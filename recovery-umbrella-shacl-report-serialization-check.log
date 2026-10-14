@@ -1,0 +1,117 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0425]: cannot find function `try_build_rdf_list` in crate `purrdf_core`
+    --> crates/shapes/src/report.rs:2445:18
+     |
+2445 |     purrdf_core::try_build_rdf_list(
+     |                  ^^^^^^^^^^^^^^^^^^ not found in `purrdf_core`
+     |
+note: similarly named function `build_rdf_list` defined here
+    --> crates/rdf-core/src/collections.rs:517:1
+     |
+ 517 | / pub fn build_rdf_list<T, I>(
+ 518 | |     members: I,
+ 519 | |     vocab: &ListVocab<T>,
+ 520 | |     mut cell: impl FnMut(usize) -> T,
+...    |
+ 524 | |     T: Clone,
+ 525 | |     I: IntoIterator<Item = T>,
+     | |______________________________^
+help: a function with a similar name exists
+     |
+2445 -     purrdf_core::try_build_rdf_list(
+2445 +     purrdf_core::build_rdf_list(
+     |
+help: consider importing this function
+     |
+  14 + use purrdf_core::collections::try_build_rdf_list;
+     |
+help: if you import `try_build_rdf_list`, refer to it directly
+     |
+2445 -     purrdf_core::try_build_rdf_list(
+2445 +     try_build_rdf_list(
+     |
+
+error: unnecessary qualification
+   --> crates/shapes/src/report.rs:387:12
+    |
+387 |     Shapes(crate::error::ShapesError),
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+387 -     Shapes(crate::error::ShapesError),
+387 +     Shapes(ShapesError),
+    |
+
+error: unnecessary qualification
+   --> crates/shapes/src/report.rs:411:12
+    |
+411 |     Shapes(crate::error::ShapesError),
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+411 -     Shapes(crate::error::ShapesError),
+411 +     Shapes(ShapesError),
+    |
+
+error: unnecessary qualification
+   --> crates/shapes/src/report.rs:458:58
+    |
+458 |                 | Some(Self::Execution(_) | Self::Shapes(crate::error::ShapesError::Invalid(_))),
+    |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+458 -                 | Some(Self::Execution(_) | Self::Shapes(crate::error::ShapesError::Invalid(_))),
+458 +                 | Some(Self::Execution(_) | Self::Shapes(ShapesError::Invalid(_))),
+    |
+
+error: unnecessary qualification
+   --> crates/shapes/src/report.rs:487:40
+    |
+487 |     pub(crate) fn into_shapes(self) -> crate::error::ShapesError {
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+487 -     pub(crate) fn into_shapes(self) -> crate::error::ShapesError {
+487 +     pub(crate) fn into_shapes(self) -> ShapesError {
+    |
+
+error: unnecessary qualification
+   --> crates/shapes/src/report.rs:490:22
+    |
+490 |             error => crate::error::ShapesError::Invalid(error.to_string()),
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+490 -             error => crate::error::ShapesError::Invalid(error.to_string()),
+490 +             error => ShapesError::Invalid(error.to_string()),
+    |
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/shacl_corpora/report_grading.rs:150:72
+     |
+ 150 |         let echoed = crate::report::conformance_disallows_from_dataset(&report.to_dataset())
+     |                      ------------------------------------------------- ^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                      |
+     |                      arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<Arc<purrdf_rdf::RdfDataset>, ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2553:8
+     |
+2553 | pub fn conformance_disallows_from_dataset(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2554 |     data: &RdfDataset,
+     |     -----------------
+
+Some errors have detailed explanations: E0308, E0425.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-shapes` (lib) due to 7 previous errors
+terminal_status=101

@@ -1,0 +1,1413 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error[E0614]: type `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` cannot be dereferenced
+  --> crates/rdf-core/tests/named_graph_membership.rs:70:20
+   |
+70 |     assert_agrees(&*dataset, "frozen", &["g", "empty"], &["phantom", "s", "o"]);
+   |                    ^^^^^^^^ can't be dereferenced
+
+error[E0277]: the trait bound `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>: DatasetView` is not satisfied
+  --> crates/rdf-core/tests/named_graph_membership.rs:71:19
+   |
+71 |     assert_agrees(&dataset, "frozen/arc", &["g", "empty"], &["phantom"]);
+   |     ------------- ^^^^^^^^ the trait `DatasetView` is not implemented for `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>`
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: the following other types implement trait `DatasetView`:
+             Arc<T>
+             CompositeDatasetView
+             DeltaDatasetView
+             LedgerDataset<'a, S, L>
+             PackView<'_>
+             PagedDataset
+             PagedQueryView<'_>
+             PagedStackQueryView<'_>
+           and 3 others
+note: required by a bound in `assert_agrees`
+  --> crates/rdf-core/tests/named_graph_membership.rs:31:21
+   |
+31 | fn assert_agrees<V: DatasetView>(view: &V, label: &str, expected: &[&str], absent: &[&str])
+   |                     ^^^^^^^^^^^ required by this bound in `assert_agrees`
+
+error[E0277]: the trait bound `DatasetHandle: From<Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>>` is not satisfied
+   --> crates/rdf-core/tests/named_graph_membership.rs:76:43
+    |
+ 76 |     let mut mutable = MutableDataset::new(fixture(""));
+    |                       ------------------- ^^^^^^^^^^^ the trait `From<Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>>` is not implemented for `DatasetHandle`
+    |                       |
+    |                       required by a bound introduced by this call
+    |
+help: the trait `From<Result<Arc<_>, RdfDiagnostic>>` is not implemented for `DatasetHandle`
+      but trait `From<Arc<_>>` is implemented for it
+   --> crates/rdf-core/src/backend.rs:163:1
+    |
+163 | impl From<Arc<RdfDataset>> for DatasetHandle {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `Arc<purrdf_core::RdfDataset>`, found `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>`
+    = note: required for `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` to implement `Into<DatasetHandle>`
+note: required by a bound in `MutableDataset::new`
+   --> crates/rdf-core/src/ir/mutable.rs:348:27
+    |
+348 |     pub fn new(base: impl Into<DatasetHandle>) -> Self {
+    |                           ^^^^^^^^^^^^^^^^^^^ required by this bound in `MutableDataset::new`
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/named_graph_membership.rs:103:40
+    |
+103 |         CompositeDatasetView::new(vec![fixture("A"), fixture("B")], ViewLimits::default())
+    |                                        ^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+103 |         CompositeDatasetView::new(vec![fixture("A").expect("REASON"), fixture("B")], ViewLimits::default())
+    |                                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/named_graph_membership.rs:114:34
+    |
+114 |             CompositeSource::new(fixture("A")).with_graph_placement(GraphPlacement::Default),
+    |             -------------------- ^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/composite.rs:121:12
+    |
+121 |     pub fn new(dataset: Arc<RdfDataset>) -> Self {
+    |            ^^^
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+114 |             CompositeSource::new(fixture("A").expect("REASON")).with_graph_placement(GraphPlacement::Default),
+    |                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/named_graph_membership.rs:115:34
+    |
+115 |             CompositeSource::new(fixture("B"))
+    |             -------------------- ^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/composite.rs:121:12
+    |
+121 |     pub fn new(dataset: Arc<RdfDataset>) -> Self {
+    |            ^^^
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+115 |             CompositeSource::new(fixture("B").expect("REASON"))
+    |                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/named_graph_membership.rs:117:34
+    |
+117 |             CompositeSource::new(fixture("C")),
+    |             -------------------- ^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/composite.rs:121:12
+    |
+121 |     pub fn new(dataset: Arc<RdfDataset>) -> Self {
+    |            ^^^
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+117 |             CompositeSource::new(fixture("C").expect("REASON")),
+    |                                              +++++++++++++++++
+
+error[E0277]: the trait bound `DatasetHandle: From<Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>>` is not satisfied
+   --> crates/rdf-core/tests/named_graph_membership.rs:129:43
+    |
+129 |     let mut mutable = MutableDataset::new(fixture("D"));
+    |                       ------------------- ^^^^^^^^^^^^ the trait `From<Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>>` is not implemented for `DatasetHandle`
+    |                       |
+    |                       required by a bound introduced by this call
+    |
+help: the trait `From<Result<Arc<_>, RdfDiagnostic>>` is not implemented for `DatasetHandle`
+      but trait `From<Arc<_>>` is implemented for it
+   --> crates/rdf-core/src/backend.rs:163:1
+    |
+163 | impl From<Arc<RdfDataset>> for DatasetHandle {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `Arc<purrdf_core::RdfDataset>`, found `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>`
+    = note: required for `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` to implement `Into<DatasetHandle>`
+note: required by a bound in `MutableDataset::new`
+   --> crates/rdf-core/src/ir/mutable.rs:348:27
+    |
+348 |     pub fn new(base: impl Into<DatasetHandle>) -> Self {
+    |                           ^^^^^^^^^^^^^^^^^^^ required by this bound in `MutableDataset::new`
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/named_graph_membership.rs:139:40
+    |
+139 |         CompositeDatasetView::new(vec![fixture("A")], ViewLimits::default())
+    |                                        ^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+139 |         CompositeDatasetView::new(vec![fixture("A").expect("REASON")], ViewLimits::default())
+    |                                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/named_graph_membership.rs:162:9
+    |
+162 |         fixture("A"),
+    |         ^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+162 |         fixture("A").expect("REASON"),
+    |                     +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/named_graph_membership.rs:175:55
+    |
+175 |     let bytes = purrdf_core::term_fixture::pack_bytes(&fixture(""));
+    |                 ------------------------------------- ^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: expected reference `&purrdf_core::RdfDataset`
+               found reference `&Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>`
+note: function defined here
+   --> crates/rdf-core/src/term_fixture.rs:158:8
+    |
+158 | pub fn pack_bytes(dataset: &RdfDataset) -> Vec<u8> {
+    |        ^^^^^^^^^^
+
+Some errors have detailed explanations: E0277, E0308, E0614.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (test "named_graph_membership") due to 11 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/graph_existence_modes.rs:213:57
+    |
+213 |             .push_quad(subject, predicate, object, Some(graph))
+    |                                                    ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                                    |
+    |                                                    arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/tests/graph_existence_modes.rs:213:52
+    |
+213 |             .push_quad(subject, predicate, object, Some(graph))
+    |                                                    ^^^^^-----^
+    |                                                         |
+    |                                                         this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+213 |             .push_quad(subject, predicate, object, Some(graph.expect("REASON")))
+    |                                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/graph_existence_modes.rs:218:62
+    |
+218 |                 .push_reifier_in_graph(reifier, triple, Some(graph))
+    |                                                         ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                                         |
+    |                                                         arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/tests/graph_existence_modes.rs:218:57
+    |
+218 |                 .push_reifier_in_graph(reifier, triple, Some(graph))
+    |                                                         ^^^^^-----^
+    |                                                              |
+    |                                                              this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+218 |                 .push_reifier_in_graph(reifier, triple, Some(graph.expect("REASON")))
+    |                                                                   +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/graph_existence_modes.rs:225:76
+    |
+225 |                 .push_annotation_in_graph(reifier, predicate, object, Some(graph))
+    |                                                                       ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                                                       |
+    |                                                                       arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/tests/graph_existence_modes.rs:225:71
+    |
+225 |                 .push_annotation_in_graph(reifier, predicate, object, Some(graph))
+    |                                                                       ^^^^^-----^
+    |                                                                            |
+    |                                                                            this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+225 |                 .push_annotation_in_graph(reifier, predicate, object, Some(graph.expect("REASON")))
+    |                                                                                 +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-core` (test "graph_existence_modes") due to 3 previous errors
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:119:55
+    |
+119 |     let provider = Arc::new(InMemoryPageProvider::new(pages));
+    |                             ------------------------- ^^^^^ expected `Vec<Arc<RdfDataset>>`, found `Result<Vec<Arc<RdfDataset>>, _>`
+    |                             |
+    |                             arguments to this function are incorrect
+    |
+    = note: expected struct `Vec<_>`
+                 found enum `Result<Vec<_>, RdfDiagnostic>`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/paged/provider.rs:268:12
+    |
+268 |     pub fn new(pages: Vec<Arc<RdfDataset>>) -> Self {
+    |            ^^^
+help: consider using `Result::expect` to unwrap the `Result<Vec<Arc<purrdf_core::RdfDataset>>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+119 |     let provider = Arc::new(InMemoryPageProvider::new(pages.expect("REASON")));
+    |                                                            +++++++++++++++++
+
+error[E0614]: type `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` cannot be dereferenced
+   --> crates/rdf-core/tests/paged_backend.rs:126:23
+    |
+126 |         collect_rows(&*single),
+    |                       ^^^^^^^ can't be dereferenced
+
+error[E0614]: type `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` cannot be dereferenced
+   --> crates/rdf-core/tests/paged_backend.rs:132:34
+    |
+132 |     let single_join = join_rows(&*single, &iri("alice"), &iri("knows"), &iri("knows"));
+    |                                  ^^^^^^^ can't be dereferenced
+
+error[E0614]: type `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` cannot be dereferenced
+   --> crates/rdf-core/tests/paged_backend.rs:142:40
+    |
+142 |     let single_members = walk_members(&*single, &iri("c1"));
+    |                                        ^^^^^^^ can't be dereferenced
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:165:5
+    |
+164 |   fn lazy_page1() -> Arc<RdfDataset> {
+    |                      --------------- expected `Arc<purrdf_core::RdfDataset>` because of return type
+165 | /     one_quad(
+166 | |         "http://example.org/s1",
+167 | |         "http://example.org/p",
+168 | |         "http://example.org/o_shared",
+169 | |     )
+    | |_____^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+169 |     ).expect("REASON")
+    |      +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:174:5
+    |
+173 |   fn lazy_page2() -> Arc<RdfDataset> {
+    |                      --------------- expected `Arc<purrdf_core::RdfDataset>` because of return type
+174 | /     one_quad(
+175 | |         "http://example.org/s2",
+176 | |         "http://example.org/p",
+177 | |         "http://example.org/o_shared",
+178 | |     )
+    | |_____^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+178 |     ).expect("REASON")
+    |      +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:277:55
+    |
+277 |     let provider = Arc::new(InMemoryPageProvider::new(raw_pages.clone()));
+    |                             ------------------------- ^^^^^^^^^^^^^^^^^ expected `Vec<Arc<RdfDataset>>`, found `Vec<Result<Arc<RdfDataset>, _>>`
+    |                             |
+    |                             arguments to this function are incorrect
+    |
+    = note: expected struct `Vec<Arc<_>>`
+               found struct `Vec<Result<Arc<_>, RdfDiagnostic>>`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/paged/provider.rs:268:12
+    |
+268 |     pub fn new(pages: Vec<Arc<RdfDataset>>) -> Self {
+    |            ^^^
+
+error[E0599]: no method named `term_id_by_value` found for reference `&Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:292:18
+    |
+292 |             page.term_id_by_value(&dense)
+    |                  ^^^^^^^^^^^^^^^^ method not found in `&Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>`
+
+error[E0599]: no method named `cardinality_estimate` found for reference `&Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:295:26
+    |
+295 |                     page.cardinality_estimate(None, Some(local_p), None, GraphMatch::Any)
+    |                          ^^^^^^^^^^^^^^^^^^^^ method not found in `&Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>`
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:321:21
+    |
+321 |         Box::new(|| build_page(&[(iri("a0"), iri("p"), iri("o0"))])),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+321 |         Box::new(|| build_page(&[(iri("a0"), iri("p"), iri("o0"))]).expect("REASON")),
+    |                                                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:322:21
+    |
+322 |         Box::new(|| build_page(&[(iri("a1"), iri("p"), iri("o1"))])),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+322 |         Box::new(|| build_page(&[(iri("a1"), iri("p"), iri("o1"))]).expect("REASON")),
+    |                                                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:380:60
+    |
+380 |     let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
+    |                                                            ^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+380 |     let provider = Arc::new(InMemoryPageProvider::new(vec![page0.expect("REASON"), page1]));
+    |                                                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:583:60
+    |
+583 |     let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
+    |                                                            ^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+583 |     let provider = Arc::new(InMemoryPageProvider::new(vec![page0.expect("REASON"), page1]));
+    |                                                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:604:58
+    |
+604 |     let ok_provider = Arc::new(InMemoryPageProvider::new(ok_pages));
+    |                                ------------------------- ^^^^^^^^ expected `Vec<Arc<RdfDataset>>`, found `Vec<Result<Arc<RdfDataset>, _>>`
+    |                                |
+    |                                arguments to this function are incorrect
+    |
+    = note: expected struct `Vec<Arc<_>>`
+               found struct `Vec<Result<Arc<_>, RdfDiagnostic>>`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/paged/provider.rs:268:12
+    |
+268 |     pub fn new(pages: Vec<Arc<RdfDataset>>) -> Self {
+    |            ^^^
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:705:9
+    |
+705 |         build_page(&[(iri("alice"), iri("knows"), iri("bob"))]),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected struct `Arc<_>`
+                 found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+705 |         build_page(&[(iri("alice"), iri("knows"), iri("bob"))]).expect("REASON"),
+    |                                                                +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf-core/tests/paged_backend.rs:818:11
+     |
+ 818 |         b.push_quad(s, p, o, g).unwrap();
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/tests/paged_backend.rs:818:21
+     |
+ 818 |         b.push_quad(s, p, o, g).unwrap();
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/tests/paged_backend.rs:818:24
+     |
+ 818 |         b.push_quad(s, p, o, g).unwrap();
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/tests/paged_backend.rs:818:27
+     |
+ 818 |         b.push_quad(s, p, o, g).unwrap();
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+    --> crates/rdf-core/tests/paged_backend.rs:818:30
+     |
+ 818 |         b.push_quad(s, p, o, g).unwrap();
+     |                              ^
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2509:12
+     |
+2509 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 818 |         b.push_quad(s.expect("REASON"), p, o, g).unwrap();
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 818 |         b.push_quad(s, p.expect("REASON"), o, g).unwrap();
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 818 |         b.push_quad(s, p, o.expect("REASON"), g).unwrap();
+     |                            +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:829:46
+    |
+829 |     let single_ttl = render_canonical_turtle(&single, &[]);
+    |                      ----------------------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |                      |
+    |                      arguments to this function are incorrect
+    |
+    = note: expected reference `&purrdf_core::RdfDataset`
+               found reference `&Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>`
+note: function defined here
+   --> crates/rdf-core/src/turtle_render.rs:56:8
+    |
+ 56 | pub fn render(dataset: &RdfDataset, prefixes: &[(String, String)]) -> String {
+    |        ^^^^^^
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:836:55
+    |
+836 |     let provider = Arc::new(InMemoryPageProvider::new(pages));
+    |                             ------------------------- ^^^^^ expected `Vec<Arc<RdfDataset>>`, found `Result<Vec<Arc<RdfDataset>>, _>`
+    |                             |
+    |                             arguments to this function are incorrect
+    |
+    = note: expected struct `Vec<_>`
+                 found enum `Result<Vec<_>, RdfDiagnostic>`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/paged/provider.rs:268:12
+    |
+268 |     pub fn new(pages: Vec<Arc<RdfDataset>>) -> Self {
+    |            ^^^
+help: consider using `Result::expect` to unwrap the `Result<Vec<Arc<purrdf_core::RdfDataset>>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+836 |     let provider = Arc::new(InMemoryPageProvider::new(pages.expect("REASON")));
+    |                                                            +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:856:80
+    |
+856 |     let eager = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(raw.clone())))
+    |                                                      ------------------------- ^^^^^^^^^^^ expected `Vec<Arc<RdfDataset>>`, found `Result<Vec<Arc<RdfDataset>>, _>`
+    |                                                      |
+    |                                                      arguments to this function are incorrect
+    |
+    = note: expected struct `Vec<_>`
+                 found enum `Result<Vec<_>, RdfDiagnostic>`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/paged/provider.rs:268:12
+    |
+268 |     pub fn new(pages: Vec<Arc<RdfDataset>>) -> Self {
+    |            ^^^
+help: consider using `Result::expect` to unwrap the `Result<Vec<Arc<purrdf_core::RdfDataset>>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+856 |     let eager = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(raw.clone().expect("REASON"))))
+    |                                                                                           +++++++++++++++++
+
+error[E0608]: cannot index into a value of type `Result<Vec<Arc<purrdf_core::RdfDataset>>, RdfDiagnostic>`
+   --> crates/rdf-core/tests/paged_backend.rs:864:17
+    |
+864 |     let p0 = raw[0].clone();
+    |                 ^^^
+
+error[E0608]: cannot index into a value of type `Result<Vec<Arc<purrdf_core::RdfDataset>>, RdfDiagnostic>`
+   --> crates/rdf-core/tests/paged_backend.rs:865:17
+    |
+865 |     let p1 = raw[1].clone();
+    |                 ^^^
+
+error[E0608]: cannot index into a value of type `Result<Vec<Arc<purrdf_core::RdfDataset>>, RdfDiagnostic>`
+   --> crates/rdf-core/tests/paged_backend.rs:866:17
+    |
+866 |     let p2 = raw[2].clone();
+    |                 ^^^
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:930:45
+    |
+930 |         b.push_quad(alice, knows, bob, Some(g1_id)).unwrap();
+    |                                        ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                        |
+    |                                        arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/tests/paged_backend.rs:930:40
+    |
+930 |         b.push_quad(alice, knows, bob, Some(g1_id)).unwrap();
+    |                                        ^^^^^-----^
+    |                                             |
+    |                                             this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+930 |         b.push_quad(alice, knows, bob, Some(g1_id.expect("REASON"))).unwrap();
+    |                                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:931:45
+    |
+931 |         b.push_quad(bob, knows, carol, Some(g1_id)).unwrap();
+    |                                        ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                        |
+    |                                        arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/tests/paged_backend.rs:931:40
+    |
+931 |         b.push_quad(bob, knows, carol, Some(g1_id)).unwrap();
+    |                                        ^^^^^-----^
+    |                                             |
+    |                                             this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+931 |         b.push_quad(bob, knows, carol, Some(g1_id.expect("REASON"))).unwrap();
+    |                                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:932:31
+     |
+ 932 |         b.declare_named_graph(g2_id).unwrap();
+     |           ------------------- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |           |
+     |           arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1242:12
+     |
+1242 |     pub fn declare_named_graph(&mut self, g: TermId) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 932 |         b.declare_named_graph(g2_id.expect("REASON")).unwrap();
+     |                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:944:45
+    |
+944 |         b.push_quad(alice, knows, bob, Some(g1_id)).unwrap();
+    |                                        ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                        |
+    |                                        arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/tests/paged_backend.rs:944:40
+    |
+944 |         b.push_quad(alice, knows, bob, Some(g1_id)).unwrap();
+    |                                        ^^^^^-----^
+    |                                             |
+    |                                             this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+944 |         b.push_quad(alice, knows, bob, Some(g1_id.expect("REASON"))).unwrap();
+    |                                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:946:45
+    |
+946 |         b.push_quad(bob, knows, carol, Some(g2_id)).unwrap();
+    |                                        ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                        |
+    |                                        arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/tests/paged_backend.rs:946:40
+    |
+946 |         b.push_quad(bob, knows, carol, Some(g2_id)).unwrap();
+    |                                        ^^^^^-----^
+    |                                             |
+    |                                             this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+946 |         b.push_quad(bob, knows, carol, Some(g2_id.expect("REASON"))).unwrap();
+    |                                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1302:15
+     |
+1302 |         page: build_page(&[(iri("s"), iri("p"), iri("o"))]),
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+     |
+     = note: expected struct `Arc<_>`
+                  found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+     |
+1302 |         page: build_page(&[(iri("s"), iri("p"), iri("o"))]).expect("REASON"),
+     |                                                            +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1329:15
+     |
+1329 |         vec![(pages[0].clone(), 31), (pages[1].clone(), 47)],
+     |               ^^^^^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+     |
+     = note: expected struct `Arc<_>`
+                  found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+     |
+1329 |         vec![(pages[0].clone().expect("REASON"), 31), (pages[1].clone(), 47)],
+     |                               +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1329:39
+     |
+1329 |         vec![(pages[0].clone(), 31), (pages[1].clone(), 47)],
+     |                                       ^^^^^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+     |
+     = note: expected struct `Arc<_>`
+                  found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+     |
+1329 |         vec![(pages[0].clone(), 31), (pages[1].clone().expect("REASON"), 47)],
+     |                                                       +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1336:9
+     |
+1335 |     let stale_provider = Arc::new(InMemoryPageProvider::with_generation(
+     |                                   ------------------------------------- arguments to this function are incorrect
+1336 |         pages.clone(),
+     |         ^^^^^^^^^^^^^ expected `Vec<Arc<RdfDataset>>`, found `Vec<Result<Arc<RdfDataset>, _>>`
+     |
+     = note: expected struct `Vec<Arc<_>>`
+                found struct `Vec<Result<Arc<_>, RdfDiagnostic>>`
+note: associated function defined here
+    --> crates/rdf-core/src/ir/paged/provider.rs:275:12
+     |
+ 275 |     pub fn with_generation(pages: Vec<Arc<RdfDataset>>, generation: PageGeneration) -> Self {
+     |            ^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1355:14
+     |
+1355 |         vec![pages[0].clone()],
+     |              ^^^^^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+     |
+     = note: expected struct `Arc<_>`
+                  found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+     |
+1355 |         vec![pages[0].clone().expect("REASON")],
+     |                              +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1472:35
+     |
+1472 |         b.push_quad(s, p, o, Some(ga_id)).unwrap();
+     |                              ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                              |
+     |                              arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1472:30
+     |
+1472 |         b.push_quad(s, p, o, Some(ga_id)).unwrap();
+     |                              ^^^^^-----^
+     |                                   |
+     |                                   this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1472 |         b.push_quad(s, p, o, Some(ga_id.expect("REASON"))).unwrap();
+     |                                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1478:31
+     |
+1478 |         b.declare_named_graph(g_empty_id).unwrap();
+     |           ------------------- ^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |           |
+     |           arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1242:12
+     |
+1242 |     pub fn declare_named_graph(&mut self, g: TermId) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1478 |         b.declare_named_graph(g_empty_id.expect("REASON")).unwrap();
+     |                                         +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1489:49
+     |
+1489 |         b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id))
+     |                                            ---- ^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                            |
+     |                                            arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1489:44
+     |
+1489 |         b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id))
+     |                                            ^^^^^-----------------^
+     |                                                 |
+     |                                                 this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1489 |         b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id.expect("REASON")))
+     |                                                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1570:31
+     |
+1570 |     b.push_quad(s, p, o, Some(ga_id)).unwrap();
+     |                          ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                          |
+     |                          arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1570:26
+     |
+1570 |     b.push_quad(s, p, o, Some(ga_id)).unwrap();
+     |                          ^^^^^-----^
+     |                               |
+     |                               this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1570 |     b.push_quad(s, p, o, Some(ga_id.expect("REASON"))).unwrap();
+     |                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1572:27
+     |
+1572 |     b.declare_named_graph(g_empty_id).unwrap();
+     |       ------------------- ^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |       |
+     |       arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1242:12
+     |
+1242 |     pub fn declare_named_graph(&mut self, g: TermId) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1572 |     b.declare_named_graph(g_empty_id.expect("REASON")).unwrap();
+     |                                     +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1579:45
+     |
+1579 |     b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id))
+     |                                        ---- ^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                        |
+     |                                        arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1579:40
+     |
+1579 |     b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id))
+     |                                        ^^^^^-----------------^
+     |                                             |
+     |                                             this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1579 |     b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id.expect("REASON")))
+     |                                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1617:47
+     |
+1617 |     b.push_reifier_in_graph(r1, triple1, Some(g_owns_id))
+     |                                          ---- ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                          |
+     |                                          arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1617:42
+     |
+1617 |     b.push_reifier_in_graph(r1, triple1, Some(g_owns_id))
+     |                                          ^^^^^---------^
+     |                                               |
+     |                                               this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1617 |     b.push_reifier_in_graph(r1, triple1, Some(g_owns_id.expect("REASON")))
+     |                                                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1621:53
+     |
+1621 |     b.push_annotation_in_graph(r1, conf, high, Some(g_owns_id))
+     |                                                ---- ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                                |
+     |                                                arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1621:48
+     |
+1621 |     b.push_annotation_in_graph(r1, conf, high, Some(g_owns_id))
+     |                                                ^^^^^---------^
+     |                                                     |
+     |                                                     this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1621 |     b.push_annotation_in_graph(r1, conf, high, Some(g_owns_id.expect("REASON")))
+     |                                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1632:27
+     |
+1632 |     b.declare_named_graph(g_none_id).unwrap();
+     |       ------------------- ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |       |
+     |       arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1242:12
+     |
+1242 |     pub fn declare_named_graph(&mut self, g: TermId) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1632 |     b.declare_named_graph(g_none_id.expect("REASON")).unwrap();
+     |                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1645:47
+     |
+1645 |     b.push_reifier_in_graph(r3, triple3, Some(g_other_id))
+     |                                          ---- ^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                          |
+     |                                          arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1645:42
+     |
+1645 |     b.push_reifier_in_graph(r3, triple3, Some(g_other_id))
+     |                                          ^^^^^----------^
+     |                                               |
+     |                                               this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1645 |     b.push_reifier_in_graph(r3, triple3, Some(g_other_id.expect("REASON")))
+     |                                                         +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1649:49
+     |
+1649 |     b.push_annotation_in_graph(r3, p3, o3, Some(g_other_id))
+     |                                            ---- ^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                            |
+     |                                            arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1649:44
+     |
+1649 |     b.push_annotation_in_graph(r3, p3, o3, Some(g_other_id))
+     |                                            ^^^^^----------^
+     |                                                 |
+     |                                                 this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1649 |     b.push_annotation_in_graph(r3, p3, o3, Some(g_other_id.expect("REASON")))
+     |                                                           +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1921:31
+     |
+1921 |         b.declare_named_graph(g_id).unwrap();
+     |           ------------------- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |           |
+     |           arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1242:12
+     |
+1242 |     pub fn declare_named_graph(&mut self, g: TermId) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1921 |         b.declare_named_graph(g_id.expect("REASON")).unwrap();
+     |                                   +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:1930:35
+     |
+1930 |         b.push_quad(s, p, o, Some(g_id)).unwrap();
+     |                              ---- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                              |
+     |                              arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:1930:30
+     |
+1930 |         b.push_quad(s, p, o, Some(g_id)).unwrap();
+     |                              ^^^^^----^
+     |                                   |
+     |                                   this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1930 |         b.push_quad(s, p, o, Some(g_id.expect("REASON"))).unwrap();
+     |                                       +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2037:35
+     |
+2037 |         b.push_quad(s, p, o, Some(g_id)).unwrap();
+     |                              ---- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                              |
+     |                              arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2037:30
+     |
+2037 |         b.push_quad(s, p, o, Some(g_id)).unwrap();
+     |                              ^^^^^----^
+     |                                   |
+     |                                   this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2037 |         b.push_quad(s, p, o, Some(g_id.expect("REASON"))).unwrap();
+     |                                       +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2054:49
+     |
+2054 |         b.push_reifier_in_graph(r, triple, Some(g_id)).unwrap();
+     |                                            ---- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                            |
+     |                                            arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2054:44
+     |
+2054 |         b.push_reifier_in_graph(r, triple, Some(g_id)).unwrap();
+     |                                            ^^^^^----^
+     |                                                 |
+     |                                                 this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2054 |         b.push_reifier_in_graph(r, triple, Some(g_id.expect("REASON"))).unwrap();
+     |                                                     +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2123:49
+     |
+2123 |         b.push_reifier_in_graph(r, triple, Some(g_id)).unwrap();
+     |                                            ---- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                            |
+     |                                            arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2123:44
+     |
+2123 |         b.push_reifier_in_graph(r, triple, Some(g_id)).unwrap();
+     |                                            ^^^^^----^
+     |                                                 |
+     |                                                 this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2123 |         b.push_reifier_in_graph(r, triple, Some(g_id.expect("REASON"))).unwrap();
+     |                                                     +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2139:57
+     |
+2139 |         b.push_annotation_in_graph(r2, conf, high, Some(g_id))
+     |                                                    ---- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                                    |
+     |                                                    arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2139:52
+     |
+2139 |         b.push_annotation_in_graph(r2, conf, high, Some(g_id))
+     |                                                    ^^^^^----^
+     |                                                         |
+     |                                                         this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2139 |         b.push_annotation_in_graph(r2, conf, high, Some(g_id.expect("REASON")))
+     |                                                             +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2210:35
+     |
+2210 |         b.push_quad(s, p, o, Some(ga_id)).unwrap();
+     |                              ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                              |
+     |                              arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2210:30
+     |
+2210 |         b.push_quad(s, p, o, Some(ga_id)).unwrap();
+     |                              ^^^^^-----^
+     |                                   |
+     |                                   this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2210 |         b.push_quad(s, p, o, Some(ga_id.expect("REASON"))).unwrap();
+     |                                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2219:35
+     |
+2219 |         b.push_quad(s, p, o, Some(gb_id)).unwrap();
+     |                              ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                              |
+     |                              arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2219:30
+     |
+2219 |         b.push_quad(s, p, o, Some(gb_id)).unwrap();
+     |                              ^^^^^-----^
+     |                                   |
+     |                                   this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2219 |         b.push_quad(s, p, o, Some(gb_id.expect("REASON"))).unwrap();
+     |                                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2223:49
+     |
+2223 |         b.push_reifier_in_graph(r, triple, Some(ga_id)).unwrap();
+     |                                            ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                            |
+     |                                            arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2223:44
+     |
+2223 |         b.push_reifier_in_graph(r, triple, Some(ga_id)).unwrap();
+     |                                            ^^^^^-----^
+     |                                                 |
+     |                                                 this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2223 |         b.push_reifier_in_graph(r, triple, Some(ga_id.expect("REASON"))).unwrap();
+     |                                                      +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2232:56
+     |
+2232 |         b.push_annotation_in_graph(r, conf, high, Some(ga_id))
+     |                                                   ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                                   |
+     |                                                   arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2232:51
+     |
+2232 |         b.push_annotation_in_graph(r, conf, high, Some(ga_id))
+     |                                                   ^^^^^-----^
+     |                                                        |
+     |                                                        this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2232 |         b.push_annotation_in_graph(r, conf, high, Some(ga_id.expect("REASON")))
+     |                                                             +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2242:35
+     |
+2242 |         b.push_quad(s, p, o, Some(gb_id)).unwrap();
+     |                              ---- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                              |
+     |                              arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/tests/paged_backend.rs:2242:30
+     |
+2242 |         b.push_quad(s, p, o, Some(gb_id)).unwrap();
+     |                              ^^^^^-----^
+     |                                   |
+     |                                   this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2242 |         b.push_quad(s, p, o, Some(gb_id.expect("REASON"))).unwrap();
+     |                                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2248:31
+     |
+2248 |         b.declare_named_graph(g_empty_id).unwrap();
+     |           ------------------- ^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |           |
+     |           arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1242:12
+     |
+1242 |     pub fn declare_named_graph(&mut self, g: TermId) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2248 |         b.declare_named_graph(g_empty_id.expect("REASON")).unwrap();
+     |                                         +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/paged_backend.rs:2250:31
+     |
+2250 |         b.declare_named_graph(ga_id).unwrap();
+     |           ------------------- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |           |
+     |           arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1242:12
+     |
+1242 |     pub fn declare_named_graph(&mut self, g: TermId) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2250 |         b.declare_named_graph(ga_id.expect("REASON")).unwrap();
+     |                                    +++++++++++++++++
+
+Some errors have detailed explanations: E0308, E0599, E0608, E0614.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-core` (test "paged_backend") due to 56 previous errors
+error[E0308]: mismatched types
+  --> crates/rdf-core/tests/paged_admission_law.rs:57:5
+   |
+56 |   fn build_simple_page(subject: &str, predicate: &str, object: &str) -> Arc<RdfDataset> {
+   |                                                                         --------------- expected `Arc<purrdf_core::RdfDataset>` because of return type
+57 | /     purrdf_core::term_fixture::one_quad(
+58 | |         &format!("http://example.org/{subject}"),
+59 | |         &format!("http://example.org/{predicate}"),
+60 | |         &format!("http://example.org/{object}"),
+61 | |     )
+   | |_____^ expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+   |
+   = note: expected struct `Arc<_>`
+                found enum `Result<Arc<_>, RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<Arc<purrdf_core::RdfDataset>, RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+   |
+61 |     ).expect("REASON")
+   |      +++++++++++++++++
+
+error: could not compile `purrdf-core` (test "paged_admission_law") due to 1 previous error

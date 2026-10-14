@@ -1,0 +1,162 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error: unused `std::result::Result` that must be used
+  --> crates/datalog/benches/seminaive.rs:72:13
+   |
+72 | /             store.insert(
+73 | |                 &surface(&format!("s{i}")),
+74 | |                 &surface("p"),
+75 | |                 &surface(&format!("m{j}")),
+76 | |                 RelationStore::DEFAULT_GRAPH,
+77 | |             );
+   | |_____________^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+   = note: `-D unused-must-use` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+   |
+72 |             let _ = store.insert(
+   |             +++++++
+
+error: unused `std::result::Result` that must be used
+  --> crates/datalog/benches/seminaive.rs:78:13
+   |
+78 | /             store.insert(
+79 | |                 &surface(&format!("m{i}")),
+80 | |                 &surface("q"),
+81 | |                 &surface(&format!("o{j}")),
+82 | |                 RelationStore::DEFAULT_GRAPH,
+83 | |             );
+   | |_____________^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+   |
+78 |             let _ = store.insert(
+   |             +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/datalog/benches/seminaive.rs:119:9
+    |
+119 | /         store.insert(
+120 | |             &surface(&format!("n{i}")),
+121 | |             &surface("p"),
+122 | |             &surface(&format!("n{}", i + 1)),
+123 | |             RelationStore::DEFAULT_GRAPH,
+124 | |         );
+    | |_________^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+119 |         let _ = store.insert(
+    |         +++++++
+
+error: could not compile `purrdf-datalog` (bench "seminaive") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_admission_law.rs:768:13
+    |
+767 |         assert_pattern_matches_reference(
+    |         -------------------------------- arguments to this function are incorrect
+768 |             &compacted,
+    |             ^^^^^^^^^^ expected `&PagedDataset`, found `&Result<PagedDataset, StorageError>`
+    |
+    = note: expected reference `&PagedDataset`
+               found reference `&std::result::Result<PagedDataset, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/tests/paged_admission_law.rs:367:8
+    |
+367 |     fn assert_pattern_matches_reference(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+368 |         variant: &PagedDataset,
+    |         ----------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_admission_law.rs:776:55
+    |
+776 |         assert_side_table_walks_match_unkeyed_streams(&compacted);
+    |         --------------------------------------------- ^^^^^^^^^^ expected `&PagedDataset`, found `&Result<PagedDataset, StorageError>`
+    |         |
+    |         arguments to this function are incorrect
+    |
+    = note: expected reference `&PagedDataset`
+               found reference `&std::result::Result<PagedDataset, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/tests/paged_admission_law.rs:491:8
+    |
+491 |     fn assert_side_table_walks_match_unkeyed_streams(variant: &PagedDataset) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ----------------------
+
+error[E0599]: no method named `named_graphs` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_admission_law.rs:1149:10
+     |
+1148 |       let post_order: Vec<TermValue> = compacted
+     |  ______________________________________-
+1149 | |         .named_graphs()
+     | |         -^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+     | |_________|
+     |
+     |
+note: the method `named_graphs` exists on the type `purrdf_core::PagedDataset`
+    --> crates/rdf-core/src/dataset_view.rs:1144:5
+     |
+1144 |     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+     |
+1148 |     let post_order: Vec<TermValue> = compacted.expect("REASON")
+     |                                               +++++++++++++++++
+
+error[E0277]: the trait bound `Result<PagedDataset, StorageError>: DatasetView` is not satisfied
+    --> crates/rdf-core/tests/paged_admission_law.rs:1150:28
+     |
+1150 |         .map(|id| to_value(&compacted, id))
+     |                   -------- ^^^^^^^^^^ unsatisfied trait bound
+     |                   |
+     |                   required by a bound introduced by this call
+     |
+     = help: the trait `purrdf_core::DatasetView` is not implemented for `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+     = help: the following other types implement trait `purrdf_core::DatasetView`:
+               purrdf_core::CompositeDatasetView
+               purrdf_core::DeltaDatasetView
+               purrdf_core::PackView<'_>
+               purrdf_core::PagedDataset
+               purrdf_core::PagedQueryView<'_>
+               purrdf_core::PagedStackQueryView<'_>
+               purrdf_core::RdfDataset
+               purrdf_core::SegmentedSession
+             and 3 others
+note: required by a bound in `values::to_value`
+    --> crates/rdf-core/tests/support/values.rs:16:20
+     |
+  16 | pub fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
+     |                    ^^^^^^^^^^^ required by this bound in `to_value`
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/1171e3e29c20915d/out/paged_admission_law-1171e3e29c20915d.long-type-17927317128580923490.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `Result<PagedDataset, StorageError>: DatasetView` is not satisfied
+    --> crates/rdf-core/tests/paged_admission_law.rs:1150:40
+     |
+1150 |         .map(|id| to_value(&compacted, id))
+     |                                        ^^ unsatisfied trait bound
+     |
+     = help: the trait `purrdf_core::DatasetView` is not implemented for `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+     = help: the following other types implement trait `purrdf_core::DatasetView`:
+               purrdf_core::CompositeDatasetView
+               purrdf_core::DeltaDatasetView
+               purrdf_core::PackView<'_>
+               purrdf_core::PagedDataset
+               purrdf_core::PagedQueryView<'_>
+               purrdf_core::PagedStackQueryView<'_>
+               purrdf_core::RdfDataset
+               purrdf_core::SegmentedSession
+             and 3 others
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/1171e3e29c20915d/out/paged_admission_law-1171e3e29c20915d.long-type-17927317128580923490.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (test "paged_admission_law") due to 5 previous errors
+terminal_status=101

@@ -1,0 +1,28 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: implicit borrow as raw pointer
+    --> crates/rdf-core/src/ir/segmented/session.rs:1700:30
+     |
+1700 |         assert!(std::ptr::eq(&*request.snapshot, &*duplicate.snapshot));
+     |                              ^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+     = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+     |
+1700 |         assert!(std::ptr::eq(&raw const *request.snapshot, &*duplicate.snapshot));
+     |                               +++++++++
+
+error: implicit borrow as raw pointer
+    --> crates/rdf-core/src/ir/segmented/session.rs:1700:50
+     |
+1700 |         assert!(std::ptr::eq(&*request.snapshot, &*duplicate.snapshot));
+     |                                                  ^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1700 |         assert!(std::ptr::eq(&*request.snapshot, &raw const *duplicate.snapshot));
+     |                                                   +++++++++
+
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

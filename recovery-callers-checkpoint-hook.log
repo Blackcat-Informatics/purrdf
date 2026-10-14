@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against dd79ef77e942 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/490-typed-capacity-errors-instead-of-u32 15bc79027] Propagate typed capacity failures through workspace consumers
+ 120 files changed, 1814 insertions(+), 1113 deletions(-)
+ create mode 100644 crates/datalog/src/test_support/host_dictionary.rs
+terminal_status=0

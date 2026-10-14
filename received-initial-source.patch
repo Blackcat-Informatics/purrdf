@@ -1,0 +1,686 @@
+diff --git crates/lex/src/allocation.rs crates/lex/src/allocation.rs
+index 5176d1a52..494c8dc01 100644
+--- crates/lex/src/allocation.rs
++++ crates/lex/src/allocation.rs
+@@ -27,6 +27,8 @@ use std::vec::Vec;
+ /// A physical failure, separate from any native lexical language.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum StorageError {
++    /// A logical address space refused the requested count before mutation.
++    Capacity(CapacityError),
+     /// A concrete allocation layout or live-byte sum cannot be represented.
+     SizeOverflow,
+     /// A fallible allocation refused its already admitted destination.
+@@ -39,17 +41,144 @@ pub enum StorageError {
+ 
+ impl fmt::Display for StorageError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        f.write_str(match self {
+-            Self::SizeOverflow => "native allocation layout overflow",
+-            Self::AllocationFailed => "native destination allocation failed",
+-            Self::AdmissionFailed => "native workspace admission refused",
+-            Self::FormattingFailed => "native diagnostic formatting failed",
+-        })
++        match self {
++            Self::Capacity(error) => error.fmt(f),
++            Self::SizeOverflow => f.write_str("native allocation layout overflow"),
++            Self::AllocationFailed => f.write_str("native destination allocation failed"),
++            Self::AdmissionFailed => f.write_str("native workspace admission refused"),
++            Self::FormattingFailed => f.write_str("native diagnostic formatting failed"),
++        }
+     }
+ }
+ 
+ impl std::error::Error for StorageError {}
+ 
++/// Exhaustion of one named logical space, distinct from physical allocation.
++/// Counts use u128 so even an attempted count beyond a u64 space is reported
++/// exactly, without wrapping or replacing the first failure with a layout error.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CapacityError {
++    /// The table or address space whose limit was reached.
++    pub space: CapacitySpace,
++    /// The requested total count, including the attempted addition.
++    pub attempted: u128,
++    /// The largest representable count in that space.
++    pub limit: u128,
++}
++
++impl CapacityError {
++    /// Check the original producer's next count before it mutates storage.
++    ///
++    /// # Errors
++    /// Returns the named space, exact attempted count and actual address limit.
++    pub fn check(space: CapacitySpace, attempted: u128, limit: u128) -> Result<(), Self> {
++        if attempted > limit {
++            Err(Self { space, attempted, limit })
++        } else {
++            Ok(())
++        }
++    }
++}
++
++/// The native logical spaces whose producers report exact capacity failures.
++/// The closed identity is retained through certificates and language boundaries.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum CapacitySpace {
++    /// Resident RDF terms.
++    LocalTerms,
++    /// Resident RDF text arena.
++    LocalTermBytes,
++    /// Global RDF terms.
++    GlobalTerms,
++    /// Global RDF text arena.
++    GlobalTermBytes,
++    /// Resident statement rows.
++    Quads,
++    /// Lazy statement permutation addresses.
++    Permutation,
++    /// Mutable delta terms.
++    DeltaTerms,
++    /// Dataset merge blank scopes.
++    BlankScopes,
++    /// Streaming import blank scopes.
++    ImportBlankScopes,
++    /// Provenance units.
++    ProvenanceUnits,
++    /// Provenance artifacts.
++    Artifacts,
++    /// Provenance origin sets.
++    OriginSets,
++    /// Datalog atomic terms.
++    DatalogTerms,
++    /// Datalog materialized rows.
++    DatalogRows,
++    /// Datalog relation partitions.
++    DatalogPartitions,
++    /// Datalog rules.
++    DatalogRules,
++    /// Datalog proof terms.
++    DatalogProofs,
++    /// Datalog compound nodes.
++    DatalogNodes,
++    /// Datalog metavariables.
++    DatalogMetas,
++    /// Datalog atomic symbols.
++    DatalogSymbols,
++}
++
++impl CapacitySpace {
++    const NAMES: [(Self, &'static str); 20] = [
++        (Self::LocalTerms, "rdf-local-terms"),
++        (Self::LocalTermBytes, "rdf-local-text"),
++        (Self::GlobalTerms, "rdf-global-terms"),
++        (Self::GlobalTermBytes, "rdf-global-text"),
++        (Self::Quads, "rdf-quads"),
++        (Self::Permutation, "rdf-permutation"),
++        (Self::DeltaTerms, "rdf-delta-terms"),
++        (Self::BlankScopes, "rdf-merge-blank-scopes"),
++        (Self::ImportBlankScopes, "rdf-import-blank-scopes"),
++        (Self::ProvenanceUnits, "rdf-provenance-units"),
++        (Self::Artifacts, "rdf-provenance-artifacts"),
++        (Self::OriginSets, "rdf-origin-sets"),
++        (Self::DatalogTerms, "datalog-terms"),
++        (Self::DatalogRows, "datalog-rows"),
++        (Self::DatalogPartitions, "datalog-partitions"),
++        (Self::DatalogRules, "datalog-rules"),
++        (Self::DatalogProofs, "datalog-proofs"),
++        (Self::DatalogNodes, "datalog-nodes"),
++        (Self::DatalogMetas, "datalog-metavariables"),
++        (Self::DatalogSymbols, "datalog-symbols"),
++    ];
++
++    /// Stable allocation-free identity for error publication.
++    #[must_use]
++    pub const fn as_str(self) -> &'static str {
++        Self::NAMES[self as usize].1
++    }
++
++    /// Decode the same closed identity without allocating or leaking strings.
++    #[must_use]
++    pub fn of_name(name: &str) -> Option<Self> {
++        Self::NAMES.iter().find_map(|&(space, spelling)| (spelling == name).then_some(space))
++    }
++}
++
++impl fmt::Display for CapacitySpace {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(self.as_str())
++    }
++}
++
++impl fmt::Display for CapacityError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(f, "{} capacity exhausted: attempted {}, limit {}", self.space, self.attempted, self.limit)
++    }
++}
++
++impl std::error::Error for CapacityError {}
++
++crate::variant_from!(StorageError { Capacity(CapacityError) });
++
+ /// A borrowed caller's live-capacity admission for one native computation.
+ pub trait Admission {
+     /// Admit the next exact total before allocation; shrink only after destruction.
+diff --git crates/rdf-core/src/ir/global.rs crates/rdf-core/src/ir/global.rs
+index 827fbab0c..21712cbc7 100644
+--- crates/rdf-core/src/ir/global.rs
++++ crates/rdf-core/src/ir/global.rs
+@@ -30,14 +30,16 @@ use std::ops::ControlFlow;
+ use std::sync::OnceLock;
+ 
+ use hashbrown::HashTable;
+-use purrdf_iri::IriError;
++use purrdf_iri::{IriError, IriReadError};
++use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+ 
+ use crate::RdfTextDirection;
+ use crate::dataset_view::ViewTermId;
+ use crate::hash::FastHasher;
+ 
+ use super::dataset::TermRef;
+-use super::term::{BlankScope, StrRange, TermId, TermValue, arena_str, push_arena_str};
++use super::term::{BlankScope, TermId, TermValue, arena_str, push_arena_str_with_memory};
++type StrRange = super::term::StrRange<u64>;
+ use super::term_walk::{Nested, try_fold_nested, visit_nested};
+ 
+ /// Opaque **global** term identity — the id space a paged / cross-segment backend
+@@ -349,30 +351,29 @@ impl GlobalDictionary {
+     }
+ 
+     /// Append a string to the arena, returning its range. Validates the range fits
+-    /// `u32` BEFORE mutating the arena, so a checked overflow fails fast and leaves
++    /// `u64` BEFORE mutating the arena, so a checked overflow fails fast and leaves
+     /// the dictionary consistent.
+-    fn push_str(&mut self, s: &str) -> StrRange {
+-        push_arena_str(&mut self.arena, s)
++    fn push_str(&mut self, s: &str) -> Result<StrRange, StorageError> {
++        use purrdf_lex::allocation::{Memory, Resident};
++        let mut resident = Resident;
++        let mut memory = Memory::resume(&mut resident, self.arena.capacity());
++        push_arena_str_with_memory(&mut self.arena, s, &mut memory)
+     }
+ 
+     /// Intern a borrowed lookup BY VALUE: dedups against existing terms (resolving
+     /// their ranges through the arena) and pushes strings to the arena only on a
+     /// MISS. Idempotent: equal values map to one id, minted in insertion order.
+-    fn intern_lookup(&mut self, lookup: GlobalTermLookup<'_>) -> GlobalTermId {
++    fn intern_lookup(&mut self, lookup: GlobalTermLookup<'_>) -> Result<GlobalTermId, StorageError> {
+         let hash = hash_lookup_value(&lookup);
+         match self.find(&lookup, hash) {
+-            Some(id) => id,
++            Some(id) => Ok(id),
+             None => self.insert_missing(lookup, hash),
+         }
+     }
+ 
+-    /// Checked allocation/address admission for composed retained metadata. The
+-    /// ordinary lookup and miss insertion remain the dictionary's single homes.
+-    fn try_intern_lookup(&mut self, lookup: GlobalTermLookup<'_>) -> Result<GlobalTermId, ()> {
+-        let hash = hash_lookup_value(&lookup);
+-        if let Some(id) = self.find(&lookup, hash) {
+-            return Ok(id);
+-        }
++    /// Reserve the entire miss before recording ranges or invalidating caches.
++    /// This is shared by ordinary and already-validated ingress.
++    fn reserve_missing(&mut self, lookup: &GlobalTermLookup<'_>) -> Result<GlobalTermId, StorageError> {
+         let bytes = match &lookup {
+             GlobalTermLookup::Iri(iri) => iri.len(),
+             GlobalTermLookup::Blank { label, .. } => label.len(),
+@@ -381,20 +382,23 @@ impl GlobalDictionary {
+             } => lexical
+                 .len()
+                 .checked_add(language.map_or(0, str::len))
+-                .ok_or(())?,
++                .ok_or(StorageError::SizeOverflow)?,
+             GlobalTermLookup::Triple { .. } => 0,
+         };
+-        let total = self.arena.len().checked_add(bytes).ok_or(())?;
+-        u32::try_from(total).map_err(|_| ())?;
+-        GlobalTermId::checked_from_index(u64::try_from(self.terms.len()).map_err(|_| ())?)
+-            .ok_or(())?;
+-        self.arena.try_reserve(bytes).map_err(|_| ())?;
+-        self.terms.try_reserve(1).map_err(|_| ())?;
++        CapacityError::check(CapacitySpace::GlobalTermBytes, self.arena.len() as u128 + bytes as u128, u128::from(u64::MAX))?;
++        let index = u64::try_from(self.terms.len()).map_err(|_| StorageError::SizeOverflow)?;
++        let attempted = u128::from(index) + 1;
++        CapacityError::check(CapacitySpace::GlobalTerms, attempted, u128::from(u64::MAX))?;
++        let id = GlobalTermId::checked_from_index(index).ok_or(StorageError::Capacity(CapacityError {
++            space: CapacitySpace::GlobalTerms, attempted, limit: u128::from(u64::MAX),
++        }))?;
++        self.arena.try_reserve(bytes).map_err(|_| StorageError::AllocationFailed)?;
++        self.terms.try_reserve(1).map_err(|_| StorageError::AllocationFailed)?;
+         let (arena, terms) = (&self.arena, &self.terms);
+         self.index
+             .try_reserve(1, |&i| hash_stored_value(arena, &terms[i as usize]))
+-            .map_err(|_| ())?;
+-        Ok(self.insert_missing(lookup, hash))
++            .map_err(|_| StorageError::AllocationFailed)?;
++        Ok(id)
+     }
+ 
+     /// The HIT half of [`intern_lookup`](Self::intern_lookup): the id of a value this
+@@ -415,14 +419,14 @@ impl GlobalDictionary {
+     /// the arena, build and store the term, and index it. `hash` must be
+     /// `hash_lookup_value(&lookup)` and the caller must already have established
+     /// that [`find`](Self::find) missed.
+-    fn insert_missing(&mut self, lookup: GlobalTermLookup<'_>, hash: u64) -> GlobalTermId {
+-        let i = u64::try_from(self.terms.len())
+-            .expect("global dictionary table exceeds u64::MAX entries");
++    fn insert_missing(&mut self, lookup: GlobalTermLookup<'_>, hash: u64) -> Result<GlobalTermId, StorageError> {
++        let id = self.reserve_missing(&lookup)?;
++        let i = id.index();
+         // Miss: now (and only now) push the strings to the arena and build the term.
+         let term = match lookup {
+-            GlobalTermLookup::Iri(iri) => GlobalInternedTerm::Iri(self.push_str(iri)),
++            GlobalTermLookup::Iri(iri) => GlobalInternedTerm::Iri(self.push_str(iri)?),
+             GlobalTermLookup::Blank { label, scope } => GlobalInternedTerm::Blank {
+-                label: self.push_str(label),
++                label: self.push_str(label)?,
+                 scope,
+             },
+             GlobalTermLookup::Literal {
+@@ -431,8 +435,8 @@ impl GlobalDictionary {
+                 language,
+                 direction,
+             } => {
+-                let lexical_form = self.push_str(lexical);
+-                let language = language.map(|l| self.push_str(l));
++                let lexical_form = self.push_str(lexical)?;
++                let language = language.map(|l| self.push_str(l)).transpose()?;
+                 GlobalInternedTerm::Literal(GlobalInternedLiteral {
+                     lexical_form,
+                     datatype,
+@@ -453,7 +457,7 @@ impl GlobalDictionary {
+         let (arena, terms) = (&self.arena, &self.terms);
+         self.index
+             .insert_unique(hash, i, |&i| hash_stored_value(arena, &terms[i as usize]));
+-        GlobalTermId::from_index(i)
++        Ok(id)
+     }
+ 
+     /// Intern an IRI term. Idempotent: the same IRI string yields the same id.
+@@ -478,14 +482,14 @@ impl GlobalDictionary {
+     ///
+     /// [`IriError`] when `iri` is not an absolute IRI. The rule has one owner, the
+     /// crate-private `ir::absolute` module, which every ingress reaches.
+-    pub fn intern_iri(&mut self, iri: &str) -> Result<GlobalTermId, IriError> {
++    pub fn intern_iri(&mut self, iri: &str) -> Result<GlobalTermId, IriReadError> {
+         let lookup = GlobalTermLookup::Iri(iri);
+         let hash = hash_lookup_value(&lookup);
+         if let Some(id) = self.find(&lookup, hash) {
+             return Ok(id);
+         }
+         super::absolute::check_absolute(iri)?;
+-        Ok(self.insert_missing(lookup, hash))
++        self.insert_missing(lookup, hash).map_err(Into::into)
+     }
+ 
+     /// Re-intern a [`TermValue`] that PROVABLY satisfies the absoluteness invariant
+@@ -511,22 +515,17 @@ impl GlobalDictionary {
+     ///
+     /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
+     /// predicate and object, each fully before the next, then the triple itself.
+-    pub(crate) fn reintern_validated(&mut self, value: &TermValue) -> GlobalTermId {
+-        self.try_reintern_validated(value)
+-            .expect("validated dictionary value fits resident capacity")
+-    }
+-
+     /// Refuse resident address/allocation exhaustion while composing independent
+     /// dictionaries. Partial private dictionary growth is never published on error.
+-    pub(crate) fn try_reintern_validated(&mut self, value: &TermValue) -> Result<GlobalTermId, ()> {
++    pub(crate) fn try_reintern_validated(&mut self, value: &TermValue) -> Result<GlobalTermId, StorageError> {
+         try_fold_nested(
+             value,
+             self,
+             |dict, value| {
+                 Ok(Nested::Leaf(match value {
+-                    TermValue::Iri(iri) => dict.try_intern_lookup(GlobalTermLookup::Iri(iri))?,
++                    TermValue::Iri(iri) => dict.intern_lookup(GlobalTermLookup::Iri(iri))?,
+                     TermValue::Blank { label, scope } => {
+-                        dict.try_intern_lookup(GlobalTermLookup::Blank {
++                        dict.intern_lookup(GlobalTermLookup::Blank {
+                             label,
+                             scope: *scope,
+                         })?
+@@ -538,7 +537,7 @@ impl GlobalDictionary {
+                         direction,
+                     } => {
+                         let datatype_id =
+-                            dict.try_intern_lookup(GlobalTermLookup::Iri(datatype))?;
++                            dict.intern_lookup(GlobalTermLookup::Iri(datatype))?;
+                         dict.try_intern_literal(
+                             lexical_form,
+                             datatype_id,
+@@ -551,12 +550,12 @@ impl GlobalDictionary {
+                     }
+                 }))
+             },
+-            |dict, _, s, p, o| dict.try_intern_lookup(GlobalTermLookup::Triple { s, p, o }),
++            |dict, _, s, p, o| dict.intern_lookup(GlobalTermLookup::Triple { s, p, o }),
+         )
+     }
+ 
+     /// Intern a blank node. Identity is `(label, scope)` (C0.2).
+-    pub fn intern_blank(&mut self, label: &str, scope: BlankScope) -> GlobalTermId {
++    pub fn intern_blank(&mut self, label: &str, scope: BlankScope) -> Result<GlobalTermId, StorageError> {
+         self.intern_lookup(GlobalTermLookup::Blank { label, scope })
+     }
+ 
+@@ -574,9 +573,8 @@ impl GlobalDictionary {
+         datatype: GlobalTermId,
+         language: Option<&str>,
+         direction: Option<RdfTextDirection>,
+-    ) -> GlobalTermId {
++    ) -> Result<GlobalTermId, StorageError> {
+         self.try_intern_literal(lexical, datatype, language, direction)
+-            .expect("literal and referenced blanks fit resident capacity")
+     }
+ 
+     /// One literal registration home for ordinary and validated ingress. Every
+@@ -588,18 +586,18 @@ impl GlobalDictionary {
+         datatype: GlobalTermId,
+         language: Option<&str>,
+         direction: Option<RdfTextDirection>,
+-    ) -> Result<GlobalTermId, ()> {
++    ) -> Result<GlobalTermId, StorageError> {
+         let blanks = match self.resolve(datatype) {
+             TermRef::Iri(iri) => crate::cdt_blank::cdt_embedded_blanks(lexical, iri),
+             _ => Vec::new(),
+         };
+         for (label, scope) in blanks {
+-            self.try_intern_lookup(GlobalTermLookup::Blank {
++            self.intern_lookup(GlobalTermLookup::Blank {
+                 label: &label,
+                 scope,
+             })?;
+         }
+-        self.try_intern_lookup(GlobalTermLookup::Literal {
++        self.intern_lookup(GlobalTermLookup::Literal {
+             lexical,
+             datatype,
+             language,
+@@ -614,7 +612,7 @@ impl GlobalDictionary {
+         s: GlobalTermId,
+         p: GlobalTermId,
+         o: GlobalTermId,
+-    ) -> GlobalTermId {
++    ) -> Result<GlobalTermId, StorageError> {
+         self.intern_lookup(GlobalTermLookup::Triple { s, p, o })
+     }
+ 
+@@ -635,14 +633,14 @@ impl GlobalDictionary {
+     /// predicate and object, each fully before the next, then the triple itself. The
+     /// first IRI refused ends the walk, with everything interned before it left in
+     /// place.
+-    pub fn intern(&mut self, value: &TermValue) -> Result<GlobalTermId, IriError> {
++    pub fn intern(&mut self, value: &TermValue) -> Result<GlobalTermId, IriReadError> {
+         try_fold_nested(
+             value,
+             self,
+             |dict, value| {
+                 Ok(Nested::Leaf(match value {
+                     TermValue::Iri(iri) => dict.intern_iri(iri)?,
+-                    TermValue::Blank { label, scope } => dict.intern_blank(label, *scope),
++                    TermValue::Blank { label, scope } => dict.intern_blank(label, *scope)?,
+                     TermValue::Literal {
+                         lexical_form,
+                         datatype,
+@@ -655,14 +653,14 @@ impl GlobalDictionary {
+                             datatype_id,
+                             language.as_deref(),
+                             *direction,
+-                        )
++                        )?
+                     }
+                     TermValue::Triple { s, p, o } => {
+                         return Ok(Nested::Triple(&**s, &**p, &**o));
+                     }
+                 }))
+             },
+-            |dict, _, s, p, o| Ok(dict.intern_triple(s, p, o)),
++            |dict, _, s, p, o| dict.intern_triple(s, p, o).map_err(Into::into),
+         )
+     }
+ 
+diff --git crates/rdf-core/src/ir/term.rs crates/rdf-core/src/ir/term.rs
+index 8d4154441..d0c0c3051 100644
+--- crates/rdf-core/src/ir/term.rs
++++ crates/rdf-core/src/ir/term.rs
+@@ -221,9 +221,40 @@ impl Default for BlankScope {
+ /// holds only this 8-byte range — `InternedTerm` becomes `Copy` and per-term heap
+ /// allocations collapse to one growable arena.
+ #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+-pub(crate) struct StrRange {
+-    pub offset: u32,
+-    pub len: u32,
++pub(crate) struct StrRange<W = u32> {
++    pub offset: W,
++    pub len: W,
++}
++
++/// The two arena address widths; resident local terms retain compact ranges,
++/// while a global dictionary's range carries its full logical u64 address.
++pub(crate) trait ArenaOffset: Copy + TryFrom<u64> + Into<u64> {
++    const LIMIT: u64;
++    const SPACE: purrdf_lex::allocation::CapacitySpace;
++}
++
++impl ArenaOffset for u32 {
++    const LIMIT: u64 = u32::MAX as u64;
++    const SPACE: purrdf_lex::allocation::CapacitySpace = purrdf_lex::allocation::CapacitySpace::LocalTermBytes;
++}
++
++impl ArenaOffset for u64 {
++    const LIMIT: u64 = u64::MAX;
++    const SPACE: purrdf_lex::allocation::CapacitySpace = purrdf_lex::allocation::CapacitySpace::GlobalTermBytes;
++}
++
++impl<W: ArenaOffset> StrRange<W> {
++    /// The actual range arithmetic used before append, independent of the
++    /// resident allocation. This also admits synthetic large-offset checks
++    /// without allocating gigabytes merely to reach a logical boundary.
++    fn checked(offset: u64, len: u64) -> Result<Self, purrdf_lex::allocation::StorageError> {
++        use purrdf_lex::allocation::{CapacityError, StorageError};
++        let attempted = u128::from(offset) + u128::from(len);
++        CapacityError::check(W::SPACE, attempted, u128::from(W::LIMIT))?;
++        let offset = W::try_from(offset).map_err(|_| StorageError::SizeOverflow)?;
++        let len = W::try_from(len).map_err(|_| StorageError::SizeOverflow)?;
++        Ok(Self { offset, len })
++    }
+ }
+ 
+ /// A language tag as the term interner keys and stores it: folded by
+@@ -271,25 +302,32 @@ pub(crate) fn push_arena_str(arena: &mut Vec<u8>, s: &str) -> StrRange {
+ }
+ 
+ /// The original arena producer, admitting growth before any allocation.
+-pub(crate) fn push_arena_str_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++pub(crate) fn push_arena_str_with_memory<W: ArenaOffset, S: purrdf_lex::allocation::Admission + ?Sized>(
+     arena: &mut Vec<u8>,
+     s: &str,
+     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+-) -> Result<StrRange, purrdf_lex::allocation::StorageError> {
++) -> Result<StrRange<W>, purrdf_lex::allocation::StorageError> {
+     use purrdf_lex::allocation::StorageError;
+-    let offset = u32::try_from(arena.len()).map_err(|_| StorageError::SizeOverflow)?;
+-    let len = u32::try_from(s.len()).map_err(|_| StorageError::SizeOverflow)?;
+-    offset.checked_add(len).ok_or(StorageError::SizeOverflow)?;
++    let range = StrRange::checked(
++        u64::try_from(arena.len()).map_err(|_| StorageError::SizeOverflow)?,
++        u64::try_from(s.len()).map_err(|_| StorageError::SizeOverflow)?,
++    )?;
+     memory.extend(arena, s.bytes())?;
+-    Ok(StrRange { offset, len })
++    Ok(range)
+ }
+ 
+ /// Borrow an arena range as `&str`. The arena only ever receives validated UTF-8
+ /// (it is appended from `&str` values) and ranges are recorded at push time, so the
+ /// sub-slice is always valid UTF-8.
+ #[inline]
+-pub(crate) fn arena_str(arena: &[u8], range: StrRange) -> &str {
+-    let bytes = &arena[range.offset as usize..range.offset as usize + range.len as usize];
++pub(crate) fn arena_str<W: ArenaOffset>(arena: &[u8], range: StrRange<W>) -> &str {
++    // Only the append producer constructs retained ranges. A range retained in
++    // a resident buffer must address that buffer; a foreign range is an invariant
++    // error, distinct from capacity refusal while appending user input.
++    let start = usize::try_from(range.offset.into()).expect("arena offset addresses its resident buffer");
++    let len = usize::try_from(range.len.into()).expect("arena length addresses its resident buffer");
++    let end = start.checked_add(len).expect("retained arena range has a checked end");
++    let bytes = &arena[start..end];
+     debug_assert!(
+         std::str::from_utf8(bytes).is_ok(),
+         "arena range is valid UTF-8"
+@@ -905,6 +943,46 @@ impl TermValue {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn global_arena_range_crosses_four_gib_without_narrowing() {
++        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
++        let offset = u64::from(u32::MAX) - 2;
++        let wide = StrRange::<u64>::checked(offset, 9).unwrap();
++        assert_eq!(wide.offset, offset);
++        assert_eq!(wide.len, 9);
++        assert_eq!(wide.offset + wide.len, u64::from(u32::MAX) + 7);
++        assert_eq!(
++            StrRange::<u32>::checked(offset, 9),
++            Err(StorageError::Capacity(CapacityError {
++                space: CapacitySpace::LocalTermBytes,
++                attempted: u128::from(u32::MAX) + 7,
++                limit: u128::from(u32::MAX),
++            }))
++        );
++        assert_eq!(StrRange::<u64>::checked(u64::MAX, 0).unwrap().offset, u64::MAX);
++        assert_eq!(
++            StrRange::<u64>::checked(u64::MAX, 1),
++            Err(StorageError::Capacity(CapacityError {
++                space: CapacitySpace::GlobalTermBytes,
++                attempted: u128::from(u64::MAX) + 1,
++                limit: u128::from(u64::MAX),
++            }))
++        );
++    }
++
++    #[test]
++    fn both_arena_widths_use_the_same_append_and_resolution_home() {
++        use purrdf_lex::allocation::{Memory, Resident};
++        let mut arena = Vec::new();
++        let mut resident = Resident;
++        let mut memory = Memory::new(&mut resident);
++        let local: StrRange<u32> = push_arena_str_with_memory(&mut arena, "aλ", &mut memory).unwrap();
++        let global: StrRange<u64> = push_arena_str_with_memory(&mut arena, "猫", &mut memory).unwrap();
++        assert_eq!(arena_str(&arena, local), "aλ");
++        assert_eq!(arena_str(&arena, global), "猫");
++        assert_eq!(global.offset, u64::from(local.offset + local.len));
++    }
++
+     #[test]
+     fn push_arena_str_appends_and_answers_the_range_it_occupies() {
+         let mut arena = Vec::new();
+diff --git crates/sparql-eval/src/error.rs crates/sparql-eval/src/error.rs
+index 8660635a2..766ebc911 100644
+--- crates/sparql-eval/src/error.rs
++++ crates/sparql-eval/src/error.rs
+@@ -256,6 +256,10 @@ pub enum EvalError {
+     /// The certified worst-case workspace bound exceeds the logical byte width.
+     WorkspaceBoundOverflow,
+ 
++    /// A native logical table or address space exhausted its representable count.
++    /// The exact space and attempted count survive public query publication.
++    Capacity(purrdf_lex::allocation::CapacityError),
++
+     /// The host could not allocate storage for materialized query solutions.
+     /// An operational failure, not an expression error or a governor trip: no
+     /// partial answer is certified when its result storage cannot be grown.
+@@ -677,6 +681,7 @@ impl EvalError {
+             Self::ExchangeIdExhausted => Some("native-sparql-exchange-id-exhausted"),
+             Self::WorkspaceUnpriced(_) => Some("native-sparql-workspace-unpriced"),
+             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
++            Self::Capacity(_) => Some("native-sparql-capacity-exhausted"),
+             Self::AllocationFailed { .. } => Some(Self::ALLOCATION_FAILED_CODE),
+             Self::Internal(_) => Some(Self::INTERNAL_CODE),
+             Self::CompositeBound(_) => Some(Self::COMPOSITE_BOUND_CODE),
+@@ -872,6 +877,7 @@ impl core::fmt::Display for EvalError {
+             Self::WorkspaceBoundOverflow => {
+                 f.write_str("bounded query workspace price exceeds the logical byte width")
+             }
++            Self::Capacity(error) => core::fmt::Display::fmt(error, f),
+             Self::AllocationFailed { construct } => {
+                 write!(f, "memory allocation failed for {construct}")
+             }
+diff --git crates/sparql-eval/src/property_fn_eval.rs crates/sparql-eval/src/property_fn_eval.rs
+index c2786b72a..a3dc3a683 100644
+--- crates/sparql-eval/src/property_fn_eval.rs
++++ crates/sparql-eval/src/property_fn_eval.rs
+@@ -576,6 +576,7 @@ fn triple_is_ground_native<S: purrdf_lex::allocation::Admission + ?Sized>(
+ 
+ fn call_storage(error: purrdf_lex::allocation::StorageError) -> EvalError {
+     match error {
++        purrdf_lex::allocation::StorageError::Capacity(error) => EvalError::Capacity(error),
+         purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
+         purrdf_lex::allocation::StorageError::AllocationFailed => EvalError::AllocationFailed {
+             construct: "property-function producer",
+diff --git crates/sparql-eval/src/workspace.rs crates/sparql-eval/src/workspace.rs
+index 7fd50b3c3..cf3273c15 100644
+--- crates/sparql-eval/src/workspace.rs
++++ crates/sparql-eval/src/workspace.rs
+@@ -321,7 +321,12 @@ impl LexicalFrame {
+         error: purrdf_lex::allocation::StorageError,
+         construct: &'static str,
+     ) -> EvalError {
++        if let purrdf_lex::allocation::StorageError::Capacity(error) = error {
++            self.take_failure();
++            return EvalError::Capacity(error);
++        }
+         self.take_failure().unwrap_or(match error {
++            purrdf_lex::allocation::StorageError::Capacity(error) => EvalError::Capacity(error),
+             purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
+             purrdf_lex::allocation::StorageError::AllocationFailed => {
+                 EvalError::AllocationFailed { construct }
+diff --git crates/validate/src/regime.rs crates/validate/src/regime.rs
+index c8bca282b..3b19437cf 100644
+--- crates/validate/src/regime.rs
++++ crates/validate/src/regime.rs
+@@ -1838,12 +1838,18 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
+     }
+     if let Some(error) = certificate.storage_refusal() {
+         let kind = match error {
++            purrdf_lex::allocation::StorageError::Capacity(error) => {
++                let _ = writeln!(out, "storage-refusal capacity {} {} {}", error.space, error.attempted, error.limit);
++                ""
++            }
+             purrdf_lex::allocation::StorageError::SizeOverflow => "size-overflow",
+             purrdf_lex::allocation::StorageError::AllocationFailed => "allocation-failed",
+             purrdf_lex::allocation::StorageError::AdmissionFailed => "admission-failed",
+             purrdf_lex::allocation::StorageError::FormattingFailed => "formatting-failed",
+         };
+-        let _ = writeln!(out, "storage-refusal {kind}");
++        if !kind.is_empty() {
++            let _ = writeln!(out, "storage-refusal {kind}");
++        }
+     }
+     for boundary in certificate.boundaries() {
+         let _ = writeln!(
+@@ -4380,6 +4386,20 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
+                 "allocation-failed" => StorageError::AllocationFailed,
+                 "admission-failed" => StorageError::AdmissionFailed,
+                 "formatting-failed" => StorageError::FormattingFailed,
++                value if value.starts_with("capacity ") => {
++                    use purrdf_lex::allocation::{CapacityError, CapacitySpace};
++                    let mut fields = value.split_whitespace().skip(1);
++                    let space = fields.next().and_then(CapacitySpace::of_name)
++                        .ok_or_else(|| "unknown DL capacity space".to_owned())?;
++                    let attempted = fields.next().and_then(|v| v.parse::<u128>().ok())
++                        .ok_or_else(|| "invalid DL capacity attempted count".to_owned())?;
++                    let limit = fields.next().and_then(|v| v.parse::<u128>().ok())
++                        .ok_or_else(|| "invalid DL capacity limit".to_owned())?;
++                    if fields.next().is_some() || attempted <= limit {
++                        return Err("invalid DL capacity refusal".to_owned());
++                    }
++                    StorageError::Capacity(CapacityError { space, attempted, limit })
++                }
+                 other => return Err(format!("unknown DL storage refusal \"{other}\"")),
+             };
+             if storage_refusal.replace(error).is_some() {

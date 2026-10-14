@@ -1,0 +1,73 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error[E0277]: `?` couldn't convert the error to `!`
+    --> crates/rdf-core/src/ir/skolem.rs:1405:72
+     |
+1392 |     ) -> Result<TermId, Infallible> {
+     |          -------------------------- expected `!` because of this
+...
+1405 |                 let mapped_datatype = mapper.map_iri(builder, dt, true)?;
+     |                                              --------------------------^ the trait `From<skolem::SkolemError>` is not implemented for `!`
+     |                                              |
+     |                                              this can't be annotated with `?` because it has type `Result<_, skolem::SkolemError>`
+     |
+note: `skolem::SkolemError` needs to implement `Into<!>`
+    --> crates/rdf-core/src/ir/skolem.rs:91:1
+     |
+  91 | pub enum SkolemError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `!`
+    --> crates/rdf-core/src/ir/skolem.rs:1407:93
+     |
+1392 |     ) -> Result<TermId, Infallible> {
+     |          -------------------------- expected `!` because of this
+...
+1407 |                 let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, mapper)?;
+     |                                    ---------------------------------------------------------^ the trait `From<skolem::SkolemError>` is not implemented for `!`
+     |                                    |
+     |                                    this can't be annotated with `?` because it has type `Result<_, skolem::SkolemError>`
+     |
+note: `skolem::SkolemError` needs to implement `Into<!>`
+    --> crates/rdf-core/src/ir/skolem.rs:91:1
+     |
+  91 | pub enum SkolemError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `!`
+    --> crates/rdf-core/src/ir/skolem.rs:1421:10
+     |
+1392 |       ) -> Result<TermId, Infallible> {
+     |            -------------------------- expected `!` because of this
+1393 |           let mapped = match ds.resolve(id) {
+     |  ______________________-
+1394 | |             TermRef::Iri(iri) => mapper.map_iri(builder, iri, iri_only),
+1395 | |             TermRef::Blank { label, scope } => mapper.map_blank(builder, id, label, scope),
+1396 | |             TermRef::Literal {
+...    |
+1421 | |         }?;
+     | |         -^ the trait `From<skolem::SkolemError>` is not implemented for `!`
+     | |_________|
+     |           this can't be annotated with `?` because it has type `Result<_, skolem::SkolemError>`
+     |
+note: `skolem::SkolemError` needs to implement `Into<!>`
+    --> crates/rdf-core/src/ir/skolem.rs:91:1
+     |
+  91 | pub enum SkolemError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/skolem.rs:1467:28
+     |
+1467 |             assert_eq!(id, reference, "seed {seed}");
+     |                            ^^^^^^^^^ expected `Result<TermId, SkolemError>`, found `Result<TermId, !>`
+     |
+     = note: expected enum `Result<_, skolem::SkolemError>`
+                found enum `Result<_, !>`
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (lib test) due to 4 previous errors
+terminal_status=101

@@ -1,0 +1,150 @@
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+error[E0308]: `if` and `else` have incompatible types
+   --> crates/sparql-eval/src/engine/graph_build.rs:570:9
+    |
+558 |        let copied_payload_bytes = if original.workspace().is_bounded() {
+    |  _________________________________-
+559 | |          let mut publication = crate::workspace::LexicalFrame::new(original.workspace());
+560 | |          let copied = {
+561 | |              let mut memory = purrdf_lex::allocation::Memory::new(&mut publication);
+...   |
+564 | |/         copied.map_err(|error| {
+565 | ||             GraphBuildError::Evaluation(
+566 | ||                 publication.storage_error(error, "transactional graph append"),
+567 | ||             )
+568 | ||         })?
+    | ||___________- expected because of this
+569 | |      } else {
+570 | |          destination.append_validated(staged)
+    | |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `Result<usize, StorageError>`
+571 | |      };
+    | |______- `if` and `else` have incompatible types
+    |
+    = note: expected type `usize`
+               found enum `Result<usize, purrdf_lex::allocation::StorageError>`
+help: use the `?` operator to extract the `Result<usize, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+571 |     }?;
+    |      +
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/governed.rs:655:41
+     |
+ 655 |             builder.declare_named_graph(id);
+     |                     ------------------- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1015:12
+     |
+1015 |     pub fn declare_named_graph(&mut self, g: TermId) {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 655 |             builder.declare_named_graph(id.expect("REASON"));
+     |                                           +++++++++++++++++
+
+error[E0277]: expected an `FnOnce(IriReadError)` closure, found `{closure@crates/sparql-eval/src/rdflib.rs:50:27: 50:56}`
+   --> crates/sparql-eval/src/rdflib.rs:60:51
+    |
+ 60 |             selected.insert(quad.clone()).map_err(insertion_error)?;
+    |                                           ------- ^^^^^^^^^^^^^^^ expected an `FnOnce(IriReadError)` closure, found `{closure@crates/sparql-eval/src/rdflib.rs:50:27: 50:56}`
+    |                                           |
+    |                                           required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(IriReadError)` is not implemented for closure `{closure@crates/sparql-eval/src/rdflib.rs:50:27: 50:56}`
+    = note: expected a closure with signature `fn(IriReadError)`
+               found a closure with signature `fn(IriError)`
+note: required by a bound in `Result::<T, E>::map_err`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+    |
+961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+    |                  ------- required by a bound in this associated function
+962 |     where
+963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0277]: expected an `FnOnce(IriReadError)` closure, found `{closure@crates/sparql-eval/src/rdflib.rs:50:27: 50:56}`
+   --> crates/sparql-eval/src/rdflib.rs:65:26
+    |
+ 65 |                 .map_err(insertion_error)?;
+    |                  ------- ^^^^^^^^^^^^^^^ expected an `FnOnce(IriReadError)` closure, found `{closure@crates/sparql-eval/src/rdflib.rs:50:27: 50:56}`
+    |                  |
+    |                  required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(IriReadError)` is not implemented for closure `{closure@crates/sparql-eval/src/rdflib.rs:50:27: 50:56}`
+    = note: expected a closure with signature `fn(IriReadError)`
+               found a closure with signature `fn(IriError)`
+note: required by a bound in `Result::<T, E>::map_err`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+    |
+961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+    |                  ------- required by a bound in this associated function
+962 |     where
+963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/update.rs:558:47
+    |
+558 |             m.insert(q).map_err(|e| iri_abort(&e))?;
+    |                                     --------- ^^ expected `&IriError`, found `&IriReadError`
+    |                                     |
+    |                                     arguments to this function are incorrect
+    |
+    = note: expected reference `&IriError`
+               found reference `&IriReadError`
+note: function defined here
+   --> crates/sparql-eval/src/update.rs:155:4
+    |
+155 | fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
+    |    ^^^^^^^^^ ---------------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/update.rs:821:43
+    |
+821 |         m.insert(q).map_err(|e| iri_abort(&e))?;
+    |                                 --------- ^^ expected `&IriError`, found `&IriReadError`
+    |                                 |
+    |                                 arguments to this function are incorrect
+    |
+    = note: expected reference `&IriError`
+               found reference `&IriReadError`
+note: function defined here
+   --> crates/sparql-eval/src/update.rs:155:4
+    |
+155 | fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
+    |    ^^^^^^^^^ ---------------------------
+
+error[E0004]: non-exhaustive patterns: `&EvalError::Capacity(_)` not covered
+    --> crates/sparql-eval/src/protocol.rs:1234:15
+     |
+1234 |         match error {
+     |               ^^^^^ pattern `&EvalError::Capacity(_)` not covered
+     |
+note: `EvalError` defined here
+    --> crates/sparql-eval/src/error.rs:282:10
+     |
+ 282 | pub enum EvalError {
+     |          ^^^^^^^^^
+...
+ 319 |     Capacity(purrdf_lex::allocation::CapacityError),
+     |     -------- not covered
+     = note: the matched value is of type `&EvalError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+     |
+1272 ~             | EvalError::FloatEnvironment(_) => Self::Evaluation,
+1273 ~             &EvalError::Capacity(_) => todo!(),
+     |
+
+Some errors have detailed explanations: E0004, E0277, E0308.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 7 previous errors
+terminal_status=101

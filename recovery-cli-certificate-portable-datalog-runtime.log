@@ -1,0 +1,91 @@
++ cargo test --locked -j 8 -p purrdf-cli --lib shapes_storage_refusal_keeps_the_original_message_and_runtime_exit -- --test-threads=4
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling utf8parse v0.2.2
+   Compiling anstyle v1.0.14
+   Compiling colorchoice v1.0.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+   Compiling anstyle-query v1.1.5
+   Compiling syn v2.0.118
+   Compiling strsim v0.11.1
+   Compiling clap_lex v1.1.0
+   Compiling anstyle-parse v1.0.0
+   Compiling anstream v1.0.0
+   Compiling clap_derive v4.6.1
+   Compiling clap_builder v4.6.0
+   Compiling clap v4.6.1
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cli)
+    Finished `test` profile [optimized] target(s) in 2m 38s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-cli/0cf98db94f04b302/out/purrdf_cli-0cf98db94f04b302)
+
+running 1 test
+test error::tests::shapes_storage_refusal_keeps_the_original_message_and_runtime_exit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out; finished in 0.00s
+
++ cargo test --locked -j 8 -p purrdf-validate --lib physical_dl_refusals_round_trip_without_a_decided_certificate -- --test-threads=4
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Finished `test` profile [optimized] target(s) in 8.41s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-validate/5fc545b3ad10833e/out/purrdf_validate-5fc545b3ad10833e)
+
+running 1 test
+test regime::tests::physical_dl_refusals_round_trip_without_a_decided_certificate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 248 filtered out; finished in 0.00s
+
++ cargo test --locked -j 8 -p purrdf-datalog --test rules_runtime -- --test-threads=4
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 2.89s
+     Running tests/rules_runtime.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-datalog/194ed7bfa895a9e6/out/rules_runtime-194ed7bfa895a9e6)
+
+running 6 tests
+test public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error ... ok
+test connected_rule_restores_all_authored_premises ... ok
+test independent_head_projects_without_cartesian_work ... ok
+test later_partial_delta_keeps_both_productive_anchors ... ok
+test original_guarded_pair_has_exact_connected_work_and_authored_proofs ... ok
+test recursive_factor_preserves_authored_proofs_and_typed_limits ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
++ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/scripts/wasm-test-runner.sh
++ cargo test --locked -j 8 --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --test-threads=4
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 29.32s
+     Running tests/rules_runtime.rs (/opt/.cargo/63/2c12af8b7e2e0c/wasm32-unknown-unknown/debug/build/purrdf-datalog/9d78c1fc5d2ce658/out/rules_runtime-9d78c1fc5d2ce658.wasm)
+
+running 6 tests
+test public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error ... ok
+test later_partial_delta_keeps_both_productive_anchors ... ok
+test original_guarded_pair_has_exact_connected_work_and_authored_proofs ... ok
+test connected_rule_restores_all_authored_premises ... ok
+test independent_head_projects_without_cartesian_work ... ok
+test recursive_factor_preserves_authored_proofs_and_typed_limits ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+terminal_status=0

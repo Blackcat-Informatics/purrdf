@@ -1,0 +1,185 @@
+cargo wrapper: relocating /home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/target -> /opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hash)
+    Checking typenum v1.20.1
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking hashbrown v0.17.1
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/deflate)
+    Checking regex-automata v0.4.14
+    Checking regex v1.12.4
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+    Checking digest v0.11.3
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+    Checking sha2 v0.11.0
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/imports.rs:1201:9
+     |
+1201 |         b.declare_named_graph(g);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+     = note: `-D unused-must-use` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+     |
+1201 |         let _ = b.declare_named_graph(g);
+     |         +++++++
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/builder.rs:1615:13
+     |
+1615 |             self.declare_named_graph(g);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1615 |             let _ = self.declare_named_graph(g);
+     |             +++++++
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/composite.rs:1627:17
+     |
+1627 |                 graph_builder.declare_named_graph(id);
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1627 |                 let _ = graph_builder.declare_named_graph(id);
+     |                 +++++++
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/mutable.rs:1521:13
+     |
+1521 |             builder.declare_named_graph(id);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1521 |             let _ = builder.declare_named_graph(id);
+     |             +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/ir/import.rs:402:17
+    |
+402 |                 self.builder.declare_named_graph(graph);
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+402 |                 let _ = self.builder.declare_named_graph(graph);
+    |                 +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/ir/ingest.rs:466:13
+    |
+466 | /             self.builder
+467 | |                 .as_mut()
+468 | |                 .expect("builder present")
+469 | |                 .declare_named_graph(g);
+    | |_______________________________________^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+466 |             let _ = self.builder
+    |             +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/ir/paged/stack.rs:305:9
+    |
+305 |         builder.declare_named_graph(id);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+305 |         let _ = builder.declare_named_graph(id);
+    |         +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/ir/paged/stack.rs:334:13
+    |
+334 |             builder.declare_named_graph(id);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+334 |             let _ = builder.declare_named_graph(id);
+    |             +++++++
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/paged/stack.rs:1080:17
+     |
+1080 |                 builder.declare_named_graph(g);
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1080 |                 let _ = builder.declare_named_graph(g);
+     |                 +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/ir/segmented/build.rs:239:9
+    |
+239 |         self.builder.declare_named_graph(graph);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+239 |         let _ = self.builder.declare_named_graph(graph);
+    |         +++++++
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/segmented/build.rs:1023:13
+     |
+1023 |             builder.declare_named_graph(native_id(id)?);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1023 |             let _ = builder.declare_named_graph(native_id(id)?);
+     |             +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/ir/skolem.rs:625:9
+    |
+625 |         builder.declare_named_graph(g);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+625 |         let _ = builder.declare_named_graph(g);
+    |         +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/term_fixture.rs:211:5
+    |
+211 |     builder.declare_named_graph(empty);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+211 |     let _ = builder.declare_named_graph(empty);
+    |     +++++++
+
+error: could not compile `purrdf-core` (lib) due to 13 previous errors
+terminal_status=101

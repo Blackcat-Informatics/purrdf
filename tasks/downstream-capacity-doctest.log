@@ -1,0 +1,58 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 13m 09s
+   Doc-tests purrdf_datalog
+
+running 1 test
+test crates/datalog/src/resolve_fol.rs - resolve_fol::derivation_id (line 1593) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.26s; merged doctests compilation took 0.26s
+   Doc-tests purrdf_shapes
+
+running 7 tests
+test crates/shapes/src/imports.rs - imports::ShapesImports::link_data_graph (line 289) ... ok
+test crates/shapes/src/imports.rs - imports::ShapesImports (line 144) ... ok
+test crates/shapes/src/report.rs - report::ValidationReport::to_dataset (line 1798) - compile ... ok
+test crates/shapes/src/engine.rs - engine::PreparedValidator (line 2343) ... ok
+test crates/shapes/src/typescript.rs - typescript::emit_typescript (line 188) ... ok
+test crates/shapes/src/json_schema.rs - json_schema::Namespaces (line 233) ... ok
+test crates/shapes/src/engine.rs - engine::PreparedShapes::bind_complete_shared_dataset (line 1824) ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.90s; merged doctests compilation took 0.89s
+   Doc-tests purrdf_sparql_eval
+
+running 11 tests
+test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::query_prepared_view (line 1821) - compile ... ok
+test crates/sparql-eval/src/engine.rs - engine::QueryOptions (line 5735) ... ok
+test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::prepare_execution (line 3909) ... ok
+test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::execute (line 4072) ... ok
+test crates/sparql-eval/src/execution.rs - execution::PreparedExecution::check_parameters_mentioned (line 507) ... ok
+test crates/sparql-eval/src/interned.rs - interned::InternedGraph (line 470) ... ok
+test crates/sparql-eval/src/agg_fn.rs - agg_fn::AggregateRegistry::register (line 1057) ... ok
+test crates/sparql-eval/src/execution.rs - execution::PreparedExecution::slot (line 566) ... ok
+test crates/sparql-eval/src/property_fn.rs - property_fn::MemoryRelation (line 3670) ... ok
+test crates/sparql-eval/src/property_fn.rs - property_fn::RankFidelity (line 1009) ... ok
+test crates/sparql-eval/src/path_relation.rs - path_relation (line 142) ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 5 tests
+test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::execute (line 4050) - compile fail ... ok
+test crates/sparql-eval/src/property_fn.rs - property_fn::RankFidelity (line 1030) - compile fail ... ok
+test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::query_prepared_view (line 1813) - compile fail ... ok
+test crates/sparql-eval/src/interned.rs - interned::InternedGraph (line 462) - compile fail ... ok
+test crates/sparql-eval/src/property_fn.rs - property_fn::RankFidelity (line 986) - compile fail ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+all doctests ran in 5.52s; merged doctests compilation took 5.45s

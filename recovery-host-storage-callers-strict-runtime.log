@@ -1,0 +1,19 @@
++ cargo clippy --locked -j 8 --keep-going -p purrdf-core -p purrdf-wasm -p purrdf-python --all-targets -- -D warnings
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 3.90s
++ cargo test --locked -j 8 -p purrdf-wasm --lib storage_ -- --test-threads=4
+   Compiling once_cell v1.21.4
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-wasm)
+    Finished `test` profile [optimized] target(s) in 16.09s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-wasm/64bcee66e053f989/out/purrdf_wasm-64bcee66e053f989)
+
+running 3 tests
+test operation::tests::reasoning_storage_failure_keeps_original_cause_and_context ... ok
+test shacl::tests::shapes_storage_outcome_retains_exact_diagnostic ... ok
+test query::tests::native_graph_storage_follows_wasm_result_and_dataset_lifetimes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 266 filtered out; finished in 0.00s
+
+terminal_status=0

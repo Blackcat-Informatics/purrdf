@@ -1,0 +1,155 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0308]: mismatched types
+   --> crates/shapes/src/components.rs:813:16
+    |
+682 |   ) -> Result<Vec<ValidationResult>, String> {
+    |        ------------------------------------- expected `std::result::Result<Vec<ValidationResult>, std::string::String>` because of return type
+...
+813 |           return crate::sparql::run_cached_select_with_shacl_prebinding_view(
+    |  ________________^
+814 | |             dataset,
+815 | |             &query,
+816 | |             &names,
+...   |
+834 | |             project,
+835 | |         );
+    | |_________^ expected `Result<Vec<ValidationResult>, String>`, found `Result<Vec<ValidationResult>, _>`
+    |
+    = note: expected enum `Result<_, std::string::String>`
+               found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+813 ~         return Ok(crate::sparql::run_cached_select_with_shacl_prebinding_view(
+814 |             dataset,
+...
+834 |             project,
+835 ~         )?);
+    |
+
+error[E0308]: mismatched types
+   --> crates/shapes/src/components.rs:849:5
+    |
+682 |   ) -> Result<Vec<ValidationResult>, String> {
+    |        ------------------------------------- expected `std::result::Result<Vec<ValidationResult>, std::string::String>` because of return type
+...
+849 | /     run_select_with_shacl_prebinding_view(
+850 | |         dataset,
+851 | |         &query,
+852 | |         &subs,
+...   |
+855 | |         project,
+856 | |     )
+    | |_____^ expected `Result<Vec<ValidationResult>, String>`, found `Result<Vec<ValidationResult>, _>`
+    |
+    = note: expected enum `Result<_, std::string::String>`
+               found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+849 ~     Ok(run_select_with_shacl_prebinding_view(
+850 |         dataset,
+...
+855 |         project,
+856 ~     )?)
+    |
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/rules.rs:1622:13
+     |
+1606 |   ) -> Result<(), String> {
+     |        ------------------ expected `std::result::Result<(), std::string::String>` because of return type
+...
+1622 | /             crate::sparql::with_cached_execution(run.construct, &names, |execution| {
+1623 | |                 let first = crate::sparql::bind_shape_context(
+1624 | |                     execution,
+1625 | |                     THIS_SLOT + 1,
+...    |
+1651 | |                 Ok(())
+1652 | |             })
+     | |______________^ expected `Result<(), String>`, found `Result<(), ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+1622 ~             Ok(crate::sparql::with_cached_execution(run.construct, &names, |execution| {
+1623 |                 let first = crate::sparql::bind_shape_context(
+ ...
+1651 |                 Ok(())
+1652 ~             })?)
+     |
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/rules.rs:1662:13
+     |
+1606 |   ) -> Result<(), String> {
+     |        ------------------ expected `std::result::Result<(), std::string::String>` because of return type
+...
+1662 | /             crate::sparql::with_cached_execution(run.construct, &names, |execution| {
+1663 | |                 for (slot, (_, value)) in run.parameters.iter().enumerate() {
+1664 | |                     execution.bind(slot, value.to_term_value())?;
+...    |
+1674 | |                 Ok(())
+1675 | |             })
+     | |______________^ expected `Result<(), String>`, found `Result<(), ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+1662 ~             Ok(crate::sparql::with_cached_execution(run.construct, &names, |execution| {
+1663 |                 for (slot, (_, value)) in run.parameters.iter().enumerate() {
+ ...
+1674 |                 Ok(())
+1675 ~             })?)
+     |
+
+error[E0308]: mismatched types
+   --> crates/shapes/src/sparql.rs:138:5
+    |
+133 |   ) -> Result<bool, String> {
+    |        -------------------- expected `std::result::Result<bool, std::string::String>` because of return type
+...
+138 | /     run_ask_with_shacl_prebinding_view(
+139 | |         dataset,
+140 | |         ask,
+141 | |         &subs,
+142 | |         crate::query_law::Invocation::without_parameters(crate::profile::QueryPurpose::AskTarget),
+143 | |     )
+    | |_____^ expected `Result<bool, String>`, found `Result<bool, ShapesError>`
+    |
+    = note: expected enum `Result<_, std::string::String>`
+               found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+138 ~     Ok(run_ask_with_shacl_prebinding_view(
+139 |         dataset,
+...
+142 |         crate::query_law::Invocation::without_parameters(crate::profile::QueryPurpose::AskTarget),
+143 ~     )?)
+    |
+
+error[E0308]: mismatched types
+   --> crates/shapes/src/sparql.rs:643:5
+    |
+635 |   ) -> Result<Vec<Term>, String> {
+    |        ------------------------- expected `std::result::Result<Vec<term::Term>, std::string::String>` because of return type
+...
+643 | /     run_select_generic_view(dataset, select, &subs, declared, invocation, |solutions| {
+644 | |         let index = solutions.column(variable).ok_or_else(|| {
+645 | |             format!("SELECT result has no ?{variable} column, but that is the projected variable")
+646 | |         })?;
+...   |
+656 | |             .collect())
+657 | |     })
+    | |______^ expected `Result<Vec<Term>, String>`, found `Result<_, ShapesError>`
+    |
+    = note: expected enum `Result<Vec<term::Term>, std::string::String>`
+               found enum `Result<_, ShapesError>`
+help: use the `?` operator to extract the `std::result::Result<_, ShapesError>` value, propagating a `Result::Err` value to the caller
+    |
+657 |     })?
+    |       +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-shapes` (lib) due to 6 previous errors
+terminal_status=101

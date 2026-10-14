@@ -1,0 +1,7 @@
+Auto-merging crates/geo-kernel/src/topology/relate.rs
+Auto-merging crates/retrieval/tests/real_producers.rs
+CONFLICT (content): Merge conflict in crates/retrieval/tests/real_producers.rs
+Auto-merging crates/shapes/src/schema_surface.rs
+Auto-merging crates/sparql-eval/src/property_fn.rs
+Recorded preimage for 'crates/retrieval/tests/real_producers.rs'
+Automatic merge failed; fix conflicts and then commit the result.

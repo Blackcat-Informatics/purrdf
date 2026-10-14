@@ -1,0 +1,72 @@
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking cpubits v0.1.1
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking libc v0.2.186
+   Compiling getrandom v0.3.4
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/ed25519)
+    Checking cipher v0.5.2
+    Checking aead v0.6.1
+    Checking ctutils v0.4.2
+    Checking structured-zstd v0.0.49
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking universal-hash v0.6.1
+    Checking polyval v0.7.3
+    Checking visual-hashing v1.0.0
+    Checking ghash v0.6.0
+    Checking aes-gcm v0.11.1
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/stack)
+error[E0283]: type annotations needed
+   --> crates/sparql-algebra/src/scope.rs:513:13
+    |
+513 |             Ok(false)
+    |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+note: multiple `impl`s satisfying `_: From<purrdf_lex::allocation::StorageError>` found
+   --> crates/sparql-algebra/src/error.rs:473:1
+    |
+473 | purrdf_lex::variant_from!(ParseError { Storage(purrdf_lex::allocation::StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-algebra/src/scope.rs:203:1
+    |
+203 | purrdf_lex::variant_from!(ScopeValidationError { Storage(StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-algebra/src/serialize.rs:341:1
+    |
+341 | purrdf_lex::variant_from!(CarrierError { Storage(StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-algebra/src/validate.rs:225:1
+    |
+225 | purrdf_lex::variant_from!(ValidationError { Storage(StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: and more `impl`s found in the following crates: `purrdf_cdt`, `purrdf_iri`, `purrdf_lex`, `purrdf_xsd`:
+            - impl From<purrdf_lex::allocation::StorageError> for DebugWriteError;
+            - impl From<purrdf_lex::allocation::StorageError> for DecimalTextError;
+            - impl From<purrdf_lex::allocation::StorageError> for DiagnosticPresentationError;
+            - impl From<purrdf_lex::allocation::StorageError> for IriReadError;
+            - impl From<purrdf_lex::allocation::StorageError> for ReadError;
+note: required by a bound in `visit_spine_leaves_with_memory`
+   --> crates/sparql-algebra/src/scope.rs:543:8
+    |
+536 | pub fn visit_spine_leaves_with_memory<'a, S, E>(
+    |        ------------------------------ required by a bound in this function
+...
+543 |     E: From<StorageError>,
+    |        ^^^^^^^^^^^^^^^^^^ required by this bound in `visit_spine_leaves_with_memory`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider specifying the generic arguments
+    |
+513 |             Ok::<bool, E>(false)
+    |               +++++++++++
+
+For more information about this error, try `rustc --explain E0283`.
+error: could not compile `purrdf-sparql-algebra` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+terminal_status=101

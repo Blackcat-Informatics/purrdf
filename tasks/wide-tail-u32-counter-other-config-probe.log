@@ -1,0 +1,10 @@
+== x86_64: 8 Cargo jobs
+== x86_64 graph 0: /opt/.cargo/slots/b62780797f198b3a/0/cargo.graph-0.stderr.log
+== x86_64 graph 1: /opt/.cargo/slots/b62780797f198b3a/0/cargo.graph-1.stderr.log
+== x86_64: {"analysis_seconds": 21.180142113065813, "build_seconds": 1198.5509207699797, "fresh_artifacts": 65, "lock_seconds": 0.001333300955593586, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 1219.8821703040157}
+== x86_64-v3: 8 Cargo jobs
+== x86_64-v3 graph 0: /opt/.cargo/slots/7e041bc28c729de1/0/cargo.graph-0.stderr.log
+== x86_64-v3 graph 1: /opt/.cargo/slots/7e041bc28c729de1/0/cargo.graph-1.stderr.log
+== x86_64-v3: {"analysis_seconds": 41.475446822005324, "build_seconds": 1357.278455871041, "fresh_artifacts": 65, "lock_seconds": 0.002608013979624957, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 1399.2619244139642}
+== x86_64-v4: 8 Cargo jobs
+== x86_64-v4 graph 0: /opt/.cargo/slots/03acafab8d77c737/0/cargo.graph-0.stderr.log

@@ -1,0 +1,46 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 8.03s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 53.43s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 34 tests
+test provenance::tests::artifact_id_index_round_trips ... ok
+test provenance::tests::artifact_id_display ... ok
+test provenance::tests::artifact_interner_path_resolves ... ok
+test provenance::tests::artifact_interner_is_idempotent ... ok
+test provenance::tests::attribution_construction_and_equality ... ok
+test provenance::tests::attribution_role_as_str_is_stable ... ok
+test provenance::tests::attribution_role_display_matches_as_str ... ok
+test provenance::tests::attribution_vec_carries_multiple_roles ... ok
+test provenance::tests::dataset_provenance_all_non_source_kinds_representable ... ok
+test provenance::tests::dataset_provenance_register_unit_is_idempotent ... ok
+test provenance::tests::dataset_provenance_unit_kind_accessible ... ok
+test provenance::tests::duplicate_origin_retention_two_occurrences_one_quad ... ok
+test provenance::tests::gate_fails_when_occurrence_missing_for_quad ... ok
+test provenance::tests::gate_fails_when_unit_has_no_kind ... ok
+test provenance::tests::gate_non_source_units_pass ... ok
+test provenance::tests::gate_passes_empty_sidecar_for_empty_dataset ... ok
+test provenance::tests::gate_passes_on_valid_single_file_provenance ... ok
+test provenance::tests::gate_passes_multi_file_fixture ... ok
+test provenance::tests::gate_rejects_occurrences_for_an_empty_dataset ... ok
+test provenance::tests::gate_reports_dangling_and_missing_together ... ok
+test provenance::tests::origin_kind_display ... ok
+test provenance::tests::origin_set_id_display ... ok
+test provenance::tests::origin_set_id_index_round_trips ... ok
+test provenance::tests::origin_set_interner_dedupes_pairs ... ok
+test provenance::tests::origin_set_interner_is_idempotent_and_order_independent ... ok
+test provenance::tests::origin_set_interning_shared_id_for_equal_sets ... ok
+test provenance::tests::origin_set_resolves ... ok
+test provenance::tests::provenance_capacity_refusal_preserves_all_public_interner_streams ... ok
+test provenance::tests::provenance_zero_based_capacity_includes_last_u32_slot ... ok
+test provenance::tests::unit_id_display ... ok
+test provenance::tests::unit_id_index_round_trips ... ok
+test provenance::tests::unit_interner_is_idempotent ... ok
+test provenance::tests::unit_interner_name_resolves ... ok
+test provenance::tests::unit_interner_starts_empty ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 1293 filtered out; finished in 0.00s
+
+
+terminal_status=0

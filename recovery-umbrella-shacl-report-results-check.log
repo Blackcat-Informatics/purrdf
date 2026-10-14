@@ -1,0 +1,187 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error: unused `std::result::Result` that must be used
+   --> crates/shapes/src/data.rs:318:17
+    |
+318 |                 terms.intern_iri(iri);
+    |                 ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+318 |                 let _ = terms.intern_iri(iri);
+    |                 +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/engine.rs:4119:13
+     |
+4119 |             reservations.intern_blank(label, scope);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+4119 |             let _ = reservations.intern_blank(label, scope);
+     |             +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/engine.rs:4295:9
+     |
+4295 |         builder.push_owned_quad(&quad);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+4295 |         let _ = builder.push_owned_quad(&quad);
+     |         +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/report.rs:2324:5
+     |
+2324 |     builder.push_owned_quad(&RdfQuad::new(subject, predicate, object));
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+2324 |     let _ = builder.push_owned_quad(&RdfQuad::new(subject, predicate, object));
+     |     +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/rules.rs:1941:9
+     |
+1941 |         builder.push_owned_quad(&quad);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1941 |         let _ = builder.push_owned_quad(&quad);
+     |         +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/rules.rs:1944:9
+     |
+1944 |         builder.push_owned_reifier(&reifier);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1944 |         let _ = builder.push_owned_reifier(&reifier);
+     |         +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/rules.rs:1947:9
+     |
+1947 |         builder.push_owned_annotation(&annotation);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1947 |         let _ = builder.push_owned_annotation(&annotation);
+     |         +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/rules.rs:2006:9
+     |
+2006 | /         builder.push_owned_reifier(&::purrdf_rdf::RdfReifier::new(
+2007 | |             s.to_rdf_term(),
+2008 | |             ::purrdf_rdf::RdfTriple::new(
+2009 | |                 statement.subject.to_rdf_term(),
+...    |
+2012 | |             ),
+2013 | |         ));
+     | |__________^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+2006 |         let _ = builder.push_owned_reifier(&::purrdf_rdf::RdfReifier::new(
+     |         +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/rules.rs:2015:9
+     |
+2015 | /         builder.push_owned_annotation(&::purrdf_rdf::RdfAnnotation::new(
+2016 | |             s.to_rdf_term(),
+2017 | |             predicate.as_str(),
+2018 | |             o.to_rdf_term(),
+2019 | |         ));
+     | |__________^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+2015 |         let _ = builder.push_owned_annotation(&::purrdf_rdf::RdfAnnotation::new(
+     |         +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/rules.rs:2021:9
+     |
+2021 | /         builder.push_owned_quad(&RdfQuad::new(
+2022 | |             s.to_rdf_term(),
+2023 | |             predicate.as_str(),
+2024 | |             o.to_rdf_term(),
+2025 | |         ));
+     | |__________^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+2021 |         let _ = builder.push_owned_quad(&RdfQuad::new(
+     |         +++++++
+
+error: unused `std::result::Result` that must be used
+    --> crates/shapes/src/rules.rs:2052:9
+     |
+2052 |         builder.push_owned_quad_scoped(&quad, SHAPES_BLANK_SCOPE);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+2052 |         let _ = builder.push_owned_quad_scoped(&quad, SHAPES_BLANK_SCOPE);
+     |         +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/shapes/src/srl/eval.rs:346:9
+    |
+346 |         edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+346 |         let _ = edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH);
+    |         +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/shapes/src/srl/eval.rs:348:13
+    |
+348 |             edb.insert(&s, &p, &o, BASE_GRAPH);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+348 |             let _ = edb.insert(&s, &p, &o, BASE_GRAPH);
+    |             +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/shapes/src/srl/eval.rs:357:9
+    |
+357 |         edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+357 |         let _ = edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH);
+    |         +++++++
+
+error: could not compile `purrdf-shapes` (lib) due to 14 previous errors
+terminal_status=101

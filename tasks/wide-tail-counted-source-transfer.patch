@@ -1,0 +1,117 @@
+diff --git crates/datalog/src/store.rs crates/datalog/src/store.rs
+index 33648d30b..337b53869 100644
+--- crates/datalog/src/store.rs
++++ crates/datalog/src/store.rs
+@@ -660,10 +660,10 @@ fn merge_batches<W: Weight, I: TermIdentity>(
+ /// order, held as three parallel columns.
+ ///
+ /// The key columns are separate so the duplicate probe on insert
+-/// ([`Self::contains`]) reads two contiguous `u32` columns rather than
+-/// twelve-byte `(subject, object, row)` tuples: over the tuples the compares
+-/// stride three words apart and the loop stays scalar, over the columns they
+-/// pack. Row `i` is `(subjects[i], objects[i], rows[i])`; the three columns
++/// ([`Self::contains`]) reads two contiguous identity columns rather than
++/// `(subject, object, row)` tuples: over the tuples the compares stride three
++/// identities apart and the loop stays scalar, over the columns they pack.
++/// Row `i` is `(subjects[i], objects[i], rows[i])`; the three columns
+ /// always have the same length.
+ #[derive(Debug, Clone)]
+ pub(crate) struct Tail<I: TermIdentity = TermId> {
+@@ -740,7 +740,7 @@ impl<I: TermIdentity> Tail<I> {
+ 
+     /// Whether some row has the key `(subject, object)`.
+     ///
+-    /// Every row is tested and the answers are OR-folded, with no exit on the
++    /// Every row is tested and the answers are counted, with no exit on the
+     /// first hit: a loop that can leave early is not vectorized, and the tail is
+     /// bounded by [`TAIL_SEAL_THRESHOLD`], so on a target with vector compares
+     /// the whole scan is a handful of packed compares.
+@@ -750,11 +750,14 @@ impl<I: TermIdentity> Tail<I> {
+                   lane loop, and the compares of both key columns must be evaluated every row"
+     )]
+     fn contains(&self, subject: I, object: I) -> bool {
+-        let mut hit = false;
+-        for (&s, &o) in self.subjects.iter().zip(&self.objects) {
+-            hit |= (s == subject) & (o == object);
++        let len = self.subjects.len().min(self.objects.len());
++        let mut matches = 0usize;
++        for position in 0..len {
++            matches += usize::from(
++                (self.subjects[position] == subject) & (self.objects[position] == object),
++            );
+         }
+-        hit
++        matches != 0
+     }
+ 
+     /// Empty the tail, returning its rows in insertion order.
+@@ -1712,6 +1715,25 @@ mod tests {
+         }
+         assert!(!relation.batches().is_empty());
+         assert!(!relation.tail().is_empty());
++        for &(s, o, _) in &expected {
++            assert!(relation.contains(s, o));
++            assert!(!relation.contains(HostId { tag: 8, ..s }, o));
++            assert!(!relation.contains(s, HostId { tag: 20, ..o }));
++            assert!(!relation.contains(
++                HostId {
++                    payload: s.payload ^ (1_u64 << 60),
++                    ..s
++                },
++                o,
++            ));
++            assert!(!relation.contains(
++                s,
++                HostId {
++                    payload: o.payload ^ (1_u64 << 60),
++                    ..o
++                },
++            ));
++        }
+         for bound in [
+             Bound::Any,
+             Bound::Subject(subject(73)),
+@@ -2999,8 +3021,10 @@ mod tests {
+     /// it sits, and must not take a one-column match for a hit.
+     #[test]
+     fn tail_contains_finds_a_lone_hit_at_every_position() {
+-        let subject = TermId::from_index(7).unwrap();
+-        let object = TermId::from_index(9).unwrap();
++        let subject = TermId::from_index((1_u64 << 48) + 7).unwrap();
++        let object = TermId::from_index((1_u64 << 40) + 9).unwrap();
++        let subject_low = TermId::from_index(7).unwrap();
++        let object_low = TermId::from_index(9).unwrap();
+         for len in 1..=TAIL_SEAL_THRESHOLD {
+             for hit in 0..len {
+                 let mut tail = Tail::default();
+@@ -3009,9 +3033,9 @@ mod tests {
+                     let row = if i == hit {
+                         (subject, object)
+                     } else if i % 2 == 0 {
+-                        (subject, TermId::from_address(100 + i).unwrap())
++                        (subject, object_low)
+                     } else {
+-                        (TermId::from_address(100 + i).unwrap(), object)
++                        (subject_low, object)
+                     };
+                     tail.push(row.0, row.1, RowId::from_address(i).unwrap());
+                     rows.push((row.0, row.1, RowId::from_address(i).unwrap()));
+@@ -3023,14 +3047,16 @@ mod tests {
+                     "len {len}, hit {hit}: the swapped key is absent"
+                 );
+                 assert!(!reference_tail_contains(&rows, object, subject));
++                assert!(!tail.contains(subject_low, object_low));
++                assert!(!reference_tail_contains(&rows, subject_low, object_low));
+             }
+             // The same near misses with no hit at all.
+             let mut tail = Tail::default();
+             for i in 0..len {
+                 let (s, o) = if i % 2 == 0 {
+-                    (subject, TermId::from_address(100 + i).unwrap())
++                    (subject, object_low)
+                 } else {
+-                    (TermId::from_address(100 + i).unwrap(), object)
++                    (subject_low, object)
+                 };
+                 tail.push(s, o, RowId::from_address(i).unwrap());
+             }

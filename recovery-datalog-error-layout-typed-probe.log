@@ -1,0 +1,16 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 12.97s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-datalog/9166702f3a632274/out/purrdf_datalog-9166702f3a632274)
+
+running 1 test
+Limits size=40 align=8
+BudgetReport size=88 align=8
+EvalError size=128 align=16
+purrdf_lex::allocation::CapacityError size=48 align=16
+purrdf_lex::allocation::StorageError size=48 align=16
+(BudgetResource, Vec<usize>, BudgetReport) size=120 align=8
+test seminaive::tests::temporary_error_layout_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 367 filtered out; finished in 0.00s
+
+terminal_status=0

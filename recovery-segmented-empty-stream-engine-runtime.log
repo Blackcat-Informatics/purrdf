@@ -1,0 +1,14 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 00s
+     Running tests/segmented_query.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-sparql-eval/75e071c550c35b0c/out/segmented_query-75e071c550c35b0c)
+
+running 2 tests
+test chronological_segmented_provider_failure_preserves_original_final_evidence ... ok
+test chronological_segmented_stack_matches_eager_raw_and_prepared_queries ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.36s
+
+terminal_status=0

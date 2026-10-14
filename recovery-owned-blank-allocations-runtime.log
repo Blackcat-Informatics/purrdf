@@ -1,0 +1,10 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 23.10s
+     Running tests/native_regex_storage.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/113335ae5181f833/out/native_regex_storage-113335ae5181f833)
+
+running 1 test
+test escaped_owned_blank_duplicate_retains_identity_without_allocating ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.03s
+
+terminal_status=0

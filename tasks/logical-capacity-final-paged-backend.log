@@ -1,0 +1,43 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 2m 04s
+     Running tests/paged_backend.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/aa7527c6b337151a/out/paged_backend-aa7527c6b337151a)
+
+running 35 tests
+test annotation_quads_in_graph_skips_a_reifier_only_page_and_still_yields_a_page_whose_only_row_in_g_is_an_annotation_row ... ok
+test cardinality_estimate_is_residency_independent ... ok
+test annotations_of_with_graph_skips_a_page_that_only_mentions_the_term_in_the_reifier_table_and_admits_the_owning_page ... ok
+test a_query_over_a_drifted_warm_restart_refuses_with_typed_sticky_invalid_data ... ok
+test cardinality_estimate_materializes_no_page ... ok
+test compact_reclaims_dead_ids_deterministically ... ok
+test cross_page_cost_model_is_per_page_sum ... ok
+test freeze_refuses_non_disjoint_side_tables ... ok
+test freeze_refuses_non_quad_disjoint_pages ... ok
+test from_parts_reconstitutes_without_materializing_pages ... ok
+test cross_page_parity_via_trait_surface ... ok
+test graph_drift_fixture_with_an_honest_provider_still_returns_the_right_rows ... ok
+test lazy_hook_fires_on_demand ... ok
+test named_graph_query_skips_the_page_that_declares_it_empty_and_admits_the_page_that_owns_rows_elsewhere ... ok
+test compacted_paged_serializes_byte_identical_to_single ... ok
+test named_graphs_costs_no_pages ... ok
+test paged_dataset_is_send_sync ... ok
+test named_graph_side_table_only_content_is_skipped_by_quads_for_pattern_but_still_yielded_by_reifier_quads ... ok
+test pages_for_pattern_predicts_actual_consumption ... ok
+test provider_fault_categories_remain_distinct ... ok
+test paged_named_graphs_match_a_single_merged_dataset ... ok
+test reifier_and_annotation_quads_in_graph_match_the_filtered_whole_table_on_every_backend ... ok
+test pages_for_graph_equals_the_graph_only_pattern_for_every_known_graph ... ok
+test reifier_and_annotation_views_compose_across_pages ... ok
+test reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owning_page ... ok
+test reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_only_row_in_g_is_a_reifier_row ... ok
+test seal_rejects_a_typed_generation_mismatch ... ok
+test retain_graph_keeps_a_declared_empty_graph_that_owns_no_row_anywhere ... ok
+test retain_graph_keeps_every_page_carrying_the_graph_in_any_stream_and_materializes_none ... ok
+test split_pages_refuses_zero_destinations_only_for_nonempty_input ... ok
+test snapshot_and_byte_metadata_survive_selection_and_compaction ... ok
+test the_same_query_over_an_honest_warm_restart_still_completes ... ok
+test warm_restart_rejects_generation_and_page_count_mismatches ... ok
+test verify_parts_accepts_an_honest_warm_restart ... ok
+test verify_parts_rejects_a_summary_that_disagrees_with_page_content ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

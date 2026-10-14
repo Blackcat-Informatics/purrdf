@@ -1,0 +1,1185 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: unnecessary qualification
+   --> crates/rdf-core/src/cdt_blank.rs:194:13
+    |
+194 |     Storage(purrdf_lex::allocation::StorageError),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+194 -     Storage(purrdf_lex::allocation::StorageError),
+194 +     Storage(StorageError),
+    |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/cdt_blank.rs:245:51
+    |
+245 | purrdf_lex::variant_from!(CdtBlankError { Storage(purrdf_lex::allocation::StorageError) });
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+245 - purrdf_lex::variant_from!(CdtBlankError { Storage(purrdf_lex::allocation::StorageError) });
+245 + purrdf_lex::variant_from!(CdtBlankError { Storage(StorageError) });
+    |
+
+error: unused import: `IriError`
+  --> crates/rdf-core/src/ir/global.rs:33:18
+   |
+33 | use purrdf_iri::{IriError, IriReadError};
+   |                  ^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+    --> crates/rdf-core/src/imports.rs:1221:38
+     |
+1221 |                 leaf => Nested::Leaf(intern_leaf(b, leaf, rescope)?),
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` operator cannot be applied to type `TermId`
+     |
+help: the nightly-only, unstable trait `Try` is not implemented for `TermId`
+    --> crates/rdf-core/src/ir/term.rs:62:1
+     |
+  62 | pub struct TermId(NonZeroU32);
+     | ^^^^^^^^^^^^^^^^^
+
+error[E0277]: the `?` operator can only be used in a closure that returns `Result` or `Option` (or another type that implements `FromResidual`)
+    --> crates/rdf-core/src/imports.rs:1221:38
+     |
+1218 |         |(b, rescope), value| {
+     |         --------------------- this function should return `Result` or `Option` to accept `?`
+...
+1221 |                 leaf => Nested::Leaf(intern_leaf(b, leaf, rescope)?),
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot use the `?` operator in a closure that returns `TermId`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/imports.rs:1233:32
+     |
+1231 | fn intern_leaf(b: &mut RdfDatasetBuilder, value: &TermValue, rescope: &mut ScopeMap<'_>) -> TermId {
+     |                                                                                             ------ expected `TermId` because of return type
+1232 |     match value {
+1233 |         TermValue::Iri(iri) => b.intern_iri(iri),
+     |                                ^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1233 |         TermValue::Iri(iri) => b.intern_iri(iri).expect("REASON"),
+     |                                                 +++++++++++++++++
+
+error[E0277]: the `?` operator can only be used in a function that returns `Result` or `Option` (or another type that implements `FromResidual`)
+    --> crates/rdf-core/src/imports.rs:1234:87
+     |
+1231 | fn intern_leaf(b: &mut RdfDatasetBuilder, value: &TermValue, rescope: &mut ScopeMap<'_>) -> TermId {
+     | -------------------------------------------------------------------------------------------------- this function should return `Result` or `Option` to accept `?`
+...
+1234 |         TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope)?),
+     |                                                                                       ^ cannot use the `?` operator in a function that returns `TermId`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/canon.rs:1048:12
+     |
+1048 |         Ok(builder.intern_blank(label, BlankScope::DEFAULT))
+     |         -- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |         |
+     |         arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/src/ir/canon.rs:1048:9
+     |
+1048 |         Ok(builder.intern_blank(label, BlankScope::DEFAULT))
+     |         ^^^------------------------------------------------^
+     |            |
+     |            this argument influences the type of `Ok`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+     |
+ 562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1048 |         Ok(builder.intern_blank(label, BlankScope::DEFAULT)?)
+     |                                                            +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/canon.rs:1057:12
+     |
+1057 |         Ok(builder.intern_iri(iri))
+     |         -- ^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |         |
+     |         arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/src/ir/canon.rs:1057:9
+     |
+1057 |         Ok(builder.intern_iri(iri))
+     |         ^^^-----------------------^
+     |            |
+     |            this argument influences the type of `Ok`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+     |
+ 562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1057 |         Ok(builder.intern_iri(iri)?)
+     |                                   +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/composite.rs:1627:51
+     |
+1627 |                 graph_builder.declare_named_graph(id);
+     |                               ------------------- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                               |
+     |                               arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:912:12
+     |
+ 912 |     pub fn declare_named_graph(&mut self, g: TermId) {
+     |            ^^^^^^^^^^^^^^^^^^^            ---------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1627 |                 graph_builder.declare_named_graph(id?);
+     |                                                     +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/composite.rs:1704:35
+     |
+1704 |                     LocalId::Base(graph_ids[index].expect("named placement has a graph ID")),
+     |                     ------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                     |
+     |                     arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: tuple variant defined here
+    --> crates/rdf-core/src/ir/mutable/delta_view.rs:22:5
+     |
+  22 |     Base(TermId),
+     |     ^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1704 |                     LocalId::Base(graph_ids[index].expect("named placement has a graph ID")?),
+     |                                                                                            +
+
+error[E0599]: no method named `append` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/mutable.rs:1336:66
+     |
+1336 |         super::import::DatasetImporter::new(&mut builder, &view).append();
+     |                                                                  ^^^^^^
+     |
+note: the method `append` exists on the type `DatasetImporter<'_, '_, DeltaDatasetView>`
+    --> crates/rdf-core/src/ir/import.rs:337:5
+     |
+ 337 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 338 | |     where
+ 339 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+help: use the `?` operator to extract the `DatasetImporter<'_, '_, DeltaDatasetView>` value, propagating a `Result::Err` value to the caller
+     |
+1336 |         super::import::DatasetImporter::new(&mut builder, &view)?.append();
+     |                                                                 +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/mutable.rs:1517:36
+     |
+1517 |             admission.row(builder, graph)?;
+     |                       ---          ^^^^^ expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+     |                       |
+     |                       arguments to this method are incorrect
+     |
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/mutable.rs:1611:8
+     |
+1611 |     fn row(
+     |        ^^^
+...
+1614 |         graph: Option<TermId>,
+     |         ---------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/mutable.rs:1521:41
+     |
+1521 |             builder.declare_named_graph(id);
+     |                     ------------------- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:912:12
+     |
+ 912 |     pub fn declare_named_graph(&mut self, g: TermId) {
+     |            ^^^^^^^^^^^^^^^^^^^            ---------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1521 |             builder.declare_named_graph(id?);
+     |                                           +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/mutable.rs:1522:41
+     |
+1522 |             admission.row(builder, Some(id))?;
+     |                                    ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                    |
+     |                                    arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+    --> crates/rdf-core/src/ir/mutable.rs:1522:36
+     |
+1522 |             admission.row(builder, Some(id))?;
+     |                                    ^^^^^--^
+     |                                         |
+     |                                         this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1522 |             admission.row(builder, Some(id?))?;
+     |                                           +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/ingest.rs:266:12
+    |
+266 |         Ok(our_id)
+    |         -- ^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |         |
+    |         arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/src/ir/ingest.rs:266:9
+    |
+266 |         Ok(our_id)
+    |         ^^^------^
+    |            |
+    |            this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+266 |         Ok(our_id?)
+    |                  +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/ingest.rs:422:55
+     |
+ 422 |             builder.push_reifier_in_graph(reifier_id, triple_term, g);
+     |                     ---------------------             ^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1927:12
+     |
+1927 |     pub fn push_reifier_in_graph(&mut self, reifier: TermId, triple: TermId, g: Option<TermId> ) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^                             --------------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 422 |             builder.push_reifier_in_graph(reifier_id, triple_term?, g);
+     |                                                                  +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:299:37
+    |
+299 |         builder.declare_named_graph(id);
+    |                 ------------------- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                 |
+    |                 arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/builder.rs:912:12
+    |
+912 |     pub fn declare_named_graph(&mut self, g: TermId) {
+    |            ^^^^^^^^^^^^^^^^^^^            ---------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+299 |         builder.declare_named_graph(id?);
+    |                                       +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:301:58
+    |
+301 |         Ok(self.graphs.insert(frozen.as_ref().term_value(id)))
+    |                                               ---------- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                               |
+    |                                               arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/dataset.rs:992:12
+    |
+992 |     pub fn term_value(&self, id: TermId) -> TermValue {
+    |            ^^^^^^^^^^        ----------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+301 |         Ok(self.graphs.insert(frozen.as_ref().term_value(id?)))
+    |                                                            +
+
+error[E0599]: no method named `append` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/paged/stack.rs:323:78
+     |
+ 323 |         crate::ir::import::DatasetImporter::new(&mut builder, head.as_ref()).append();
+     |                                                                              ^^^^^^
+     |
+note: the method `append` exists on the type `DatasetImporter<'_, '_, RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:337:5
+     |
+ 337 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 338 | |     where
+ 339 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+help: use the `?` operator to extract the `DatasetImporter<'_, '_, RdfDataset>` value, propagating a `Result::Err` value to the caller
+     |
+ 323 |         crate::ir::import::DatasetImporter::new(&mut builder, head.as_ref())?.append();
+     |                                                                             +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:326:41
+    |
+326 |             builder.declare_named_graph(id);
+    |                     ------------------- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                     |
+    |                     arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/builder.rs:912:12
+    |
+912 |     pub fn declare_named_graph(&mut self, g: TermId) {
+    |            ^^^^^^^^^^^^^^^^^^^            ---------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+326 |             builder.declare_named_graph(id?);
+    |                                           +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:388:35
+    |
+388 |                         .map_err(|()| PagedStackError::Capacity)?,
+    |                                   ^^
+    |                                   |
+    |                                   expected `StorageError`, found `()`
+    |                                   expected due to this
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:447:31
+    |
+447 |                     .map_err(|()| PagedStackError::Capacity)?,
+    |                               ^^
+    |                               |
+    |                               expected `StorageError`, found `()`
+    |                               expected due to this
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:470:43
+    |
+470 | ...                   .map_err(|()| PagedStackError::Capacity)?,
+    |                                 ^^
+    |                                 |
+    |                                 expected `StorageError`, found `()`
+    |                                 expected due to this
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:473:43
+    |
+473 | ...                   .map_err(|()| PagedStackError::Capacity)?,
+    |                                 ^^
+    |                                 |
+    |                                 expected `StorageError`, found `()`
+    |                                 expected due to this
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:476:43
+    |
+476 | ...                   .map_err(|()| PagedStackError::Capacity)?,
+    |                                 ^^
+    |                                 |
+    |                                 expected `StorageError`, found `()`
+    |                                 expected due to this
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:483:51
+    |
+483 | ...                   .map_err(|()| PagedStackError::Capacity)
+    |                                 ^^
+    |                                 |
+    |                                 expected `StorageError`, found `()`
+    |                                 expected due to this
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf-core/src/ir/paged/stack.rs:570:13
+     |
+ 570 |     builder.push_quad(s, p, o, g);
+     |             ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:570:23
+     |
+ 570 |     builder.push_quad(s, p, o, g);
+     |                       ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:570:26
+     |
+ 570 |     builder.push_quad(s, p, o, g);
+     |                          ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:570:29
+     |
+ 570 |     builder.push_quad(s, p, o, g);
+     |                             ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:570:32
+     |
+ 570 |     builder.push_quad(s, p, o, g);
+     |                                ^
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1855:12
+     |
+1855 |     pub fn push_quad(&mut self, s: TermId, p: TermId, o: TermId, g: Option<TermId> ) -> Result<(), StorageError> {
+     |            ^^^^^^^^^            ---------  ---------  ---------  -----------------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 570 |     builder.push_quad(s?, p, o, g);
+     |                        +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 570 |     builder.push_quad(s, p?, o, g);
+     |                           +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 570 |     builder.push_quad(s, p, o?, g);
+     |                              +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:573:39
+    |
+573 |         s: frozen.as_ref().term_value(s),
+    |                            ---------- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                            |
+    |                            arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/dataset.rs:992:12
+    |
+992 |     pub fn term_value(&self, id: TermId) -> TermValue {
+    |            ^^^^^^^^^^        ----------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+573 |         s: frozen.as_ref().term_value(s?),
+    |                                        +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:574:39
+    |
+574 |         p: frozen.as_ref().term_value(p),
+    |                            ---------- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                            |
+    |                            arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/dataset.rs:992:12
+    |
+992 |     pub fn term_value(&self, id: TermId) -> TermValue {
+    |            ^^^^^^^^^^        ----------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+574 |         p: frozen.as_ref().term_value(p?),
+    |                                        +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:575:39
+    |
+575 |         o: frozen.as_ref().term_value(o),
+    |                            ---------- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                            |
+    |                            arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/dataset.rs:992:12
+    |
+992 |     pub fn term_value(&self, id: TermId) -> TermValue {
+    |            ^^^^^^^^^^        ----------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+575 |         o: frozen.as_ref().term_value(o?),
+    |                                        +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/stack.rs:576:49
+    |
+576 |         g: g.map(|g| frozen.as_ref().term_value(g)),
+    |                                      ---------- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                      |
+    |                                      arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/dataset.rs:992:12
+    |
+992 |     pub fn term_value(&self, id: TermId) -> TermValue {
+    |            ^^^^^^^^^^        ----------
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+576 |         g: g.map(|g| frozen.as_ref().term_value(g.expect("REASON"))),
+    |                                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/paged/stack.rs:1066:45
+     |
+1066 |                 builder.declare_named_graph(g);
+     |                         ------------------- ^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                         |
+     |                         arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:912:12
+     |
+ 912 |     pub fn declare_named_graph(&mut self, g: TermId) {
+     |            ^^^^^^^^^^^^^^^^^^^            ---------
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1066 |                 builder.declare_named_graph(g.expect("REASON"));
+     |                                              +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf-core/src/ir/paged/stack.rs:1080:34
+     |
+1080 |                     0 => builder.push_quad(s, p, o, g),
+     |                                  ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1080:44
+     |
+1080 |                     0 => builder.push_quad(s, p, o, g),
+     |                                            ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1080:47
+     |
+1080 |                     0 => builder.push_quad(s, p, o, g),
+     |                                               ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1080:50
+     |
+1080 |                     0 => builder.push_quad(s, p, o, g),
+     |                                                  ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1080:53
+     |
+1080 |                     0 => builder.push_quad(s, p, o, g),
+     |                                                     ^
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1855:12
+     |
+1855 |     pub fn push_quad(&mut self, s: TermId, p: TermId, o: TermId, g: Option<TermId> ) -> Result<(), StorageError> {
+     |            ^^^^^^^^^            ---------  ---------  ---------  -----------------
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1080 |                     0 => builder.push_quad(s.expect("REASON"), p, o, g),
+     |                                             +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1080 |                     0 => builder.push_quad(s, p.expect("REASON"), o, g),
+     |                                                +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1080 |                     0 => builder.push_quad(s, p, o.expect("REASON"), g),
+     |                                                   +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf-core/src/ir/paged/stack.rs:1081:34
+     |
+1081 |                     1 => builder.push_reifier_in_graph(s, o, g),
+     |                                  ^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1081:56
+     |
+1081 |                     1 => builder.push_reifier_in_graph(s, o, g),
+     |                                                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1081:59
+     |
+1081 |                     1 => builder.push_reifier_in_graph(s, o, g),
+     |                                                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1081:62
+     |
+1081 |                     1 => builder.push_reifier_in_graph(s, o, g),
+     |                                                              ^
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1927:12
+     |
+1927 |     pub fn push_reifier_in_graph(&mut self, reifier: TermId, triple: TermId, g: Option<TermId> ) -> Result<(), StorageError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^            ---------------  --------------  -----------------
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1081 |                     1 => builder.push_reifier_in_graph(s.expect("REASON"), o, g),
+     |                                                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1081 |                     1 => builder.push_reifier_in_graph(s, o.expect("REASON"), g),
+     |                                                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf-core/src/ir/paged/stack.rs:1082:34
+     |
+1082 |                     _ => builder.push_annotation_in_graph(s, p, o, g),
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1082:59
+     |
+1082 |                     _ => builder.push_annotation_in_graph(s, p, o, g),
+     |                                                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1082:62
+     |
+1082 |                     _ => builder.push_annotation_in_graph(s, p, o, g),
+     |                                                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1082:65
+     |
+1082 |                     _ => builder.push_annotation_in_graph(s, p, o, g),
+     |                                                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+    --> crates/rdf-core/src/ir/paged/stack.rs:1082:68
+     |
+1082 |                     _ => builder.push_annotation_in_graph(s, p, o, g),
+     |                                                                    ^
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1973:12
+     |
+1973 |     pub fn push_annotation_in_graph(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+1974 |         &mut self,
+1975 |         reifier: TermId,
+     |         ---------------
+1976 |         p: TermId,
+     |         ---------
+1977 |         o: TermId,
+     |         ---------
+1978 |         g: Option<TermId>,
+     |         -----------------
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1082 |                     _ => builder.push_annotation_in_graph(s.expect("REASON"), p, o, g),
+     |                                                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1082 |                     _ => builder.push_annotation_in_graph(s, p.expect("REASON"), o, g),
+     |                                                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1082 |                     _ => builder.push_annotation_in_graph(s, p, o.expect("REASON"), g),
+     |                                                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/paged/stack.rs:1079:17
+     |
+1079 | /                 match kind {
+1080 | |                     0 => builder.push_quad(s, p, o, g),
+1081 | |                     1 => builder.push_reifier_in_graph(s, o, g),
+1082 | |                     _ => builder.push_annotation_in_graph(s, p, o, g),
+1083 | |                 }
+     | |_________________^ expected `()`, found `Result<(), StorageError>`
+     |
+     = note: expected unit type `()`
+                     found enum `Result<(), purrdf_lex::allocation::StorageError>`
+help: consider using a semicolon here
+     |
+1083 |                 };
+     |                  +
+help: try adding a return type
+     |
+1062 |     fn replay(self, builder: &mut RdfDatasetBuilder) -> Result<(), purrdf_lex::allocation::StorageError> {
+     |                                                      +++++++++++++++++++++++++++++++++++++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<(), purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1083 |                 }.expect("REASON")
+     |                  +++++++++++++++++
+
+error[E0599]: no method named `reintern_validated` found for mutable reference `&mut GlobalDictionary` in the current scope
+   --> crates/rdf-core/src/ir/paged/translation.rs:102:31
+    |
+102 |             let global = dict.reintern_validated(&value);
+    |                               ^^^^^^^^^^^^^^^^^^
+    |
+help: there is a method `try_reintern_validated` with a similar name
+    |
+102 |             let global = dict.try_reintern_validated(&value);
+    |                               ++++
+
+error[E0599]: no method named `reintern_validated` found for struct `GlobalDictionary` in the current scope
+   --> crates/rdf-core/src/ir/paged/mod.rs:785:43
+    |
+785 |             remap.insert(*old, dictionary.reintern_validated(value));
+    |                                           ^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/global.rs:307:1
+    |
+307 | pub struct GlobalDictionary {
+    | --------------------------- method `reintern_validated` not found for this struct
+    |
+help: there is a method `try_reintern_validated` with a similar name
+    |
+785 |             remap.insert(*old, dictionary.try_reintern_validated(value));
+    |                                           ++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/segmented/build.rs:154:38
+    |
+154 |             visit(value, self.global(id));
+    |                               ------ ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                               |
+    |                               arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/segmented/build.rs:104:8
+    |
+104 |     fn global(&self, id: TermId) -> GlobalTermId {
+    |        ^^^^^^        ----------
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+154 |             visit(value, self.global(id?));
+    |                                        +
+
+error[E0599]: no method named `append` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/segmented/build.rs:480:91
+     |
+ 480 |         super::super::import::DatasetImporter::new(&mut builder.builder, source.as_ref()).append();
+     |                                                                                           ^^^^^^
+     |
+note: the method `append` exists on the type `DatasetImporter<'_, '_, RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:337:5
+     |
+ 337 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 338 | |     where
+ 339 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+help: use the `?` operator to extract the `DatasetImporter<'_, '_, RdfDataset>` value, propagating a `Result::Err` value to the caller
+     |
+ 480 |         super::super::import::DatasetImporter::new(&mut builder.builder, source.as_ref())?.append();
+     |                                                                                          +
+
+error[E0599]: no method named `index` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/segmented/build.rs:938:15
+    |
+938 |         if id.index() != index {
+    |               ^^^^^ method not found in `Result<TermId, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `index` exists on the type `TermId`
+   --> crates/rdf-core/src/ir/term.rs:83:5
+    |
+ 83 |     pub fn index(self) -> usize {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `TermId` value, propagating a `Result::Err` value to the caller
+    |
+938 |         if id?.index() != index {
+    |              +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/segmented/build.rs:943:24
+    |
+891 |     let mut local_ids = Vec::with_capacity(keys.len());
+    |                         ------------------------------ here the type of `local_ids` is inferred to be `Vec<TermId>`
+...
+943 |         local_ids.push(id);
+    |                   ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                   |
+    |                   arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:999:12
+    |
+999 |     pub fn push(&mut self, value: T) {
+    |            ^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+943 |         local_ids.push(id?);
+    |                          +
+
+error[E0308]: `match` arms have incompatible types
+   --> crates/rdf-core/src/ir/segmented/build.rs:985:25
+    |
+976 | / ...   match table {
+977 | | ...       0 => builder.push_quad(s, p, o, g),
+    | |                ----------------------------- this is found to be of type `Result<(), purrdf_lex::allocation::StorageError>`
+978 | | ...       1 => {
+979 | | ...           if !matches!(format::decode_term(&keys[p.index()])?, TermRef::Iri(iri) if iri == purrdf_iri::vocab::rdf::REIFIES)
+...   |
+985 | | ...           builder.push_reifier_in_graph(s, o, g);
+    | |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<(), StorageError>`, found `()`
+986 | | ...       }
+987 | | ...       _ => builder.push_annotation_in_graph(s, p, o, g),
+988 | | ...   }
+    | |_______- `match` arms have incompatible types
+    |
+    = note:   expected enum `Result<(), purrdf_lex::allocation::StorageError>`
+            found unit type `()`
+help: consider removing this semicolon
+    |
+985 -                         builder.push_reifier_in_graph(s, o, g);
+985 +                         builder.push_reifier_in_graph(s, o, g)
+    |
+help: try wrapping the expression in `Ok`
+    |
+978 ~                     1 => Ok({
+979 |                         if !matches!(format::decode_term(&keys[p.index()])?, TermRef::Iri(iri) if iri == purrdf_iri::vocab::rdf::REIFIES)
+...
+985 |                         builder.push_reifier_in_graph(s, o, g);
+986 ~                     })
+    |
+
+error[E0308]: `match` arms have incompatible types
+   --> crates/rdf-core/src/ir/skolem.rs:394:21
+    |
+375 |               let mapped = match ds.resolve(id) {
+    |                            -------------------- `match` arms have incompatible types
+376 |                   TermRef::Iri(iri) => mapper.map_iri(builder, iri, iri_only),
+    |                                        -------------------------------------- this is found to be of type `Result<TermId, <M as TermMapper>::Error>`
+377 |                   TermRef::Blank { label, scope } => mapper.map_blank(builder, id, label, scope),
+    |                                                      ------------------------------------------- this is found to be of type `Result<TermId, <M as TermMapper>::Error>`
+...
+394 | /                     Ok(builder.intern_literal(RdfLiteral {
+395 | |                         lexical_form,
+396 | |                         datatype: Some(dt.to_owned()),
+397 | |                         language: language.map(str::to_owned),
+398 | |                         direction,
+399 | |                     }))
+    | |_______________________^ expected `Result<TermId, <M as TermMapper>::Error>`, found `Result<Result<TermId, StorageError>, _>`
+    |
+    = note: expected enum `Result<TermId, <M as TermMapper>::Error>`
+               found enum `Result<Result<TermId, purrdf_lex::allocation::StorageError>, _>`
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/skolem.rs:410:36
+    |
+410 |             mapper.record_term(id, mapped);
+    |                    -----------     ^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                    |
+    |                    arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/ir/skolem.rs:346:8
+    |
+346 |     fn record_term(&mut self, _source: TermId, _target: TermId) {}
+    |        ^^^^^^^^^^^                             ---------------
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+410 |             mapper.record_term(id, mapped.expect("REASON"));
+    |                                          +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/skolem.rs:411:16
+    |
+411 |             Ok(mapped)
+    |             -- ^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |             |
+    |             arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/src/ir/skolem.rs:411:13
+    |
+411 |             Ok(mapped)
+    |             ^^^------^
+    |                |
+    |                this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+411 |             Ok(mapped.expect("REASON"))
+    |                      +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/skolem.rs:581:37
+     |
+ 581 |             builder.attach_location(handle, loc.clone());
+     |                     --------------- ^^^^^^ expected `QuadHandle`, found `Result<QuadHandle, StorageError>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected struct `QuadHandle`
+                  found enum `Result<QuadHandle, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1994:12
+     |
+1994 |     pub fn attach_location(&mut self, handle: QuadHandle, loc: RdfLocation) {
+     |            ^^^^^^^^^^^^^^^            ------------------
+help: use the `?` operator to extract the `Result<QuadHandle, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 581 |             builder.attach_location(handle?, loc.clone());
+     |                                           +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/skolem.rs:634:12
+    |
+634 |         Ok(builder.intern_iri(&iri))
+    |         -- ^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |         |
+    |         arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/src/ir/skolem.rs:634:9
+    |
+634 |         Ok(builder.intern_iri(&iri))
+    |         ^^^------------------------^
+    |            |
+    |            this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+634 |         Ok(builder.intern_iri(&iri)?)
+    |                                    +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/skolem.rs:646:12
+    |
+646 |         Ok(builder.intern_iri(iri))
+    |         -- ^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |         |
+    |         arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/src/ir/skolem.rs:646:9
+    |
+646 |         Ok(builder.intern_iri(iri))
+    |         ^^^-----------------------^
+    |            |
+    |            this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+646 |         Ok(builder.intern_iri(iri)?)
+    |                                   +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/skolem.rs:670:12
+    |
+670 |         Ok(builder.intern_blank(label, scope))
+    |         -- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |         |
+    |         arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/src/ir/skolem.rs:670:9
+    |
+670 |         Ok(builder.intern_blank(label, scope))
+    |         ^^^----------------------------------^
+    |            |
+    |            this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+670 |         Ok(builder.intern_blank(label, scope)?)
+    |                                              +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/skolem.rs:682:23
+    |
+682 |             return Ok(builder.intern_iri(iri));
+    |                    -- ^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                    |
+    |                    arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/src/ir/skolem.rs:682:20
+    |
+682 |             return Ok(builder.intern_iri(iri));
+    |                    ^^^-----------------------^
+    |                       |
+    |                       this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+682 |             return Ok(builder.intern_iri(iri)?);
+    |                                              +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/skolem.rs:698:12
+    |
+698 |         Ok(builder.intern_blank(&label, scope))
+    |         -- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |         |
+    |         arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf-core/src/ir/skolem.rs:698:9
+    |
+698 |         Ok(builder.intern_blank(&label, scope))
+    |         ^^^-----------------------------------^
+    |            |
+    |            this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+698 |         Ok(builder.intern_blank(&label, scope)?)
+    |                                               +
+
+error[E0004]: non-exhaustive patterns: `CdtBlankError::Storage(_)` not covered
+   --> crates/rdf-core/src/cdt_blank.rs:252:26
+    |
+252 |         let code = match err {
+    |                          ^^^ pattern `CdtBlankError::Storage(_)` not covered
+    |
+note: `CdtBlankError` defined here
+   --> crates/rdf-core/src/cdt_blank.rs:192:10
+    |
+192 | pub enum CdtBlankError {
+    |          ^^^^^^^^^^^^^
+193 |     /// Logical capacity or physical storage refusal at the original term producer.
+194 |     Storage(purrdf_lex::allocation::StorageError),
+    |     ------- not covered
+    = note: the matched value is of type `CdtBlankError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+254 ~             CdtBlankError::ScannerDisagreement { .. } => "cdt-literal-scan-disagreement",
+255 ~             CdtBlankError::Storage(_) => todo!(),
+    |
+
+Some errors have detailed explanations: E0004, E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `purrdf-core` (lib) due to 54 previous errors
+terminal_status=101

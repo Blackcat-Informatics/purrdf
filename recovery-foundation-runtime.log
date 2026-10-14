@@ -1,0 +1,64 @@
+ir::ingest::tests::event_scope_capacity_preserves_original_count_and_prior_state: test
+
+running 1 test
+test ir::ingest::tests::event_scope_capacity_preserves_original_count_and_prior_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+ir::term::tests::global_arena_range_crosses_four_gib_without_narrowing: test
+
+running 1 test
+test ir::term::tests::global_arena_range_crosses_four_gib_without_narrowing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+ir::term::tests::both_arena_widths_use_the_same_append_and_resolution_home: test
+
+running 1 test
+test ir::term::tests::both_arena_widths_use_the_same_append_and_resolution_home ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+ir::term::tests::term_id_from_index_rejects_u32_max: test
+
+running 1 test
+test ir::term::tests::term_id_from_index_rejects_u32_max ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+ir::term::tests::term_id_option_uses_the_nonzero_niche: test
+
+running 1 test
+test ir::term::tests::term_id_option_uses_the_nonzero_niche ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+ir::global::tests::global_term_id_from_index_rejects_u64_max: test
+
+running 1 test
+test ir::global::tests::global_term_id_from_index_rejects_u64_max ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+ir::global::tests::global_term_id_index_round_trips: test
+
+running 1 test
+test ir::global::tests::global_term_id_index_round_trips ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+ir::global::tests::a_relative_iri_is_refused_and_leaves_the_dictionary_unchanged: test
+
+running 1 test
+test ir::global::tests::a_relative_iri_is_refused_and_leaves_the_dictionary_unchanged ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+ir::skolem::term_walk_tests::the_rewrite_and_the_survey_agree_with_their_recursive_references: test
+
+running 1 test
+test ir::skolem::term_walk_tests::the_rewrite_and_the_survey_agree_with_their_recursive_references ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1305 filtered out; finished in 0.00s
+
+terminal_status=0

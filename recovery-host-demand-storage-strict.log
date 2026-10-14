@@ -1,0 +1,117 @@
++ cargo clippy --locked -j 8 --keep-going -p purrdf-core -p purrdf-wasm -p purrdf-python --all-targets -- -D warnings
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-wasm)
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/rdf-wasm/src/async_query.rs:3099:9
+     |
+3099 |         Ok(query_result_from_sparql(result, self.inner.blank_scope)?)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+     = note: `-D clippy::needless-question-mark` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_question_mark)]`
+help: remove the enclosing `Ok` and `?` operator
+     |
+3099 -         Ok(query_result_from_sparql(result, self.inner.blank_scope)?)
+3099 +         query_result_from_sparql(result, self.inner.blank_scope)
+     |
+
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/rdf-wasm/src/query.rs:1418:9
+     |
+1418 |         Ok(query_result_from_sparql(result, self.blank_scope())?)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+help: remove the enclosing `Ok` and `?` operator
+     |
+1418 -         Ok(query_result_from_sparql(result, self.blank_scope())?)
+1418 +         query_result_from_sparql(result, self.blank_scope())
+     |
+
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/rdf-wasm/src/query.rs:1957:9
+     |
+1957 |         Ok(graph_result_from_sparql(result)?)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+help: remove the enclosing `Ok` and `?` operator
+     |
+1957 -         Ok(graph_result_from_sparql(result)?)
+1957 +         graph_result_from_sparql(result)
+     |
+
+error: could not compile `purrdf-wasm` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0004]: non-exhaustive patterns: `operation::ErrorText::ReasoningQuery` not covered
+    --> crates/rdf-wasm/src/operation.rs:1031:31
+     |
+1031 |             let plain = match error.text {
+     |                               ^^^^^^^^^^ pattern `operation::ErrorText::ReasoningQuery` not covered
+     |
+note: `operation::ErrorText` defined here
+    --> crates/rdf-wasm/src/operation.rs:109:6
+     |
+ 109 | enum ErrorText {
+     |      ^^^^^^^^^
+...
+ 115 |     ReasoningQuery,
+     |     -------------- not covered
+     = note: the matched value is of type `operation::ErrorText`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+     |
+1033 ~                 ErrorText::Message => error.diagnostic.message.clone(),
+1034 ~                 operation::ErrorText::ReasoningQuery => todo!(),
+     |
+
+For more information about this error, try `rustc --explain E0004`.
+error: could not compile `purrdf-wasm` (lib test) due to 1 previous error
+error: this argument is passed by value, but not consumed in the function body
+  --> bindings/python/src/py_store/mutable.rs:65:15
+   |
+65 |         base: Option<String>,
+   |               ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+   |
+65 |         base: Option<&String>,
+   |                      +
+
+error: this argument is passed by value, but not consumed in the function body
+  --> bindings/python/src/py_store/store.rs:77:15
+   |
+77 |         base: Option<String>,
+   |               ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+   |
+77 |         base: Option<&String>,
+   |                      +
+
+error: could not compile `purrdf-python` (lib) due to 2 previous errors
+terminal_status=101

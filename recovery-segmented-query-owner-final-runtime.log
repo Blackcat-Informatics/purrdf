@@ -1,0 +1,25 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 34.01s
+     Running tests/segmented_stack.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 7 tests
+test admitted_identity_walk_releases_spill_and_preserves_hash_law ... ok
+test memoized_term_hits_allocate_nothing_and_failed_import_latches ... ok
+test final_query_readiness_checks_untouched_evicted_descriptors ... ok
+test query_ids_touch_only_values_and_preserve_source_scopes ... ok
+test resident_head_copy_refuses_under_the_shared_operation_grant ... ok
+test tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation ... ok
+test thousand_distinct_sources_open_only_headers_under_one_request_budget ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 51.04s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::segmented::query::tests::returned_term_retains_original_base_and_payload_charge_after_query_drop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1331 filtered out; finished in 0.00s
+
+terminal_status=0

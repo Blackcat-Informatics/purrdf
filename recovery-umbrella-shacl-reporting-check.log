@@ -1,0 +1,34 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+    --> crates/shapes/src/engine.rs:2654:14
+     |
+2647 |               all_results.extend(evaluate_shape_focus_nodes_using(
+     |  ________________________________-
+2648 | |                 reporting,
+2649 | |                 &self.data,
+2650 | |                 &self.shapes,
+...    |
+2653 | |                 |_| true,
+2654 | |             )?);
+     | |             -^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+     | |_____________|
+     |               this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+     |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+    --> crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<Cow<'_, str>>
+               From<RulesError>
+               From<char>
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 1 previous error
+terminal_status=101

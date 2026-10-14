@@ -1,0 +1,61 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 58.86s
+     Running unittests src/lib.rs (/opt/.cargo/slots/32e51468452a2d41/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 31 tests
+test ir::builder::tests::freeze_dedupes_quads ... ok
+test ir::builder::tests::freeze_dedupes_annotations ... ok
+test ir::builder::tests::freeze_keeps_multiple_reifiers_for_one_triple ... ok
+test ir::builder::native_graph_birth_tests::native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes ... ok
+test ir::builder::tests::freeze_preserves_named_graphs ... ok
+test ir::builder::tests::validated_builder_type_state_freezes_after_validation ... ok
+test ir::dataset::tests::content_addressing::content_id_lookup_is_stable_across_freeze ... ok
+test ir::dataset::tests::location_follows_quad_through_freeze_sort ... ok
+test ir::ingest::tests::cancellation_does_not_freeze ... ok
+test ir::mutable::tests::a_configured_but_unused_derivation_predicate_survives_freeze ... ok
+test ir::mutable::tests::freeze_and_snapshot_keep_the_base_content_addressing ... ok
+test ir::mutable::tests::declared_named_graphs_survive_freeze_and_snapshot ... ok
+test ir::mutable::tests::freeze_empty_mutation_equals_base_quads ... ok
+test ir::mutable::tests::freeze_and_snapshot_of_an_unconfigured_base_stay_unconfigured ... ok
+test ir::mutable::tests::freeze_carries_base_quad_locations ... ok
+test ir::segmented::build::certification_tests::freeze_storage_refusal_stays_distinct_from_malformed_rdf ... ok
+test ir::mutable::tests::freeze_round_trip_quads_reifiers_annotations ... ok
+test ir::validate::tests::freeze_checks_declared_named_graphs ... ok
+test ir::validate::tests::freeze_err_on_cyclic_triple_term ... ok
+test ir::validate::tests::freeze_err_on_literal_graph_name ... ok
+test ir::validate::tests::freeze_err_on_literal_predicate ... ok
+test ir::validate::tests::freeze_err_on_literal_subject ... ok
+test ir::validate::tests::freeze_err_on_out_of_range_term_id ... ok
+test ir::validate::tests::freeze_err_on_reifier_target_not_triple ... ok
+test ir::validate::tests::freeze_err_on_too_deep_acyclic_nesting ... ok
+test ir::validate::tests::freeze_err_on_triple_term_subject ... ok
+test ir::validate::tests::freeze_ok_on_deep_acyclic_nesting ... ok
+test ir::validate::tests::freeze_ok_on_well_formed_quad ... ok
+test ir::validate::tests::freeze_range_checks_statement_layer_graphs ... ok
+test ir::mutable::tests::freeze_replays_delta_insertions_in_call_order_across_fresh_datasets ... ok
+test ir::dataset::tests::property_freeze_quads_count_and_in_range ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 1281 filtered out; finished in 0.00s
+
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 04s
+terminal_status=0

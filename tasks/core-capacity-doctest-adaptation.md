@@ -1,0 +1,9 @@
+# Core capacity API examples
+
+The retained final-consolidated-full-gate.log fails seven core examples in graph_roles.rs and imports.rs because intern_iri now returns Result<TermId, StorageError>, and push_quad also returns a typed storage result. The examples passed those results as IDs and ignored insertion failures.
+
+Root adapted only those seven existing documentation blocks: propagate each existing interning/insertion result with `?`, and give the executable example a hidden `Ok::<(), purrdf_lex::allocation::StorageError>(())` return. Existing fixtures, graph-role/import assertions and freeze checks remain intact. No production implementation, duplicate helper, test expectation, tooling, dependency or resource policy changed.
+
+The change is committed and published as e8285d713 on the existing capacity branch, based on 5ec569c32. Only crates/rdf-core/src/graph_roles.rs and crates/rdf-core/src/imports.rs changed. Independent source review PASS is recorded in reviews/core-capacity-doctest-review.md. The worktree is clean.
+
+`rustfmt --edition 2024 --check` on the two files and `git diff --check` pass. An initial standalone rustfmt check omitted the repository edition and reported unrelated style differences; it wrote nothing. Executable `cargo test --locked -j1 -p purrdf-core --doc` is terminal0: 26 positive and five compile-fail doctests PASS, including all seven repaired blocks. It ran directly with one build job/four test threads after observation of 98,948,476 kB available memory. Existing542 and531 jobs are preserved. Receipt: tasks/core-capacity-doctest.log, session55464. Normal hooked commit19503 and push54237 both terminal0; receipts tasks/core-capacity-doctest-commit.log and tasks/core-capacity-doctest-push.log. Remaining four crates' failed doctests, residency failure and capacity census remain open. This checkpoint is not whole-issue completion or a full-gate pass.

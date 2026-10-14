@@ -1,0 +1,374 @@
+== aarch64: 1 Cargo jobs
+== aarch64 graph 0: /opt/.cargo/slots/37d5b31053e625e5/0/cargo.graph-0.stderr.log
+== aarch64 graph 1: /opt/.cargo/slots/37d5b31053e625e5/0/cargo.graph-1.stderr.log
+== aarch64: {"analysis_seconds": 28.070379955985118, "build_seconds": 1646.5413423550199, "fresh_artifacts": 112, "lock_seconds": 0.0005126359756104648, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 27, "seconds": 1675.7977705810335}
+aarch64              purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v45 f0 r0  [purrdf_datalog-40b5863875f1f398.s]  add×15, addv×2, and×9, cmeq×20, sub×8, uzp1×10
+                        stp x29, x30, [sp, #-64]!
+                        str x23, [sp, #16]
+                        stp x22, x21, [sp, #32]
+                        stp x20, x19, [sp, #48]
+                        mov x29, sp
+                        ldr x8, [x0, #16]
+                        mov x19, x2
+                        mov x21, x0
+                        mov x20, x1
+                        cbz x8, .LBB597_11
+                        mov w9, #120
+                        ldr x22, [x21, #8]
+                        madd x23, x8, x9, x22
+                        b .LBB597_5
+                        mov x10, xzr
+                        ldr x8, [x8, x10, lsl #3]
+                        cmp x8, x19
+                        b.eq .LBB597_15
+                        add x22, x22, #120
+                        cmp x22, x23
+                        b.eq .LBB597_11
+                        ldp x0, x1, [x22, #8]
+                        mov x2, x20
+                        bl _RNvMs4_NtCs5S10HVhpNYb_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        ldr x2, [x22, #40]
+                        cmp x1, x0
+                        b.lo .LBB597_28
+                        cmp x1, x2
+                        b.hi .LBB597_28
+                        subs x9, x1, x0
+                        b.eq .LBB597_4
+                        ldr x8, [x22, #32]
+                        cmp x9, #1
+                        add x8, x8, x0, lsl #3
+                        b.eq .LBB597_2
+                        mov x10, xzr
+                        lsr x11, x9, #1
+                        add x12, x11, x10
+                        sub x9, x9, x11
+                        ldr x13, [x8, x12, lsl #3]
+                        cmp x13, x19
+                        csel x10, x10, x12, hi
+                        cmp x9, #1
+                        b.hi .LBB597_10
+                        b .LBB597_3
+                        ldr x8, [x21, #40]
+                        ldr x9, [x21, #64]
+                        cmp x8, x9
+                        csel x8, x8, x9, lo
+                        cbz x8, .LBB597_14
+                        ldr x9, [x21, #32]
+                        ldr x10, [x21, #56]
+                        cmp x8, #3
+                        b.hi .LBB597_16
+                        mov w13, wzr
+                        mov x11, xzr
+                        b .LBB597_25
+                        mov w0, wzr
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        mov w0, #1
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        dup v0.2d, x20
+                        dup v1.2d, x19
+                        cmp x8, #16
+                        b.hs .LBB597_18
+                        mov x11, xzr
+                        mov w13, wzr
+                        b .LBB597_22
+                        movi v2.2d, #0000000000000000
+                        movi v3.2d, #0000000000000000
+                        and x12, x8, #0xc
+                        movi v4.2d, #0000000000000000
+                        movi v5.2d, #0000000000000000
+                        and x11, x8, #0xffffffffffffff0
+                        add x13, x9, #64
+                        add x14, x10, #64
+                        and x15, x8, #0xffffffffffffff0
+                        ldp q6, q7, [x13, #-64]
+                        subs x15, x15, #16
+                        ldp q16, q17, [x13, #-32]
+                        ldp q18, q19, [x13]
+                        ldp q20, q21, [x13, #32]
+                        cmeq v7.2d, v7.2d, v0.2d
+                        ldp q22, q23, [x14, #-64]
+                        cmeq v6.2d, v6.2d, v0.2d
+                        ldp q24, q25, [x14, #-32]
+                        cmeq v17.2d, v17.2d, v0.2d
+                        ldp q26, q27, [x14]
+                        cmeq v16.2d, v16.2d, v0.2d
+                        ldp q28, q29, [x14, #32]
+                        cmeq v19.2d, v19.2d, v0.2d
+                        cmeq v18.2d, v18.2d, v0.2d
+                        cmeq v21.2d, v21.2d, v0.2d
+                        cmeq v20.2d, v20.2d, v0.2d
+                        cmeq v23.2d, v23.2d, v1.2d
+                        cmeq v22.2d, v22.2d, v1.2d
+                        cmeq v25.2d, v25.2d, v1.2d
+                        cmeq v24.2d, v24.2d, v1.2d
+                        cmeq v27.2d, v27.2d, v1.2d
+                        cmeq v26.2d, v26.2d, v1.2d
+                        cmeq v29.2d, v29.2d, v1.2d
+                        cmeq v28.2d, v28.2d, v1.2d
+                        uzp1 v6.4s, v6.4s, v7.4s
+                        uzp1 v7.4s, v16.4s, v17.4s
+                        uzp1 v16.4s, v18.4s, v19.4s
+                        uzp1 v17.4s, v20.4s, v21.4s
+                        uzp1 v18.4s, v22.4s, v23.4s
+                        uzp1 v19.4s, v24.4s, v25.4s
+                        uzp1 v20.4s, v26.4s, v27.4s
+                        uzp1 v21.4s, v28.4s, v29.4s
+                        add x13, x13, #128
+                        add x14, x14, #128
+                        and v6.16b, v6.16b, v18.16b
+                        and v7.16b, v7.16b, v19.16b
+                        and v16.16b, v16.16b, v20.16b
+                        and v17.16b, v17.16b, v21.16b
+                        sub v2.4s, v2.4s, v6.4s
+                        sub v3.4s, v3.4s, v7.4s
+                        sub v4.4s, v4.4s, v16.4s
+                        sub v5.4s, v5.4s, v17.4s
+                        b.ne .LBB597_19
+                        add v2.4s, v3.4s, v2.4s
+                        add v3.4s, v5.4s, v4.4s
+                        cmp x8, x11
+                        add v2.4s, v3.4s, v2.4s
+                        addv s2, v2.4s
+                        fmov w13, s2
+                        b.eq .LBB597_27
+                        cbz x12, .LBB597_25
+                        movi v2.2d, #0000000000000000
+                        lsl x14, x11, #3
+                        mov x12, x11
+                        and x11, x8, #0xffffffffffffffc
+                        sub x12, x12, x11
+                        mov v2.s[0], w13
+                        add x13, x10, x14
+                        add x14, x9, x14
+                        ldp q4, q3, [x14], #32
+                        ldp q5, q6, [x13], #32
+                        adds x12, x12, #4
+                        cmeq v3.2d, v3.2d, v0.2d
+                        cmeq v4.2d, v4.2d, v0.2d
+                        cmeq v6.2d, v6.2d, v1.2d
+                        cmeq v5.2d, v5.2d, v1.2d
+                        uzp1 v3.4s, v4.4s, v3.4s
+                        uzp1 v4.4s, v5.4s, v6.4s
+                        and v3.16b, v3.16b, v4.16b
+                        sub v2.4s, v2.4s, v3.4s
+                        b.ne .LBB597_23
+                        addv s0, v2.4s
+                        cmp x8, x11
+                        fmov w13, s0
+                        b.eq .LBB597_27
+                        lsl x12, x11, #3
+                        sub x8, x8, x11
+                        add x10, x10, x12
+                        add x9, x9, x12
+                        ldr x11, [x9], #8
+                        ldr x12, [x10], #8
+                        cmp x11, x20
+                        ccmp x12, x19, #0, eq
+                        cinc w13, w13, eq
+                        subs x8, x8, #1
+                        b.ne .LBB597_26
+                        cmp w13, #0
+                        cset w0, ne
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        adrp x3, .Lanon.ef9dc4f9fb1e33d1aeab92afa7627955.308
+                        add x3, x3, :lo12:.Lanon.ef9dc4f9fb1e33d1aeab92afa7627955.308
+                        bl _RNvNtNtCsiv0KamgG7il_4core5slice5index16slice_index_fail
+aarch64              purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v45 f0 r0  [purrdf_datalog-40b5863875f1f398.s]  add×15, addv×2, and×9, cmeq×20, sub×8, uzp1×10
+                        stp x29, x30, [sp, #-64]!
+                        str x23, [sp, #16]
+                        stp x22, x21, [sp, #32]
+                        stp x20, x19, [sp, #48]
+                        mov x29, sp
+                        ldr x8, [x0, #16]
+                        mov x19, x2
+                        mov x21, x0
+                        mov x20, x1
+                        cbz x8, .LBB597_11
+                        mov w9, #120
+                        ldr x22, [x21, #8]
+                        madd x23, x8, x9, x22
+                        b .LBB597_5
+                        mov x10, xzr
+                        ldr x8, [x8, x10, lsl #3]
+                        cmp x8, x19
+                        b.eq .LBB597_15
+                        add x22, x22, #120
+                        cmp x22, x23
+                        b.eq .LBB597_11
+                        ldp x0, x1, [x22, #8]
+                        mov x2, x20
+                        bl _RNvMs4_NtCs5S10HVhpNYb_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        ldr x2, [x22, #40]
+                        cmp x1, x0
+                        b.lo .LBB597_28
+                        cmp x1, x2
+                        b.hi .LBB597_28
+                        subs x9, x1, x0
+                        b.eq .LBB597_4
+                        ldr x8, [x22, #32]
+                        cmp x9, #1
+                        add x8, x8, x0, lsl #3
+                        b.eq .LBB597_2
+                        mov x10, xzr
+                        lsr x11, x9, #1
+                        add x12, x11, x10
+                        sub x9, x9, x11
+                        ldr x13, [x8, x12, lsl #3]
+                        cmp x13, x19
+                        csel x10, x10, x12, hi
+                        cmp x9, #1
+                        b.hi .LBB597_10
+                        b .LBB597_3
+                        ldr x8, [x21, #40]
+                        ldr x9, [x21, #64]
+                        cmp x8, x9
+                        csel x8, x8, x9, lo
+                        cbz x8, .LBB597_14
+                        ldr x9, [x21, #32]
+                        ldr x10, [x21, #56]
+                        cmp x8, #3
+                        b.hi .LBB597_16
+                        mov w13, wzr
+                        mov x11, xzr
+                        b .LBB597_25
+                        mov w0, wzr
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        mov w0, #1
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        dup v0.2d, x20
+                        dup v1.2d, x19
+                        cmp x8, #16
+                        b.hs .LBB597_18
+                        mov x11, xzr
+                        mov w13, wzr
+                        b .LBB597_22
+                        movi v2.2d, #0000000000000000
+                        movi v3.2d, #0000000000000000
+                        and x12, x8, #0xc
+                        movi v4.2d, #0000000000000000
+                        movi v5.2d, #0000000000000000
+                        and x11, x8, #0xffffffffffffff0
+                        add x13, x9, #64
+                        add x14, x10, #64
+                        and x15, x8, #0xffffffffffffff0
+                        ldp q6, q7, [x13, #-64]
+                        subs x15, x15, #16
+                        ldp q16, q17, [x13, #-32]
+                        ldp q18, q19, [x13]
+                        ldp q20, q21, [x13, #32]
+                        cmeq v7.2d, v7.2d, v0.2d
+                        ldp q22, q23, [x14, #-64]
+                        cmeq v6.2d, v6.2d, v0.2d
+                        ldp q24, q25, [x14, #-32]
+                        cmeq v17.2d, v17.2d, v0.2d
+                        ldp q26, q27, [x14]
+                        cmeq v16.2d, v16.2d, v0.2d
+                        ldp q28, q29, [x14, #32]
+                        cmeq v19.2d, v19.2d, v0.2d
+                        cmeq v18.2d, v18.2d, v0.2d
+                        cmeq v21.2d, v21.2d, v0.2d
+                        cmeq v20.2d, v20.2d, v0.2d
+                        cmeq v23.2d, v23.2d, v1.2d
+                        cmeq v22.2d, v22.2d, v1.2d
+                        cmeq v25.2d, v25.2d, v1.2d
+                        cmeq v24.2d, v24.2d, v1.2d
+                        cmeq v27.2d, v27.2d, v1.2d
+                        cmeq v26.2d, v26.2d, v1.2d
+                        cmeq v29.2d, v29.2d, v1.2d
+                        cmeq v28.2d, v28.2d, v1.2d
+                        uzp1 v6.4s, v6.4s, v7.4s
+                        uzp1 v7.4s, v16.4s, v17.4s
+                        uzp1 v16.4s, v18.4s, v19.4s
+                        uzp1 v17.4s, v20.4s, v21.4s
+                        uzp1 v18.4s, v22.4s, v23.4s
+                        uzp1 v19.4s, v24.4s, v25.4s
+                        uzp1 v20.4s, v26.4s, v27.4s
+                        uzp1 v21.4s, v28.4s, v29.4s
+                        add x13, x13, #128
+                        add x14, x14, #128
+                        and v6.16b, v6.16b, v18.16b
+                        and v7.16b, v7.16b, v19.16b
+                        and v16.16b, v16.16b, v20.16b
+                        and v17.16b, v17.16b, v21.16b
+                        sub v2.4s, v2.4s, v6.4s
+                        sub v3.4s, v3.4s, v7.4s
+                        sub v4.4s, v4.4s, v16.4s
+                        sub v5.4s, v5.4s, v17.4s
+                        b.ne .LBB597_19
+                        add v2.4s, v3.4s, v2.4s
+                        add v3.4s, v5.4s, v4.4s
+                        cmp x8, x11
+                        add v2.4s, v3.4s, v2.4s
+                        addv s2, v2.4s
+                        fmov w13, s2
+                        b.eq .LBB597_27
+                        cbz x12, .LBB597_25
+                        movi v2.2d, #0000000000000000
+                        lsl x14, x11, #3
+                        mov x12, x11
+                        and x11, x8, #0xffffffffffffffc
+                        sub x12, x12, x11
+                        mov v2.s[0], w13
+                        add x13, x10, x14
+                        add x14, x9, x14
+                        ldp q4, q3, [x14], #32
+                        ldp q5, q6, [x13], #32
+                        adds x12, x12, #4
+                        cmeq v3.2d, v3.2d, v0.2d
+                        cmeq v4.2d, v4.2d, v0.2d
+                        cmeq v6.2d, v6.2d, v1.2d
+                        cmeq v5.2d, v5.2d, v1.2d
+                        uzp1 v3.4s, v4.4s, v3.4s
+                        uzp1 v4.4s, v5.4s, v6.4s
+                        and v3.16b, v3.16b, v4.16b
+                        sub v2.4s, v2.4s, v3.4s
+                        b.ne .LBB597_23
+                        addv s0, v2.4s
+                        cmp x8, x11
+                        fmov w13, s0
+                        b.eq .LBB597_27
+                        lsl x12, x11, #3
+                        sub x8, x8, x11
+                        add x10, x10, x12
+                        add x9, x9, x12
+                        ldr x11, [x9], #8
+                        ldr x12, [x10], #8
+                        cmp x11, x20
+                        ccmp x12, x19, #0, eq
+                        cinc w13, w13, eq
+                        subs x8, x8, #1
+                        b.ne .LBB597_26
+                        cmp w13, #0
+                        cset w0, ne
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        adrp x3, .Lanon.ef9dc4f9fb1e33d1aeab92afa7627955.308
+                        add x3, x3, :lo12:.Lanon.ef9dc4f9fb1e33d1aeab92afa7627955.308
+                        bl _RNvNtNtCsiv0KamgG7il_4core5slice5index16slice_index_fail
+
+terminal_status=0

@@ -1,0 +1,53 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: temporary with significant `Drop` can be early dropped
+   --> crates/rdf-core/src/ir/segmented/query.rs:162:17
+    |
+161 |       fn intern(&self, term: SourceTerm) -> Result<GlobalTermId, SegmentedError> {
+    |  ________________________________________________________________________________-
+162 | |         let mut ids = lock_read_state(&self.identities);
+    | |                 ^^^
+163 | |         let alias_hash = hash_of(&term);
+164 | |         if let Some((_, id)) = ids.aliases.find(alias_hash, |(key, _)| *key == term) {
+...   |
+222 | |         Ok(id)
+223 | |     }
+    | |_____- temporary `ids` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+    = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+    |
+193 ~         } = &mut *ids;
+194 +         drop(ids);
+    |
+
+error: deref which would be done by auto-deref
+    --> crates/rdf-core/src/ir/term_walk.rs:1339:40
+     |
+1339 |                     push(&mut pending, &**o)?;
+     |                                        ^^^^ help: try: `o`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_auto_deref
+     = note: `-D clippy::explicit-auto-deref` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::explicit_auto_deref)]`
+
+error: deref which would be done by auto-deref
+    --> crates/rdf-core/src/ir/term_walk.rs:1340:40
+     |
+1340 |                     push(&mut pending, &**p)?;
+     |                                        ^^^^ help: try: `p`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_auto_deref
+
+error: deref which would be done by auto-deref
+    --> crates/rdf-core/src/ir/term_walk.rs:1341:40
+     |
+1341 |                     push(&mut pending, &**s)?;
+     |                                        ^^^^ help: try: `s`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_auto_deref
+
+error: could not compile `purrdf-core` (lib) due to 4 previous errors
+terminal_status=101

@@ -1,0 +1,15 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error[E0282]: type annotations needed
+   --> crates/datalog/src/seminaive/factors.rs:677:20
+    |
+677 |             return Ok(buffer);
+    |                    ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+help: consider specifying the generic arguments
+    |
+677 |             return Ok::<seminaive::RoundBuffer<'_, <D as dictionary::TermDictionary>::Id>, E>(buffer);
+    |                      ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error
+terminal_status=101

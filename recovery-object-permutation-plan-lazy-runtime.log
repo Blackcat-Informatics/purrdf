@@ -1,0 +1,2408 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 12.73s
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 1m 03s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-datalog/9166702f3a632274/out/purrdf_datalog-9166702f3a632274)
+
+running 1 test
+test store::tests::consolidated_object_positions_preserve_wide_row_ids ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 366 filtered out; finished in 0.00s
+
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 9.75s
+     Running tests/object_permutation_allocation.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-datalog/63770065629c4374/out/object_permutation_allocation-63770065629c4374)
+
+running 2 tests
+test object_probe_allocates_one_address_per_row_once ... ok
+test consolidated_object_order_serves_the_actual_cycle_join ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:107:17
+     |
+ 107 |         builder.push_quad(s, p, m, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:107:27
+     |
+ 107 |         builder.push_quad(s, p, m, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:107:30
+     |
+ 107 |         builder.push_quad(s, p, m, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:107:33
+     |
+ 107 |         builder.push_quad(s, p, m, None);
+     |                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 107 |         builder.push_quad(s.expect("REASON"), p, m, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 107 |         builder.push_quad(s, p.expect("REASON"), m, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 107 |         builder.push_quad(s, p, m.expect("REASON"), None);
+     |                                  +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:108:17
+     |
+ 108 |         builder.push_quad(m, q, z, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:108:27
+     |
+ 108 |         builder.push_quad(m, q, z, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:108:30
+     |
+ 108 |         builder.push_quad(m, q, z, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:108:33
+     |
+ 108 |         builder.push_quad(m, q, z, None);
+     |                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 108 |         builder.push_quad(m.expect("REASON"), q, z, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 108 |         builder.push_quad(m, q.expect("REASON"), z, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 108 |         builder.push_quad(m, q, z.expect("REASON"), None);
+     |                                  +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:328:17
+     |
+ 328 |         builder.push_quad(s, p, o, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:328:27
+     |
+ 328 |         builder.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:328:30
+     |
+ 328 |         builder.push_quad(s, p, o, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:328:33
+     |
+ 328 |         builder.push_quad(s, p, o, None);
+     |                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 328 |         builder.push_quad(s.expect("REASON"), p, o, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 328 |         builder.push_quad(s, p.expect("REASON"), o, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 328 |         builder.push_quad(s, p, o.expect("REASON"), None);
+     |                                  +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:405:17
+     |
+ 405 |         builder.push_quad(s, p, o, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:405:27
+     |
+ 405 |         builder.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:405:30
+     |
+ 405 |         builder.push_quad(s, p, o, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:405:33
+     |
+ 405 |         builder.push_quad(s, p, o, None);
+     |                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 405 |         builder.push_quad(s.expect("REASON"), p, o, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 405 |         builder.push_quad(s, p.expect("REASON"), o, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 405 |         builder.push_quad(s, p, o.expect("REASON"), None);
+     |                                  +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:946:17
+     |
+ 946 |         builder.push_quad(s, p, m, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:946:27
+     |
+ 946 |         builder.push_quad(s, p, m, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:946:30
+     |
+ 946 |         builder.push_quad(s, p, m, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:946:33
+     |
+ 946 |         builder.push_quad(s, p, m, None);
+     |                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 946 |         builder.push_quad(s.expect("REASON"), p, m, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 946 |         builder.push_quad(s, p.expect("REASON"), m, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 946 |         builder.push_quad(s, p, m.expect("REASON"), None);
+     |                                  +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:1339:15
+     |
+1339 |             b.push_quad(subject, cat_pred, cat, None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1339:25
+     |
+1339 |             b.push_quad(subject, cat_pred, cat, None);
+     |                         ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1339:34
+     |
+1339 |             b.push_quad(subject, cat_pred, cat, None);
+     |                                  ^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1339:44
+     |
+1339 |             b.push_quad(subject, cat_pred, cat, None);
+     |                                            ^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1339 |             b.push_quad(subject.expect("REASON"), cat_pred, cat, None);
+     |                                +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1339 |             b.push_quad(subject, cat_pred.expect("REASON"), cat, None);
+     |                                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1339 |             b.push_quad(subject, cat_pred, cat.expect("REASON"), None);
+     |                                               +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:1340:15
+     |
+1340 |             b.push_quad(subject, val_pred, val, None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1340:25
+     |
+1340 |             b.push_quad(subject, val_pred, val, None);
+     |                         ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1340:34
+     |
+1340 |             b.push_quad(subject, val_pred, val, None);
+     |                                  ^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1340:44
+     |
+1340 |             b.push_quad(subject, val_pred, val, None);
+     |                                            ^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1340 |             b.push_quad(subject.expect("REASON"), val_pred, val, None);
+     |                                +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1340 |             b.push_quad(subject, val_pred.expect("REASON"), val, None);
+     |                                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1340 |             b.push_quad(subject, val_pred, val.expect("REASON"), None);
+     |                                               +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:1430:11
+     |
+1430 |         b.push_quad(subject, val_pred, same, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1430:21
+     |
+1430 |         b.push_quad(subject, val_pred, same, None);
+     |                     ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1430:30
+     |
+1430 |         b.push_quad(subject, val_pred, same, None);
+     |                              ^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1430:40
+     |
+1430 |         b.push_quad(subject, val_pred, same, None);
+     |                                        ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1430 |         b.push_quad(subject.expect("REASON"), val_pred, same, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1430 |         b.push_quad(subject, val_pred.expect("REASON"), same, None);
+     |                                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1430 |         b.push_quad(subject, val_pred, same.expect("REASON"), None);
+     |                                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/governor/charge_points.rs:1866:11
+     |
+1866 |         b.push_quad(subject, val_pred, val, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1866:21
+     |
+1866 |         b.push_quad(subject, val_pred, val, None);
+     |                     ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1866:30
+     |
+1866 |         b.push_quad(subject, val_pred, val, None);
+     |                              ^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/governor/charge_points.rs:1866:40
+     |
+1866 |         b.push_quad(subject, val_pred, val, None);
+     |                                        ^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1866 |         b.push_quad(subject.expect("REASON"), val_pred, val, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1866 |         b.push_quad(subject, val_pred.expect("REASON"), val, None);
+     |                                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1866 |         b.push_quad(subject, val_pred, val.expect("REASON"), None);
+     |                                           +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:134:11
+     |
+ 134 |         b.push_quad(s, p, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:134:21
+     |
+ 134 |         b.push_quad(s, p, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:134:24
+     |
+ 134 |         b.push_quad(s, p, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:134:27
+     |
+ 134 |         b.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 134 |         b.push_quad(s.expect("REASON"), p, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 134 |         b.push_quad(s, p.expect("REASON"), o, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 134 |         b.push_quad(s, p, o.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:295:11
+     |
+ 295 |         b.push_quad(from, next, to, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:295:21
+     |
+ 295 |         b.push_quad(from, next, to, None);
+     |                     ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:295:27
+     |
+ 295 |         b.push_quad(from, next, to, None);
+     |                           ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:295:33
+     |
+ 295 |         b.push_quad(from, next, to, None);
+     |                                 ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 295 |         b.push_quad(from.expect("REASON"), next, to, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 295 |         b.push_quad(from, next.expect("REASON"), to, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 295 |         b.push_quad(from, next, to.expect("REASON"), None);
+     |                                   +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:441:11
+     |
+ 441 |         b.push_quad(s, p, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:441:21
+     |
+ 441 |         b.push_quad(s, p, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:441:24
+     |
+ 441 |         b.push_quad(s, p, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:441:27
+     |
+ 441 |         b.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 441 |         b.push_quad(s.expect("REASON"), p, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 441 |         b.push_quad(s, p.expect("REASON"), o, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 441 |         b.push_quad(s, p, o.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:444:11
+     |
+ 444 |         b.push_quad(s, q, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:444:21
+     |
+ 444 |         b.push_quad(s, q, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:444:24
+     |
+ 444 |         b.push_quad(s, q, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:444:27
+     |
+ 444 |         b.push_quad(s, q, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 444 |         b.push_quad(s.expect("REASON"), q, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 444 |         b.push_quad(s, q.expect("REASON"), o, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 444 |         b.push_quad(s, q, o.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:447:11
+     |
+ 447 |         b.push_quad(s, label, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:447:21
+     |
+ 447 |         b.push_quad(s, label, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:447:24
+     |
+ 447 |         b.push_quad(s, label, o, None);
+     |                        ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:447:31
+     |
+ 447 |         b.push_quad(s, label, o, None);
+     |                               ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 447 |         b.push_quad(s.expect("REASON"), label, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 447 |         b.push_quad(s, label.expect("REASON"), o, None);
+     |                             +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 447 |         b.push_quad(s, label, o.expect("REASON"), None);
+     |                                +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/nested_exists_gate.rs:449:32
+    |
+449 |     b.push_quad(a, r, bb, Some(g));
+    |                           ---- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                           |
+    |                           arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/sparql-eval/src/nested_exists_gate.rs:449:27
+    |
+449 |     b.push_quad(a, r, bb, Some(g));
+    |                           ^^^^^-^
+    |                                |
+    |                                this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+449 |     b.push_quad(a, r, bb, Some(g.expect("REASON")));
+    |                                 +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:449:7
+     |
+ 449 |     b.push_quad(a, r, bb, Some(g));
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:449:17
+     |
+ 449 |     b.push_quad(a, r, bb, Some(g));
+     |                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:449:20
+     |
+ 449 |     b.push_quad(a, r, bb, Some(g));
+     |                    ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:449:23
+     |
+ 449 |     b.push_quad(a, r, bb, Some(g));
+     |                       ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 449 |     b.push_quad(a.expect("REASON"), r, bb, Some(g));
+     |                  +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 449 |     b.push_quad(a, r.expect("REASON"), bb, Some(g));
+     |                     +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 449 |     b.push_quad(a, r, bb.expect("REASON"), Some(g));
+     |                         +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/nested_exists_gate.rs:450:36
+    |
+450 |     b.push_quad(blank1, r, c, Some(g));
+    |                               ---- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                               |
+    |                               arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/sparql-eval/src/nested_exists_gate.rs:450:31
+    |
+450 |     b.push_quad(blank1, r, c, Some(g));
+    |                               ^^^^^-^
+    |                                    |
+    |                                    this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+450 |     b.push_quad(blank1, r, c, Some(g.expect("REASON")));
+    |                                     +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:450:7
+     |
+ 450 |     b.push_quad(blank1, r, c, Some(g));
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:450:17
+     |
+ 450 |     b.push_quad(blank1, r, c, Some(g));
+     |                 ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:450:25
+     |
+ 450 |     b.push_quad(blank1, r, c, Some(g));
+     |                         ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:450:28
+     |
+ 450 |     b.push_quad(blank1, r, c, Some(g));
+     |                            ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 450 |     b.push_quad(blank1.expect("REASON"), r, c, Some(g));
+     |                       +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 450 |     b.push_quad(blank1, r.expect("REASON"), c, Some(g));
+     |                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 450 |     b.push_quad(blank1, r, c.expect("REASON"), Some(g));
+     |                             +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:595:7
+     |
+ 595 |     b.push_quad(x1, tag, x1, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:595:17
+     |
+ 595 |     b.push_quad(x1, tag, x1, None);
+     |                 ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:595:21
+     |
+ 595 |     b.push_quad(x1, tag, x1, None);
+     |                     ^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:595:26
+     |
+ 595 |     b.push_quad(x1, tag, x1, None);
+     |                          ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 595 |     b.push_quad(x1.expect("REASON"), tag, x1, None);
+     |                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 595 |     b.push_quad(x1, tag.expect("REASON"), x1, None);
+     |                        +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 595 |     b.push_quad(x1, tag, x1.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:596:7
+     |
+ 596 |     b.push_quad(x2, tag, x2, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:596:17
+     |
+ 596 |     b.push_quad(x2, tag, x2, None);
+     |                 ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:596:21
+     |
+ 596 |     b.push_quad(x2, tag, x2, None);
+     |                     ^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:596:26
+     |
+ 596 |     b.push_quad(x2, tag, x2, None);
+     |                          ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 596 |     b.push_quad(x2.expect("REASON"), tag, x2, None);
+     |                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 596 |     b.push_quad(x2, tag.expect("REASON"), x2, None);
+     |                        +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 596 |     b.push_quad(x2, tag, x2.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:597:7
+     |
+ 597 |     b.push_quad(x1, q, k, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:597:17
+     |
+ 597 |     b.push_quad(x1, q, k, None);
+     |                 ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:597:21
+     |
+ 597 |     b.push_quad(x1, q, k, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:597:24
+     |
+ 597 |     b.push_quad(x1, q, k, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 597 |     b.push_quad(x1.expect("REASON"), q, k, None);
+     |                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 597 |     b.push_quad(x1, q.expect("REASON"), k, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 597 |     b.push_quad(x1, q, k.expect("REASON"), None);
+     |                         +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:598:7
+     |
+ 598 |     b.push_quad(x2, q, other, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:598:17
+     |
+ 598 |     b.push_quad(x2, q, other, None);
+     |                 ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:598:21
+     |
+ 598 |     b.push_quad(x2, q, other, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:598:24
+     |
+ 598 |     b.push_quad(x2, q, other, None);
+     |                        ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 598 |     b.push_quad(x2.expect("REASON"), q, other, None);
+     |                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 598 |     b.push_quad(x2, q.expect("REASON"), other, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 598 |     b.push_quad(x2, q, other.expect("REASON"), None);
+     |                             +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:599:7
+     |
+ 599 |     b.push_quad(k, r, z, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:599:17
+     |
+ 599 |     b.push_quad(k, r, z, None);
+     |                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:599:20
+     |
+ 599 |     b.push_quad(k, r, z, None);
+     |                    ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:599:23
+     |
+ 599 |     b.push_quad(k, r, z, None);
+     |                       ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 599 |     b.push_quad(k.expect("REASON"), r, z, None);
+     |                  +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 599 |     b.push_quad(k, r.expect("REASON"), z, None);
+     |                     +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 599 |     b.push_quad(k, r, z.expect("REASON"), None);
+     |                        +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:600:7
+     |
+ 600 |     b.push_quad(other, r, z, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:600:17
+     |
+ 600 |     b.push_quad(other, r, z, None);
+     |                 ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:600:24
+     |
+ 600 |     b.push_quad(other, r, z, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:600:27
+     |
+ 600 |     b.push_quad(other, r, z, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 600 |     b.push_quad(other.expect("REASON"), r, z, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 600 |     b.push_quad(other, r.expect("REASON"), z, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 600 |     b.push_quad(other, r, z.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:680:11
+     |
+ 680 |         b.push_quad(s, p, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:680:21
+     |
+ 680 |         b.push_quad(s, p, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:680:24
+     |
+ 680 |         b.push_quad(s, p, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:680:27
+     |
+ 680 |         b.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 680 |         b.push_quad(s.expect("REASON"), p, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 680 |         b.push_quad(s, p.expect("REASON"), o, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 680 |         b.push_quad(s, p, o.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_exists_gate.rs:682:15
+     |
+ 682 |             b.push_quad(s, q, y, None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:682:25
+     |
+ 682 |             b.push_quad(s, q, y, None);
+     |                         ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:682:28
+     |
+ 682 |             b.push_quad(s, q, y, None);
+     |                            ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_exists_gate.rs:682:31
+     |
+ 682 |             b.push_quad(s, q, y, None);
+     |                               ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 682 |             b.push_quad(s.expect("REASON"), q, y, None);
+     |                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 682 |             b.push_quad(s, q.expect("REASON"), y, None);
+     |                             +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 682 |             b.push_quad(s, q, y.expect("REASON"), None);
+     |                                +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:148:11
+     |
+ 148 |         b.push_quad(s, p, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:148:21
+     |
+ 148 |         b.push_quad(s, p, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:148:24
+     |
+ 148 |         b.push_quad(s, p, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:148:27
+     |
+ 148 |         b.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 148 |         b.push_quad(s.expect("REASON"), p, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 148 |         b.push_quad(s, p.expect("REASON"), o, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 148 |         b.push_quad(s, p, o.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:296:11
+     |
+ 296 |         b.push_quad(from, next, to, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:296:21
+     |
+ 296 |         b.push_quad(from, next, to, None);
+     |                     ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:296:27
+     |
+ 296 |         b.push_quad(from, next, to, None);
+     |                           ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:296:33
+     |
+ 296 |         b.push_quad(from, next, to, None);
+     |                                 ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 296 |         b.push_quad(from.expect("REASON"), next, to, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 296 |         b.push_quad(from, next.expect("REASON"), to, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 296 |         b.push_quad(from, next, to.expect("REASON"), None);
+     |                                   +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:402:15
+     |
+ 402 |             b.push_quad(s, p, o, None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:402:25
+     |
+ 402 |             b.push_quad(s, p, o, None);
+     |                         ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:402:28
+     |
+ 402 |             b.push_quad(s, p, o, None);
+     |                            ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:402:31
+     |
+ 402 |             b.push_quad(s, p, o, None);
+     |                               ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 402 |             b.push_quad(s.expect("REASON"), p, o, None);
+     |                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 402 |             b.push_quad(s, p.expect("REASON"), o, None);
+     |                             +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 402 |             b.push_quad(s, p, o.expect("REASON"), None);
+     |                                +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:404:19
+     |
+ 404 |                 b.push_quad(s, q, o, None);
+     |                   ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:404:29
+     |
+ 404 |                 b.push_quad(s, q, o, None);
+     |                             ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:404:32
+     |
+ 404 |                 b.push_quad(s, q, o, None);
+     |                                ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:404:35
+     |
+ 404 |                 b.push_quad(s, q, o, None);
+     |                                   ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 404 |                 b.push_quad(s.expect("REASON"), q, o, None);
+     |                              +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 404 |                 b.push_quad(s, q.expect("REASON"), o, None);
+     |                                 +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 404 |                 b.push_quad(s, q, o.expect("REASON"), None);
+     |                                    +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:447:11
+     |
+ 447 |         b.push_quad(s, p, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:447:21
+     |
+ 447 |         b.push_quad(s, p, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:447:24
+     |
+ 447 |         b.push_quad(s, p, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:447:27
+     |
+ 447 |         b.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 447 |         b.push_quad(s.expect("REASON"), p, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 447 |         b.push_quad(s, p.expect("REASON"), o, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 447 |         b.push_quad(s, p, o.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:450:11
+     |
+ 450 |         b.push_quad(s, q, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:450:21
+     |
+ 450 |         b.push_quad(s, q, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:450:24
+     |
+ 450 |         b.push_quad(s, q, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:450:27
+     |
+ 450 |         b.push_quad(s, q, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 450 |         b.push_quad(s.expect("REASON"), q, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 450 |         b.push_quad(s, q.expect("REASON"), o, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 450 |         b.push_quad(s, q, o.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:453:11
+     |
+ 453 |         b.push_quad(s, label, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:453:21
+     |
+ 453 |         b.push_quad(s, label, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:453:24
+     |
+ 453 |         b.push_quad(s, label, o, None);
+     |                        ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:453:31
+     |
+ 453 |         b.push_quad(s, label, o, None);
+     |                               ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 453 |         b.push_quad(s.expect("REASON"), label, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 453 |         b.push_quad(s, label.expect("REASON"), o, None);
+     |                             +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 453 |         b.push_quad(s, label, o.expect("REASON"), None);
+     |                                +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/nested_lateral_gate.rs:455:32
+    |
+455 |     b.push_quad(a, r, bb, Some(g));
+    |                           ---- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                           |
+    |                           arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/sparql-eval/src/nested_lateral_gate.rs:455:27
+    |
+455 |     b.push_quad(a, r, bb, Some(g));
+    |                           ^^^^^-^
+    |                                |
+    |                                this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+455 |     b.push_quad(a, r, bb, Some(g.expect("REASON")));
+    |                                 +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:455:7
+     |
+ 455 |     b.push_quad(a, r, bb, Some(g));
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:455:17
+     |
+ 455 |     b.push_quad(a, r, bb, Some(g));
+     |                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:455:20
+     |
+ 455 |     b.push_quad(a, r, bb, Some(g));
+     |                    ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:455:23
+     |
+ 455 |     b.push_quad(a, r, bb, Some(g));
+     |                       ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 455 |     b.push_quad(a.expect("REASON"), r, bb, Some(g));
+     |                  +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 455 |     b.push_quad(a, r.expect("REASON"), bb, Some(g));
+     |                     +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 455 |     b.push_quad(a, r, bb.expect("REASON"), Some(g));
+     |                         +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/nested_lateral_gate.rs:456:36
+    |
+456 |     b.push_quad(blank1, r, c, Some(g));
+    |                               ---- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                               |
+    |                               arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/sparql-eval/src/nested_lateral_gate.rs:456:31
+    |
+456 |     b.push_quad(blank1, r, c, Some(g));
+    |                               ^^^^^-^
+    |                                    |
+    |                                    this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+456 |     b.push_quad(blank1, r, c, Some(g.expect("REASON")));
+    |                                     +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:456:7
+     |
+ 456 |     b.push_quad(blank1, r, c, Some(g));
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:456:17
+     |
+ 456 |     b.push_quad(blank1, r, c, Some(g));
+     |                 ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:456:25
+     |
+ 456 |     b.push_quad(blank1, r, c, Some(g));
+     |                         ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:456:28
+     |
+ 456 |     b.push_quad(blank1, r, c, Some(g));
+     |                            ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 456 |     b.push_quad(blank1.expect("REASON"), r, c, Some(g));
+     |                       +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 456 |     b.push_quad(blank1, r.expect("REASON"), c, Some(g));
+     |                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 456 |     b.push_quad(blank1, r, c.expect("REASON"), Some(g));
+     |                             +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:604:7
+     |
+ 604 |     b.push_quad(x1, q, k, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:604:17
+     |
+ 604 |     b.push_quad(x1, q, k, None);
+     |                 ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:604:21
+     |
+ 604 |     b.push_quad(x1, q, k, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:604:24
+     |
+ 604 |     b.push_quad(x1, q, k, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 604 |     b.push_quad(x1.expect("REASON"), q, k, None);
+     |                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 604 |     b.push_quad(x1, q.expect("REASON"), k, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 604 |     b.push_quad(x1, q, k.expect("REASON"), None);
+     |                         +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:605:7
+     |
+ 605 |     b.push_quad(x2, q, other, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:605:17
+     |
+ 605 |     b.push_quad(x2, q, other, None);
+     |                 ^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:605:21
+     |
+ 605 |     b.push_quad(x2, q, other, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:605:24
+     |
+ 605 |     b.push_quad(x2, q, other, None);
+     |                        ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 605 |     b.push_quad(x2.expect("REASON"), q, other, None);
+     |                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 605 |     b.push_quad(x2, q.expect("REASON"), other, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 605 |     b.push_quad(x2, q, other.expect("REASON"), None);
+     |                             +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:606:7
+     |
+ 606 |     b.push_quad(k, r, z, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:606:17
+     |
+ 606 |     b.push_quad(k, r, z, None);
+     |                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:606:20
+     |
+ 606 |     b.push_quad(k, r, z, None);
+     |                    ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:606:23
+     |
+ 606 |     b.push_quad(k, r, z, None);
+     |                       ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 606 |     b.push_quad(k.expect("REASON"), r, z, None);
+     |                  +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 606 |     b.push_quad(k, r.expect("REASON"), z, None);
+     |                     +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 606 |     b.push_quad(k, r, z.expect("REASON"), None);
+     |                        +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:607:7
+     |
+ 607 |     b.push_quad(other, r, z, None);
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:607:17
+     |
+ 607 |     b.push_quad(other, r, z, None);
+     |                 ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:607:24
+     |
+ 607 |     b.push_quad(other, r, z, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/nested_lateral_gate.rs:607:27
+     |
+ 607 |     b.push_quad(other, r, z, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 607 |     b.push_quad(other.expect("REASON"), r, z, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 607 |     b.push_quad(other, r.expect("REASON"), z, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 607 |     b.push_quad(other, r, z.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0599]: no method named `seal` found for enum `Result<T, E>` in the current scope
+   --> crates/sparql-eval/src/xpath_regex.rs:742:51
+    |
+742 |         let image = SegmentedBuilder::new(limits).seal().unwrap();
+    |                                                   ^^^^ method not found in `Result<SegmentedBuilder, SegmentedError>`
+    |
+note: the method `seal` exists on the type `SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:253:5
+    |
+253 |     pub fn seal(self) -> Result<SegmentedImage, SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+742 |         let image = SegmentedBuilder::new(limits).expect("REASON").seal().unwrap();
+    |                                                  +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:82:11
+     |
+  82 |         b.push_quad(s, rdf_type, person_class, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:82:21
+     |
+  82 |         b.push_quad(s, rdf_type, person_class, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:82:24
+     |
+  82 |         b.push_quad(s, rdf_type, person_class, None);
+     |                        ^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:82:34
+     |
+  82 |         b.push_quad(s, rdf_type, person_class, None);
+     |                                  ^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  82 |         b.push_quad(s.expect("REASON"), rdf_type, person_class, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  82 |         b.push_quad(s, rdf_type.expect("REASON"), person_class, None);
+     |                                +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  82 |         b.push_quad(s, rdf_type, person_class.expect("REASON"), None);
+     |                                              +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:85:11
+     |
+  85 |         b.push_quad(s, p_name, name, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:85:21
+     |
+  85 |         b.push_quad(s, p_name, name, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:85:24
+     |
+  85 |         b.push_quad(s, p_name, name, None);
+     |                        ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:85:32
+     |
+  85 |         b.push_quad(s, p_name, name, None);
+     |                                ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  85 |         b.push_quad(s.expect("REASON"), p_name, name, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  85 |         b.push_quad(s, p_name.expect("REASON"), name, None);
+     |                              +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  85 |         b.push_quad(s, p_name, name.expect("REASON"), None);
+     |                                    +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:88:11
+     |
+  88 |         b.push_quad(s, p_age, age, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:88:21
+     |
+  88 |         b.push_quad(s, p_age, age, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:88:24
+     |
+  88 |         b.push_quad(s, p_age, age, None);
+     |                        ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:88:31
+     |
+  88 |         b.push_quad(s, p_age, age, None);
+     |                               ^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  88 |         b.push_quad(s.expect("REASON"), p_age, age, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  88 |         b.push_quad(s, p_age.expect("REASON"), age, None);
+     |                             +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  88 |         b.push_quad(s, p_age, age.expect("REASON"), None);
+     |                                  +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:92:11
+     |
+  92 |         b.push_quad(s, p_label, label, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:92:21
+     |
+  92 |         b.push_quad(s, p_label, label, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:92:24
+     |
+  92 |         b.push_quad(s, p_label, label, None);
+     |                        ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:92:33
+     |
+  92 |         b.push_quad(s, p_label, label, None);
+     |                                 ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  92 |         b.push_quad(s.expect("REASON"), p_label, label, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  92 |         b.push_quad(s, p_label.expect("REASON"), label, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  92 |         b.push_quad(s, p_label, label.expect("REASON"), None);
+     |                                      +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:94:11
+     |
+  94 |         b.push_quad(s, p_dept, depts[i % 200], None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:94:21
+     |
+  94 |         b.push_quad(s, p_dept, depts[i % 200], None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:94:24
+     |
+  94 |         b.push_quad(s, p_dept, depts[i % 200], None);
+     |                        ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:94:32
+     |
+  94 |         b.push_quad(s, p_dept, depts[i % 200], None);
+     |                                ^^^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  94 |         b.push_quad(s.expect("REASON"), p_dept, depts[i % 200], None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  94 |         b.push_quad(s, p_dept.expect("REASON"), depts[i % 200], None);
+     |                              +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  94 |         b.push_quad(s, p_dept, depts[i % 200].expect("REASON"), None);
+     |                                              +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:95:11
+     |
+  95 |         b.push_quad(s, p_city, cities[i % 50], None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:95:21
+     |
+  95 |         b.push_quad(s, p_city, cities[i % 50], None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:95:24
+     |
+  95 |         b.push_quad(s, p_city, cities[i % 50], None);
+     |                        ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:95:32
+     |
+  95 |         b.push_quad(s, p_city, cities[i % 50], None);
+     |                                ^^^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  95 |         b.push_quad(s.expect("REASON"), p_city, cities[i % 50], None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  95 |         b.push_quad(s, p_city.expect("REASON"), cities[i % 50], None);
+     |                              +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  95 |         b.push_quad(s, p_city, cities[i % 50].expect("REASON"), None);
+     |                                              +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:98:15
+     |
+  98 |             b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:98:25
+     |
+  98 |             b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None);
+     |                         ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:98:28
+     |
+  98 |             b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None);
+     |                            ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:98:37
+     |
+  98 |             b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None);
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  98 |             b.push_quad(s.expect("REASON"), p_knows, people[(i + step) % PEOPLE], None);
+     |                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  98 |             b.push_quad(s, p_knows.expect("REASON"), people[(i + step) % PEOPLE], None);
+     |                                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  98 |             b.push_quad(s, p_knows, people[(i + step) % PEOPLE].expect("REASON"), None);
+     |                                                                +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:103:15
+     |
+ 103 |             b.push_quad(s, p_email, email, None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:103:25
+     |
+ 103 |             b.push_quad(s, p_email, email, None);
+     |                         ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:103:28
+     |
+ 103 |             b.push_quad(s, p_email, email, None);
+     |                            ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:103:37
+     |
+ 103 |             b.push_quad(s, p_email, email, None);
+     |                                     ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 103 |             b.push_quad(s.expect("REASON"), p_email, email, None);
+     |                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 103 |             b.push_quad(s, p_email.expect("REASON"), email, None);
+     |                                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 103 |             b.push_quad(s, p_email, email.expect("REASON"), None);
+     |                                          +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:107:15
+     |
+ 107 |             b.push_quad(s, p_reports, people[(i - 1) / 2], None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:107:25
+     |
+ 107 |             b.push_quad(s, p_reports, people[(i - 1) / 2], None);
+     |                         ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:107:28
+     |
+ 107 |             b.push_quad(s, p_reports, people[(i - 1) / 2], None);
+     |                            ^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/parallel_determinism_gate.rs:107:39
+     |
+ 107 |             b.push_quad(s, p_reports, people[(i - 1) / 2], None);
+     |                                       ^^^^^^^^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 107 |             b.push_quad(s.expect("REASON"), p_reports, people[(i - 1) / 2], None);
+     |                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 107 |             b.push_quad(s, p_reports.expect("REASON"), people[(i - 1) / 2], None);
+     |                                     +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 107 |             b.push_quad(s, p_reports, people[(i - 1) / 2].expect("REASON"), None);
+     |                                                          +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:74:17
+     |
+  74 |         builder.push_quad(s, v, value, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:74:27
+     |
+  74 |         builder.push_quad(s, v, value, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:74:30
+     |
+  74 |         builder.push_quad(s, v, value, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:74:33
+     |
+  74 |         builder.push_quad(s, v, value, None);
+     |                                 ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  74 |         builder.push_quad(s.expect("REASON"), v, value, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  74 |         builder.push_quad(s, v.expect("REASON"), value, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  74 |         builder.push_quad(s, v, value.expect("REASON"), None);
+     |                                      +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:75:17
+     |
+  75 |         builder.push_quad(s, l, list, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:75:27
+     |
+  75 |         builder.push_quad(s, l, list, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:75:30
+     |
+  75 |         builder.push_quad(s, l, list, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:75:33
+     |
+  75 |         builder.push_quad(s, l, list, None);
+     |                                 ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  75 |         builder.push_quad(s.expect("REASON"), l, list, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  75 |         builder.push_quad(s, l.expect("REASON"), list, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  75 |         builder.push_quad(s, l, list.expect("REASON"), None);
+     |                                     +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:271:17
+     |
+ 271 |         builder.push_quad(s, w, value, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:271:27
+     |
+ 271 |         builder.push_quad(s, w, value, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:271:30
+     |
+ 271 |         builder.push_quad(s, w, value, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:271:33
+     |
+ 271 |         builder.push_quad(s, w, value, None);
+     |                                 ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 271 |         builder.push_quad(s.expect("REASON"), w, value, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 271 |         builder.push_quad(s, w.expect("REASON"), value, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 271 |         builder.push_quad(s, w, value.expect("REASON"), None);
+     |                                      +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:411:17
+     |
+ 411 |         builder.push_quad(s, t, value, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:411:27
+     |
+ 411 |         builder.push_quad(s, t, value, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:411:30
+     |
+ 411 |         builder.push_quad(s, t, value, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-eval/src/row_checkpoint_gate.rs:411:33
+     |
+ 411 |         builder.push_quad(s, t, value, None);
+     |                                 ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2265:12
+     |
+2265 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 411 |         builder.push_quad(s.expect("REASON"), t, value, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 411 |         builder.push_quad(s, t.expect("REASON"), value, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 411 |         builder.push_quad(s, t, value.expect("REASON"), None);
+     |                                      +++++++++++++++++
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 55 previous errors
+terminal_status=101

@@ -1,0 +1,466 @@
+== x86_64: 1 Cargo jobs
+== x86_64 graph 0: /opt/.cargo/slots/b62780797f198b3a/0/cargo.graph-0.stderr.log
+== x86_64 graph 1: /opt/.cargo/slots/b62780797f198b3a/0/cargo.graph-1.stderr.log
+== x86_64: {"analysis_seconds": 28.989447248051874, "build_seconds": 1377.282431790023, "fresh_artifacts": 65, "lock_seconds": 0.0018328260048292577, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 1406.4438349939883}
+x86_64               purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v21 f0 r0  [purrdf_datalog-cdd10d24d0a52cdb.s]  paddq×2, pand×6, pcmpeqd×4, pshufd×7, psubq×2, pxor×2
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        movq %rdx, %rbx
+                        movq %rsi, %r14
+                        movq %rdi, %r15
+                        movq 16(%rdi), %rax
+                        testq %rax, %rax
+                        je .LBB599_10
+                        movq 8(%r15), %r12
+                        imulq $120, %rax, %r13
+                        addq %r12, %r13
+                        jmp .LBB599_2
+                        cmpq %rbx, (%rax,%rcx,8)
+                        je .LBB599_7
+                        addq $120, %r12
+                        cmpq %r13, %r12
+                        je .LBB599_10
+                        movq 8(%r12), %rdi
+                        movq 16(%r12), %rsi
+                        movq %r14, %rdx
+                        callq _RNvMs4_NtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        movq 40(%r12), %r8
+                        cmpq %rax, %rdx
+                        jb .LBB599_21
+                        cmpq %r8, %rdx
+                        ja .LBB599_21
+                        subq %rax, %rdx
+                        je .LBB599_9
+                        shlq $3, %rax
+                        addq 32(%r12), %rax
+                        xorl %ecx, %ecx
+                        cmpq $1, %rdx
+                        je .LBB599_6
+                        movq %rcx, %rsi
+                        movq %rdx, %rdi
+                        shrq %rdi
+                        addq %rdi, %rcx
+                        cmpq %rbx, (%rax,%rcx,8)
+                        cmovaq %rsi, %rcx
+                        subq %rdi, %rdx
+                        cmpq $1, %rdx
+                        ja .LBB599_8
+                        jmp .LBB599_6
+                        movq 40(%r15), %rcx
+                        movq 64(%r15), %rax
+                        cmpq %rax, %rcx
+                        cmovbq %rcx, %rax
+                        testq %rax, %rax
+                        je .LBB599_11
+                        movq 32(%r15), %rcx
+                        movq 56(%r15), %rdx
+                        cmpq $4, %rax
+                        jae .LBB599_15
+                        xorl %edi, %edi
+                        xorl %esi, %esi
+                        jmp .LBB599_14
+                        xorl %eax, %eax
+                        jmp .LBB599_20
+                        movb $1, %al
+                        jmp .LBB599_20
+                        movabsq $1152921504606846976, %rsi
+                        addq $-4, %rsi
+                        andq %rax, %rsi
+                        movq %r14, %xmm0
+                        pshufd $68, %xmm0, %xmm0
+                        movq %rbx, %xmm1
+                        pshufd $68, %xmm1, %xmm2
+                        leaq (,%rax,8), %rdi
+                        andq $-32, %rdi
+                        pxor %xmm1, %xmm1
+                        xorl %r8d, %r8d
+                        pxor %xmm3, %xmm3
+                        movdqu (%rcx,%r8), %xmm4
+                        movdqu 16(%rcx,%r8), %xmm5
+                        pcmpeqd %xmm0, %xmm4
+                        pshufd $177, %xmm4, %xmm6
+                        pand %xmm4, %xmm6
+                        pcmpeqd %xmm0, %xmm5
+                        pshufd $177, %xmm5, %xmm4
+                        pand %xmm5, %xmm4
+                        movdqu (%rdx,%r8), %xmm5
+                        movdqu 16(%rdx,%r8), %xmm7
+                        pcmpeqd %xmm2, %xmm5
+                        pshufd $177, %xmm5, %xmm8
+                        pand %xmm5, %xmm8
+                        pand %xmm6, %xmm8
+                        psubq %xmm8, %xmm3
+                        pcmpeqd %xmm2, %xmm7
+                        pshufd $177, %xmm7, %xmm5
+                        pand %xmm7, %xmm5
+                        pand %xmm4, %xmm5
+                        psubq %xmm5, %xmm1
+                        addq $32, %r8
+                        cmpq %r8, %rdi
+                        jne .LBB599_16
+                        paddq %xmm3, %xmm1
+                        pshufd $238, %xmm1, %xmm0
+                        paddq %xmm1, %xmm0
+                        movq %xmm0, %rdi
+                        jmp .LBB599_18
+                        leaq .Lanon.3207eca98762eb5278259041e2df9771.310(%rip), %rcx
+                        movq %rax, %rdi
+                        movq %rdx, %rsi
+                        movq %r8, %rdx
+                        callq *_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+                        movq (%rcx,%rsi,8), %r8
+                        movq (%rdx,%rsi,8), %r9
+                        incq %rsi
+                        xorq %r14, %r8
+                        xorq %rbx, %r9
+                        xorl %r10d, %r10d
+                        orq %r8, %r9
+                        sete %r10b
+                        addq %r10, %rdi
+                        cmpq %rsi, %rax
+                        jne .LBB599_14
+                        testq %rdi, %rdi
+                        setne %al
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        retq 
+x86_64               purrdf_datalog  <purrdf_datalog::store::RelationStore>::contains
+                     v0 f0 r0  [purrdf_datalog-cdd10d24d0a52cdb.s]  
+                        pushq %rbp
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        subq $24, %rsp
+                        movq %r9, %r14
+                        movq %r8, %r12
+                        movq %rcx, %r15
+                        movq %rdi, %rbx
+                        movq 96(%rsp), %rax
+                        movq %rax, 16(%rsp)
+                        movq 88(%rsp), %rax
+                        movq %rax, 8(%rsp)
+                        movq 80(%rsp), %r13
+                        movq _RNvMNtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB2_12TermInterner6lookup@GOTPCREL(%rip), %rbp
+                        callq *%rbp
+                        movq %rbx, %rdi
+                        movq %r14, %rsi
+                        movq %rax, %r14
+                        movq %r13, %rdx
+                        callq *%rbp
+                        testq %r14, %r14
+                        je .LBB633_18
+                        movq %rax, %r13
+                        testq %rax, %rax
+                        je .LBB633_18
+                        movq %rbx, %rdi
+                        movq %r15, %rsi
+                        movq %r12, %rdx
+                        callq *_RNvMNtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB2_12TermInterner6lookup@GOTPCREL(%rip)
+                        testq %rax, %rax
+                        je .LBB633_18
+                        movq %rax, %r12
+                        movq %rbx, %rdi
+                        movq 8(%rsp), %rsi
+                        movq 16(%rsp), %rdx
+                        callq *_RNvMNtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB2_12TermInterner6lookup@GOTPCREL(%rip)
+                        testq %rax, %rax
+                        je .LBB633_18
+                        movq 272(%rbx), %rcx
+                        testq %rcx, %rcx
+                        je .LBB633_18
+                        movq 280(%rbx), %rdx
+                        movzwl 274(%rcx), %edi
+                        testl %edi, %edi
+                        jne .LBB633_6
+                        movq %rdi, %rsi
+                        subq $1, %rdx
+                        jb .LBB633_18
+                        movq 280(%rcx,%rsi,8), %rcx
+                        movzwl 274(%rcx), %edi
+                        testl %edi, %edi
+                        je .LBB633_13
+                        movl %edi, %r8d
+                        shll $4, %r8d
+                        addq %rcx, %r8
+                        movq %rcx, %r9
+                        xorl %esi, %esi
+                        cmpq (%r9), %r12
+                        jne .LBB633_9
+                        cmpq 8(%r9), %rax
+                        seta %r10b
+                        sbbb $0, %r10b
+                        cmpb $1, %r10b
+                        jne .LBB633_12
+                        addq $16, %r9
+                        incq %rsi
+                        cmpq %r8, %r9
+                        jne .LBB633_7
+                        jmp .LBB633_13
+                        movzbl %r10b, %edi
+                        testl %edi, %edi
+                        jne .LBB633_14
+                        movq 184(%rcx,%rsi,8), %rax
+                        cmpq 80(%rbx), %rax
+                        jae .LBB633_18
+                        imulq $112, %rax, %rdi
+                        addq 72(%rbx), %rdi
+                        movq %r14, %rsi
+                        movq %r13, %rdx
+                        addq $24, %rsp
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        popq %rbp
+                        jmp _RNvMs8_NtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB5_8Relation8containsB7_
+                        xorl %eax, %eax
+                        addq $24, %rsp
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        popq %rbp
+                        retq 
+x86_64               purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v21 f0 r0  [purrdf_datalog-cdd10d24d0a52cdb.s]  paddq×2, pand×6, pcmpeqd×4, pshufd×7, psubq×2, pxor×2
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        movq %rdx, %rbx
+                        movq %rsi, %r14
+                        movq %rdi, %r15
+                        movq 16(%rdi), %rax
+                        testq %rax, %rax
+                        je .LBB599_10
+                        movq 8(%r15), %r12
+                        imulq $120, %rax, %r13
+                        addq %r12, %r13
+                        jmp .LBB599_2
+                        cmpq %rbx, (%rax,%rcx,8)
+                        je .LBB599_7
+                        addq $120, %r12
+                        cmpq %r13, %r12
+                        je .LBB599_10
+                        movq 8(%r12), %rdi
+                        movq 16(%r12), %rsi
+                        movq %r14, %rdx
+                        callq _RNvMs4_NtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        movq 40(%r12), %r8
+                        cmpq %rax, %rdx
+                        jb .LBB599_21
+                        cmpq %r8, %rdx
+                        ja .LBB599_21
+                        subq %rax, %rdx
+                        je .LBB599_9
+                        shlq $3, %rax
+                        addq 32(%r12), %rax
+                        xorl %ecx, %ecx
+                        cmpq $1, %rdx
+                        je .LBB599_6
+                        movq %rcx, %rsi
+                        movq %rdx, %rdi
+                        shrq %rdi
+                        addq %rdi, %rcx
+                        cmpq %rbx, (%rax,%rcx,8)
+                        cmovaq %rsi, %rcx
+                        subq %rdi, %rdx
+                        cmpq $1, %rdx
+                        ja .LBB599_8
+                        jmp .LBB599_6
+                        movq 40(%r15), %rcx
+                        movq 64(%r15), %rax
+                        cmpq %rax, %rcx
+                        cmovbq %rcx, %rax
+                        testq %rax, %rax
+                        je .LBB599_11
+                        movq 32(%r15), %rcx
+                        movq 56(%r15), %rdx
+                        cmpq $4, %rax
+                        jae .LBB599_15
+                        xorl %edi, %edi
+                        xorl %esi, %esi
+                        jmp .LBB599_14
+                        xorl %eax, %eax
+                        jmp .LBB599_20
+                        movb $1, %al
+                        jmp .LBB599_20
+                        movabsq $1152921504606846976, %rsi
+                        addq $-4, %rsi
+                        andq %rax, %rsi
+                        movq %r14, %xmm0
+                        pshufd $68, %xmm0, %xmm0
+                        movq %rbx, %xmm1
+                        pshufd $68, %xmm1, %xmm2
+                        leaq (,%rax,8), %rdi
+                        andq $-32, %rdi
+                        pxor %xmm1, %xmm1
+                        xorl %r8d, %r8d
+                        pxor %xmm3, %xmm3
+                        movdqu (%rcx,%r8), %xmm4
+                        movdqu 16(%rcx,%r8), %xmm5
+                        pcmpeqd %xmm0, %xmm4
+                        pshufd $177, %xmm4, %xmm6
+                        pand %xmm4, %xmm6
+                        pcmpeqd %xmm0, %xmm5
+                        pshufd $177, %xmm5, %xmm4
+                        pand %xmm5, %xmm4
+                        movdqu (%rdx,%r8), %xmm5
+                        movdqu 16(%rdx,%r8), %xmm7
+                        pcmpeqd %xmm2, %xmm5
+                        pshufd $177, %xmm5, %xmm8
+                        pand %xmm5, %xmm8
+                        pand %xmm6, %xmm8
+                        psubq %xmm8, %xmm3
+                        pcmpeqd %xmm2, %xmm7
+                        pshufd $177, %xmm7, %xmm5
+                        pand %xmm7, %xmm5
+                        pand %xmm4, %xmm5
+                        psubq %xmm5, %xmm1
+                        addq $32, %r8
+                        cmpq %r8, %rdi
+                        jne .LBB599_16
+                        paddq %xmm3, %xmm1
+                        pshufd $238, %xmm1, %xmm0
+                        paddq %xmm1, %xmm0
+                        movq %xmm0, %rdi
+                        jmp .LBB599_18
+                        leaq .Lanon.3207eca98762eb5278259041e2df9771.310(%rip), %rcx
+                        movq %rax, %rdi
+                        movq %rdx, %rsi
+                        movq %r8, %rdx
+                        callq *_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+                        movq (%rcx,%rsi,8), %r8
+                        movq (%rdx,%rsi,8), %r9
+                        incq %rsi
+                        xorq %r14, %r8
+                        xorq %rbx, %r9
+                        xorl %r10d, %r10d
+                        orq %r8, %r9
+                        sete %r10b
+                        addq %r10, %rdi
+                        cmpq %rsi, %rax
+                        jne .LBB599_14
+                        testq %rdi, %rdi
+                        setne %al
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        retq 
+x86_64               purrdf_datalog  <purrdf_datalog::store::RelationStore>::contains
+                     v0 f0 r0  [purrdf_datalog-cdd10d24d0a52cdb.s]  
+                        pushq %rbp
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        subq $24, %rsp
+                        movq %r9, %r14
+                        movq %r8, %r12
+                        movq %rcx, %r15
+                        movq %rdi, %rbx
+                        movq 96(%rsp), %rax
+                        movq %rax, 16(%rsp)
+                        movq 88(%rsp), %rax
+                        movq %rax, 8(%rsp)
+                        movq 80(%rsp), %r13
+                        movq _RNvMNtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB2_12TermInterner6lookup@GOTPCREL(%rip), %rbp
+                        callq *%rbp
+                        movq %rbx, %rdi
+                        movq %r14, %rsi
+                        movq %rax, %r14
+                        movq %r13, %rdx
+                        callq *%rbp
+                        testq %r14, %r14
+                        je .LBB633_18
+                        movq %rax, %r13
+                        testq %rax, %rax
+                        je .LBB633_18
+                        movq %rbx, %rdi
+                        movq %r15, %rsi
+                        movq %r12, %rdx
+                        callq *_RNvMNtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB2_12TermInterner6lookup@GOTPCREL(%rip)
+                        testq %rax, %rax
+                        je .LBB633_18
+                        movq %rax, %r12
+                        movq %rbx, %rdi
+                        movq 8(%rsp), %rsi
+                        movq 16(%rsp), %rdx
+                        callq *_RNvMNtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB2_12TermInterner6lookup@GOTPCREL(%rip)
+                        testq %rax, %rax
+                        je .LBB633_18
+                        movq 272(%rbx), %rcx
+                        testq %rcx, %rcx
+                        je .LBB633_18
+                        movq 280(%rbx), %rdx
+                        movzwl 274(%rcx), %edi
+                        testl %edi, %edi
+                        jne .LBB633_6
+                        movq %rdi, %rsi
+                        subq $1, %rdx
+                        jb .LBB633_18
+                        movq 280(%rcx,%rsi,8), %rcx
+                        movzwl 274(%rcx), %edi
+                        testl %edi, %edi
+                        je .LBB633_13
+                        movl %edi, %r8d
+                        shll $4, %r8d
+                        addq %rcx, %r8
+                        movq %rcx, %r9
+                        xorl %esi, %esi
+                        cmpq (%r9), %r12
+                        jne .LBB633_9
+                        cmpq 8(%r9), %rax
+                        seta %r10b
+                        sbbb $0, %r10b
+                        cmpb $1, %r10b
+                        jne .LBB633_12
+                        addq $16, %r9
+                        incq %rsi
+                        cmpq %r8, %r9
+                        jne .LBB633_7
+                        jmp .LBB633_13
+                        movzbl %r10b, %edi
+                        testl %edi, %edi
+                        jne .LBB633_14
+                        movq 184(%rcx,%rsi,8), %rax
+                        cmpq 80(%rbx), %rax
+                        jae .LBB633_18
+                        imulq $112, %rax, %rdi
+                        addq 72(%rbx), %rdi
+                        movq %r14, %rsi
+                        movq %r13, %rdx
+                        addq $24, %rsp
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        popq %rbp
+                        jmp _RNvMs8_NtCskSIt6fnWEhJ_14purrdf_datalog5storeNtB5_8Relation8containsB7_
+                        xorl %eax, %eax
+                        addq $24, %rsp
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        popq %rbp
+                        retq 
+
+terminal_status=0

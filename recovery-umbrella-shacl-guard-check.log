@@ -1,0 +1,72 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+    --> crates/shapes/src/expression.rs:1905:22
+     |
+1726 |   ) -> Result<Vec<Term>, String> {
+     |        ------------------------- expected `std::string::String` because of this
+...
+1882 |                       if let Some(term) = crate::sparql::eval_cached_scalar_query_view(
+     |  _________________________________________-
+1883 | |                         store.sparql_view(),
+1884 | |                         query,
+1885 | |                         &parameters,
+...    |
+1904 | |                         },
+1905 | |                     )? {
+     | |                     -^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+     | |_____________________|
+     |                       this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+     |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+    --> crates/shapes/src/error.rs:45:1
+     |
+  45 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<Cow<'_, str>>
+               From<RulesError>
+               From<char>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+    --> crates/shapes/src/expression.rs:1971:14
+     |
+1726 |   ) -> Result<Vec<Term>, String> {
+     |        ------------------------- expected `std::string::String` because of this
+...
+1961 |               let result = crate::sparql::eval_cached_scalar_query_view(
+     |  __________________________-
+1962 | |                 store.sparql_view(),
+1963 | |                 query,
+1964 | |                 &parameters,
+...    |
+1970 | |                 },
+1971 | |             )?;
+     | |             -^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+     | |_____________|
+     |               this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+     |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+    --> crates/shapes/src/error.rs:45:1
+     |
+  45 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<Cow<'_, str>>
+               From<RulesError>
+               From<char>
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 2 previous errors
+terminal_status=101

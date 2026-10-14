@@ -1,0 +1,178 @@
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	﻿2026-10-14T05:27:10.3797099Z ##[group]Run make test-shard SHARD=integration-1
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3797535Z ^[[36;1mmake test-shard SHARD=integration-1^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3872653Z shell: /usr/bin/bash -e {0}
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3872964Z env:
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3873180Z   CARGO_HOME: /home/runner/.cargo
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3873723Z   CARGO_INCREMENTAL: 0
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3873968Z   CARGO_TERM_COLOR: always
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3874201Z   CACHE_ON_FAILURE: false
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3874623Z   PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:sse2,blake3:sse2,deflate:sse2,csv:sse2
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.3875081Z ##[endgroup]
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.4722536Z + cargo test --workspace --locked --test [a-d]* -- --exact --skip c_abi_smoke
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.5417047Z ^[[1m^[[92m    Updating^[[0m crates.io index
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.9641921Z ^[[1m^[[92m   Compiling^[[0m hybrid-array v0.4.15
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.9657788Z ^[[1m^[[92m   Compiling^[[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.9658911Z ^[[1m^[[92m   Compiling^[[0m const-oid v0.10.2
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.9659695Z ^[[1m^[[92m   Compiling^[[0m cfg-if v1.0.4
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:10.9973317Z ^[[1m^[[92m   Compiling^[[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:11.1126675Z ^[[1m^[[92m   Compiling^[[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:11.2155524Z ^[[1m^[[92m   Compiling^[[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:11.2785144Z ^[[1m^[[92m   Compiling^[[0m crossbeam-utils v0.8.21
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:11.6913681Z ^[[1m^[[92m   Compiling^[[0m crypto-common v0.2.2
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:11.7815380Z ^[[1m^[[92m   Compiling^[[0m block-buffer v0.12.1
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:12.5915510Z ^[[1m^[[92m   Compiling^[[0m digest v0.11.3
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:12.7229060Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.11.0
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:12.8339128Z ^[[1m^[[92m   Compiling^[[0m crossbeam-epoch v0.9.18
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:13.2355428Z ^[[1m^[[92m   Compiling^[[0m crossbeam-deque v0.8.6
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:13.2826237Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.3.4
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:13.4027278Z ^[[1m^[[92m   Compiling^[[0m rayon-core v1.13.0
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:13.4326332Z ^[[1m^[[92m   Compiling^[[0m purrdf-alloc-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/alloc-probe)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:13.6616380Z ^[[1m^[[92m   Compiling^[[0m inout v0.2.2
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:13.7485425Z ^[[1m^[[92m   Compiling^[[0m universal-hash v0.6.1
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:13.7970632Z ^[[1m^[[92m   Compiling^[[0m cipher v0.5.2
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:14.0605125Z ^[[1m^[[92m   Compiling^[[0m rayon v1.12.0
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:14.9776515Z ^[[1m^[[92m   Compiling^[[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:15.3282218Z ^[[1m^[[92m   Compiling^[[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:17.3427040Z ^[[1m^[[92m   Compiling^[[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:17.7846206Z ^[[1m^[[92m   Compiling^[[0m polyval v0.7.3
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:18.0365444Z ^[[1m^[[92m   Compiling^[[0m twox-hash v2.1.2
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:18.1115578Z ^[[1m^[[92m   Compiling^[[0m structured-zstd v0.0.49
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:22.6799108Z ^[[1m^[[92m   Compiling^[[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:27.9555550Z ^[[1m^[[92m   Compiling^[[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:29.0135571Z ^[[1m^[[92m   Compiling^[[0m ghash v0.6.0
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:29.0657541Z ^[[1m^[[92m   Compiling^[[0m ctr v0.10.1
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:29.2072880Z ^[[1m^[[92m   Compiling^[[0m aes v0.9.3
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:29.8761035Z ^[[1m^[[92m   Compiling^[[0m aead v0.6.1
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:29.9705340Z ^[[1m^[[92m   Compiling^[[0m aes-gcm v0.11.1
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:30.0675958Z ^[[1m^[[92m   Compiling^[[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:31.0705985Z ^[[1m^[[92m   Compiling^[[0m visual-hashing v1.0.0
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:31.5715570Z ^[[1m^[[92m   Compiling^[[0m unicode-ident v1.0.24
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:31.6405268Z ^[[1m^[[92m   Compiling^[[0m proc-macro2 v1.0.106
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:35.2272894Z ^[[1m^[[92m   Compiling^[[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:36.1486349Z ^[[1m^[[92m   Compiling^[[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:27:54.3926862Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:28:07.0735848Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:28:13.7705897Z ^[[1m^[[92m   Compiling^[[0m purrdf-geo-kernel v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo-kernel)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:28:38.2216142Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:28:42.9455764Z ^[[1m^[[92m   Compiling^[[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:29:22.4209405Z ^[[1m^[[92m   Compiling^[[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:29:55.2265770Z ^[[1m^[[92m   Compiling^[[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:30:14.3066335Z ^[[1m^[[92m   Compiling^[[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:31:23.3225815Z ^[[1m^[[92m   Compiling^[[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:31:56.7274804Z ^[[1m^[[92m   Compiling^[[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:32:23.0566146Z ^[[1m^[[92m   Compiling^[[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:32:26.9575365Z ^[[1m^[[92m   Compiling^[[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:32:35.6935753Z ^[[1m^[[92m   Compiling^[[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:11.8505557Z ^[[1m^[[92m   Compiling^[[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:11.8829776Z ^[[1m^[[92m   Compiling^[[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:17.6912572Z ^[[1m^[[92m   Compiling^[[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:22.5396244Z ^[[1m^[[92m   Compiling^[[0m purrdf-mime v3.0.1 (/home/runner/work/purrdf/purrdf/crates/mime)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:25.8029705Z ^[[1m^[[92m   Compiling^[[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:26.8575956Z ^[[1m^[[92m   Compiling^[[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:27.8285146Z ^[[1m^[[92m   Compiling^[[0m purrdf-jsonschema v3.0.1 (/home/runner/work/purrdf/purrdf/crates/jsonschema)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:33.1864305Z ^[[1m^[[92m   Compiling^[[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:37.9334703Z ^[[1m^[[92m   Compiling^[[0m quote v1.0.46
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:38.6605066Z ^[[1m^[[92m   Compiling^[[0m syn v2.0.118
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:40.8574258Z ^[[1m^[[92m   Compiling^[[0m purrdf-conformance-kit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/conformance-kit)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:33:42.3086450Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-conformance v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-conformance)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:34:09.4445647Z ^[[1m^[[92m   Compiling^[[0m purrdf-bench v3.0.1 (/home/runner/work/purrdf/purrdf/crates/bench)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:34:16.1835961Z ^[[1m^[[92m   Compiling^[[0m purrdf-hash-conformance v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash-conformance)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:34:31.0199617Z ^[[1m^[[92m   Compiling^[[0m clap_derive v4.6.1
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:34:47.3472988Z ^[[1m^[[92m   Compiling^[[0m clap v4.6.1
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:34:47.3855542Z ^[[1m^[[92m   Compiling^[[0m purrdf-cli v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cli)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:35:51.0600592Z ^[[1m^[[92m   Compiling^[[0m purrdf-capi v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-capi)
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.0838047Z ^[[1m^[[91merror[E0308]^[[0m^[[1m: arguments to this method are incorrect^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.0860364Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:30:17
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.0896515Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.0914402Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m|^[[0m         builder.push_quad(subject, predicate, literal, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.0954825Z      ^[[1m^[[94m|^[[0m                 ^[[1m^[[91m^^^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.0955901Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.0985280Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1014754Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:30:27
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1023070Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1045123Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m|^[[0m         builder.push_quad(subject, predicate, literal, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1074655Z      ^[[1m^[[94m|^[[0m                           ^[[1m^[[92m^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1104636Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1135331Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1137124Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1164668Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:30:36
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1194325Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1224835Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m|^[[0m         builder.push_quad(subject, predicate, literal, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1226163Z      ^[[1m^[[94m|^[[0m                                    ^[[1m^[[92m^^^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1254552Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1285319Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1314724Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1316199Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:30:47
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1344596Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1362269Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m|^[[0m         builder.push_quad(subject, predicate, literal, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1364524Z      ^[[1m^[[94m|^[[0m                                               ^[[1m^[[92m^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1365630Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1367335Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1368668Z ^[[1m^[[92mnote^[[0m: method defined here
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1369613Z     ^[[1m^[[94m--> ^[[0mcrates/rdf-core/src/ir/builder.rs:2509:12
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1370444Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1371251Z ^[[1m^[[94m2509^[[0m ^[[1m^[[94m|^[[0m     pub fn push_quad(
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1372138Z      ^[[1m^[[94m|^[[0m            ^[[1m^[[92m^^^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1376583Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1378584Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1380059Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m| ^[[0m        builder.push_quad(subject^[[92m.expect("REASON")^[[0m, predicate, literal, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1381557Z      ^[[1m^[[94m|^[[0m                                  ^[[92m+++++++++++++++++^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1384063Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1385679Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1387593Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m| ^[[0m        builder.push_quad(subject, predicate^[[92m.expect("REASON")^[[0m, literal, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1389098Z      ^[[1m^[[94m|^[[0m                                             ^[[92m+++++++++++++++++^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1391482Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1393371Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1395048Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m| ^[[0m        builder.push_quad(subject, predicate, literal^[[92m.expect("REASON")^[[0m, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1396594Z      ^[[1m^[[94m|^[[0m                                                      ^[[92m+++++++++++++++++^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1397296Z 
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1398200Z ^[[1m^[[91merror[E0308]^[[0m^[[1m: arguments to this method are incorrect^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1399467Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:34:13
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1400555Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1401729Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m|^[[0m     builder.push_quad(quiet, predicate, punctuation, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1402922Z      ^[[1m^[[94m|^[[0m             ^[[1m^[[91m^^^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1403958Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1404971Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1406214Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:34:23
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1407051Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1408180Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m|^[[0m     builder.push_quad(quiet, predicate, punctuation, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1409334Z      ^[[1m^[[94m|^[[0m                       ^[[1m^[[92m^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1410300Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1411911Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1413715Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1415004Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:34:30
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1415902Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1417077Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m|^[[0m     builder.push_quad(quiet, predicate, punctuation, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1418287Z      ^[[1m^[[94m|^[[0m                              ^[[1m^[[92m^^^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1419404Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1421158Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1422937Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1424485Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:34:41
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1425386Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1426507Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m|^[[0m     builder.push_quad(quiet, predicate, punctuation, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1427835Z      ^[[1m^[[94m|^[[0m                                         ^[[1m^[[92m^^^^^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1428944Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1430605Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1432026Z ^[[1m^[[92mnote^[[0m: method defined here
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1433047Z     ^[[1m^[[94m--> ^[[0mcrates/rdf-core/src/ir/builder.rs:2509:12
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1434692Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1435599Z ^[[1m^[[94m2509^[[0m ^[[1m^[[94m|^[[0m     pub fn push_quad(
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1436589Z      ^[[1m^[[94m|^[[0m            ^[[1m^[[92m^^^^^^^^^^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1438751Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1440753Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1442204Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m| ^[[0m    builder.push_quad(quiet^[[92m.expect("REASON")^[[0m, predicate, punctuation, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1443949Z      ^[[1m^[[94m|^[[0m                            ^[[92m+++++++++++++++++^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1446270Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1448161Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1449583Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m| ^[[0m    builder.push_quad(quiet, predicate^[[92m.expect("REASON")^[[0m, punctuation, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1451049Z      ^[[1m^[[94m|^[[0m                                       ^[[92m+++++++++++++++++^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1453303Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1455085Z      ^[[1m^[[94m|^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1456525Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m| ^[[0m    builder.push_quad(quiet, predicate, punctuation^[[92m.expect("REASON")^[[0m, None);
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1458108Z      ^[[1m^[[94m|^[[0m                                                    ^[[92m+++++++++++++++++^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1458796Z 
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1459710Z ^[[1mFor more information about this error, try `rustc --explain E0308`.^[[0m
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1461368Z ^[[1m^[[91merror^[[0m: could not compile `purrdf-text` (test "analysis_allocations") due to 2 previous errors
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:43:54.1462829Z ^[[1m^[[33mwarning^[[0m: build failed, waiting for other jobs to finish...
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:44:07.5897667Z make: *** [Makefile:276: test-shard] Error 101
+test (integration-1)	Run workspace tests (this shard; the seven include the doc tests)	2026-10-14T05:44:07.5915408Z ##[error]Process completed with exit code 2.

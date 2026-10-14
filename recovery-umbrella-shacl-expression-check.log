@@ -1,0 +1,105 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error: unnecessary qualification
+   --> crates/shapes/src/free_expression.rs:183:24
+    |
+183 | ) -> Result<Vec<Term>, crate::error::ShapesError> {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+183 - ) -> Result<Vec<Term>, crate::error::ShapesError> {
+183 + ) -> Result<Vec<Term>, ShapesError> {
+    |
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/src/engine.rs:435:90
+    |
+435 |                     let candidates = source_sparql_target(data, &shape.id, index, target)?;
+    |                                      ----------------------------------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+    |                                      |
+    |                                      this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+    |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+   --> crates/shapes/src/error.rs:45:1
+    |
+ 45 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Box<str>>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+    --> crates/shapes/src/engine.rs:1209:86
+     |
+1169 | ) -> Result<Vec<FocusNode>, String> {
+     |      ------------------------------ expected `std::string::String` because of this
+...
+1209 |             Target::Sparql { .. } => source_sparql_target(data, shape, index, target)?,
+     |                                      ------------------------------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+     |                                      |
+     |                                      this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+     |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+    --> crates/shapes/src/error.rs:45:1
+     |
+  45 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<Cow<'_, str>>
+               From<RulesError>
+               From<char>
+
+error[E0277]: expected an `FnOnce(ShapesError)` closure, found `fn(std::string::String) -> ShapesError {ShapesError::Invalid}`
+   --> crates/shapes/src/free_expression.rs:168:14
+    |
+168 |     .map_err(ShapesError::Invalid)?;
+    |      ------- ^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(ShapesError)` closure, found `fn(std::string::String) -> ShapesError {ShapesError::Invalid}`
+    |      |
+    |      required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(ShapesError)` is not implemented for fn item `fn(std::string::String) -> ShapesError {ShapesError::Invalid}`
+    = note: expected a closure with signature `fn(ShapesError)`
+               found a closure with signature `fn(std::string::String)`
+note: required by a bound in `std::result::Result::<T, E>::map_err`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+    |
+961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+    |                  ------- required by a bound in this associated function
+962 |     where
+963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/rules.rs:1859:9
+     |
+1858 |       ) -> Result<Vec<Term>, String> {
+     |            ------------------------- expected `std::result::Result<Vec<term::Term>, std::string::String>` because of return type
+1859 | /         eval_planned_node_expr(
+1860 | |             data,
+1861 | |             focus,
+1862 | |             self.expr,
+...    |
+1865 | |             guard,
+1866 | |         )
+     | |_________^ expected `Result<Vec<Term>, String>`, found `Result<Vec<Term>, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 5 previous errors
+terminal_status=101

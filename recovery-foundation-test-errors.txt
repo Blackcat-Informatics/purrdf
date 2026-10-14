@@ -1,0 +1,340 @@
+26:error[E0277]: the trait bound `!: From<diagnostic::RdfDiagnostic>` is not satisfied
+27:    --> crates/rdf-core/src/ir/skolem.rs:1146:26
+33:    --> crates/rdf-core/src/ir/skolem.rs:340:62
+38:error[E0277]: the trait bound `!: From<purrdf_lex::allocation::StorageError>` is not satisfied
+39:    --> crates/rdf-core/src/ir/skolem.rs:1146:26
+45:    --> crates/rdf-core/src/ir/skolem.rs:340:17
+50:error[E0277]: the trait bound `!: From<diagnostic::RdfDiagnostic>` is not satisfied
+51:    --> crates/rdf-core/src/ir/skolem.rs:1358:22
+57:    --> crates/rdf-core/src/ir/skolem.rs:340:62
+62:error[E0277]: the trait bound `!: From<purrdf_lex::allocation::StorageError>` is not satisfied
+63:    --> crates/rdf-core/src/ir/skolem.rs:1358:22
+69:    --> crates/rdf-core/src/ir/skolem.rs:340:17
+74:error[E0308]: mismatched types
+75:   --> crates/rdf-core/src/bundle.rs:608:42
+85:   --> crates/rdf-core/src/bundle.rs:432:12
+94:error[E0308]: mismatched types
+95:   --> crates/rdf-core/src/bundle.rs:609:42
+105:   --> crates/rdf-core/src/bundle.rs:432:12
+114:error[E0308]: mismatched types
+115:    --> crates/rdf-core/src/imports.rs:1970:72
+125:    --> crates/rdf-core/src/ir/builder.rs:918:12
+134:error[E0308]: mismatched types
+135:    --> crates/rdf-core/src/imports.rs:2017:17
+147:error[E0308]: mismatched types
+148:    --> crates/rdf-core/src/imports.rs:2032:17
+160:error[E0599]: no method named `index` found for enum `Result<T, E>` in the current scope
+161:    --> crates/rdf-core/src/imports.rs:2064:63
+167:    --> crates/rdf-core/src/ir/term.rs:83:5
+176:error[E0277]: a value of type `Vec<ir::term::TermId>` cannot be built from an iterator over elements of type `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>`
+177:    --> crates/rdf-core/src/ir/builder.rs:2431:14
+184:    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4036:1
+190:    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2073:19
+195:error[E0308]: mismatched types
+196:    --> crates/rdf-core/src/ir/builder.rs:2440:63
+208:error[E0308]: mismatched types
+209:    --> crates/rdf-core/src/ir/builder.rs:2456:13
+221:error[E0308]: mismatched types
+222:    --> crates/rdf-core/src/ir/builder.rs:2462:16
+234:error[E0308]: mismatched types
+235:    --> crates/rdf-core/src/ir/builder.rs:2463:16
+247:error[E0308]: mismatched types
+248:    --> crates/rdf-core/src/ir/builder.rs:2464:16
+260:error[E0308]: mismatched types
+261:    --> crates/rdf-core/src/ir/builder.rs:2479:80
+271:    --> crates/rdf-core/src/ir/builder.rs:482:8
+280:error[E0308]: mismatched types
+281:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1959:49
+291:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+303:error[E0308]: mismatched types
+304:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2009:17
+315:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+327:error[E0308]: mismatched types
+328:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2025:65
+336:error[E0308]: mismatched types
+337:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2045:17
+348:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+360:error[E0308]: mismatched types
+361:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2081:65
+369:error[E0308]: mismatched types
+370:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2113:13
+382:error[E0308]: mismatched types
+383:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2201:17
+394:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+406:error[E0308]: mismatched types
+407:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2247:17
+418:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+430:error[E0599]: no method named `to_hex` found for enum `Result<T, E>` in the current scope
+431:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2458:44
+437:    --> crates/rdf-core/src/content_store.rs:60:5
+446:error[E0308]: mismatched types
+447:    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2477:9
+458:error[E0308]: mismatched types
+459:    --> crates/rdf-core/src/ir/canon.rs:4008:38
+469:    --> crates/rdf-core/src/ir/canon.rs:460:8
+474:error[E0308]: mismatched types
+475:    --> crates/rdf-core/src/ir/canon.rs:4027:33
+485:    --> crates/rdf-core/src/ir/canon.rs:460:8
+490:error[E0308]: mismatched types
+491:    --> crates/rdf-core/src/ir/canon.rs:4056:26
+501:    --> crates/rdf-core/src/ir/canon.rs:460:8
+506:error[E0277]: the trait bound `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>: dataset_view::FallibleDatasetView` is not satisfied
+507:    --> crates/rdf-core/src/ir/canon.rs:4923:40
+525:    --> crates/rdf-core/src/ir/canon.rs:728:38
+530:error[E0277]: the trait bound `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>: dataset_view::DatasetView` is not satisfied
+531:    --> crates/rdf-core/src/ir/canon.rs:4923:13
+547:error[E0277]: the trait bound `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>: dataset_view::FallibleDatasetView` is not satisfied
+548:    --> crates/rdf-core/src/ir/canon.rs:4923:13
+564:error[E0599]: no method named `extend` found for struct `builder::RdfDatasetBuilder` in the current scope
+565:    --> crates/rdf-core/src/ir/dataset.rs:2777:11
+583:error[E0599]: no method named `extend` found for struct `builder::RdfDatasetBuilder` in the current scope
+584:    --> crates/rdf-core/src/ir/dataset.rs:2809:11
+602:error[E0599]: no method named `extend` found for struct `builder::RdfDatasetBuilder` in the current scope
+603:    --> crates/rdf-core/src/ir/dataset.rs:2815:11
+621:error[E0599]: no method named `quad_count` found for enum `Result<T, E>` in the current scope
+622:    --> crates/rdf-core/src/ir/dataset.rs:3310:23
+628:    --> crates/rdf-core/src/ir/dataset.rs:2117:5
+637:error[E0308]: mismatched types
+638:    --> crates/rdf-core/src/ir/dataset.rs:3312:26
+648:    --> crates/rdf-core/src/ir/canon.rs:460:8
+653:error[E0308]: mismatched types
+654:    --> crates/rdf-core/src/ir/dataset.rs:3313:26
+664:    --> crates/rdf-core/src/ir/canon.rs:460:8
+669:error[E0599]: no method named `quad_count` found for enum `Result<T, E>` in the current scope
+670:    --> crates/rdf-core/src/ir/dataset.rs:3334:22
+676:    --> crates/rdf-core/src/ir/dataset.rs:2117:5
+685:error[E0599]: no method named `reifiers` found for enum `Result<T, E>` in the current scope
+686:    --> crates/rdf-core/src/ir/dataset.rs:3358:22
+692:    --> crates/rdf-core/src/ir/dataset.rs:1702:5
+701:error[E0599]: no method named `annotations` found for enum `Result<T, E>` in the current scope
+702:    --> crates/rdf-core/src/ir/dataset.rs:3359:22
+708:    --> crates/rdf-core/src/ir/dataset.rs:1718:5
+717:error[E0599]: no method named `owned_reifiers` found for enum `Result<T, E>` in the current scope
+718:    --> crates/rdf-core/src/ir/dataset.rs:3361:25
+724:    --> crates/rdf-core/src/ir/dataset.rs:1065:5
+733:error[E0599]: no method named `owned_annotations` found for enum `Result<T, E>` in the current scope
+734:    --> crates/rdf-core/src/ir/dataset.rs:3367:28
+740:    --> crates/rdf-core/src/ir/dataset.rs:1071:5
+749:error[E0599]: no method named `quad_count` found for enum `Result<T, E>` in the current scope
+750:    --> crates/rdf-core/src/ir/dataset.rs:3398:15
+756:    --> crates/rdf-core/src/ir/dataset.rs:2117:5
+765:error[E0599]: no method named `owned_quads` found for enum `Result<T, E>` in the current scope
+766:    --> crates/rdf-core/src/ir/dataset.rs:3405:14
+776:    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+785:error[E0308]: mismatched types
+786:    --> crates/rdf-core/src/ir/dataset.rs:3429:26
+796:    --> crates/rdf-core/src/ir/canon.rs:460:8
+801:error[E0599]: no method named `content_id_scheme` found for enum `Result<T, E>` in the current scope
+802:    --> crates/rdf-core/src/ir/dataset.rs:3471:15
+808:    --> crates/rdf-core/src/ir/dataset.rs:2277:5
+817:error[E0599]: no method named `content_ids` found for enum `Result<T, E>` in the current scope
+818:    --> crates/rdf-core/src/ir/dataset.rs:3476:15
+824:    --> crates/rdf-core/src/ir/dataset.rs:2315:5
+833:error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+834:    --> crates/rdf-core/src/ir/dataset.rs:3480:20
+840:    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+849:error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+850:    --> crates/rdf-core/src/ir/dataset.rs:3481:20
+856:    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+865:error[E0599]: no method named `predecessors` found for enum `Result<T, E>` in the current scope
+866:    --> crates/rdf-core/src/ir/dataset.rs:3483:15
+872:    --> crates/rdf-core/src/ir/dataset.rs:2349:5
+881:error[E0599]: no method named `content_id_scheme` found for enum `Result<T, E>` in the current scope
+882:    --> crates/rdf-core/src/ir/dataset.rs:3517:15
+888:    --> crates/rdf-core/src/ir/dataset.rs:2277:5
+897:error[E0599]: no method named `content_ids` found for enum `Result<T, E>` in the current scope
+898:    --> crates/rdf-core/src/ir/dataset.rs:3522:15
+904:    --> crates/rdf-core/src/ir/dataset.rs:2315:5
+913:error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+914:    --> crates/rdf-core/src/ir/dataset.rs:3566:23
+920:    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+929:error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+930:    --> crates/rdf-core/src/ir/dataset.rs:3567:23
+936:    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+945:error[E0599]: no method named `predecessors` found for enum `Result<T, E>` in the current scope
+946:    --> crates/rdf-core/src/ir/dataset.rs:3568:26
+952:    --> crates/rdf-core/src/ir/dataset.rs:2349:5
+961:error[E0599]: no method named `content_id_scheme` found for enum `Result<T, E>` in the current scope
+962:    --> crates/rdf-core/src/ir/dataset.rs:3593:25
+968:    --> crates/rdf-core/src/ir/dataset.rs:2277:5
+977:error[E0599]: no method named `content_ids` found for enum `Result<T, E>` in the current scope
+978:    --> crates/rdf-core/src/ir/dataset.rs:3594:25
+984:    --> crates/rdf-core/src/ir/dataset.rs:2315:5
+993:error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+994:    --> crates/rdf-core/src/ir/dataset.rs:3595:23
+1000:    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+1009:error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+1010:    --> crates/rdf-core/src/ir/dataset.rs:3596:23
+1016:    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+1025:error[E0599]: no method named `predecessors` found for enum `Result<T, E>` in the current scope
+1026:    --> crates/rdf-core/src/ir/dataset.rs:3597:25
+1032:    --> crates/rdf-core/src/ir/dataset.rs:2349:5
+1041:error[E0599]: no method named `owned_quads` found for enum `Result<T, E>` in the current scope
+1042:    --> crates/rdf-core/src/ir/dataset.rs:3879:36
+1048:    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+1057:error[E0599]: no method named `owned_reifiers` found for enum `Result<T, E>` in the current scope
+1058:    --> crates/rdf-core/src/ir/dataset.rs:3886:39
+1064:    --> crates/rdf-core/src/ir/dataset.rs:1065:5
+1073:error[E0599]: no method named `owned_annotations` found for enum `Result<T, E>` in the current scope
+1074:    --> crates/rdf-core/src/ir/dataset.rs:3900:42
+1080:    --> crates/rdf-core/src/ir/dataset.rs:1071:5
+1089:error[E0599]: no method named `owned_reifiers` found for enum `Result<T, E>` in the current scope
+1090:    --> crates/rdf-core/src/ir/dataset.rs:3911:39
+1096:    --> crates/rdf-core/src/ir/dataset.rs:1065:5
+1105:error[E0599]: no method named `owned_annotations` found for enum `Result<T, E>` in the current scope
+1106:    --> crates/rdf-core/src/ir/dataset.rs:3912:42
+1112:    --> crates/rdf-core/src/ir/dataset.rs:1071:5
+1121:error[E0599]: no method named `owned_quads` found for enum `Result<T, E>` in the current scope
+1122:    --> crates/rdf-core/src/ir/dataset.rs:3939:27
+1128:    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+1137:error[E0599]: no method named `owned_reifiers` found for enum `Result<T, E>` in the current scope
+1138:    --> crates/rdf-core/src/ir/dataset.rs:3940:27
+1144:    --> crates/rdf-core/src/ir/dataset.rs:1065:5
+1153:error[E0599]: no method named `owned_annotations` found for enum `Result<T, E>` in the current scope
+1154:    --> crates/rdf-core/src/ir/dataset.rs:3941:27
+1160:    --> crates/rdf-core/src/ir/dataset.rs:1071:5
+1169:error[E0308]: mismatched types
+1170:   --> crates/rdf-core/src/ir/global.rs:927:55
+1178:error[E0308]: mismatched types
+1179:   --> crates/rdf-core/src/ir/global.rs:949:16
+1191:error[E0308]: mismatched types
+1192:   --> crates/rdf-core/src/ir/global.rs:951:16
+1204:error[E0308]: mismatched types
+1205:   --> crates/rdf-core/src/ir/global.rs:960:21
+1217:error[E0308]: mismatched types
+1218:   --> crates/rdf-core/src/ir/global.rs:961:23
+1230:error[E0308]: mismatched types
+1231:   --> crates/rdf-core/src/ir/global.rs:962:22
+1243:error[E0308]: mismatched types
+1244:   --> crates/rdf-core/src/ir/global.rs:969:52
+1256:error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+1257:    --> crates/rdf-core/src/ir/global.rs:1194:25
+1270:error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+1271:    --> crates/rdf-core/src/ir/global.rs:1227:42
+1284:error[E0599]: no method named `reintern_validated` found for mutable reference `&mut global::GlobalDictionary` in the current scope
+1285:    --> crates/rdf-core/src/ir/global.rs:1256:33
+1295:error[E0599]: no method named `expect_err` found for struct `global::GlobalTermId` in the current scope
+1296:    --> crates/rdf-core/src/ir/global.rs:1361:59
+1306:error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+1307:    --> crates/rdf-core/src/ir/global.rs:1388:25
+1320:error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+1321:    --> crates/rdf-core/src/ir/global.rs:1470:29
+1334:error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+1335:    --> crates/rdf-core/src/ir/global.rs:1487:29
+1348:error[E0599]: no method named `term` found for enum `Result<T, E>` in the current scope
+1349:    --> crates/rdf-core/src/ir/import.rs:481:24
+1355:    --> crates/rdf-core/src/ir/import.rs:277:5
+1366:    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+1375:error[E0599]: no method named `term` found for enum `Result<T, E>` in the current scope
+1376:    --> crates/rdf-core/src/ir/import.rs:539:30
+1382:    --> crates/rdf-core/src/ir/import.rs:277:5
+1393:    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+1402:error[E0308]: mismatched types
+1403:   --> crates/rdf-core/src/ir/import.rs:540:36
+1413:   --> crates/rdf-core/src/ir/import.rs:459:8
+1420:error[E0599]: no method named `stats` found for enum `Result<T, E>` in the current scope
+1421:   --> crates/rdf-core/src/ir/import.rs:544:33
+1427:   --> crates/rdf-core/src/ir/import.rs:412:5
+1436:error[E0599]: no method named `stats` found for enum `Result<T, E>` in the current scope
+1437:   --> crates/rdf-core/src/ir/import.rs:544:51
+1443:   --> crates/rdf-core/src/ir/import.rs:412:5
+1452:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1453:   --> crates/rdf-core/src/ir/paged/admission.rs:417:36
+1459:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1468:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1469:   --> crates/rdf-core/src/ir/paged/admission.rs:418:36
+1475:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1484:error[E0308]: mismatched types
+1485:   --> crates/rdf-core/src/ir/paged/admission.rs:423:27
+1495:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1502:error[E0308]: mismatched types
+1503:   --> crates/rdf-core/src/ir/paged/admission.rs:428:27
+1513:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1520:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1521:   --> crates/rdf-core/src/ir/paged/admission.rs:447:36
+1527:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1536:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1537:   --> crates/rdf-core/src/ir/paged/admission.rs:448:36
+1543:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1552:error[E0308]: mismatched types
+1553:   --> crates/rdf-core/src/ir/paged/admission.rs:452:27
+1563:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1570:error[E0308]: mismatched types
+1571:   --> crates/rdf-core/src/ir/paged/admission.rs:457:27
+1581:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1588:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1589:   --> crates/rdf-core/src/ir/paged/admission.rs:476:36
+1595:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1604:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1605:   --> crates/rdf-core/src/ir/paged/admission.rs:477:36
+1611:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1620:error[E0308]: mismatched types
+1621:   --> crates/rdf-core/src/ir/paged/admission.rs:481:27
+1631:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1638:error[E0308]: mismatched types
+1639:   --> crates/rdf-core/src/ir/paged/admission.rs:486:27
+1649:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1656:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1657:   --> crates/rdf-core/src/ir/paged/admission.rs:513:36
+1663:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1672:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1673:   --> crates/rdf-core/src/ir/paged/admission.rs:514:37
+1679:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1688:error[E0308]: mismatched types
+1689:   --> crates/rdf-core/src/ir/paged/admission.rs:517:27
+1699:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1706:error[E0308]: mismatched types
+1707:   --> crates/rdf-core/src/ir/paged/admission.rs:522:27
+1717:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1724:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1725:   --> crates/rdf-core/src/ir/paged/admission.rs:547:37
+1731:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1740:error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+1741:   --> crates/rdf-core/src/ir/paged/admission.rs:548:37
+1747:   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+1756:error[E0308]: mismatched types
+1757:   --> crates/rdf-core/src/ir/paged/admission.rs:553:27
+1767:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1774:error[E0308]: mismatched types
+1775:   --> crates/rdf-core/src/ir/paged/admission.rs:558:27
+1785:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1792:error[E0308]: mismatched types
+1793:   --> crates/rdf-core/src/ir/paged/admission.rs:581:27
+1803:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1810:error[E0308]: mismatched types
+1811:   --> crates/rdf-core/src/ir/paged/admission.rs:595:27
+1821:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1828:error[E0308]: mismatched types
+1829:   --> crates/rdf-core/src/ir/paged/admission.rs:618:27
+1839:   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+1846:error[E0599]: no method named `graph_index` found for enum `Result<T, E>` in the current scope
+1847:   --> crates/rdf-core/src/ir/paged/graph_index.rs:403:14
+1857:   --> crates/rdf-core/src/ir/paged/mod.rs:857:5
+1866:error[E0599]: no method named `dictionary` found for enum `Result<T, E>` in the current scope
+1867:   --> crates/rdf-core/src/ir/paged/graph_index.rs:406:50
+1873:   --> crates/rdf-core/src/ir/paged/mod.rs:835:5
+1882:error[E0599]: no method named `intern_batch` found for enum `Result<T, E>` in the current scope
+1883:    --> crates/rdf-core/src/ir/segmented/build.rs:1192:17
+1889:    --> crates/rdf-core/src/ir/segmented/build.rs:129:5
+1898:    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+1907:error[E0599]: no method named `push_quad` found for enum `Result<T, E>` in the current scope
+1908:    --> crates/rdf-core/src/ir/segmented/build.rs:1195:18
+1917:    --> crates/rdf-core/src/ir/segmented/build.rs:174:5
+1926:error[E0599]: no method named `declare_named_graph` found for enum `Result<T, E>` in the current scope
+1927:    --> crates/rdf-core/src/ir/segmented/build.rs:1203:17
+1933:    --> crates/rdf-core/src/ir/segmented/build.rs:236:5
+1942:error[E0599]: no method named `seal` found for enum `Result<T, E>` in the current scope
+1943:    --> crates/rdf-core/src/ir/segmented/build.rs:1204:17
+1949:    --> crates/rdf-core/src/ir/segmented/build.rs:247:5
+1958:error[E0308]: mismatched types
+1959:   --> crates/rdf-core/src/ir/skolem.rs:849:74
+1971:error[E0308]: mismatched types
+1972:   --> crates/rdf-core/src/provenance.rs:802:27
+1982:   --> crates/rdf-core/src/provenance.rs:311:12
+1991:error[E0308]: mismatched types
+1992:   --> crates/rdf-core/src/provenance.rs:828:27
+2002:   --> crates/rdf-core/src/provenance.rs:357:12
+2011:error[E0308]: mismatched types
+2012:   --> crates/rdf-core/src/provenance.rs:875:25
+2022:   --> crates/rdf-core/src/provenance.rs:408:12
+2033:error: could not compile `purrdf-core` (lib test) due to 122 previous errors

@@ -1,0 +1,126 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0277]: a value of type `std::result::Result<Vec<_>, std::string::String>` cannot be built from an iterator over elements of type `std::result::Result<PreparedTargets, ShapesError>`
+    --> crates/shapes/src/engine.rs:308:24
+     |
+ 308 |             .collect::<Result<Vec<_>, String>>()?;
+     |              -------   ^^^^^^^^^^^^^^^^^^^^^^ value of type `std::result::Result<Vec<_>, std::string::String>` cannot be built from `std::iter::Iterator<Item=std::result::Result<PreparedTargets, ShapesError>>`
+     |              |
+     |              required by a bound introduced by this call
+     |
+help: the trait `FromIterator<Result<_, ShapesError>>` is not implemented for `Result<Vec<_>, _>`
+      but trait `FromIterator<Result<_, std::string::String>>` is implemented for `Result<Vec<PreparedTargets>, _>`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:2114:1
+     |
+2114 | impl<T, E, V: FromIterator<T>> FromIterator<Result<T, E>> for Result<V, E> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `std::string::String`, found `ShapesError`
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+    --> crates/shapes/src/engine.rs:1483:10
+     |
+1461 |   ) -> Result<Vec<R::Result>, String>
+     |        ------------------------------ expected `std::string::String` because of this
+...
+1477 |           let mut focus_nodes = resolve_focus_nodes(
+     |  _______________________________-
+1478 | |             data,
+1479 | |             &shape.id,
+1480 | |             &shape.targets,
+1481 | |             bound.binding(),
+1482 | |             bound.classes(),
+1483 | |         )?;
+     | |         -^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+     | |_________|
+     |           this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+     |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+    --> crates/shapes/src/error.rs:45:1
+     |
+  45 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<Cow<'_, str>>
+               From<RulesError>
+               From<char>
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/rules.rs:1807:9
+     |
+1806 |       fn focus_nodes(&self, data: &ShaclData) -> Result<Vec<Term>, String> {
+     |                                                  ------------------------- expected `std::result::Result<Vec<term::Term>, std::string::String>` because of return type
+1807 | /         resolve_focus_nodes(
+1808 | |             data,
+1809 | |             &self.shape.id,
+1810 | |             &self.shape.targets,
+...    |
+1820 | |                 .collect()
+1821 | |         })
+     | |__________^ expected `Result<Vec<Term>, String>`, found `Result<_, ShapesError>`
+     |
+     = note: expected enum `Result<Vec<term::Term>, std::string::String>`
+                found enum `Result<_, ShapesError>`
+help: use the `?` operator to extract the `std::result::Result<_, ShapesError>` value, propagating a `Result::Err` value to the caller
+     |
+1821 |         })?
+     |           +
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+    --> crates/shapes/src/srl/eval.rs:1325:94
+     |
+1325 |         let triples = rules::expected_derived_triples(&view, self.engine.shapes, &predicates)?;
+     |                       -----------------------------------------------------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+     |                       |
+     |                       this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+     |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+    --> crates/shapes/src/error.rs:45:1
+     |
+  45 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<Cow<'_, str>>
+               From<RulesError>
+               From<char>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/src/unique_values.rs:124:99
+    |
+124 |             crate::engine::resolve_focus_nodes(data, &spec.shape, &spec.targets, binding, classes)?;
+    |             --------------------------------------------------------------------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+    |             |
+    |             this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+    |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+   --> crates/shapes/src/error.rs:45:1
+    |
+ 45 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Box<str>>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 5 previous errors
+terminal_status=101

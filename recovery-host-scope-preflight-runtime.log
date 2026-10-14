@@ -1,0 +1,23 @@
++ cargo clippy --locked -j 8 -p purrdf-python --all-targets -- -D warnings
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling syn v2.0.118
+   Compiling pyo3-macros-backend v0.29.0
+   Compiling pyo3-macros v0.29.0
+    Checking pyo3 v0.29.0
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 00s
++ cargo test --locked -j 8 -p purrdf-python --test load_scope -- --test-threads=4
+   Compiling pyo3-ffi v0.29.0
+   Compiling pyo3 v0.29.0
+   Compiling purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+    Finished `test` profile [optimized] target(s) in 1m 05s
+     Running tests/load_scope.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-python/b7a57c398e3c53c9/out/load_scope-b7a57c398e3c53c9)
+
+running 2 tests
+test load_retains_original_lexical_and_declaration_error_boundaries ... ok
+test last_scope_and_repeated_refusal_preserve_every_blank_ingress ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+terminal_status=0

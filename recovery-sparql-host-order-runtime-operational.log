@@ -1,0 +1,33 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+error: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+  --> crates/sparql-eval/tests/host_identity.rs:77:14
+   |
+77 |             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
+   |              ^^^^^^^^^^^^
+   |
+   = note: `-D deprecated` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(deprecated)]`
+help: replace the use of the deprecated method
+   |
+77 -             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
+77 +             .try_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
+   |
+
+error[E0277]: the trait bound `[HostReservation; 1]: WorkspaceReservation` is not satisfied in `[HostReservation; 1]`
+   --> crates/sparql-eval/tests/host_identity.rs:188:16
+    |
+188 |             Ok(owner as OwnedWorkspaceReservation<Deleted>)
+    |                ^^^^^ within `[HostReservation; 1]`, the trait `WorkspaceReservation` is not implemented for `[HostReservation; 1]`
+    |
+help: the trait `WorkspaceReservation` is implemented for `[SegmentedReservation; 1]`
+   --> crates/rdf-core/src/ir/segmented/session.rs:178:1
+    |
+178 | impl crate::WorkspaceReservation for [SegmentedReservation; 1] {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required because it appears within the type `[HostReservation; 1]`
+    = note: required for `Box<[HostReservation; 1]>` to implement `CoerceUnsized<Box<dyn WorkspaceReservation<Error = Deleted> + Send + Sync>>`
+    = note: required for the cast from `Box<[HostReservation; 1]>` to `Box<(dyn WorkspaceReservation<Error = Deleted> + Send + Sync + 'static)>`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (test "host_identity") due to 2 previous errors
+terminal_status=101

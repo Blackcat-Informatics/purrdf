@@ -1,0 +1,22 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error[E0282]: type annotations needed for `seminaive::EvalError<_>`
+    --> crates/datalog/src/seminaive.rs:7102:13
+     |
+7102 |           let error = EvalError::BudgetExhausted {
+     |  _____________^^^^^___-
+7103 | |             resource: BudgetResource::JoinSteps,
+7104 | |             report: BudgetReport {
+7105 | |                 join_steps: DEFAULT_MAX_JOIN_STEPS + 1,
+...    |
+7109 | |             },
+7110 | |         };
+     | |_________- type must be known at this point
+     |
+help: consider giving `error` an explicit type, where the type for type parameter `E` is specified
+     |
+7102 |         let error: seminaive::EvalError<E> = EvalError::BudgetExhausted {
+     |                  +++++++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error
+terminal_status=101

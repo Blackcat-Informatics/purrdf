@@ -1,0 +1,137 @@
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-events)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: method `import_builder_term` is never used
+    --> crates/rdf-core/src/ir/builder.rs:1645:8
+     |
+ 627 | impl RdfDatasetBuilder {
+     | ---------------------- method in this implementation
+...
+1645 |     fn import_builder_term(
+     |        ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `push_arena_str` is never used
+   --> crates/rdf-core/src/ir/term.rs:294:15
+    |
+294 | pub(crate) fn push_arena_str(arena: &mut Vec<u8>, s: &str) -> Result<StrRange, purrdf_lex::allocation::StorageError> {
+    |               ^^^^^^^^^^^^^^
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/dataset.rs:1131:13
+     |
+1131 |             builder.push_owned_quad(&quad);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+     = note: `-D unused-must-use` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+     |
+1131 |             let _ = builder.push_owned_quad(&quad);
+     |             +++++++
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/dataset.rs:1139:13
+     |
+1139 |             builder.push_owned_reifier(&reifier);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1139 |             let _ = builder.push_owned_reifier(&reifier);
+     |             +++++++
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/dataset.rs:1147:13
+     |
+1147 |             builder.push_owned_annotation(&annotation);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1147 |             let _ = builder.push_owned_annotation(&annotation);
+     |             +++++++
+
+error: unused `Result` that must be used
+    --> crates/rdf-core/src/ir/dataset.rs:2070:13
+     |
+2070 |             builder.push_dataset(ds);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+2070 |             let _ = builder.push_dataset(ds);
+     |             +++++++
+
+error: unused `Result` that must be used
+  --> crates/rdf-core/src/ir/segmented/build.rs:90:9
+   |
+90 | /         builder.reserve_for_replay(
+91 | |             usize::try_from(limits.terms).expect("u32 capacity fits supported pointer widths"),
+92 | |             usize::try_from(limits.term_bytes).expect("u32 capacity fits supported pointer widths"),
+93 | |             usize::try_from(limits.rows).expect("u32 capacity fits supported pointer widths"),
+94 | |         );
+   | |_________^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+   |
+90 |         let _ = builder.reserve_for_replay(
+   |         +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/term_fixture.rs:148:9
+    |
+148 |         builder.push_quad(s, p, o, None);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+148 |         let _ = builder.push_quad(s, p, o, None);
+    |         +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/term_fixture.rs:209:5
+    |
+209 |     builder.push_quad(s, p, phantom, None);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+209 |     let _ = builder.push_quad(s, p, phantom, None);
+    |     +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/term_fixture.rs:210:5
+    |
+210 |     builder.push_quad(s, p, o, Some(graph));
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+210 |     let _ = builder.push_quad(s, p, o, Some(graph));
+    |     +++++++
+
+error: unused `Result` that must be used
+   --> crates/rdf-core/src/term_fixture.rs:236:9
+    |
+236 |         builder.push_quad(s, p, o, g);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+236 |         let _ = builder.push_quad(s, p, o, g);
+    |         +++++++
+
+error: could not compile `purrdf-core` (lib) due to 11 previous errors
+terminal_status=101

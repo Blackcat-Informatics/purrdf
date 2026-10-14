@@ -1,0 +1,658 @@
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-events)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/ed25519)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/alloc-probe)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2m 14s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.19s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_loss_matrix transcode`
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 22.02s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_rule_inventory`
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.55s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2.62s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables case-context`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables ecma-ranges`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables xpath`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables xpath-compatibility`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables xpath-dated-names`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_unicode_tables xpath-dated-blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.40s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_html_entities`
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 7.04s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2625 file(s); entailment-overclaim ban swept 36 of 259 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2637 unit(s) outside that set).
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.46s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/examples/viz_samples /home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/target/gate-scratch/check-generated.gIcAHi/visualization --svg-only`
+wrote RDF 1.2 visualization artifacts to /home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/target/gate-scratch/check-generated.gIcAHi/visualization
+    Finished `test` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test sssom::tests::corpus_accessibility_parses_and_validates_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1339 filtered out; finished in 0.00s
+
+make license-bundles
+python3 scripts/fetch-locked-deps.py
+python3 scripts/package-licenses.py --write
+license bundles generated: 37 profiles
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/alloc-probe)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/testkit)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+    Checking twox-hash v2.1.2
+    Checking fastrand v2.4.1
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/ed25519)
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking cpubits v0.1.1
+    Checking structured-zstd v0.0.49
+    Checking cipher v0.5.2
+    Checking aead v0.6.1
+    Checking visual-hashing v1.0.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking ctutils v0.4.2
+    Checking unicode-ident v1.0.24
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/jsonschema)
+    Checking universal-hash v0.6.1
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+    Checking polyval v0.7.3
+    Checking ghash v0.6.0
+    Checking aes-gcm v0.11.1
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+   Compiling heck v0.5.0
+    Checking syn v2.0.118
+    Checking utf8parse v0.2.2
+    Checking anstyle-parse v1.0.0
+    Checking is_terminal_polyfill v1.70.2
+    Checking anstyle v1.0.14
+    Checking anstyle-query v1.1.5
+    Checking colorchoice v1.0.5
+    Checking clap_lex v1.1.0
+    Checking strsim v0.11.1
+    Checking anstream v1.0.0
+   Compiling clap_derive v4.6.1
+   Compiling wasm-bindgen-shared v0.2.125
+    Checking clap_builder v4.6.0
+   Compiling rustversion v1.0.22
+   Compiling target-lexicon v0.13.5
+    Checking clap v4.6.1
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hash-conformance)
+    Checking once_cell v1.21.4
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling pyo3-build-config v0.29.0
+    Checking leb128fmt v0.1.0
+   Compiling pyo3-macros-backend v0.29.0
+   Compiling pyo3-ffi v0.29.0
+    Checking wasm-encoder v0.259.0
+   Compiling pyo3 v0.29.0
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/wasm-link)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/helper-census)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/deflate)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/stack)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/conformance-kit)
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/datalog/src/resolve_fol.rs:718:6
+    |
+718 | ) -> Result<(NodeId, Vec<FolLit>, Vec<(MetaId, NodeId)>), StorageError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/datalog/src/seminaive/factors.rs:326:6
+    |
+326 | ) -> Result<Vec<Vec<SlotSolution<D::Id>>>, EvalError<D::Error>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: redundant closure
+   --> crates/datalog/src/seminaive/factors.rs:403:26
+    |
+403 |                     .map(|order| order.is_lt())
+    |                          ^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::cmp::Ordering::is_lt`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+    = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/datalog/src/seminaive/factors.rs:540:13
+    |
+540 |     tables: Vec<&'a BTreeMap<Vec<D::Id>, Frontier<'a, D::Id>>>,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/datalog/src/seminaive.rs:1706:6
+     |
+1706 | ) -> Result<[Option<PositionValue<D::Id>>; ATOM_ARITY], D::Error> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/datalog/src/seminaive.rs:2255:10
+     |
+2255 |     run: LeapfrogRun<'_, D>,
+     |          ^^^^^^^^^^^^^^^^^^
+     |
+help: or consider marking this type as `Copy`
+    --> crates/datalog/src/seminaive.rs:2127:1
+     |
+2127 | struct LeapfrogRun<'a, D: TermDictionary = TermInterner> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+     = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+     |
+2255 |     run: &LeapfrogRun<'_, D>,
+     |          +
+
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/datalog/src/seminaive.rs:2673:20
+     |
+2673 |               return Ok(self
+     |  ____________________^
+2674 | |                 .satisfied(solution, rel, governor)
+2675 | |                 .map_err(EvalError::Source)?);
+     | |_____________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+     = note: `-D clippy::needless-question-mark` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_question_mark)]`
+help: remove the enclosing `Ok` and `?` operator
+     |
+2673 ~             return self
+2674 |                 .satisfied(solution, rel, governor)
+2675 ~                 .map_err(EvalError::Source);
+     |
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/datalog/src/seminaive.rs:4050:22
+     |
+4050 |         let buffers: Vec<Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>>> = entries
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/datalog/src/seminaive.rs:4593:22
+     |
+4593 |     let mut winners: Vec<(Fact, HeadKey<'_, D::Id>, Candidate<D::Id>)> = round
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/datalog/src/store.rs:1157:10
+     |
+1157 |     ) -> Result<Option<(D::Id, D::Id, RowId)>, DictionaryError<D::Error>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/datalog/src/store.rs:1169:10
+     |
+1169 |     ) -> Result<Option<(D::Id, D::Id, RowId)>, DictionaryError<D::Error>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: could not compile `purrdf-datalog` (lib) due to 11 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+    --> crates/rdf-core/src/ir/builder.rs:3901:9
+     |
+3901 |         drop(memory);
+     |         ^^^^^^^^^^^^
+     |
+note: argument has type `purrdf_lex::allocation::Memory<'_, ir::builder::native_graph_birth_tests::Grant>`
+    --> crates/rdf-core/src/ir/builder.rs:3901:14
+     |
+3901 |         drop(memory);
+     |              ^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+     = note: `-D clippy::drop-non-drop` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::drop_non_drop)]`
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4101:17
+     |
+4101 |                 assert!(builder.scope_journal.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+     = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+     |
+4101 -                 assert!(builder.scope_journal.is_empty());
+4101 +                 assert_eq!(builder.scope_journal, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4216:17
+     |
+4216 |                 assert!(builder.quads.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4216 -                 assert!(builder.quads.is_empty());
+4216 +                 assert_eq!(builder.quads, [] as [ir::dataset::QuadRow; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4218:17
+     |
+4218 |                 assert!(builder.locations.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4218 -                 assert!(builder.locations.is_empty());
+4218 +                 assert_eq!(builder.locations, [] as [(ir::dataset::QuadHandle, diagnostic::RdfLocation); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4220:17
+     |
+4220 |                 assert!(builder.scope_journal.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4220 -                 assert!(builder.scope_journal.is_empty());
+4220 +                 assert_eq!(builder.scope_journal, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4294:13
+     |
+4294 |             assert!(builder.scope_journal.is_empty());
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4294 -             assert!(builder.scope_journal.is_empty());
+4294 +             assert_eq!(builder.scope_journal, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4360:17
+     |
+4360 |                 assert!(builder.scope_journal.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4360 -                 assert!(builder.scope_journal.is_empty());
+4360 +                 assert_eq!(builder.scope_journal, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4435:13
+     |
+4435 |             assert!(destination.used_scopes.is_empty());
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4435 -             assert!(destination.used_scopes.is_empty());
+4435 +             assert_eq!(destination.used_scopes, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4445:17
+     |
+4445 |                 assert!(destination.used_scopes.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4445 -                 assert!(destination.used_scopes.is_empty());
+4445 +                 assert_eq!(destination.used_scopes, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4446:17
+     |
+4446 |                 assert!(destination.scope_journal.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4446 -                 assert!(destination.scope_journal.is_empty());
+4446 +                 assert_eq!(destination.scope_journal, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4514:17
+     |
+4514 |                 assert!(destination.quads.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4514 -                 assert!(destination.quads.is_empty());
+4514 +                 assert_eq!(destination.quads, [] as [ir::dataset::QuadRow; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4515:17
+     |
+4515 |                 assert!(destination.reifiers.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4515 -                 assert!(destination.reifiers.is_empty());
+4515 +                 assert_eq!(destination.reifiers, [] as [(ir::term::TermId, ir::term::TermId, std::option::Option<ir::term::TermId>); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4516:17
+     |
+4516 |                 assert!(destination.annotations.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4516 -                 assert!(destination.annotations.is_empty());
+4516 +                 assert_eq!(destination.annotations, [] as [(ir::term::TermId, ir::term::TermId, ir::term::TermId, std::option::Option<ir::term::TermId>); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4517:17
+     |
+4517 |                 assert!(destination.locations.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4517 -                 assert!(destination.locations.is_empty());
+4517 +                 assert_eq!(destination.locations, [] as [(ir::dataset::QuadHandle, diagnostic::RdfLocation); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4518:17
+     |
+4518 |                 assert!(destination.declared_graphs.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4518 -                 assert!(destination.declared_graphs.is_empty());
+4518 +                 assert_eq!(destination.declared_graphs, [] as [ir::term::TermId; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4521:17
+     |
+4521 |                 assert!(destination.scope_journal.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4521 -                 assert!(destination.scope_journal.is_empty());
+4521 +                 assert_eq!(destination.scope_journal, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4643:17
+     |
+4643 |                 assert!(destination.locations.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4643 -                 assert!(destination.locations.is_empty());
+4643 +                 assert_eq!(destination.locations, [] as [(ir::dataset::QuadHandle, diagnostic::RdfLocation); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4644:17
+     |
+4644 |                 assert!(destination.declared_graphs.is_empty());
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4644 -                 assert!(destination.declared_graphs.is_empty());
+4644 +                 assert_eq!(destination.declared_graphs, [] as [ir::term::TermId; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4818:21
+     |
+4818 |                     assert!(builder.reifiers.is_empty());
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4818 -                     assert!(builder.reifiers.is_empty());
+4818 +                     assert_eq!(builder.reifiers, [] as [(ir::term::TermId, ir::term::TermId, std::option::Option<ir::term::TermId>); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4820:21
+     |
+4820 |                     assert!(builder.annotations.is_empty());
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4820 -                     assert!(builder.annotations.is_empty());
+4820 +                     assert_eq!(builder.annotations, [] as [(ir::term::TermId, ir::term::TermId, ir::term::TermId, std::option::Option<ir::term::TermId>); 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:4824:21
+     |
+4824 |                     assert!(builder.scope_journal.is_empty());
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+4824 -                     assert!(builder.scope_journal.is_empty());
+4824 +                     assert_eq!(builder.scope_journal, [] as [ir::term::BlankScope; 0]);
+     |
+
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/builder.rs:5143:13
+     |
+5143 |             assert!(builder.reifiers.is_empty());
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+5143 -             assert!(builder.reifiers.is_empty());
+5143 +             assert_eq!(builder.reifiers, [] as [(ir::term::TermId, ir::term::TermId, std::option::Option<ir::term::TermId>); 0]);
+     |
+
+error: used underscore-prefixed binding
+   --> crates/rdf-core/src/ir/segmented/query.rs:423:35
+    |
+423 |         let base = Arc::downgrade(term._storage.reservation.base_owner());
+    |                                   ^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/rdf-core/src/ir/segmented/query.rs:70:5
+    |
+ 70 |     _storage: QueryStorage,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+    = note: `-D clippy::used-underscore-binding` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::used_underscore_binding)]`
+
+error: used underscore-prefixed binding
+   --> crates/rdf-core/src/ir/segmented/query.rs:424:29
+    |
+424 |         let payload_bytes = term._storage.reservation.bytes();
+    |                             ^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/rdf-core/src/ir/segmented/query.rs:70:5
+    |
+ 70 |     _storage: QueryStorage,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+   --> crates/rdf-core/src/ir/segmented/query.rs:425:26
+    |
+425 |         let base_bytes = term._storage.reservation.base_owner().bytes();
+    |                          ^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/rdf-core/src/ir/segmented/query.rs:70:5
+    |
+ 70 |     _storage: QueryStorage,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+   --> crates/rdf-core/src/ir/segmented/query.rs:429:13
+    |
+429 |             term._storage.reservation.live_bytes(),
+    |             ^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/rdf-core/src/ir/segmented/query.rs:70:5
+    |
+ 70 |     _storage: QueryStorage,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/rdf-core/src/ir/segmented/session.rs:1711:13
+     |
+1711 | /             assert!(
+1712 | |                 requests
+1713 | |                     .iter()
+1714 | |                     .all(|r| r.snapshot() == first.receipt().snapshot())
+1715 | |             )
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+     |
+1711 |             assert!(
+ ...
+1714 |                     .all(|r| r.snapshot() == first.receipt().snapshot())
+1715 ~             );
+     |
+
+error: redundant closure
+   --> crates/rdf-core/src/provenance.rs:836:30
+    |
+836 |                         .map(|id| id.index()),
+    |                              ^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `super::UnitId::index`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+    = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: redundant closure
+   --> crates/rdf-core/src/provenance.rs:840:63
+    |
+840 |                     provenance.register_artifact("third").map(|id| id.index()),
+    |                                                               ^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `super::ArtifactId::index`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: redundant closure
+   --> crates/rdf-core/src/provenance.rs:846:30
+    |
+846 |                         .map(|id| id.index()),
+    |                              ^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `super::OriginSetId::index`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: could not compile `purrdf-core` (lib test) due to 30 previous errors
+make: *** [Makefile:94: check] Error 101
+terminal_status=2

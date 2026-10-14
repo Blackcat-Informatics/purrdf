@@ -1,0 +1,16 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: this could be rewritten as `let...else`
+    --> crates/rdf-core/src/ir/segmented/session.rs:1300:17
+     |
+1300 | /                 let block = match self.session.block(page) {
+1301 | |                     Ok(block) => block,
+1302 | |                     Err(_) => return None,
+1303 | |                 };
+     | |__________________^ help: consider writing: `let Ok(block) = self.session.block(page) else { return None };`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+     = note: `-D clippy::manual-let-else` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+
+error: could not compile `purrdf-core` (lib) due to 1 previous error
+terminal_status=101

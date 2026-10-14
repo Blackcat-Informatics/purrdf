@@ -1,0 +1,80 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/import_view.rs:23:18
+     |
+  23 |         importer.append();
+     |                  ^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, std::sync::Arc<purrdf_core::RdfDataset>>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/9e299c56d154cf38/out/import_view-9e299c56d154cf38.long-type-4219333360437477529.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, std::sync::Arc<purrdf_core::RdfDataset>>` value, panicking if the value is a `Result::Err`
+     |
+  23 |         importer.expect("REASON").append();
+     |                 +++++++++++++++++
+
+error[E0599]: no method named `stats` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/import_view.rs:24:29
+    |
+ 24 |         assert_eq!(importer.stats().quads, 1);
+    |                             ^^^^^ method not found in `Result<DatasetImporter<'_, '_, Arc<RdfDataset>>, _>`
+    |
+note: the method `stats` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, std::sync::Arc<purrdf_core::RdfDataset>>`
+   --> crates/rdf-core/src/ir/import.rs:417:5
+    |
+417 |     pub const fn stats(&self) -> DatasetImportStats {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/9e299c56d154cf38/out/import_view-9e299c56d154cf38.long-type-4219333360437477529.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, std::sync::Arc<purrdf_core::RdfDataset>>` value, panicking if the value is a `Result::Err`
+    |
+ 24 |         assert_eq!(importer.expect("REASON").stats().quads, 1);
+    |                            +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (test "import_view") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unused `std::result::Result` that must be used
+   --> crates/rdf-core/benches/shared_views.rs:463:5
+    |
+463 |     black_box(carrier.pipeline_root());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+463 |     let _ = black_box(carrier.pipeline_root());
+    |     +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/rdf-core/benches/shared_views.rs:472:13
+    |
+472 |             black_box(reader.graph_digest(graph));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+472 |             let _ = black_box(reader.graph_digest(graph));
+    |             +++++++
+
+error: could not compile `purrdf-core` (bench "shared_views") due to 2 previous errors
+terminal_status=101

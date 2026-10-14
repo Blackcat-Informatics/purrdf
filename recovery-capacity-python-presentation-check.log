@@ -1,0 +1,9 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling syn v2.0.118
+   Compiling pyo3-macros-backend v0.29.0
+   Compiling pyo3-macros v0.29.0
+    Checking pyo3 v0.29.0
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 36.13s
+terminal_status=0

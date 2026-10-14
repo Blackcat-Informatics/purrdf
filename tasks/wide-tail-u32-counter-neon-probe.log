@@ -1,0 +1,5 @@
+== aarch64: 24 Cargo jobs
+== aarch64 graph 0: /opt/.cargo/slots/37d5b31053e625e5/0/cargo.graph-0.stderr.log
+FAIL: assembly run interrupted
+
+terminal_status=130

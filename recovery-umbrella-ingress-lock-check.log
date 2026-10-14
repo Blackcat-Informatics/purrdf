@@ -1,0 +1,269 @@
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+error[E0308]: mismatched types
+   --> crates/entail/src/explain.rs:323:29
+    |
+323 |             if !seen.insert(node.index()) {
+    |                      ------ ^^^^^^^^^^^^ expected `usize`, found `u64`
+    |                      |
+    |                      arguments to this method are incorrect
+    |
+note: method defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/btree/set.rs:900:12
+    |
+900 |     pub fn insert(&mut self, value: T) -> bool
+    |            ^^^^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+323 |             if !seen.insert(node.index().try_into().unwrap()) {
+    |                                         ++++++++++++++++++++
+
+error[E0599]: no method named `root_for` found for enum `Result<T, E>` in the current scope
+    --> crates/entail/src/explain.rs:603:38
+     |
+ 603 |     let (arena, root) = match proofs.root_for(&goal) {
+     |                                      ^^^^^^^^ method not found in `Result<EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `root_for` exists on the type `EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1045:5
+     |
+1045 |     pub fn root_for(&self, fact: &Fact) -> Option<ProofId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `EvaluationProofs` value, propagating a `Result::Err` value to the caller
+     |
+ 603 |     let (arena, root) = match proofs?.root_for(&goal) {
+     |                                     +
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/entail/src/explain.rs:605:40
+     |
+ 605 |             ProofArena::decode(&proofs.arena().encode(id)).map_err(ExplainError::Unchecked)?
+     |                                        ^^^^^ method not found in `Result<EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1035:5
+     |
+1035 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `EvaluationProofs` value, propagating a `Result::Err` value to the caller
+     |
+ 605 |             ProofArena::decode(&proofs?.arena().encode(id)).map_err(ExplainError::Unchecked)?
+     |                                       +
+
+error[E0308]: `match` arms have incompatible types
+   --> crates/entail/src/explain.rs:625:13
+    |
+603 |       let (arena, root) = match proofs.root_for(&goal) {
+    |  _________________________-
+604 | |         Some(id) => {
+605 | |             ProofArena::decode(&proofs.arena().encode(id)).map_err(ExplainError::Unchecked)?
+    | |             -------------------------------------------------------------------------------- this is found to be of type `(ProofArena, Id<Proof>)`
+...   |
+625 | |             (arena, root)
+    | |             ^^^^^^^^^^^^^ expected `(ProofArena, Id<Proof>)`, found `(ProofArena, Result<Id<Proof>, _>)`
+626 | |         }
+627 | |     };
+    | |_____- `match` arms have incompatible types
+    |
+    = note: expected tuple `(ProofArena, Id<_>)`
+               found tuple `(ProofArena, Result<Id<_>, purrdf_lex::allocation::StorageError>)`
+
+error[E0308]: mismatched types
+   --> crates/entail/src/interner.rs:144:5
+    |
+143 | pub(crate) fn intern_into(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
+    |                                                                        ------ expected `TermId` because of return type
+144 |     b.intern_value(v)
+    |     ^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+144 |     b.intern_value(v).expect("REASON")
+    |                      +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/entail/src/owl_dl/query.rs:158:9
+    |
+155 |     fn blank(&mut self, b: &mut RdfDatasetBuilder) -> TermId {
+    |                                                       ------ expected `TermId` because of return type
+...
+158 |         b.intern_blank(&label, purrdf_core::BlankScope::DEFAULT)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+158 |         b.intern_blank(&label, purrdf_core::BlankScope::DEFAULT).expect("REASON")
+    |                                                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/entail/src/owl_dl/query.rs:769:32
+     |
+ 769 |                 b.push_quad(s, sub_class, o, None);
+     |                   ---------    ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                   |
+     |                   arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 769 |                 b.push_quad(s, sub_class?, o, None);
+     |                                         +
+
+error[E0308]: mismatched types
+    --> crates/entail/src/owl_dl/query.rs:788:32
+     |
+ 788 |                 b.push_quad(s, ty, o, None);
+     |                   ---------    ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                   |
+     |                   arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 788 |                 b.push_quad(s, ty?, o, None);
+     |                                  +
+
+error[E0308]: mismatched types
+    --> crates/entail/src/owl_dl/query.rs:806:28
+     |
+ 806 |             b.push_quad(s, same_as, o, None);
+     |               ---------    ^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |               |
+     |               arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 806 |             b.push_quad(s, same_as.expect("REASON"), o, None);
+     |                                   +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/entail/src/owl_dl/query.rs:869:36
+     |
+ 869 |                     b.push_quad(s, ty, x, None);
+     |                       ---------    ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                       |
+     |                       arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 869 |                     b.push_quad(s, ty?, x, None);
+     |                                      +
+
+error[E0308]: mismatched types
+    --> crates/entail/src/owl_dl/query.rs:880:36
+     |
+ 880 |                     b.push_quad(s, sub_class, x, None);
+     |                       ---------    ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                       |
+     |                       arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 880 |                     b.push_quad(s, sub_class?, x, None);
+     |                                             +
+
+error[E0308]: mismatched types
+    --> crates/entail/src/owl_dl/query.rs:891:36
+     |
+ 891 |                     b.push_quad(x, sub_class, o, None);
+     |                       ---------    ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                       |
+     |                       arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 891 |                     b.push_quad(x, sub_class?, o, None);
+     |                                             +
+
+error[E0308]: mismatched types
+    --> crates/entail/src/owl_dl/query.rs:899:46
+     |
+ 899 |                         b.push_quad(prop_id, domain, o, None);
+     |                           ---------          ^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                           |
+     |                           arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 899 |                         b.push_quad(prop_id, domain?, o, None);
+     |                                                    +
+
+error[E0308]: mismatched types
+    --> crates/entail/src/owl_dl/query.rs:908:46
+     |
+ 908 |                         b.push_quad(prop_id, range, o, None);
+     |                           ---------          ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                           |
+     |                           arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 908 |                         b.push_quad(prop_id, range?, o, None);
+     |                                                   +
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-entail` (lib) due to 14 previous errors
+warning: build failed, waiting for other jobs to finish...
+terminal_status=101

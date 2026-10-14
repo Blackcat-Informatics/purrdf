@@ -1,0 +1,39 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1.72s
+     Running tests/segmented_stack.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 7 tests
+test admitted_identity_walk_releases_spill_and_preserves_hash_law ... ok
+test memoized_term_hits_allocate_nothing_and_failed_import_latches ... ok
+test final_query_readiness_checks_untouched_evicted_descriptors ... ok
+test query_ids_touch_only_values_and_preserve_source_scopes ... ok
+test resident_head_copy_refuses_under_the_shared_operation_grant ... ok
+test tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation ... ok
+test thousand_distinct_sources_open_only_headers_under_one_request_budget ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: unused import: `TermFactory`
+   --> crates/rdf-core/src/ir/segmented/query.rs:376:9
+    |
+376 |         TermFactory,
+    |         ^^^^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error[E0599]: no method named `iri` found for struct `builder::RdfDatasetBuilder` in the current scope
+   --> crates/rdf-core/src/ir/segmented/query.rs:382:23
+    |
+382 |         let id = head.iri("urn:retained-value").unwrap();
+    |                       ^^^ method not found in `builder::RdfDatasetBuilder`
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:578:1
+    |
+578 | pub struct RdfDatasetBuilder {
+    | ---------------------------- method `iri` not found for this struct
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors
+terminal_status=101

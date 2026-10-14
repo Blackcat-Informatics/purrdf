@@ -1,0 +1,95 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/conformance-kit)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/bench)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+   --> crates/shapes/src/data_view.rs:552:5
+    |
+552 |     pub fn materialized(&self) -> Result<&Arc<RdfDataset>, crate::error::ShapesError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove `must_use`
+   --> crates/shapes/src/data_view.rs:551:5
+    |
+551 |     #[must_use]
+    |     ^^^^^^^^^^^
+    = note: alternatively, you may add an explicit reason to the `must_use` attribute
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+    = note: `-D clippy::double-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::double_must_use)]`
+
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/shapes/src/engine.rs:3665:5
+     |
+3665 | /     Ok(validate_linked_with_focus_filter(
+3666 | |         data,
+3667 | |         shapes,
+3668 | |         include_focus,
+3669 | |     )?)
+     | |_______^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+     = note: `-D clippy::needless-question-mark` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_question_mark)]`
+help: remove the enclosing `Ok` and `?` operator
+     |
+3665 ~     validate_linked_with_focus_filter(
+3666 |         data,
+3667 |         shapes,
+3668 |         include_focus,
+3669 ~     )
+     |
+
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/shapes/src/engine.rs:4751:5
+     |
+4751 |     Ok(crate::rules::entail_dataset(data.as_ref(), &shapes)?)
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+help: remove the enclosing `Ok` and `?` operator
+     |
+4751 -     Ok(crate::rules::entail_dataset(data.as_ref(), &shapes)?)
+4751 +     crate::rules::entail_dataset(data.as_ref(), &shapes)
+     |
+
+error: wildcard matches only a single variant and will also match any future added variants
+   --> crates/shapes/src/error.rs:229:13
+    |
+229 |             error => Self::Invalid(error.to_string()),
+    |             ^^^^^ help: try: `error @ purrdf_iri::IriReadError::Lexical(_)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#match_wildcard_for_single_variants
+    = note: `-D clippy::match-wildcard-for-single-variants` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::match_wildcard_for_single_variants)]`
+
+error: useless conversion to the same type: `error::ShapesError`
+   --> crates/shapes/src/xpath.rs:870:70
+    |
+870 |             error.into_public(|message| XPathValidationError::Shapes(ShapesError::from(message)))
+    |                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider removing `ShapesError::from()`: `message`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#useless_conversion
+    = note: `-D clippy::useless-conversion` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::useless_conversion)]`
+
+error: could not compile `purrdf-shapes` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-shapes` (lib test) due to 5 previous errors
+terminal_status=101

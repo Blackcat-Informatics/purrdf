@@ -1,0 +1,44 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 0.54s
+     Running tests/cdt_blank_storage.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/a6ecd34b8f0280f3/out/cdt_blank_storage-a6ecd34b8f0280f3)
+
+running 7 tests
+test checked_malformed_payload_keeps_exact_original_grant_until_drop ... ok
+test malformed_and_non_image_envelopes_keep_identity_and_release_scratch ... ok
+test checked_nested_binding_accounts_for_grammar_and_only_retains_output ... ok
+test nested_binding_peak_and_surviving_output_use_original_admission ... ok
+test plain_and_non_composite_binding_preserve_borrowed_bytes ... ok
+test physical_refusals_never_become_unmodified_composite_success ... ok
+test decoder_image_check_is_allocation_free_and_refusal_is_typed ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: `drain(..)` used on a `Vec`
+   --> crates/rdf-core/src/cdt_blank.rs:747:33
+    |
+747 |             for label in labels.drain(..) {
+    |                                 ^^^^^^^^^ help: try: `into_iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+    = note: `-D clippy::iter-with-drain` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::iter_with_drain)]`
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/rdf-core/src/ir/builder.rs:1451:14
+     |
+1451 |         lit: RdfLiteral,
+     |              ^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+     = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+     |
+1451 |         lit: &RdfLiteral,
+     |              +
+
+error: could not compile `purrdf-core` (lib) due to 2 previous errors
+
+terminal_status=101

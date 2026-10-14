@@ -1,0 +1,101 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 49.15s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 44 tests
+test ir::builder::native_graph_birth_tests::blank_term_refusal_does_not_reserve_its_scope ... ok
+test ir::builder::native_graph_birth_tests::content_id_side_table_refusal_does_not_publish_an_unindexed_term ... ok
+test ir::builder::native_graph_birth_tests::named_graph_growth_refusal_keeps_prior_declarations_and_duplicate_hits ... ok
+test ir::builder::native_graph_birth_tests::compound_literal_refusal_rolls_back_children_and_sorted_scopes ... ok
+test ir::builder::native_graph_birth_tests::native_graph_refuses_before_the_first_arena_allocation ... ok
+test ir::builder::native_graph_birth_tests::native_structural_failure_releases_builder_and_retains_only_the_diagnostic ... ok
+test ir::builder::native_graph_birth_tests::native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes ... ok
+test ir::builder::native_graph_birth_tests::owned_overlay_refusal_restores_children_and_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::refused_literal_does_not_poison_later_healthy_freeze ... ok
+test ir::builder::native_graph_birth_tests::reifier_row_refusal_does_not_publish_its_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::owned_quad_refusal_restores_terms_rows_scopes_and_location_payloads ... ok
+test ir::builder::native_graph_birth_tests::validated_append_keeps_original_account_exact_across_refusal_and_repetition ... ok
+test ir::builder::tests::all_term_kinds_match_borrowed_and_stored_hashes ... ok
+test ir::builder::tests::blank_scope_distinctness ... ok
+test ir::builder::tests::datatype_expansion_equality ... ok
+test ir::builder::tests::directional_literal_distinctness ... ok
+test ir::builder::tests::freeze_dedupes_annotations ... ok
+test ir::builder::native_graph_birth_tests::escaped_owned_blank_hits_need_no_growth_and_match_materialized_hashes ... ok
+test ir::builder::tests::freeze_dedupes_quads ... ok
+test ir::builder::tests::freeze_preserves_named_graphs ... ok
+test ir::builder::tests::freeze_keeps_multiple_reifiers_for_one_triple ... ok
+test ir::builder::tests::intern_blank_is_idempotent ... ok
+test ir::builder::tests::intern_blank_never_recognized_as_content_id ... ok
+test ir::builder::native_graph_birth_tests::content_id_rollback_preserves_retained_charge_and_prior_lookup ... ok
+test ir::builder::tests::intern_iri_is_idempotent ... ok
+test ir::builder::tests::intern_iri_content_id_is_idempotent ... ok
+test ir::builder::tests::intern_iri_no_recognition_when_scheme_inactive ... ok
+test ir::builder::tests::intern_iri_ordinary_iri_has_no_content_id ... ok
+test ir::builder::tests::intern_iri_recognizes_content_id ... ok
+test ir::builder::tests::intern_iri_rejects_malformed_suffix_as_ordinary_iri ... ok
+test ir::builder::tests::intern_literal_is_idempotent ... ok
+test ir::builder::tests::lang_tagged_distinct_from_plain ... ok
+test ir::builder::tests::nested_triple_term_structural_identity ... ok
+test ir::builder::tests::language_lowercasing ... ok
+test ir::builder::tests::new_builder_has_no_content_scheme ... ok
+test ir::builder::tests::iri_hash_matches_stored_form_across_lengths_and_table_growth ... ok
+test ir::builder::tests::push_dataset_carries_reifiers_and_annotations ... ok
+test ir::builder::tests::push_dataset_merges_and_dedupes_quads ... ok
+test ir::builder::tests::push_dataset_keeps_two_scopes_of_one_label_apart ... ok
+test ir::builder::tests::push_dataset_standardizes_apart_blank_nodes ... ok
+test ir::builder::tests::validated_builder_type_state_freezes_after_validation ... ok
+test ir::builder::tests::the_owned_round_trip_preserves_blank_label_identity ... ok
+test ir::builder::tests::with_content_addressing_sets_config ... ok
+test ir::builder::tests::property_idempotence_and_bounded_count ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 1277 filtered out; finished in 0.01s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 24.80s
+     Running tests/native_regex_storage.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/113335ae5181f833/out/native_regex_storage-113335ae5181f833)
+
+running 2 tests
+test native_graph_append_refuses_transactionally_before_copying_the_destination ... ok
+test native_graph_append_and_describe_cover_original_buffers_and_preserve_scoped_blanks ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.10s
+     Running tests/native_regex_storage.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/113335ae5181f833/out/native_regex_storage-113335ae5181f833)
+
+running 1 test
+test escaped_owned_blank_duplicate_retains_identity_without_allocating ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.06s
+
+   Compiling crossbeam-utils v0.8.21
+   Compiling libc v0.2.186
+   Compiling rayon-core v1.13.0
+   Compiling getrandom v0.3.4
+    Checking either v1.16.0
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking crossbeam-epoch v0.9.18
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/stack)
+    Checking rayon v1.12.0
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+error: this function has too many arguments (8/7)
+   --> crates/geo-kernel/src/topology/relate.rs:569:1
+    |
+569 | / fn scan_for_areas<W: RelateWork>(
+570 | |     a: &Geometry,
+571 | |     b: &Geometry,
+572 | |     events: &[Coord],
+...   |
+577 | |     work: &mut W,
+578 | | ) -> Result<(), GeoError> {
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: could not compile `purrdf-geo-kernel` (lib) due to 1 previous error
+terminal_status=101

@@ -1,0 +1,52 @@
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+   Compiling cpubits v0.1.1
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+   Compiling ctutils v0.4.2
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+   Compiling aes v0.9.3
+   Compiling polyval v0.7.3
+   Compiling ctr v0.10.1
+   Compiling ghash v0.6.0
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+   Compiling aes-gcm v0.11.1
+   Compiling once_cell v1.21.4
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+   Compiling purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-wasm)
+    Finished `test` profile [optimized] target(s) in 2m 36s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-wasm/64bcee66e053f989/out/purrdf_wasm-64bcee66e053f989)
+
+running 6 tests
+test operation::tests::every_error_kind_names_its_failure ... ok
+test operation::tests::a_stack_refusal_renders_as_the_evaluator_gives_it ... ok
+test operation::tests::reasoning_storage_failure_keeps_original_cause_and_context ... ok
+test operation::tests::parse_failures_keep_their_typed_presentation ... ok
+test operation::tests::an_ungoverned_offline_operation_installs_no_governor_state ... ok
+test operation::tests::the_division_policy_reaches_every_operation_kind ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 265 filtered out; finished in 0.03s
+

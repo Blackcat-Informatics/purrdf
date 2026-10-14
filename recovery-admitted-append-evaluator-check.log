@@ -1,0 +1,948 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 47.97s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test imports::tests::fresh_import_scope_last_slot_keeps_duplicate_and_prior_assignment ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1321 filtered out; finished in 0.00s
+
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:167:6
+    |
+167 | ) -> PrepResult<Option<GraphPattern>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:193:6
+    |
+193 | ) -> PrepResult<Query> {
+    |      ^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:206:6
+    |
+206 | ) -> PrepResult<()> {
+    |      ^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:230:6
+    |
+230 | ) -> PrepResult<bool> {
+    |      ^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:234:14
+    |
+234 |         &mut |_, _| Ok::<_, PreparationError>(true),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:241:6
+    |
+241 | ) -> PrepResult<bool> {
+    |      ^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:245:14
+    |
+245 |         &mut |_, _| Ok::<_, PreparationError>(true),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:254:6
+    |
+254 | ) -> PrepResult<AdmittedVec<&'a str>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:278:34
+    |
+278 |   ...                   &mut |label, _| {
+    |  ____________________________^
+279 | | ...                       original.push(label)?;
+280 | | ...                       Ok::<_, PreparationError>(false)
+281 | | ...                   },
+    | |_______________________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:294:30
+    |
+294 |                           &mut |label, _| {
+    |  ______________________________^
+295 | |                             original.push(label)?;
+296 | |                             Ok::<_, PreparationError>(false)
+297 | |                         },
+    | |_________________________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:307:30
+    |
+307 |                           &mut |label, _| {
+    |  ______________________________^
+308 | |                             original.push(label)?;
+309 | |                             Ok::<_, PreparationError>(false)
+310 | |                         },
+    | |_________________________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:324:18
+    |
+324 |               &mut |label, _| {
+    |  __________________^
+325 | |                 labels.push(label)?;
+326 | |                 Ok::<_, PreparationError>(false)
+327 | |             },
+    | |_____________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:396:6
+    |
+396 | ) -> PrepResult<()> {
+    |      ^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:406:6
+    |
+406 | ) -> PrepResult<bool> {
+    |      ^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:430:80
+    |
+430 | fn needs_with_memory(root: Node<'_>, memory: &mut Memory<'_, LexicalFrame>) -> PrepResult<bool> {
+    |                                                                                ^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:438:26
+    |
+438 |                     &mut |leaf, memory| leaf_has_raw_blank_with_memory(leaf, memory),
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:443:30
+    |
+443 |                           &mut |leaf, memory| {
+    |  ______________________________^
+444 | |                             blank_leaves = blank_leaves
+445 | |                                 .checked_add(usize::from(leaf_has_blank_with_memory(leaf, memory)?))
+446 | |                                 .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+447 | |                             Ok::<_, PreparationError>(false)
+448 | |                         },
+    | |_________________________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:457:30
+    |
+457 |                           &mut |leaf, _| {
+    |  ______________________________^
+458 | |                             leaves.push(leaf)?;
+459 | |                             Ok::<_, PreparationError>(false)
+460 | |                         },
+    | |_________________________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:471:26
+    |
+471 |                       &mut |leaf, memory| {
+    |  __________________________^
+472 | |                         pending.try_push_admitted(Node::Pattern(leaf), memory)?;
+473 | |                         Ok::<_, PreparationError>(false)
+474 | |                     },
+    | |_____________________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:797:6
+    |
+797 | ) -> PrepResult<AdmittedVec<TakenAggregate>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:848:6
+    |
+848 | ) -> PrepResult<()> {
+    |      ^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:921:6
+    |
+921 | ) -> PrepResult<Vec<String>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:933:6
+    |
+933 | ) -> PrepResult<()> {
+    |      ^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/blank_scope.rs:949:6
+    |
+949 | ) -> PrepResult<GraphPattern> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/sparql-eval/src/blank_scope.rs:953:14
+     |
+ 953 |           &mut |node, in_spine, memory| {
+     |  ______________^
+ 954 | |             let spine = is_spine(node);
+ 955 | |             if spine
+ 956 | |                 && !in_spine
+...    |
+1035 | |             Ok(spine)
+1036 | |         },
+     | |_________^
+     |
+    ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+     |
+ 171 |       Plan(PlanError),
+     |       --------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:959:26
+    |
+959 |                     &mut |leaf, memory| leaf_has_raw_blank_with_memory(leaf, memory),
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:968:30
+    |
+968 |                           &mut |leaf, _| {
+    |  ______________________________^
+969 | |                             leaves.push(leaf)?;
+970 | |                             Ok::<_, PreparationError>(false)
+971 | |                         },
+    | |_________________________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/blank_scope.rs:981:38
+    |
+981 |   ...                   &mut |label, _| {
+    |  ____________________________^
+982 | | ...                       carried.push(label)?;
+983 | | ...                       Ok::<_, PreparationError>(false)
+984 | | ...                   },
+    | |_______________________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/sparql-eval/src/blank_scope.rs:1012:34
+     |
+1012 |   ...                   &mut |label, memory| {
+     |  ____________________________^
+1013 | | ...                       let workspace = memory.admission_mut().workspace();
+1014 | | ...                       if canonical
+1015 | | ...                           .binary_search_by(|name| name.as_str().cmp(label))
+...    |
+1027 | | ...                   },
+     | |_______________________^
+     |
+    ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+     |
+ 171 |       Plan(PlanError),
+     |       --------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/blank_scope.rs:1080:6
+     |
+1080 | ) -> PrepResult<GraphPattern> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/blank_scope.rs:1245:6
+     |
+1245 | ) -> PrepResult<()> {
+     |      ^^^^^^^^^^^^^^
+     |
+    ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/blank_scope.rs:1276:6
+     |
+1276 | ) -> PrepResult<()> {
+     |      ^^^^^^^^^^^^^^
+     |
+    ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/join_plan.rs:47:6
+    |
+ 47 | ) -> PrepResult<Option<GraphPattern>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/join_plan.rs:53:9
+    |
+ 53 | /         |visit, node, _| {
+ 54 | |             if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Union { .. }))
+ 55 | |             {
+ 56 | |                 has_union = true;
+...   |
+ 59 | |             Ok(Flow::Descend)
+ 60 | |         },
+    | |_________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/join_plan.rs:70:9
+    |
+ 70 | /         |node, children, _| {
+ 71 | |             let mut summary = match node {
+ 72 | |                 NodeRef::Pattern(GraphPattern::Bgp { .. } | GraphPattern::Join { .. }) => {
+ 73 | |                     (true, false)
+...   |
+ 90 | |             Ok::<_, PreparationError>(summary)
+ 91 | |         },
+    | |_________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/src/join_plan.rs:97:14
+    |
+ 97 |           &mut |node, in_join, memory| {
+    |  ______________^
+ 98 | |             if !matches!(node, GraphPattern::Join { .. }) {
+ 99 | |                 return Ok(false);
+...   |
+132 | |             Ok(true)
+133 | |         },
+    | |_________^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |       Plan(PlanError),
+    |       --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/join_plan.rs:160:6
+    |
+160 | ) -> PrepResult<()> {
+    |      ^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/join_plan.rs:182:6
+    |
+182 | ) -> PrepResult<GraphPattern> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/join_plan.rs:224:6
+    |
+224 | ) -> PrepResult<AdmittedVec<Factor>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/join_plan.rs:279:6
+    |
+279 | ) -> PrepResult<GraphPattern> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/join_plan.rs:350:6
+    |
+350 | ) -> PrepResult<AdmittedVec<Vec<TriplePattern>>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/sparql-eval/src/property_fn_plan.rs:171:5
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:271:6
+    |
+271 | ) -> Result<Option<Query>, PlanError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:283:6
+    |
+283 | ) -> Result<Option<Query>, PlanError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:336:6
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+...
+336 | ) -> PrepResult<Option<Query>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:383:6
+    |
+383 | ) -> Result<Option<GraphPattern>, PlanError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:407:6
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+...
+407 | ) -> PrepResult<Option<GraphPattern>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:604:6
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+...
+604 | ) -> PrepResult<GraphPattern> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:715:6
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+...
+715 | ) -> PrepResult<bool> {
+    |      ^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:854:6
+    |
+171 |     Plan(PlanError),
+    |     --------------- the largest variant contains at least 128 bytes
+...
+854 | ) -> PrepResult<NativeChainOrder<'a>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1015:6
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1015 | ) -> PrepResult<PlanError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1096:6
+     |
+1096 | ) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, PlanError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1131:6
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1131 | ) -> PrepResult<Option<u64>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1176:6
+     |
+1176 | ) -> Result<(), PlanError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1370:42
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1370 |     fn own(&mut self, set: VarSchema) -> PrepResult<SetRef<'a>> {
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1383:10
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1383 |     ) -> PrepResult<()> {
+     |          ^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1395:41
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1395 |     fn take(&mut self, count: usize) -> PrepResult<AdmittedVecIntoIter<Planned>> {
+     |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1425:10
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1425 |     ) -> PrepResult<()> {
+     |          ^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1465:10
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1465 |     ) -> PrepResult<()> {
+     |          ^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1511:10
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1511 |     ) -> PrepResult<()> {
+     |          ^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1743:10
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1743 |     ) -> PrepResult<()> {
+     |          ^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1849:10
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1849 |     ) -> PrepResult<()> {
+     |          ^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1913:10
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1913 |     ) -> PrepResult<()> {
+     |          ^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1922:55
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+1922 |     fn assemble(&mut self, assemble: Assemble<'a>) -> PrepResult<()> {
+     |                                                       ^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:2002:63
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+2002 |     fn assemble_pattern(&mut self, node: &'a GraphPattern) -> PrepResult<GraphPattern> {
+     |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:2160:64
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+2160 |     fn assemble_expression(&mut self, expr: &'a Expression) -> PrepResult<Expression> {
+     |                                                                ^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:2287:32
+     |
+ 171 |     Plan(PlanError),
+     |     --------------- the largest variant contains at least 128 bytes
+...
+2287 |     fn take_pair(&mut self) -> PrepResult<(Child<Expression>, Child<Expression>)> {
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `property_fn_plan::PreparationError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PreparationError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 66 previous errors
+terminal_status=

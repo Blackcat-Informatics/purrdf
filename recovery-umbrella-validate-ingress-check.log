@@ -1,0 +1,25 @@
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+error[E0308]: mismatched types
+    --> crates/purrdf/src/reasoning.rs:1742:41
+     |
+1742 |             builder.declare_named_graph(id);
+     |                     ------------------- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1019:12
+     |
+1019 |     pub fn declare_named_graph(&mut self, g: TermId) {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1742 |             builder.declare_named_graph(id.expect("REASON"));
+     |                                           +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf` (lib) due to 1 previous error
+terminal_status=101

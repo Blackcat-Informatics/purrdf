@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against dd79ef77e942 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/490-typed-capacity-errors-instead-of-u32 58c1fa987] Enforce logical capacity refusal at native producer boundaries
+ 34 files changed, 2922 insertions(+), 215 deletions(-)
+ create mode 100644 crates/helper-census/src/capacity.rs

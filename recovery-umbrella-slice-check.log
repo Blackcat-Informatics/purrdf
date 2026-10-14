@@ -1,0 +1,108 @@
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/data_view.rs:561:54
+     |
+ 561 |             DatasetImporter::new(&mut builder, self).append();
+     |                                                      ^^^^^^
+     |
+note: the method `append` exists on the type `DatasetImporter<'_, '_, ShaclDatasetView>`
+    --> crates/rdf-core/src/ir/import.rs:353:5
+     |
+ 353 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 354 | |     where
+ 355 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+help: consider using `Result::expect` to unwrap the `DatasetImporter<'_, '_, ShaclDatasetView>` value, panicking if the value is a `Result::Err`
+     |
+ 561 |             DatasetImporter::new(&mut builder, self).expect("REASON").append();
+     |                                                     +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/schema_surface.rs:2224:33
+     |
+2224 |     let mut rows = dataset_rows(&union);
+     |                    ------------ ^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |                    |
+     |                    arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&std::result::Result<RdfDataset, RdfDiagnostic>`
+note: function defined here
+    --> crates/shapes/src/schema_surface.rs:3137:4
+     |
+3137 | fn dataset_rows(dataset: &RdfDataset) -> Vec<TripleRow> {
+     |    ^^^^^^^^^^^^ --------------------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/schema_surface.rs:2252:44
+     |
+2252 |     let mut reader = ExpressionReader::new(&union);
+     |                      --------------------- ^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |                      |
+     |                      arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&std::result::Result<RdfDataset, RdfDiagnostic>`
+note: associated function defined here
+    --> crates/shapes/src/schema_surface.rs:1417:8
+     |
+1417 |     fn new(dataset: &'a RdfDataset) -> Self {
+     |        ^^^ -----------------------
+
+error[E0277]: the trait bound `std::result::Result<purrdf_rdf::RdfDataset, RdfDiagnostic>: ShaclRead` is not satisfied
+    --> crates/shapes/src/schema_surface.rs:2391:36
+     |
+2391 |                     && !objects_of(&union, &row.subject, rdf::TYPE)
+     |                         ---------- ^^^^^^ the trait `ShaclRead` is not implemented for `std::result::Result<purrdf_rdf::RdfDataset, RdfDiagnostic>`
+     |                         |
+     |                         required by a bound introduced by this call
+     |
+help: the following other types implement trait `ShaclRead`
+    --> crates/shapes/src/data_view.rs:41:1
+     |
+  41 | impl ShaclRead for RdfDataset {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_rdf::RdfDataset`
+...
+  65 | impl<T: ShaclRead + Send> ShaclRead for Arc<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arc<T>`
+...
+1108 | impl ShaclRead for ShaclDatasetView {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ShaclDatasetView`
+note: required by a bound in `data::objects_of`
+    --> crates/shapes/src/data.rs:421:36
+     |
+ 421 | pub(crate) fn objects_of(ds: &impl ShaclRead, subject: &Term, predicate: &str) -> Vec<Term> {
+     |                                    ^^^^^^^^^ required by this bound in `objects_of`
+
+error[E0308]: `if` and `else` have incompatible types
+   --> crates/shapes/src/shape_union.rs:142:9
+    |
+136 |        let merged = if per_file.is_empty() {
+    |  ___________________-
+137 | |/         RdfDatasetBuilder::new()
+138 | ||             .freeze()
+139 | ||             .map_err(|e| format!("failed to build empty shapes dataset: {e}"))?
+    | ||_______________________________________________________________________________- expected because of this
+...   |
+142 | |          Arc::new(RdfDataset::union(&refs))
+    | |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Arc<RdfDataset>`, found `Arc<Result<RdfDataset, RdfDiagnostic>>`
+143 | |      };
+    | |______- `if` and `else` have incompatible types
+    |
+    = note: expected struct `Arc<RdfDataset>`
+               found struct `Arc<std::result::Result<RdfDataset, RdfDiagnostic>>`
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 5 previous errors
+terminal_status=101

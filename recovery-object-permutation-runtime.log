@@ -1,0 +1,53 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:309:6
+    |
+309 | ) -> Result<Option<Query>, PlanError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:321:6
+    |
+321 | ) -> Result<Option<Query>, PlanError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/property_fn_plan.rs:421:6
+    |
+421 | ) -> Result<Option<GraphPattern>, PlanError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1134:6
+     |
+1134 | ) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, PlanError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/property_fn_plan.rs:1214:6
+     |
+1214 | ) -> Result<(), PlanError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+     |
+     = help: try reducing the size of `property_fn_plan::PlanError`, for example by boxing large elements or replacing it with `Box<property_fn_plan::PlanError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 5 previous errors
+terminal_status=101

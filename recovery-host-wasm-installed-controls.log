@@ -1,0 +1,69 @@
+
+> @blackcatinformatics/purrdf@3.0.1 typecheck
+> tsc -p tsconfig.types.json
+
+✔ async SHACL twins return exactly their synchronous twins' results on core and SHACL-SPARQL fixtures, conforming and not (481.655789ms)
+✔ the change, entailment and product twins return their synchronous twins' values (82.830671ms)
+✔ a refused product rejects with the synchronous twin's ShaclProductRefusal, dimension and all (6.291658ms)
+✔ a SERVICE in a SHACL-SPARQL target is refused on both lanes and no host handler is asked; the local target answers (10.136152ms)
+✔ the shapes-graph arguments reach the job exactly as they reach the synchronous twin (16.234436ms)
+✔ a heavy validation with no SPARQL in it yields to the event loop; the synchronous twin does not (875.431393ms)
+✔ a signal stops a SHACL validation: its reason, a timeout, and an already-aborted signal (901.946068ms)
+✔ concurrent SHACL validations suspended at every poll, interleaved with synchronous validations, all answer their synchronous baselines (2551.848176ms)
+✔ configured Dataset serialization reuses compiled contexts (23.863194ms)
+✔ configured graph results and YAML schema headers use the same engine (42.026162ms)
+✔ closed options fail before output (0.893553ms)
+✔ a refused query carries sparql-parse-lex on both lanes (22.605003ms)
+✔ a refused query carries sparql-parse-syntax on both lanes (8.805772ms)
+✔ a refused query carries sparql-parse-unsupported on both lanes (1.735678ms)
+✔ a refused query carries sparql-parse-iri on both lanes (1.341759ms)
+✔ a refused query carries sparql-parse-cdt-arity on both lanes (1.350219ms)
+✔ a relative IRI without a base names its typed cause (0.494835ms)
+✔ a refused update carries its typed presentation on both lanes (3.142524ms)
+✔ a failure without a typed presentation carries none; the valid neighbour answers (30.327348ms)
+✔ serializeWithLoss counts the declared empty graphs a target cannot write (71.371999ms)
+✔ a sink receives the same bytes serialize returns (45.201855ms)
+✔ a sink that throws aborts instead of truncating (13.508809ms)
+✔ an object without write is refused rather than silently producing nothing (0.65587ms)
+✔ shaclValidateToSarif emits SARIF 2.1.0 with a violation (43.819768ms)
+✔ shaclValidateToSarif rejects malformed shapes (never a silent pass) (1.558853ms)
+✔ wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformanceDisallows (2.694428ms)
+✔ wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWellFormed (87.791001ms)
+✔ wasm_shacl_subclass_of_in_shapes_graph: shaclValidateToSarif honours subClassOfInShapesGraph (3.781045ms)
+✔ wasm_shacl_sparql_expr_declaration: shaclValidateToSarif evaluates sh:sparqlExpr beside its vocabulary declaration (68.09559ms)
+✔ wasm_shacl_message_languages: shaclValidateToSarif carries every message with its language (1.741937ms)
+✔ shaclEntail materializes the inferred triple and keeps the base fact (26.051688ms)
+✔ wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, beside the verdict (5.735315ms)
+✔ shaclValidateChangesToSarif validates the change and reports its scope (8.139383ms)
+✔ shaclValidateChangesToSarif honours the retract half (1.431666ms)
+✔ shaclValidateChangesToSarif reports an unbounded footprint rather than guessing (49.633171ms)
+✔ shaclValidateChangesToSarif rejects a malformed change document (1.354829ms)
+✔ wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its proof, and honours the round limit (146.442078ms)
+✔ wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope (6.56531ms)
+✔ shaclEvalNodeExpr reports the mandatory diagnostic as { rule, shape }, and none for the neighbour (1.733737ms)
+✔ wasm_shacl_eval_node_expr_selectors: shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle (5.91055ms)
+✔ wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one (117.382221ms)
+✔ wasm_shacl_apply_rules: the wasm32 default stored-fact limit refuses a 70,000-triple copy, naming maxStoredFacts, and admits it when raised (3550.82875ms)
+✔ wasm_shacl_entail_limits: shaclEntail takes the four rule-evaluation limits, names its own arguments, and materializes the closure when they are raised (8.395985ms)
+✔ wasm_shacl_check_rules: shaclCheckRules checks a SPARQL 1.2 RL rule set to a level and evaluates nothing (1.590702ms)
+✔ a trap that is not a panic, in a synchronous call, poisons every entry point (222.469047ms)
+✔ installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it (18.138538ms)
+✔ a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error (2.648039ms)
+ℹ tests 47
+ℹ suites 0
+ℹ pass 47
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11080.834836
+✔ a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing (408.274059ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 642.856779
+terminal_status=0

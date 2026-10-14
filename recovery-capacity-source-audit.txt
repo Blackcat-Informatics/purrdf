@@ -1,0 +1,627 @@
+crates/rdf-core/src/turtle_render.rs:254:            let id = TermId::from_index(i as u32).expect("stored term index is representable");
+crates/datalog/src/seminaive/factors.rs:2274:        assert!(!saturated_sum([u64::MAX - 2, 1]));
+crates/datalog/src/seminaive/factors.rs:2275:        assert!(saturated_sum([u64::MAX - 2, 2]));
+crates/datalog/src/seminaive/factors.rs:2276:        assert!(saturated_sum([u64::MAX - 2, 3]));
+crates/datalog/src/seminaive/factors.rs:2331:        assert!(saturated_sum([frontier.at(u32::MAX).summed.sum, 1]));
+crates/datalog/src/resolve_fol.rs:1704:                .expect("a non-variable clause term has a lexical surface");
+crates/datalog/src/resolve_fol.rs:1798:                    .expect("a non-variable clause term has a lexical surface");
+crates/datalog/src/store.rs:267:                ids.map(|id| id.expect("every admitted term has an identity")),
+crates/datalog/src/store.rs:279:        u64::try_from(self.len()).expect("resident term count fits native64")
+crates/datalog/src/store.rs:1711:            expected.push((subject(i), object(i % 11), row));
+crates/datalog/src/store.rs:1740:        let mut wanted: Vec<_> = expected.iter().map(|&(s, _, row)| (s, row)).collect();
+crates/datalog/src/store.rs:1746:        let mut wanted: Vec<_> = expected.iter().map(|&(_, o, row)| (o, row)).collect();
+crates/datalog/src/store.rs:1750:        assert!(actual.windows(2).all(|rows| rows[0].0 <= rows[1].0));
+crates/datalog/src/store.rs:1810:            assert!(store.term_id(term).is_none());
+crates/datalog/src/store.rs:1919:        assert!(store.term_id("fresh-s").is_none());
+crates/datalog/src/store.rs:1920:        assert!(store.term_id("fresh-p").is_none());
+crates/datalog/src/store.rs:1921:        assert!(store.term_id("fresh-o").is_none());
+crates/datalog/src/store.rs:1922:        assert!(store.term_id("fresh-g").is_none());
+crates/datalog/src/store.rs:2003:            .unwrap_or_else(|| panic!("term {surface:?} must be interned"))
+crates/datalog/src/store.rs:2249:            [RowId::from_index(0).unwrap(), RowId::from_index(2).unwrap()].into(),
+crates/datalog/src/store.rs:2287:        let expect_p: BTreeSet<RowId> = (0..n)
+crates/datalog/src/store.rs:2291:        assert_eq!(p_ids, expect_p, "p carries exactly the even-index row ids");
+crates/datalog/src/store.rs:2324:        assert!(s.term_id(&iri("a")).is_some());
+crates/datalog/src/store.rs:2359:                .expect("the knows partition exists")
+crates/datalog/src/store.rs:2466:                .expect("the partition exists")
+crates/datalog/src/store.rs:2469:        assert!(format!("{:?}", s.partitions(Some(alpha), Some(alpha))).contains("single"));
+crates/datalog/src/store.rs:2470:        assert!(format!("{:?}", s.partitions(None, None)).contains("sweep"));
+crates/datalog/src/store.rs:2698:        assert!(reference_partitions.len() >= 4, "several partitions");
+crates/datalog/src/store.rs:2885:            .expect_err("signed overflow must be a structured failure");
+crates/datalog/src/store.rs:2887:        assert!(text.contains("overflow"), "{text}");
+crates/datalog/src/store.rs:2913:                let expected = from + run[from.min(run.len())..].partition_point(|&x| x < key);
+crates/datalog/src/store.rs:2990:                    assert!(tail.contains(s, o), "len {len}: row {position} is found");
+crates/datalog/src/store.rs:3020:                assert!(reference_tail_contains(&rows, subject, object));
+crates/datalog/src/store.rs:3025:                assert!(!reference_tail_contains(&rows, object, subject));
+crates/rdf-core/src/diagnostic.rs:622:            CapacityError::slot(CapacitySpace::GlobalTerms, u64::MAX, u64::MAX - 1).unwrap_err(),
+crates/rdf-core/src/turtle.rs:131:    try_write_view_term(dataset, id, out).expect("a validated resident term is readable");
+crates/rdf-core/src/turtle.rs:810:                .expect("a blank term emits the `_:` prefix");
+crates/rdf-core/src/turtle.rs:1090:            let dataset = builder.freeze().expect("a generated term freezes");
+crates/rdf-core/src/turtle.rs:1100:        assert!(nested > 0, "some generated term nests a triple term in one");
+crates/datalog/src/proof.rs:1089:                    .expect("a non-variable term always has a lexical surface");
+crates/datalog/src/proof.rs:1106:                .expect("a non-variable term always has a lexical surface"),
+crates/datalog/src/lib.rs:128://!   predicate handle is expected. A [`RowId`](id::RowId) is dense and minted in
+crates/datalog/src/seminaive.rs:374:            .unwrap_or(DEFAULT_MAX_TERM_GENERATING_ROUNDS)
+crates/datalog/src/seminaive.rs:2524:                    .expect("a non-variable term always has a lexical surface"),
+crates/datalog/src/seminaive.rs:2793:                        .expect("a non-variable term always has a lexical surface"),
+crates/datalog/src/seminaive.rs:3289:            .expect("a head term is bound")
+crates/datalog/src/seminaive.rs:4168:        if u64::try_from(projected).unwrap_or(u64::MAX) > self.limits.stored_facts {
+crates/datalog/src/seminaive.rs:4450:    if u64::try_from(report.stored_facts).unwrap_or(u64::MAX) > report.limits.stored_facts {
+crates/datalog/src/seminaive.rs:4652:            panic!("the original capacity cause must survive unchanged");
+crates/datalog/src/seminaive.rs:5914:        assert!(result.evidence.rows().is_uniform_default());
+crates/datalog/src/seminaive.rs:5968:            "a frame past the inline capacity is expected to spill — this asserts the \
+crates/datalog/src/seminaive.rs:6560:                workload.expected_rows,
+crates/datalog/src/seminaive.rs:6697:        let expected_rows = expected.len() as u64;
+crates/datalog/src/seminaive.rs:6698:        assert_eq!(expected_rows, N as u64);
+crates/datalog/src/seminaive.rs:6704:            expected_rows,
+crates/datalog/src/seminaive.rs:7026:            .expect_err("overflowed observation is a total refusal");
+crates/datalog/src/seminaive.rs:7291:        .expect_err("negative callback rows are admitted too");
+crates/datalog/src/seminaive.rs:7327:        .expect("one positive, group and partition admission, and two per negative row");
+crates/datalog/src/seminaive.rs:7764:        assert!(seeded as u64 > NATIVE_DEFAULT_MAX_STORED_FACTS);
+crates/datalog/src/seminaive.rs:7874:        assert!((edb.row_count() as u64) < DEFAULT_MAX_STORED_FACTS);
+crates/datalog/src/seminaive.rs:7876:        let error = evaluate(&exe, edb).expect_err("the term-arena ceiling must be passed");
+crates/datalog/src/seminaive.rs:7881:        assert!(report.term_arena_bytes() > MAX_TERM_ARENA_BYTES);
+crates/datalog/src/seminaive.rs:8019:            assert!(keep_row::<SCAN_FULL>(delta, row));
+crates/datalog/src/seminaive.rs:8056:        assert!(keep_row_for_scan(
+crates/datalog/src/seminaive.rs:8061:        assert!(!keep_row_for_scan(
+crates/rdf-core/src/backend.rs:412:        let dataset = builder.freeze().expect("term factory output is valid");
+crates/rdf-core/src/collections.rs:1430:        assert!(convertible_list_cells([7_u32], |_| None).is_empty());
+crates/rdf-core/src/describe.rs:819:        assert!(rows.next().is_none(), "exactly one reifier declaration");
+crates/rdf-core/src/describe.rs:1029:            _ => owned_term(dataset, id).expect("a generated resident term resolves"),
+crates/rdf-core/src/describe.rs:1050:            let dataset = builder.freeze().expect("a generated term freezes");
+crates/rdf-core/src/describe.rs:1053:                owned_term(&*dataset, object).expect("a generated resident term resolves"),
+crates/rdf-core/src/distance/tests.rs:323:        let expected: Vec<Option<u64>> = rows_wide
+crates/rdf-core/src/distance/tests.rs:682:    assert!(RowsRef::new(&data, 3, 4, &[]).is_some());
+crates/rdf-core/src/distance/tests.rs:683:    assert!(RowsRef::new(&data, 3, 4, &[1.0, 2.0, 3.0]).is_some());
+crates/rdf-core/src/distance/tests.rs:684:    assert!(RowsRef::new(&data, 4, 4, &[]).is_none(), "too few values");
+crates/rdf-core/src/distance/tests.rs:685:    assert!(RowsRef::new(&data, 2, 4, &[]).is_none(), "too many values");
+crates/rdf-core/src/small.rs:103:/// assert!(!row.spilled());
+crates/rdf-core/src/small.rs:105:/// assert!(row.spilled());
+crates/rdf-core/src/small.rs:278:        assert!(A::CAPACITY <= Self::INLINE, "capacity overflow");
+crates/rdf-core/src/small.rs:622:        let required = len.checked_add(additional).expect("capacity overflow");
+crates/rdf-core/src/small.rs:625:        assert!(!Self::IS_ZST, "capacity overflow");
+crates/rdf-core/src/small.rs:635:            .expect("small vector capacity allocation failed");
+crates/rdf-core/src/small_tests.rs:43:    assert!(sv.capacity() >= sv.len());
+crates/rdf-core/src/small_tests.rs:100:                assert!(sv.capacity() >= len + extra);
+crates/rdf-core/src/small_tests.rs:105:                assert!(sv.capacity() >= len + extra);
+crates/rdf-core/src/small_tests.rs:244:                    assert!(back.spilled() || back.len() != A::CAPACITY);
+crates/rdf-core/src/small_tests.rs:853:    assert!(catch_unwind(|| SmallVec::<[u64; 1]>::with_capacity(usize::MAX)).is_err());
+crates/rdf-core/src/small_tests.rs:856:    assert!(v.capacity() >= 102);
+crates/rdf-core/src/small_tests.rs:885:        .map(|index| TermId::from_index(index).expect("stored term index is representable"))
+crates/rdf-core/src/small_tests.rs:888:    assert!(!row.spilled());
+crates/rdf-core/src/small_tests.rs:892:    assert!(row < long);
+crates/datalog/src/schedule.rs:1218:        .expect("the 10,000-step counter terminates under the default limits");
+crates/datalog/src/schedule.rs:1237:            panic!("expected a term-limit refusal, got {error}");
+crates/datalog/src/schedule.rs:1302:        assert!(model.budget().term_generating_round_limit() >= LENGTH as u64);
+crates/datalog/src/schedule.rs:1331:            panic!("a term-limit refusal: {error}");
+crates/datalog/src/schedule.rs:1339:        assert!(report.generated_terms() < report.generated_term_budget());
+crates/datalog/src/schedule.rs:1372:            panic!("a term-limit refusal: {error}");
+crates/datalog/src/schedule.rs:1376:        assert!(report.generated_terms() > GENERATED_TERM_BUDGET_FLOOR);
+crates/datalog/src/schedule.rs:1377:        assert!(report.term_generating_rounds() < 20, "{rendered}");
+crates/datalog/src/schedule.rs:1586:            panic!("expected a term-limit refusal, got {error}");
+crates/datalog/src/schedule.rs:1870:            .expect_err("actual term mint capacity refusal");
+crates/datalog/src/schedule.rs:1940:            assert!(!message.contains("second-earlier-row"), "{message}");
+crates/datalog/src/schedule.rs:1959:                assert!(message.contains("first-later-row"), "{message}");
+crates/datalog/src/schedule.rs:2065:        .expect("the neighbour partition compiles");
+crates/datalog/src/cursor.rs:535:        let Reverse((expected_value, expected_row, source)) = self.frontier.pop()?;
+crates/datalog/src/cursor.rs:538:            .expect("a frontier entry always names a live source row");
+crates/datalog/src/cursor.rs:539:        debug_assert_eq!(row, (expected_value, expected_row));
+crates/datalog/src/cursor.rs:742:        assert!(text.starts_with("RowCursor"), "{text}");
+crates/datalog/src/cursor.rs:747:                .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:760:            .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:764:        assert!(subject_rows.windows(2).all(|rows| rows[0].0 <= rows[1].0));
+crates/datalog/src/cursor.rs:767:            .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:771:        assert!(object_rows.windows(2).all(|rows| rows[0].0 <= rows[1].0));
+crates/datalog/src/cursor.rs:775:            .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:779:        assert!(subjects_at_o0.windows(2).all(|rows| rows[0].0 <= rows[1].0));
+crates/datalog/src/cursor.rs:783:            .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:787:        assert!(objects_at_a.windows(2).all(|rows| rows[0].0 <= rows[1].0));
+crates/datalog/src/cursor.rs:797:            .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:802:        assert!(rows.iter().all(|&(value, _)| value >= target));
+crates/datalog/src/cursor.rs:810:            .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:846:                .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:853:                .expect("the fixture partition exists")
+crates/datalog/src/cursor.rs:910:                .expect("the fixture partition exists")
+crates/rdf-core/src/imports.rs:1352:        assert_eq!(scopes.map(BlankScope(4)).unwrap(), BlankScope(u32::MAX));
+crates/rdf-core/src/imports.rs:1354:            assert_eq!(scopes.map(BlankScope(4)).unwrap(), BlankScope(u32::MAX));
+crates/rdf-core/src/imports.rs:1718:        assert!(scopes.contains(&BlankScope::DEFAULT.ordinal()));
+crates/rdf-core/src/imports.rs:2133:                reference_intern(&mut expected, &value, &mut ScopeMap::Identity),
+crates/rdf-core/src/imports.rs:2141:            let mut expected_map = ScopeMap::Fresh {
+crates/datalog/src/cache.rs:649:        assert!(capacity > 0, "a plan cache's capacity must be non-zero");
+crates/datalog/src/cache.rs:1270:    #[should_panic(expected = "capacity must be non-zero")]
+crates/rdf-core/src/cdt_blank.rs:509:    .expect("resident composite term rewrite allocation failed")
+crates/rdf-core/src/distance/mod.rs:520:        let expected = rows.checked_mul(dims)?;
+crates/rdf-core/src/distance/mod.rs:521:        if data.len() != expected || !(norms.is_empty() || norms.len() == rows) {
+crates/datalog/src/evidence.rs:234:            .conjunction([RowId::from_index(0).unwrap(), RowId::from_index(1).unwrap()])
+crates/datalog/src/evidence.rs:297:        assert!(evidence.rows().is_uniform_default());
+crates/rdf-core/src/query_scope/counters.rs:109:        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
+crates/rdf-core/src/query_scope/counters.rs:155:        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
+crates/datalog/src/plan.rs:1800:            assert!(shape.addresses_one_partition(), "{shape:?}");
+crates/datalog/src/synth_corpus.rs:18://! Every workload also carries `expected_rows`, the closed-form COUNT, checked alongside
+crates/datalog/src/synth_corpus.rs:58:    pub(crate) expected_rows: u64,
+crates/datalog/src/synth_corpus.rs:168:    let expected_rows = (n as u64) * (n as u64 + 1) / 2;
+crates/datalog/src/synth_corpus.rs:169:    assert_eq!(expected.len() as u64, expected_rows);
+crates/datalog/src/synth_corpus.rs:176:        expected_rows,
+crates/datalog/src/synth_corpus.rs:220:    let expected_rows = 2 * (n as u64) * (n as u64);
+crates/datalog/src/synth_corpus.rs:221:    assert_eq!(expected.len() as u64, expected_rows);
+crates/datalog/src/synth_corpus.rs:228:        expected_rows,
+crates/datalog/src/synth_corpus.rs:289:    let expected_rows = square + square * square;
+crates/datalog/src/synth_corpus.rs:290:    assert_eq!(expected.len() as u64, expected_rows);
+crates/datalog/src/synth_corpus.rs:297:        expected_rows,
+crates/datalog/src/synth_corpus.rs:328:    let expected_rows = n as u64;
+crates/datalog/src/synth_corpus.rs:329:    assert_eq!(expected.len() as u64, expected_rows);
+crates/datalog/src/synth_corpus.rs:336:        expected_rows,
+crates/datalog/src/synth_corpus.rs:374:                workload.expected.len() as u64,
+crates/datalog/src/synth_corpus.rs:375:                workload.expected_rows,
+crates/datalog/src/synth_corpus.rs:409:            assert_eq!(left.expected_rows, right.expected_rows);
+crates/datalog/src/synth_corpus.rs:416:        assert_eq!(transitive_closure(8).expected_rows, 8 * 9 / 2);
+crates/datalog/src/synth_corpus.rs:417:        assert_eq!(strongly_connected(5).expected_rows, 2 * 25);
+crates/datalog/src/synth_corpus.rs:418:        assert_eq!(same_generation(3).expected_rows, 9 + 81);
+crates/datalog/src/synth_corpus.rs:419:        assert_eq!(reachability(7).expected_rows, 7);
+crates/rdf-core/src/csv/tests.rs:57:    let data: Vec<StringRecord> = reader.records().collect::<Result<_, _>>().expect("rows");
+crates/rdf-core/src/csv/tests.rs:114:    assert_eq!(records(Dialect::RFC4180, b"").expect("valid"), rows(&[]));
+crates/rdf-core/src/csv/tests.rs:235:    let error = reader.records().next().expect("row").expect_err("short");
+crates/rdf-core/src/csv/tests.rs:236:    assert_eq!(error.position().expect("positioned").row, 2);
+crates/rdf-core/src/csv/tests.rs:353:    assert_eq!(records(escaped, b"a\\").expect("valid"), rows(&[&["a\\"]]));
+crates/rdf-core/src/csv/tests.rs:487:    let error = reader.records().next().expect("row").expect_err("refused");
+crates/rdf-core/src/query_scope.rs:120:        assert!(std::ptr::eq(unscoped.needle, &raw const plain));
+crates/rdf-core/src/query_scope.rs:121:        assert!(unscoped.predicate.is_none());
+crates/rdf-core/src/query_scope.rs:125:            panic!("genuine triple term");
+crates/rdf-core/src/query_scope.rs:128:        assert!(std::ptr::eq(scoped.needle, o.as_ref()));
+crates/rdf-core/src/query_scope.rs:129:        assert!(std::ptr::eq(scoped.predicate.unwrap(), s.as_ref()));
+crates/datalog/src/chase.rs:1036:            .expect("a non-variable term always has a lexical surface"),
+crates/datalog/src/chase.rs:1183:        if u64::try_from(report.stored_facts()).unwrap_or(u64::MAX) > report.stored_fact_limit() {
+crates/datalog/src/chase.rs:1506:        if u64::try_from(projected).unwrap_or(u64::MAX) > options.max_stored_facts() {
+crates/datalog/src/chase.rs:1984:        assert!(!termination.is_certified(), "{termination:?}");
+crates/datalog/src/chase.rs:1986:            panic!("expected an unbounded verdict: {termination:?}");
+crates/datalog/src/chase.rs:1994:        assert!(termination.to_string().contains("not weakly acyclic"));
+crates/datalog/src/chase.rs:2004:        assert!(refusal.to_string().contains("not certified to terminate"));
+crates/datalog/src/chase.rs:2077:        assert!(termination.to_string().contains("weakly acyclic"));
+crates/datalog/src/chase.rs:2381:        assert!(outcome.termination().is_certified());
+crates/datalog/src/clause.rs:1178:        assert!(ClauseTerm::var("?x").is_var());
+crates/datalog/src/clause.rs:1195:        assert!(!ClauseTerm::iri("https://example.org/g").is_default_graph());
+crates/rdf-core/src/dataset_view.rs:347:        debug_assert!(ix < (1 << 32), "TermId index must fit u32");
+crates/rdf-core/src/dataset_view.rs:722:            |error| panic!("resident term value allocation: {error}"),
+crates/rdf-core/src/dataset_view.rs:1705:            .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
+crates/rdf-core/src/dataset_view.rs:1756:            .expect("bounded local count fits u64")
+crates/rdf-core/src/dataset_view.rs:1761:        u64::try_from(Self::term_count(self)).expect("bounded local count fits u64")
+crates/rdf-core/src/dataset_view.rs:1771:        .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
+crates/rdf-core/src/dataset_view.rs:2061:        assert!(GraphMatch::<TermId>::Any.matches(None) && GraphMatch::Any.matches(Some(g)));
+crates/rdf-core/src/blank_label.rs:705:    fn expected_pn_chars_base(cp: u32) -> bool {
+crates/rdf-core/src/blank_label.rs:725:    fn expected_pn_chars_u(cp: u32) -> bool {
+crates/rdf-core/src/blank_label.rs:729:    fn expected_pn_chars(cp: u32) -> bool {
+crates/rdf-core/src/distance/shape.rs:203:        assert!(ROWS[row].features.len() <= FEATURE_BITS);
+crates/rdf-core/src/cdt_blank/tests.rs:142:    assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+crates/rdf-core/src/cdt_blank/tests.rs:182:    let expected_token = encode_blank_label("b", scope, LabelAlphabet::BlankNodeLabel);
+crates/rdf-core/src/cdt_blank/tests.rs:292:    let expected_token = encode_blank_label("b", scope, LabelAlphabet::BlankNodeLabel);
+crates/rdf-core/src/cdt_blank/tests.rs:368:    assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+crates/rdf-core/src/csv/read.rs:832:        assert!(rows.next_event().unwrap().is_none());
+crates/rdf-core/src/csv/read.rs:846:                    .expect("source row exhausted")
+crates/rdf-core/src/distance/reassociated_tests.rs:199:    let view = RowsRef::new(b_typed, 1, n, &[]).expect("one row");
+crates/rdf-core/src/distance/reassociated_tests.rs:264:    let view = RowsRef::new(b_typed, 1, a.len(), &norms).expect("one row");
+crates/rdf-core/src/distance/reassociated_tests.rs:433:            let view = RowsRef::new(&negative, 1, len, &[]).expect("one row");
+crates/rdf-core/src/purremb_fixture.rs:129:    crate::bytes::read_u32_le(bytes, offset).expect("a u32 field inside the image")
+crates/rdf-core/src/purremb_fixture.rs:140:    crate::bytes::read_u64_le(bytes, offset).expect("a u64 field inside the image")
+crates/rdf-core/src/purremb_fixture.rs:150:    crate::bytes::put_u32_le(bytes, offset, value).expect("a u32 field inside the image");
+crates/rdf-core/src/purremb_fixture.rs:160:    crate::bytes::put_u64_le(bytes, offset, value).expect("a u64 field inside the image");
+crates/rdf-core/src/purremb_fixture.rs:165:    usize::try_from(read_u32(bytes, offset)).expect("a u32 field fits usize")
+crates/rdf-core/src/purremb_fixture.rs:170:    usize::try_from(read_u64(bytes, offset)).expect("a u64 field fits usize")
+crates/rdf-core/src/ir/builder.rs:565:            .map(|index| TermId::from_index(index).expect("stored term index is representable"))
+crates/rdf-core/src/ir/builder.rs:591:            .map(|index| TermId::from_index(index).expect("stored term index is representable"))
+crates/rdf-core/src/ir/builder.rs:817:                    TermId::from_index(u32::try_from(index).expect("stored term index fits u32"))
+crates/rdf-core/src/ir/builder.rs:818:                        .expect("stored term index is representable");
+crates/rdf-core/src/ir/builder.rs:839:                    .expect("journaled scope is still present until rollback");
+crates/rdf-core/src/ir/builder.rs:1728:                    let o = ids.pop().expect("a triple term's object is interned");
+crates/rdf-core/src/ir/builder.rs:1729:                    let p = ids.pop().expect("a triple term's predicate is interned");
+crates/rdf-core/src/ir/builder.rs:1730:                    let s = ids.pop().expect("a triple term's subject is interned");
+crates/rdf-core/src/ir/builder.rs:1738:            .expect("the term's own id is the last one interned");
+crates/rdf-core/src/ir/builder.rs:2195:                    .expect("stored term index is representable");
+crates/rdf-core/src/ir/builder.rs:2204:        let mapped = |id: TermId| remap[id.index()].expect("validated term import completed");
+crates/rdf-core/src/ir/builder.rs:2402:                    let o = imported.pop().expect("a triple term's object is imported");
+crates/rdf-core/src/ir/builder.rs:2405:                        .expect("a triple term's predicate is imported");
+crates/rdf-core/src/ir/builder.rs:2406:                    let s = imported.pop().expect("a triple term's subject is imported");
+crates/rdf-core/src/ir/builder.rs:2415:            .expect("the term's own id is the last one imported");
+crates/rdf-core/src/ir/builder.rs:3366:            let expected = crate::TermValue::Literal {
+crates/rdf-core/src/ir/builder.rs:3471:                            .expect("stored term index is representable"),
+crates/rdf-core/src/ir/builder.rs:3508:                    TermId::from_index(index as u32).expect("stored term index is representable"),
+crates/rdf-core/src/ir/builder.rs:3924:                panic!("public replay must preserve its actual term-capacity cause")
+crates/rdf-core/src/ir/builder.rs:4255:        panic!("owned-quad growth sweep must reach complete admission");
+crates/rdf-core/src/ir/builder.rs:4388:        panic!("checked document growth sweep must complete");
+crates/rdf-core/src/ir/builder.rs:4433:            let expected = StorageError::Capacity(purrdf_lex::allocation::CapacityError::new(
+crates/rdf-core/src/ir/builder.rs:4588:        panic!("whole-dataset growth sweep must reach complete admission");
+crates/rdf-core/src/ir/builder.rs:4680:        panic!("append growth sweep must complete");
+crates/rdf-core/src/ir/builder.rs:5173:        let mut ids = [TermId::from_index(0).expect("stored term index is representable"); 5];
+crates/rdf-core/src/ir/builder.rs:5228:            let id = TermId::from_index(index as u32).expect("stored term index is representable");
+crates/rdf-core/src/ir/builder.rs:5235:            .expect("warmed graph borrows the original indexes");
+crates/rdf-core/src/ir/builder.rs:5261:            .expect("native invalid row");
+crates/rdf-core/src/ir/embedding/error.rs:132:        expected: u64,
+crates/rdf-core/src/ir/embedding/error.rs:139:        expected: u64,
+crates/rdf-core/src/fno.rs:316:        let expects: Vec<RdfTerm> = func.expects.iter().map(RdfTerm::iri).collect();
+crates/rdf-core/src/fno.rs:384:                .expect("a boolean literal is no triple term"),
+crates/rdf-core/src/fno.rs:662:        assert!(matches!(head, RdfTerm::BlankNode(_)));
+crates/rdf-core/src/fno.rs:686:        assert!(has_obj(&quads, RDF_REST, &RdfTerm::iri(RDF_NIL)));
+crates/rdf-core/src/fno.rs:714:        assert!(has_obj(&quads, DCTERMS_FORMAT, &sparql));
+crates/rdf-core/src/ir/embedding/contract.rs:823:                        value: u64::try_from(ordinal).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/contract.rs:944:        value: u64::try_from(value.len()).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/contract.rs:959:            value: u64::try_from(output.len()).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/contract.rs:968:        value: u64::try_from(blocks.len()).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/contract.rs:994:            value: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/contract.rs:1033:                offset: u64::try_from(value_end).expect("slice offset fits u64"),
+crates/rdf-core/src/ir/embedding/contract.rs:1101:                offset: u64::try_from(block_end).expect("slice offset fits u64"),
+crates/rdf-core/src/distance/binary64_tests.rs:315:            let rows = RowsRef::new(&b, 1, b.len(), &norms).expect("one row");
+crates/rdf-core/src/ir/embedding/writer.rs:127:                length: u64::try_from(self.source.len()).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/writer.rs:224:                value: u64::try_from(index + 1).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/writer.rs:298:    /// Expected identity of the canonical sorted target rows.
+crates/rdf-core/src/ir/embedding/writer.rs:954:        u32::try_from(MATRIX_RECORD_LENGTH).expect("fixed record length fits u32"),
+crates/rdf-core/src/ir/embedding/writer.rs:962:        u32::try_from(PROJECTION_RECORD_LENGTH).expect("fixed record length fits u32"),
+crates/rdf-core/src/ir/embedding/writer.rs:971:        u32::try_from(PROJECTION_ID_INDEX_RECORD_LENGTH).expect("fixed record length fits u32"),
+crates/rdf-core/src/ir/embedding/writer.rs:979:        u32::try_from(MATRIX_KEY_INDEX_RECORD_LENGTH).expect("fixed record length fits u32"),
+crates/rdf-core/src/ir/embedding/writer.rs:988:            .expect("fixed record length fits u32"),
+crates/rdf-core/src/ir/embedding/writer.rs:1261:        length -= u64::try_from(count).expect("a small buffer length fits u64");
+crates/rdf-core/src/ir/embedding/writer.rs:1293:        value: u64::try_from(index + 1).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/validate.rs:453:        let id = TermId::from_index(raw as u32).expect("stored term index is representable");
+crates/rdf-core/src/ir/validate.rs:501:            let id = TermId::from_index(raw as u32).expect("stored term index is representable");
+crates/rdf-core/src/ir/validate.rs:717:            .expect("stored term index is representable");
+crates/rdf-core/src/ir/validate.rs:761:        let err = b.freeze().expect_err("triple-term subject must fail");
+crates/rdf-core/src/ir/validate.rs:776:            .expect_err("an asserted triple-term subject fails");
+crates/rdf-core/src/ir/validate.rs:785:        let err = b.freeze().expect_err("a nested triple-term subject fails");
+crates/rdf-core/src/ir/validate.rs:814:            TermId::from_index(b.term_count() as u32).expect("stored term index is representable");
+crates/rdf-core/src/ir/validate.rs:819:        let err = b.freeze().expect_err("cyclic triple term must fail");
+crates/rdf-core/src/ir/validate.rs:842:            .expect("stored term index is representable");
+crates/rdf-core/src/ir/validate.rs:861:            .expect_err("a triple-term declared graph must fail");
+crates/rdf-core/src/ir/validate.rs:899:                .expect("stored term index is representable")
+crates/rdf-core/src/ir/validate.rs:923:            .expect_err("reifier target must be a triple term");
+crates/rdf-core/src/ir/validate.rs:985:                        .expect("stored term index is representable")
+crates/rdf-core/src/ir/validate.rs:1034:                    .expect("stored term index is representable")
+crates/rdf-core/src/ir/import.rs:500:        let dataset = builder.freeze().expect("a generated term freezes");
+crates/rdf-core/src/ir/import.rs:551:        assert!(found_any > 0, "some generated term is found");
+crates/rdf-core/src/governor.rs:938:        assert!(!one_bound.is_bounded(ResourceDimension::AnswerRows));
+crates/rdf-core/src/ir/global.rs:111:            NonZeroU64::new(index + 1).expect("checked nonzero global term representation"),
+crates/rdf-core/src/ir/global.rs:143:const _: () = assert!(size_of::<GlobalTermId>() == 8);
+crates/rdf-core/src/ir/global.rs:144:const _: () = assert!(size_of::<Option<GlobalTermId>>() == 8);
+crates/rdf-core/src/ir/global.rs:145:const _: () = assert!(size_of::<TermId>() == 4);
+crates/rdf-core/src/ir/global.rs:432:                GlobalTermId::from_index(index).expect("stored term index is representable")
+crates/rdf-core/src/ir/global.rs:889:                    u64::try_from(i).expect("dense index fits u64 for a Vec-bounded table"),
+crates/rdf-core/src/ir/global.rs:891:                .expect("stored term index is representable");
+crates/rdf-core/src/ir/global.rs:1104:            panic!("expected a triple term");
+crates/rdf-core/src/ir/global.rs:1215:            .expect("default identity exists without a bare input term");
+crates/rdf-core/src/ir/global.rs:1221:            .expect("scoped identity exists without a bare input term");
+crates/rdf-core/src/ir/global.rs:1281:                    assert!(dict.term_id_by_value(&blank).is_some());
+crates/rdf-core/src/ir/global.rs:1300:                    .expect("stored term index is representable");
+crates/rdf-core/src/ir/global.rs:1434:            let id = GlobalTermId::from_index(raw).expect("stored term index is representable");
+crates/rdf-core/src/ir/global.rs:1506:            assert!(dict.term_matches_value(id, &value), "seed {seed}");
+crates/rdf-core/src/ir/global.rs:1519:        assert!(nested > 0, "some generated term nests a triple term in one");
+crates/rdf-core/src/ir/global.rs:1534:            assert!(dict.term_matches_value(id, &value));
+crates/rdf-core/src/loss.rs:2457:    const EXPECTED_CODES: [&str; 2] = ["blob-bytes-absent", "bnode-scope-flatten"];
+crates/rdf-core/src/loss.rs:2943:                from.expect("every row has a `from` field"),
+crates/rdf-core/src/loss.rs:2944:                to.expect("every row has a `to` field"),
+crates/rdf-core/src/ir/canon/state.rs:813:        Ok(best.expect("exact search has at least one terminal labeling"))
+crates/rdf-core/src/ir/segmented/format.rs:128:        let expected = terms / u64::from(records_per_block)
+crates/rdf-core/src/ir/segmented/format.rs:460:        Some(GlobalTermId::from_index(graph - 1).expect("stored term index is representable"))
+crates/rdf-core/src/ir/canon/state/tests.rs:125:        .expect("one discrete terminal is one search node");
+crates/rdf-core/src/ir/embedding/metadata.rs:327:                    .unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/metadata.rs:383:        u32::try_from(SPACE_ID_INDEX_RECORD_LENGTH).expect("fixed record length fits u32"),
+crates/rdf-core/src/ir/embedding/metadata.rs:469:            target.source_local_ordinal.unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/metadata.rs:1035:                value: u64::try_from(index).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/metadata.rs:1076:        u32::try_from(EXTERNAL_LOOKUP_RECORD_LENGTH).expect("fixed record length fits u32"),
+crates/rdf-core/src/ir/embedding/metadata.rs:1530:                value: u64_len(payloads.len(), "inline index count").unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/metadata.rs:2632:        expected[0..4].copy_from_slice(&1u32.to_le_bytes());
+crates/rdf-core/src/ir/embedding/metadata.rs:2633:        expected[4..8].copy_from_slice(&120u32.to_le_bytes());
+crates/rdf-core/src/ir/embedding/metadata.rs:2634:        expected[16..24].copy_from_slice(&64u64.to_le_bytes());
+crates/rdf-core/src/ir/embedding/metadata.rs:2635:        expected[32..40].copy_from_slice(&64u64.to_le_bytes());
+crates/rdf-core/src/ir/term_walk.rs:216:                panic!("resident owned term fold allocation: {error}")
+crates/rdf-core/src/ir/term_walk.rs:283:        .expect("resident term traversal storage")
+crates/rdf-core/src/ir/term_walk.rs:448:                panic!("resident nested term spelling: {error}")
+crates/rdf-core/src/ir/term_walk.rs:543:        panic!("resident term fold allocation: {error}")
+crates/rdf-core/src/ir/term_walk.rs:890:        self.try_clone().expect("resident term clone allocation")
+crates/rdf-core/src/ir/term_walk.rs:1140:            .expect("resident term equality allocation")
+crates/rdf-core/src/ir/term_walk.rs:1159:            .expect("resident term comparison allocation")
+crates/rdf-core/src/ir/term_walk.rs:1263:        self.try_hash(state).expect("resident term hash allocation");
+crates/rdf-core/src/ir/term_walk.rs:1939:                .expect("every term has a leaf");
+crates/rdf-core/src/ir/term_walk.rs:2078:            assert!(term == copy, "a copy equals its original");
+crates/rdf-core/src/ir/term_walk.rs:2081:            assert!(format!("{term:?}").len() > LEVELS);
+crates/rdf-core/src/ir/term_walk.rs:2248:                        .expect("a refusal names a blank the term holds");
+crates/rdf-core/src/ir/term.rs:118:            NonZeroU32::new(index + 1).expect("checked nonzero term representation"),
+crates/rdf-core/src/ir/term.rs:126:const _: () = assert!(size_of::<TermId>() == 4);
+crates/rdf-core/src/ir/term.rs:127:const _: () = assert!(size_of::<Option<TermId>>() == 4);
+crates/rdf-core/src/ir/term.rs:687:                    .expect("resident literal term allocation"),
+crates/rdf-core/src/ir/term.rs:873:            .expect("resident canonical term storage");
+crates/rdf-core/src/ir/term.rs:1079:            let id = TermId::from_index(raw).expect("stored term index is representable");
+crates/rdf-core/src/ir/term.rs:1326:            datatype: TermId::from_index(0).expect("stored term index is representable"),
+crates/rdf-core/src/ir/term.rs:1774:        assert!(refused > 0, "some generated term has a non-IRI predicate");
+crates/rdf-core/src/ir/term.rs:1775:        assert!(lifted_count > 0, "some generated term has an owned form");
+crates/rdf-core/src/ir/embedding/identity.rs:260:    let row_count = u64::try_from(target_ids.len()).expect("a slice length fits u64");
+crates/rdf-core/src/ir/composite.rs:261:                    TermId::from_index(u32::try_from(i).expect("source index fits u32"))
+crates/rdf-core/src/ir/composite.rs:262:                        .expect("stored term index is representable"),
+crates/rdf-core/src/ir/composite.rs:275:                usize::try_from(ds.term_count()).expect("resident delta has a local term table")
+crates/rdf-core/src/ir/composite.rs:845:                    TermId::from_index(u32::try_from(local).expect("checked against u32 above"))
+crates/rdf-core/src/ir/composite.rs:846:                        .expect("stored term index is representable"),
+crates/rdf-core/src/ir/composite.rs:905:                .expect("the projection closes over every handle a selected row reaches"),
+crates/rdf-core/src/ir/composite.rs:1847:        u64::try_from(self.unique_terms).expect("bounded local count fits u64")
+crates/rdf-core/src/ir/composite.rs:2143:                let o = answers.pop().expect("a triple term's object is looked up");
+crates/rdf-core/src/ir/composite.rs:2146:                    .expect("a triple term's predicate is looked up");
+crates/rdf-core/src/ir/composite.rs:2147:                let s = answers.pop().expect("a triple term's subject is looked up");
+crates/rdf-core/src/ir/composite.rs:2160:        .expect("the term's own answer is the last one found")
+crates/rdf-core/src/ir/embedding/wire.rs:430:            length: u64::try_from(source.len()).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/wire.rs:450:            value: u64::try_from(count).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/wire.rs:456:            value: u64::try_from(count).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/wire.rs:462:    let mut expected_matrix_instance = 1u32;
+crates/rdf-core/src/ir/embedding/wire.rs:463:    let mut expected_index_instance = 1u32;
+crates/rdf-core/src/ir/embedding/target.rs:186:            byte_length: u64::try_from(bytes.len()).expect("slice length fits u64"),
+crates/rdf-core/src/ir/embedding/target.rs:187:            scalar_count: u64::try_from(text.chars().count()).expect("char count fits u64"),
+crates/rdf-core/src/ir/embedding/target.rs:193:        let actual_length = u64::try_from(bytes.len()).expect("slice length fits u64");
+crates/rdf-core/src/ir/embedding/target.rs:202:        let scalar_count = u64::try_from(text.chars().count()).expect("char count fits u64");
+crates/rdf-core/src/ir/embedding/target.rs:268:            u64::try_from(document[..start].chars().count()).expect("char count fits u64");
+crates/rdf-core/src/ir/embedding/target.rs:270:            u64::try_from(document[start..end].chars().count()).expect("char count fits u64");
+crates/rdf-core/src/ir/embedding/target.rs:886:                .checked_shl(u32::try_from(index).unwrap_or(u32::MAX))
+crates/rdf-core/src/ir/embedding/target.rs:897:            .checked_shl(u32::try_from(index).unwrap_or(u32::MAX))
+crates/rdf-core/src/ir/embedding/target.rs:1376:            assert!(validate_rdf_term_identity(&bytes).is_err());
+crates/rdf-core/src/ir/embedding/target.rs:1415:        .expect("statement row ordinals are zero-based");
+crates/rdf-core/src/ir/event_sink.rs:95:            let id = TermId::from_index(i as u32).expect("stored term index is representable");
+crates/rdf-core/src/ir/skolem.rs:877:                .resolve(TermId::from_index(i as u32).expect("stored term index is representable"))
+crates/rdf-core/src/ir/skolem.rs:924:            .any(|i| matches!(out.resolve(TermId::from_index(i as u32).expect("stored term index is representable")), TermRef::Iri(iri) if iri == foreign));
+crates/rdf-core/src/ir/skolem.rs:1248:            .map(|i| TermId::from_index(i as u32).expect("stored term index is representable"))
+crates/rdf-core/src/ir/skolem.rs:1470:            let ds = builder.freeze().expect("a generated term freezes");
+crates/rdf-core/src/view_fixture.rs:138:            .expect("the scratch row inserts")
+crates/rdf-core/src/ir/dataset.rs:137:const _: () = assert!(size_of::<QuadRow>() == 16);
+crates/rdf-core/src/ir/dataset.rs:979:            .expect("a frozen dataset's triple terms have IRI predicates")
+crates/rdf-core/src/ir/dataset.rs:1339:                Axis::S => s.expect("plan prefix axis S is bound").index() as u32,
+crates/rdf-core/src/ir/dataset.rs:1340:                Axis::P => p.expect("plan prefix axis P is bound").index() as u32,
+crates/rdf-core/src/ir/dataset.rs:1341:                Axis::O => o.expect("plan prefix axis O is bound").index() as u32,
+crates/rdf-core/src/ir/dataset.rs:1502:                matches(TermId::from_index(index).expect("stored term index is representable"))
+crates/rdf-core/src/ir/dataset.rs:1505:            .map(|index| TermId::from_index(index).expect("stored term index is representable"))
+crates/rdf-core/src/ir/dataset.rs:2261:            u64::try_from(self.quads.len()).expect("local quad count fits u64"),
+crates/rdf-core/src/ir/dataset.rs:2262:            u64::try_from(self.terms.len()).expect("local term count fits u64"),
+crates/rdf-core/src/ir/dataset.rs:2493:        let expected = StorageError::Capacity(CapacityError::new(CapacitySpace::Permutation, 3, 2));
+crates/rdf-core/src/ir/dataset.rs:2516:        assert!(memory.admitted_bytes() >= 3 * 5 * size_of::<u32>());
+crates/rdf-core/src/ir/dataset.rs:3047:        assert!(matches!(reifier, TermRef::Iri("http://example.org/r")));
+crates/rdf-core/src/ir/dataset.rs:3053:            other => panic!("reifier statement must be a triple term, got {other:?}"),
+crates/rdf-core/src/ir/dataset.rs:3060:        assert!(matches!(a_reifier, TermRef::Iri("http://example.org/r")));
+crates/rdf-core/src/ir/dataset.rs:3061:        assert!(matches!(a_pred, TermRef::Iri("http://example.org/ap")));
+crates/rdf-core/src/ir/dataset.rs:3258:                .expect("fixture term")
+crates/rdf-core/src/ir/dataset.rs:3335:            let any_reifier = ds.reifier_quads().next().expect("at least one row").s;
+crates/rdf-core/src/ir/dataset.rs:3748:                prop_assert!(q.s.index() < term_count);
+crates/rdf-core/src/ir/dataset.rs:3749:                prop_assert!(q.p.index() < term_count);
+crates/rdf-core/src/ir/dataset.rs:3750:                prop_assert!(q.o.index() < term_count);
+crates/rdf-core/src/ir/dataset.rs:3752:                    prop_assert!(g.index() < term_count);
+crates/rdf-core/src/ir/dataset.rs:4146:        /// `TermId::from_index(i).expect("stored term index is representable")` stays valid post-freeze (see the comment on
+crates/rdf-core/src/ir/dataset.rs:4162:            let mut expected: Vec<(TermId, Blake3ContentId)> = Vec::new();
+crates/rdf-core/src/ir/dataset.rs:4172:            let s = last_ordinary.expect("at least one ordinary term interned");
+crates/rdf-core/src/ir/ingest.rs:530:        let event_id = EventTermId(u64::try_from(id.index()).expect("bounded local term index"));
+crates/rdf-core/src/ir/ingest.rs:566:                    s: EventTermId(u64::try_from(s.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:567:                    p: EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:568:                    o: EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:586:                    TermId::from_index(i as u32).expect("stored term index is representable"),
+crates/rdf-core/src/ir/ingest.rs:601:            let id = TermId::from_index(i as u32).expect("stored term index is representable");
+crates/rdf-core/src/ir/ingest.rs:608:                s: EventTermId(u64::try_from(quad.s.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:609:                p: EventTermId(u64::try_from(quad.p.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:610:                o: EventTermId(u64::try_from(quad.o.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:612:                    EventTermId(u64::try_from(g.index()).expect("bounded local term index"))
+crates/rdf-core/src/ir/ingest.rs:626:                s: EventTermId(u64::try_from(s.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:627:                p: EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:628:                o: EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:631:                g.map(|g| EventTermId(u64::try_from(g.index()).expect("bounded local term index")));
+crates/rdf-core/src/ir/ingest.rs:633:                EventTermId(u64::try_from(reifier.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:643:                g.map(|g| EventTermId(u64::try_from(g.index()).expect("bounded local term index")));
+crates/rdf-core/src/ir/ingest.rs:645:                EventTermId(u64::try_from(reifier.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:646:                EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:647:                EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
+crates/rdf-core/src/ir/ingest.rs:657:            let event = EventTermId(u64::try_from(g.index()).expect("bounded local term index"));
+crates/rdf-core/src/ir/ingest.rs:681:        let final_scope = sink.open_scope().expect("last representable scope");
+crates/rdf-core/src/ir/ingest.rs:684:        let expected = EventError::Capacity {
+crates/rdf-core/src/ir/ingest.rs:736:        let flow = sink.term(id, term).expect("term declaration ok");
+crates/rdf-core/src/ir/ingest.rs:929:        let scope = sink.open_scope().expect("open scope");
+crates/rdf-core/src/ir/ingest.rs:930:        let _ = sink.close_scope(scope).expect("close scope");
+crates/rdf-core/src/ir/ingest.rs:934:            .expect_err("closed-scope reference must fail");
+crates/rdf-core/src/ir/ingest.rs:946:            .expect_err("never-opened-scope reference must fail");
+crates/rdf-core/src/ir/ingest.rs:965:            .expect("default sink has the default scope open");
+crates/rdf-core/src/ir/ingest.rs:1049:        let err = sink.finish().expect_err("cyclic triple term must fail");
+crates/rdf-core/src/ir/ingest.rs:1055:        assert!(sink.dataset().is_none(), "no freeze on a cyclic term");
+crates/rdf-core/src/ir/ingest.rs:1066:            .expect_err("closing the default scope must fail");
+crates/rdf-core/src/ir/ingest.rs:1077:            .expect_err("closing a never-opened scope must fail");
+crates/rdf-core/src/ir/ingest.rs:1080:        let scope = sink.open_scope().expect("open scope");
+crates/rdf-core/src/ir/ingest.rs:1085:            .expect_err("closing an already-closed scope must fail");
+crates/rdf-core/src/evidence/ledger/terms.rs:522:        assert_eq!(dictionary.lookup(&scoped).unwrap(), Some(scoped_id));
+crates/rdf-core/src/ir/embedding/view.rs:816:            .saturating_add(u32::try_from(self.position / 4).unwrap_or(u32::MAX));
+crates/rdf-core/src/ir/embedding/view.rs:898:            .saturating_add(u32::try_from(self.position / 4 + index).unwrap_or(u32::MAX));
+crates/rdf-core/src/ir/embedding/view.rs:968:            .saturating_add(u32::try_from(self.position / 8).unwrap_or(u32::MAX));
+crates/rdf-core/src/ir/embedding/view.rs:2485:        u64::try_from(directory_end).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/view.rs:2654:            length: u64::try_from(section.len()).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/view.rs:2744:            offset: expected_pool_offset as u64,
+crates/rdf-core/src/ir/embedding/view.rs:2808:                || infallible_u32(space, 72) != u32::try_from(ordinal).unwrap_or(u32::MAX)
+crates/rdf-core/src/ir/embedding/view.rs:3324:        let expected_length = rows
+crates/rdf-core/src/ir/embedding/view.rs:3760:                u32::try_from(self.matrix_count()).unwrap_or(u32::MAX) + 1,
+crates/rdf-core/src/ir/embedding/view.rs:3776:                || matrix.row_count() != u64::try_from(set.row_count()).unwrap_or(u64::MAX)
+crates/rdf-core/src/ir/embedding/view.rs:3989:                .checked_shl(u32::try_from(index).unwrap_or(u32::MAX))
+crates/rdf-core/src/ir/embedding/view.rs:4002:                    .checked_shl(u32::try_from(index).unwrap_or(u32::MAX))
+crates/rdf-core/src/ir/embedding/view.rs:4521:                column: u32::try_from(column).unwrap_or(u32::MAX),
+crates/rdf-core/src/ir/embedding/view.rs:4547:                column: u32::try_from(column).unwrap_or(u32::MAX),
+crates/rdf-core/src/ir/embedding/view.rs:4635:            length: u64::try_from(length).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/view.rs:4666:    read_u32_le(bytes, offset).expect("structurally validated fixed u32 field")
+crates/rdf-core/src/ir/embedding/view.rs:4670:    read_u64_le(bytes, offset).expect("structurally validated fixed u64 field")
+crates/rdf-core/src/ir/embedding/view.rs:4682:    expected: u32,
+crates/rdf-core/src/ir/embedding/view.rs:4694:    expected: u64,
+crates/rdf-core/src/ir/embedding/view.rs:4719:            length: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/view.rs:4780:            offset: u64::try_from(start + relative).unwrap_or(u64::MAX),
+crates/rdf-core/src/ir/embedding/view.rs:5242:            let (expected, result) = drain_f32(row);
+crates/rdf-core/src/ir/embedding/view.rs:5280:            let expected: Vec<u32> = values
+crates/rdf-core/src/ir/embedding/view.rs:5317:            .expect("finite row");
+crates/rdf-core/src/ir/embedding/view.rs:5339:            .expect("nonzero row")
+crates/rdf-core/src/ir/embedding/view.rs:5341:            .expect("finite normalized row");
+crates/rdf-core/src/ir/embedding/view.rs:5349:            L2F64Scalars::new(&bytes, 3, 2, exact()).expect_err("zero row"),
+crates/rdf-core/src/ir/segmented/mod.rs:409:        u64::try_from(self.bytes.len()).expect("resident byte length fits u64")
+crates/rdf-core/src/ir/mutable.rs:249:                .expect("minted delta term has a bucket");
+crates/rdf-core/src/ir/mutable.rs:252:                .expect("minted delta term is the latest bucket entry");
+crates/rdf-core/src/ir/mutable.rs:606:            let id = TermId::from_index(u32::try_from(index).expect("native index fits u32"))
+crates/rdf-core/src/ir/mutable.rs:607:                .expect("stored term index is representable");
+crates/rdf-core/src/ir/mutable.rs:781:        // Hash-indexed delta lookup (O(1) expected) — no linear scan, no per-term
+crates/rdf-core/src/ir/mutable.rs:1975:                panic!("expected delta capacity refusal: {error}");
+crates/rdf-core/src/ir/mutable.rs:2104:        assert!(frozen.term_id_by_blank("embedded", scope).is_some());
+crates/rdf-core/src/ir/mutable.rs:2129:                assert!(mutable.insert(row.clone()).unwrap());
+crates/rdf-core/src/ir/mutable.rs:2130:                assert!(mutable.remove(&row));
+crates/rdf-core/src/ir/mutable.rs:2276:            assert!(mutable.remove(&row));
+crates/rdf-core/src/ir/mutable.rs:2279:            assert!(mutable.insert(row.clone()).unwrap());
+crates/rdf-core/src/ir/mutable.rs:2283:        assert!(mutable.insert(row.clone()).unwrap());
+crates/rdf-core/src/ir/mutable.rs:2286:        assert!(mutable.remove(&row));
+crates/rdf-core/src/ir/mutable.rs:2845:        assert!(m.remove(&row));
+crates/rdf-core/src/ir/mutable.rs:2903:            assert!(m.remove(&row));
+crates/rdf-core/src/ir/mutable.rs:3015:            .expect("C is a delta term");
+crates/rdf-core/src/ir/mutable.rs:3221:                .expect("stored term index is representable");
+crates/rdf-core/src/ir/mutable.rs:3642:        assert!(!m.should_compact()); // 2 * 2 <= 5 retained RDF rows
+crates/rdf-core/src/ir/mutable.rs:3834:        assert!(graph_names(&m).is_empty(), "every row is gone");
+crates/rdf-core/src/ir/mutable.rs:3841:        assert!(graph_names(&m).is_empty(), "every row is gone");
+crates/rdf-core/src/ir/mutable.rs:4093:            let base = builder.freeze().expect("a generated term freezes");
+crates/rdf-core/src/ir/mutable.rs:4122:        assert!(refused > 0, "some generated term holds a relative IRI");
+crates/rdf-core/src/ir/pack/container.rs:596:                .expect("an in-memory section's offset fits u64");
+crates/rdf-core/src/evidence/ledger/source.rs:498:        assert!(core::ptr::eq(first[0].subject, &raw const row_nodes[0]));
+crates/rdf-core/src/ir/pack/view.rs:211:        .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
+crates/rdf-core/src/ir/pack/view.rs:251:        .expect("bounded local count fits u64")
+crates/rdf-core/src/ir/pack/view.rs:265:        .map(|count| u64::try_from(count).expect("bounded local size fits u64"))
+crates/rdf-core/src/ir/pack/view.rs:275:            u64::try_from(quads).expect("local pack row count fits u64"),
+crates/rdf-core/src/ir/segmented/session.rs:937:                    u64::try_from(records.arena.capacity()).expect("local arena capacity fits u64")
+crates/rdf-core/src/ir/segmented/session.rs:942:                        .expect("local entries capacity fits u64")
+crates/rdf-core/src/ir/segmented/session.rs:1063:                            u64::try_from(tag.len()).expect("local tag bytes fit u64"),
+crates/rdf-core/src/ir/segmented/session.rs:1125:            / u64::try_from(format::SUMMARY_BYTES).expect("fixed summary width fits u64");
+crates/rdf-core/src/ir/segmented/session.rs:1269:            .expect("a term guard is minted only from a decoded dictionary block");
+crates/rdf-core/src/ir/segmented/session.rs:1271:            .expect("term bytes were checked before the immutable guard was minted")
+crates/rdf-core/src/ir/segmented/session.rs:1688:        assert_eq!(a.term_value(first_id).unwrap(), TermValue::iri("urn:first"));
+crates/rdf-core/src/ir/segmented/session.rs:1693:        assert_eq!(a.term_value(first_id).unwrap(), TermValue::iri("urn:first"));
+crates/rdf-core/src/term_writer.rs:48:    write_term_value_with_memory(term, out, &mut memory).expect("resident RDF term spelling");
+crates/rdf-core/src/term_writer.rs:198:        assert!(scoped.starts_with("_:") && scoped != "_:b0", "{scoped}");
+crates/rdf-core/src/ir/paged/stack.rs:392:                    GlobalTermId::from_index(i as u64).expect("stored term index is representable"),
+crates/rdf-core/src/ir/pack/triples.rs:201:                    .expect("s came from this triple list") as u64,
+crates/rdf-core/src/ir/pack/triples.rs:204:                    .expect("p came from this triple list") as u64,
+crates/rdf-core/src/ir/pack/triples.rs:207:                    .expect("o came from this triple list") as u64,
+crates/rdf-core/src/ir/pack/triples.rs:339:        Self::try_encode(dict, view).expect("a validated resident view resolves its own terms")
+crates/rdf-core/src/ir/pack/triples.rs:831:        .map(|r| r.expect("validated at PartitionRef::from_bytes time"))
+crates/rdf-core/src/ir/pack/triples.rs:1109:                .expect("checked above: partitions[1..] are all named-graph");
+crates/rdf-core/src/ir/pack/triples.rs:1375:            .expect("graph-name term present");
+crates/rdf-core/src/ir/pack/triples.rs:1608:                    let expected = merge_intersect_rows(part, lp, lo);
+crates/rdf-core/src/ir/segmented/build.rs:19:const _: () = assert!(size_of::<TermValue>() <= 80);
+crates/rdf-core/src/ir/segmented/build.rs:90:            usize::try_from(limits.terms).expect("u32 capacity fits supported pointer widths"),
+crates/rdf-core/src/ir/segmented/build.rs:91:            usize::try_from(limits.term_bytes).expect("u32 capacity fits supported pointer widths"),
+crates/rdf-core/src/ir/segmented/build.rs:92:            usize::try_from(limits.rows).expect("u32 capacity fits supported pointer widths"),
+crates/rdf-core/src/ir/segmented/build.rs:106:                + u64::try_from(id.index()).expect("resident term index fits u64"),
+crates/rdf-core/src/ir/segmented/build.rs:108:        .expect("stored term index is representable")
+crates/rdf-core/src/ir/segmented/build.rs:122:                .expect("stored term index is representable"),
+crates/rdf-core/src/ir/segmented/build.rs:208:                    .expect("vocabulary length fits u64"),
+crates/rdf-core/src/ir/segmented/build.rs:503:                .declare_named_graph(id.expect("one admitted batch term invokes its visitor"))?;
+crates/rdf-core/src/ir/segmented/build.rs:510:    GlobalTermId::from_index(first + u64::try_from(id.index()).expect("local term index fits u64"))
+crates/rdf-core/src/ir/segmented/build.rs:511:        .expect("stored term index is representable")
+crates/rdf-core/src/ir/segmented/build.rs:536:                .expect("stored term index is representable");
+crates/rdf-core/src/ir/segmented/build.rs:1000:            expected_summaries.push(summary(&rows, slot, table as u8)?);
+crates/rdf-core/src/term_fixture.rs:132:        .expect("resident term interning allocation failed")
+crates/rdf-core/src/term_fixture.rs:502:        let error = budget.read_error().expect("the second row was refused");
+crates/rdf-core/src/ir/pack/side.rs:255:        Self::try_encode(dict, view).expect("a validated resident view resolves its own terms")
+crates/rdf-core/src/ir/pack/side.rs:880:        let expected: crate::FastSet<(TermValue, TermValue, Option<TermValue>)> = dataset
+crates/rdf-core/src/evidence/ledger.rs:308:        assert!(matches!(reified.object, TermValue::Triple { .. }));
+crates/rdf-core/src/evidence/ledger.rs:317:        assert!(!matches!(cause_statement.object, TermValue::Triple { .. }));
+crates/rdf-core/src/xsd_regex/xpath/sets.rs:897:                .unwrap_or(u32::MAX)
+crates/rdf-core/src/ir/pipeline_bundle.rs:2660:                .expect_err("a stray row outside the target graph must hard-fail");
+crates/rdf-core/src/ir/paged/translation.rs:98:            let local = TermId::from_index(u32::try_from(i).expect("page term index fits u32"))
+crates/rdf-core/src/ir/paged/translation.rs:99:                .expect("stored term index is representable");
+crates/rdf-core/src/ir/paged/translation.rs:179:                    TermId::from_index(u32::try_from(i).expect("page term index fits u32"))
+crates/rdf-core/src/ir/paged/translation.rs:180:                        .expect("stored term index is representable"),
+crates/rdf-core/src/ir/paged/graph_index.rs:113:        offsets.push(u32::try_from(postings.len()).expect("posting count fits u32"));
+crates/rdf-core/src/ir/mutable/delta_view.rs:114:                    TermId::from_index(u32::try_from(index).expect("native term index fits u32"))
+crates/rdf-core/src/ir/mutable/delta_view.rs:115:                        .expect("stored term index is representable");
+crates/rdf-core/src/ir/mutable/delta_view.rs:203:                    TermId::from_index(u32::try_from(index).expect("native index fits u32"))
+crates/rdf-core/src/ir/mutable/delta_view.rs:204:                        .expect("stored term index is representable"),
+crates/rdf-core/src/ir/mutable/delta_view.rs:666:        .expect("bounded local count fits u64")
+crates/rdf-core/src/ir/mutable/delta_view.rs:733:        .expect("bounded local count fits u64")
+crates/rdf-core/src/ir/mutable/delta_view.rs:1114:        assert!(mutation.remove(&reifier_row()));
+crates/rdf-core/src/ir/mutable/delta_view.rs:1120:        assert!(mutation.remove(&reifier_row()));
+crates/rdf-core/src/ir/mutable/delta_view.rs:1194:        assert!(mutation.remove(&row("a", "b")));
+crates/rdf-core/src/ir/mutable/delta_view.rs:1195:        assert!(mutation.insert(row("b", "new")).unwrap());
+crates/rdf-core/src/ir/mutable/delta_view.rs:1209:        assert!(mutation.insert(row("a", "b")).unwrap());
+crates/rdf-core/src/ir/mutable/delta_view.rs:1210:        assert!(mutation.remove(&row("b", "new")));
+crates/rdf-core/src/ir/mutable/delta_view.rs:1215:        assert!(first.term_id_by_value(&iri("new")).unwrap().is_some());
+crates/rdf-core/src/ir/mutable/delta_view.rs:1216:        assert!(second.term_id_by_value(&iri("new")).unwrap().is_none());
+crates/rdf-core/src/ir/mutable/delta_view.rs:1280:                        assert!(view.cardinality_estimate(s, p, o, g) >= scan.len() as u64);
+crates/rdf-core/src/xsd_regex/xpath/pike.rs:185:            .expect("finite fuel refuses before a repetition count can overflow"),
+crates/rdf-core/src/xsd_regex/xpath/pike.rs:400:                normal.push(u32::try_from(node).expect("an admitted program's nodes fit u32"));
+crates/rdf-core/src/xsd_regex/xpath/pike.rs:507:        .expect("admitted capacity fits its finite u64 slot bound");
+crates/rdf-core/src/ir/paged/summary.rs:792:        let bogus = TermId::from_index(u32::try_from(page.term_count()).expect("fits u32") + 1000)
+crates/rdf-core/src/ir/paged/summary.rs:793:            .expect("stored term index is representable");
+crates/rdf-core/src/ir/canon.rs:1135:        u64::try_from(blank_count_unchecked(view)).expect("local blank set count fits u64")
+crates/rdf-core/src/ir/canon.rs:2986:                .expect("a row spelled both ways must fold, not refuse")
+crates/rdf-core/src/ir/canon.rs:3520:            other => panic!("a reserved IRI inside a folded row must refuse; got {other:?}"),
+crates/rdf-core/src/ir/canon.rs:3795:        assert!(ca.contains("<<("), "triple terms rendered: {ca}");
+crates/rdf-core/src/ir/canon.rs:3833:                    TermId::from_index(i as u32).expect("stored term index is representable"),
+crates/rdf-core/src/ir/canon.rs:3872:        let expected: BTreeSet<(String, BlankScope)> = canonical
+crates/rdf-core/src/ir/canon.rs:4629:        assert!(scoped.nquads.contains(RDF_REIFIES));
+crates/rdf-core/src/ir/canon.rs:4630:        assert!(!scoped.nquads.contains(RESERVED_NAMESPACE));
+crates/rdf-core/src/ir/pack/dict.rs:712:/// record count against `expected_terms`.
+crates/rdf-core/src/ir/pack/dict.rs:717:fn decode_value_list(values_bytes: &[u8], expected_terms: u64) -> Result<PackDict, PackDictError> {
+crates/rdf-core/src/ir/pack/dict.rs:723:    if decoded != expected_terms {
+crates/rdf-core/src/ir/pack/dict.rs:787:        Self::try_encode(view).expect("a validated resident view resolves its own terms")
+crates/rdf-core/src/ir/pack/dict.rs:1831:            .expect("graph-name term present");
+crates/rdf-core/src/ir/pack/dict.rs:1878:        let reifier_id = dict.id_by_value(&iri("r")).expect("reifier term present");
+crates/rdf-core/src/ir/pack/dict.rs:1887:            .expect("triple-term present via the reifier row");
+crates/rdf-core/src/ir/pack/dict.rs:2067:                .map(|i| dataset.term_value(TermId::from_index(i as u32).expect("stored term index is representable")).unwrap())
+crates/rdf-core/src/ir/pack/dict.rs:2101:            .expect_err("a self-referential triple term must be rejected");
+crates/rdf-core/src/ir/pack/dict.rs:2168:            .expect_err("a mutually cyclic triple-term pair must be rejected");
+crates/rdf-core/src/ir/pack/dict.rs:2188:            .expect("an acyclic, shallow triple-term graph is valid regardless of id order");
+crates/rdf-core/src/ir/paged/query.rs:121:        expected: u64,
+crates/rdf-core/src/ir/paged/query.rs:654:        if u64::try_from(materialization.dataset.quad_count()).expect("bounded page count fits u64")
+crates/rdf-core/src/ir/paged/query.rs:677:                TermId::from_index(u32::try_from(local_index).expect("page term index fits u32"))
+crates/rdf-core/src/ir/paged/query.rs:678:                    .expect("stored term index is representable");
+crates/rdf-core/src/ir/paged/query.rs:859:            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/query.rs:938:                u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/query.rs:960:        u64::try_from(self.dataset.dictionary.len()).expect("bounded local count fits u64")
+crates/rdf-core/src/ir/paged/query.rs:967:                .expect("resident dictionary count fits u64"),
+crates/rdf-core/src/ir/paged/query.rs:1064:            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/query.rs:1093:            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/provider.rs:304:        u64::try_from(self.pages.len()).expect("resident page count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:351:        u64::try_from(self.indices.len()).expect("resident page count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:367:                    u64::try_from(self.indices.len()).expect("resident page count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:428:        u64::try_from(self.thunks.len()).expect("resident page count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:458:        let id = TermId::from_index(u32::try_from(index).expect("term count fits u32"))
+crates/rdf-core/src/ir/paged/provider.rs:459:            .expect("stored term index is representable");
+crates/rdf-core/src/ir/paged/provider.rs:462:                1_u64 + u64::try_from(iri.len()).expect("an in-memory count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:465:                1_u64 + u64::try_from(label.len()).expect("an in-memory count fits u64") + 4
+crates/rdf-core/src/ir/paged/provider.rs:474:                    + u64::try_from(lexical.len()).expect("an in-memory count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:478:                        u64::try_from(tag.len()).expect("an in-memory count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:487:            .expect("logical page size fits u64");
+crates/rdf-core/src/ir/paged/provider.rs:491:        .expect("an in-memory count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:496:                    .expect("an in-memory count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:498:                    .expect("reifier table size fits u64"),
+crates/rdf-core/src/ir/paged/provider.rs:504:                    .expect("an in-memory count fits u64")
+crates/rdf-core/src/ir/paged/provider.rs:506:                    .expect("annotation table size fits u64"),
+crates/rdf-core/src/ir/paged/provider.rs:509:        .expect("logical page size fits u64");
+crates/rdf-core/src/ir/paged/provider.rs:512:        .expect("logical page size fits u64")
+crates/rdf-core/src/xsd_regex/scan.rs:827:                opened_groups: u32::try_from(self.groups.opened).unwrap_or(u32::MAX),
+crates/rdf-core/src/ir/paged/mod.rs:461:            let page_quads = u64::try_from(page.quad_count()).expect("bounded page count fits u64");
+crates/rdf-core/src/ir/paged/mod.rs:599:        if u64::try_from(parts.len()).expect("local metadata count fits u64") != provider_page_count
+crates/rdf-core/src/ir/paged/mod.rs:602:                metadata: u64::try_from(parts.len()).expect("local metadata count fits u64"),
+crates/rdf-core/src/ir/paged/mod.rs:622:                id: PageId(u64::try_from(i).expect("resident page count fits u64")),
+crates/rdf-core/src/ir/paged/mod.rs:701:                id: PageId(u64::try_from(new_index).expect("resident page count fits u64")),
+crates/rdf-core/src/ir/paged/mod.rs:834:        u64::try_from(self.pages.len()).expect("resident page count fits u64")
+crates/rdf-core/src/ir/paged/mod.rs:887:        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/mod.rs:953:        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/mod.rs:1019:        if u64::try_from(materialization.dataset.quad_count()).expect("bounded page count fits u64")
+crates/rdf-core/src/ir/paged/mod.rs:1195:                .expect("sealed page must re-materialize deterministically");
+crates/rdf-core/src/ir/paged/mod.rs:1221:        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/mod.rs:1232:                    .expect("sealed page must re-materialize deterministically");
+crates/rdf-core/src/ir/paged/mod.rs:1297:        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/mod.rs:1318:        u64::try_from(self.dictionary.len()).expect("bounded local count fits u64")
+crates/rdf-core/src/ir/paged/mod.rs:1324:            u64::try_from(self.dictionary.len()).expect("resident dictionary count fits u64"),
+crates/rdf-core/src/ir/paged/mod.rs:1333:                .expect("sealed page must re-materialize deterministically");
+crates/rdf-core/src/ir/paged/mod.rs:1360:                        .expect("sealed page must re-materialize deterministically");
+crates/rdf-core/src/ir/paged/mod.rs:1372:                .expect("sealed page must re-materialize deterministically");
+crates/rdf-core/src/ir/paged/mod.rs:1394:                        .expect("sealed page must re-materialize deterministically");
+crates/rdf-core/src/ir/paged/mod.rs:1425:        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/mod.rs:1437:                .expect("sealed page must re-materialize deterministically");
+crates/rdf-core/src/ir/paged/mod.rs:1452:        let page_count = u64::try_from(self.pages.len()).expect("resident page count fits u64");
+crates/rdf-core/src/ir/paged/mod.rs:1464:                .expect("sealed page must re-materialize deterministically");
+crates/rdf-core/src/xsd_regex/xpath/mod.rs:577:            .expect("admission proves the exact requirement fits its u64 bound");
+crates/rdf-core/src/xsd_regex/classes.rs:125:            .expect("a bracket class matches exactly one character") as u32;
+crates/rdf-core/src/xsd_regex/emit.rs:1241:        let scoped = regex::Regex::new(&format!("(?i){with_i}")).expect("compile scoped");
+crates/rdf-core/src/xsd_regex/emit.rs:1242:        assert!(scoped.is_match("A"));
+crates/rdf-core/src/xsd_regex/emit.rs:1243:        assert!(scoped.is_match("a"));
+crates/rdf-core/src/xsd_regex/xpath/compile.rs:649:        .expect("admitted capacity fits its finite u64 slot bound");
+crates/rdf-core/src/xsd_regex/xpath/compile.rs:980:                let span = |at: usize| u32::try_from(at).expect("admitted ranges fit u32");
+crates/rdf-core/src/xsd_regex/mod.rs:1201:        // (pattern, flags, expected) — one row per variant, plus the two
+crates/rdf-core/src/xsd_regex/xpath/match.rs:319:        self.allowed = u64::try_from(allowance).unwrap_or(u64::MAX);
+crates/rdf-core/src/xsd_regex/xpath/match.rs:323:            limit: u64::try_from(allowance).unwrap_or(u64::MAX),
+crates/rdf-core/src/xsd_regex/xpath/match.rs:1434:                    .expect("finite fuel refuses before a repetition count can overflow");
+crates/rdf-core/src/xsd_regex/xpath/match.rs:3676:                        assert!(steps <= 6 * bytes as u64, "{source}: {steps}/{bytes}");

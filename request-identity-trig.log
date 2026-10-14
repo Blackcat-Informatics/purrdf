@@ -1,0 +1,13 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 8m 11s
+     Running tests/segmented_trig_roundtrip.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-rdf/1f6fffcc7b28d6f1/out/segmented_trig_roundtrip-1f6fffcc7b28d6f1)
+
+running 1 test
+test persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

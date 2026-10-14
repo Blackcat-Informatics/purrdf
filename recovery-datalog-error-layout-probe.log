@@ -1,0 +1,66 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error: unnecessary qualification
+    --> crates/datalog/src/seminaive.rs:4645:17
+     |
+4645 |         layout!(super::Limits);
+     |                 ^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+4645 -         layout!(super::Limits);
+4645 +         layout!(Limits);
+     |
+
+error: unnecessary qualification
+    --> crates/datalog/src/seminaive.rs:4646:17
+     |
+4646 |         layout!(super::BudgetReport);
+     |                 ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4646 -         layout!(super::BudgetReport);
+4646 +         layout!(BudgetReport);
+     |
+
+error: unnecessary qualification
+    --> crates/datalog/src/seminaive.rs:4647:17
+     |
+4647 |         layout!(super::EvalError);
+     |                 ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4647 -         layout!(super::EvalError);
+4647 +         layout!(EvalError);
+     |
+
+error: unnecessary qualification
+    --> crates/datalog/src/seminaive.rs:4650:18
+     |
+4650 |         layout!((super::BudgetResource, Vec<usize>, super::BudgetReport));
+     |                  ^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4650 -         layout!((super::BudgetResource, Vec<usize>, super::BudgetReport));
+4650 +         layout!((BudgetResource, Vec<usize>, super::BudgetReport));
+     |
+
+error: unnecessary qualification
+    --> crates/datalog/src/seminaive.rs:4650:53
+     |
+4650 |         layout!((super::BudgetResource, Vec<usize>, super::BudgetReport));
+     |                                                     ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4650 -         layout!((super::BudgetResource, Vec<usize>, super::BudgetReport));
+4650 +         layout!((super::BudgetResource, Vec<usize>, BudgetReport));
+     |
+
+error: could not compile `purrdf-datalog` (lib test) due to 5 previous errors
+terminal_status=101

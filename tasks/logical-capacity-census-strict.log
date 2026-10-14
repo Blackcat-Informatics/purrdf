@@ -1,0 +1,168 @@
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/testkit)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/helper-census)
+error: operator precedence might not be obvious
+   --> crates/helper-census/src/capacity.rs:164:5
+    |
+164 |     u8::from(count) * COUNT | u8::from(logical) * LOGICAL | u8::from(limit) * LIMIT
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider parenthesizing your expression: `u8::from(count) * COUNT | u8::from(logical) * LOGICAL | (u8::from(limit) * LIMIT)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#precedence
+    = note: `-D clippy::precedence` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::precedence)]`
+
+error: operator precedence might not be obvious
+   --> crates/helper-census/src/capacity.rs:164:5
+    |
+164 |     u8::from(count) * COUNT | u8::from(logical) * LOGICAL | u8::from(limit) * LIMIT
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider parenthesizing your expression: `(u8::from(count) * COUNT) | (u8::from(logical) * LOGICAL)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#precedence
+
+error: operator precedence might not be obvious
+   --> crates/helper-census/src/capacity.rs:424:17
+    |
+424 |                 left | right | u8::from(boundary) * BOUNDARY
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider parenthesizing your expression: `left | right | (u8::from(boundary) * BOUNDARY)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#precedence
+
+error: this `if` statement can be collapsed
+   --> crates/helper-census/src/capacity.rs:210:13
+    |
+210 | /             if let syn::Expr::Path(path) = &*call.func
+211 | |                 && terminal(&path.path) == "from"
+212 | |             {
+213 | |                 if path
+...   |
+221 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+211 ~                 && terminal(&path.path) == "from"
+212 ~                 && path
+213 |                     .path
+...
+218 |                     return integer(&call.args[0]);
+219 ~                 }
+    |
+
+error: function call inside of `unwrap_or`
+   --> crates/helper-census/src/capacity.rs:458:44
+    |
+458 |         let bound = integer(&call.args[2]).unwrap_or(u128::from(u64::MAX));
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `unwrap_or_else(|| u128::from(u64::MAX))`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+    = note: `-D clippy::or-fun-call` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/helper-census/src/capacity.rs:600:21
+    |
+600 |                     this.visit_expr(diverge)
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `this.visit_expr(diverge);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/helper-census/src/capacity.rs:746:17
+    |
+746 |                 this.visit_block(&node.block)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `this.visit_block(&node.block);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/helper-census/src/capacity.rs:753:17
+    |
+753 |                 this.visit_block(&node.block)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `this.visit_block(&node.block);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/helper-census/src/capacity.rs:767:17
+    |
+767 |                 syn::visit::visit_item_mod(this, node)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `syn::visit::visit_item_mod(this, node);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: could not compile `helper-census` (bin "helper-census") due to 9 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: used `assert!` to check that a value is empty
+   --> crates/helper-census/src/capacity.rs:883:9
+    |
+883 |         assert!(hits(safe).is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+883 -         assert!(hits(safe).is_empty());
+883 +         assert_eq!(hits(safe), [] as [rules::RuleHit; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/helper-census/src/capacity.rs:912:9
+    |
+912 |         assert!(hits(source).is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+912 -         assert!(hits(source).is_empty());
+912 +         assert_eq!(hits(source), [] as [rules::RuleHit; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/helper-census/src/capacity.rs:948:9
+    |
+948 |         assert!(workspace.errors.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+948 -         assert!(workspace.errors.is_empty());
+948 +         assert_eq!(workspace.errors, [] as [std::string::String; 0]);
+    |
+
+error: used `assert!` to check that a value is not empty
+    --> crates/helper-census/src/capacity.rs:1017:9
+     |
+1017 |         assert!(!malformed.errors.is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+     |
+1017 -         assert!(!malformed.errors.is_empty());
+1017 +         assert_ne!(malformed.errors, [] as [std::string::String; 0]);
+     |
+
+error: used `assert!` to check that a value is not empty
+    --> crates/helper-census/src/capacity.rs:1018:9
+     |
+1018 |         assert!(!crate::census::check_findings(&malformed, &ledger).is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+     |
+1018 -         assert!(!crate::census::check_findings(&malformed, &ledger).is_empty());
+1018 +         assert_ne!(crate::census::check_findings(&malformed, &ledger), [] as [std::string::String; 0]);
+     |
+
+error: could not compile `helper-census` (bin "helper-census" test) due to 14 previous errors

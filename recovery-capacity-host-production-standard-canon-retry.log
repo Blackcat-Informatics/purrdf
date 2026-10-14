@@ -1,0 +1,714 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/conformance-kit)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-capi)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-conformance)
+error[E0004]: non-exhaustive patterns: `ShapesError::Storage(_)` not covered
+  --> crates/rdf-capi/src/error.rs:71:15
+   |
+71 |         match error {
+   |               ^^^^^ pattern `ShapesError::Storage(_)` not covered
+   |
+note: `ShapesError` defined here
+  --> crates/shapes/src/error.rs:49:1
+   |
+49 | pub enum ShapesError {
+   | ^^^^^^^^^^^^^^^^^^^^
+50 |     /// Logical capacity or physical storage refused an operation.
+51 |     Storage(purrdf_lex::allocation::StorageError),
+   |     ------- not covered
+   = note: the matched value is of type `ShapesError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+   |
+90 ~             },
+91 +             ShapesError::Storage(_) => todo!()
+   |
+
+For more information about this error, try `rustc --explain E0004`.
+error: could not compile `purrdf-capi` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+   --> crates/sparql-conformance/src/community.rs:657:21
+    |
+657 |                     message,
+    |                     ^^^^^^^ expected `String`, found `ShapesError`
+    |
+help: try using a conversion method
+    |
+657 |                     message: message.to_string(),
+    |                     ++++++++        ++++++++++++
+
+error[E0277]: the trait bound `std::string::String: From<ShapesError>` is not satisfied
+   --> crates/sparql-conformance/src/community.rs:789:26
+    |
+789 |             let actual = inference.inferred_dataset().map_err(malformed)?;
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+              From<std::boxed::Box<str>>
+    = note: required for `ShapesError` to implement `Into<std::string::String>`
+note: required by a bound in `malformed`
+   --> crates/sparql-conformance/src/community.rs:214:28
+    |
+214 | fn malformed(message: impl Into<String>) -> GradeError {
+    |                            ^^^^^^^^^^^^ required by this bound in `malformed`
+
+error[E0277]: the trait bound `std::string::String: From<ShapesError>` is not satisfied
+   --> crates/sparql-conformance/src/community.rs:789:55
+    |
+789 |             let actual = inference.inferred_dataset().map_err(malformed)?;
+    |                                                       ^^^^^^^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+              From<std::boxed::Box<str>>
+    = note: required for `ShapesError` to implement `Into<std::string::String>`
+note: required by a bound in `malformed`
+   --> crates/sparql-conformance/src/community.rs:214:28
+    |
+214 | fn malformed(message: impl Into<String>) -> GradeError {
+    |                            ^^^^^^^^^^^^ required by this bound in `malformed`
+
+error[E0277]: the trait bound `std::string::String: From<ShapesError>` is not satisfied
+   --> crates/sparql-conformance/src/community.rs:789:63
+    |
+789 |             let actual = inference.inferred_dataset().map_err(malformed)?;
+    |                                                               ^^^^^^^^^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+              From<std::boxed::Box<str>>
+    = note: required for `ShapesError` to implement `Into<std::string::String>`
+note: required by a bound in `malformed`
+   --> crates/sparql-conformance/src/community.rs:214:28
+    |
+214 | fn malformed(message: impl Into<String>) -> GradeError {
+    |                            ^^^^^^^^^^^^ required by this bound in `malformed`
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/sparql-conformance/src/community.rs:1052:32
+     |
+1052 |     let actual_dataset = graph.dataset();
+     |                                ^^^^^^^ method not found in `std::result::Result<CompleteReportGraph, ShapesError>`
+     |
+note: the method `dataset` exists on the type `CompleteReportGraph`
+    --> crates/shapes/src/report.rs:742:5
+     |
+ 742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `CompleteReportGraph` value, propagating a `Result::Err` value to the caller
+     |
+1052 |     let actual_dataset = graph?.dataset();
+     |                               +
+
+error[E0599]: no method named `source_context` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/sparql-conformance/src/community.rs:1054:25
+     |
+1054 |     let context = graph.source_context();
+     |                         ^^^^^^^^^^^^^^ method not found in `std::result::Result<CompleteReportGraph, ShapesError>`
+     |
+note: the method `source_context` exists on the type `CompleteReportGraph`
+    --> crates/shapes/src/report.rs:760:5
+     |
+ 760 |     pub const fn source_context(&self) -> &Arc<ReportSourceContext> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `CompleteReportGraph` value, propagating a `Result::Err` value to the caller
+     |
+1054 |     let context = graph?.source_context();
+     |                        +
+
+error[E0599]: no method named `blank_labels` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/sparql-conformance/src/community.rs:1074:10
+     |
+1073 |       let actual_links = graph
+     |  ________________________-
+1074 | |         .blank_labels()
+     | |         -^^^^^^^^^^^^ method not found in `std::result::Result<CompleteReportGraph, ShapesError>`
+     | |_________|
+     |
+     |
+note: the method `blank_labels` exists on the type `CompleteReportGraph`
+    --> crates/shapes/src/report.rs:754:5
+     |
+ 754 |     pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `CompleteReportGraph` value, propagating a `Result::Err` value to the caller
+     |
+1073 |     let actual_links = graph?
+     |                             +
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-conformance/src/community.rs:1126:17
+     |
+1126 |         builder.push_quad(s, p, o, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/community.rs:1126:27
+     |
+1126 |         builder.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/community.rs:1126:30
+     |
+1126 |         builder.push_quad(s, p, o, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/community.rs:1126:33
+     |
+1126 |         builder.push_quad(s, p, o, None);
+     |                                 ^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2033:12
+     |
+2033 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1126 |         builder.push_quad(s?, p, o, None);
+     |                            +
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1126 |         builder.push_quad(s, p?, o, None);
+     |                               +
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+1126 |         builder.push_quad(s, p, o?, None);
+     |                                  +
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-conformance/src/compare.rs:453:25
+     |
+ 453 |                 builder.push_quad(solution, predicate, object, None);
+     |                         ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:453:35
+     |
+ 453 |                 builder.push_quad(solution, predicate, object, None);
+     |                                   ^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:453:45
+     |
+ 453 |                 builder.push_quad(solution, predicate, object, None);
+     |                                             ^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2033:12
+     |
+2033 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 453 |                 builder.push_quad(solution?, predicate, object, None);
+     |                                           +
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 453 |                 builder.push_quad(solution, predicate?, object, None);
+     |                                                      +
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-conformance/src/compare.rs:460:21
+     |
+ 460 |             builder.push_quad(solution, empty, empty, None);
+     |                     ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:460:31
+     |
+ 460 |             builder.push_quad(solution, empty, empty, None);
+     |                               ^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:460:41
+     |
+ 460 |             builder.push_quad(solution, empty, empty, None);
+     |                                         ^^^^^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:460:48
+     |
+ 460 |             builder.push_quad(solution, empty, empty, None);
+     |                                                ^^^^^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2033:12
+     |
+2033 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 460 |             builder.push_quad(solution?, empty, empty, None);
+     |                                       +
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 460 |             builder.push_quad(solution, empty?, empty, None);
+     |                                              +
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 460 |             builder.push_quad(solution, empty, empty?, None);
+     |                                                     +
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-conformance/src/compare.rs:469:21
+     |
+ 469 |             builder.push_quad(solution, index_predicate, ordinal, None);
+     |                     ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:469:31
+     |
+ 469 |             builder.push_quad(solution, index_predicate, ordinal, None);
+     |                               ^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:469:41
+     |
+ 469 |             builder.push_quad(solution, index_predicate, ordinal, None);
+     |                                         ^^^^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:469:58
+     |
+ 469 |             builder.push_quad(solution, index_predicate, ordinal, None);
+     |                                                          ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2033:12
+     |
+2033 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 469 |             builder.push_quad(solution?, index_predicate, ordinal, None);
+     |                                       +
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 469 |             builder.push_quad(solution, index_predicate?, ordinal, None);
+     |                                                        +
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 469 |             builder.push_quad(solution, index_predicate, ordinal?, None);
+     |                                                                 +
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/sparql-conformance/src/compare.rs:551:42
+     |
+ 551 |         |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
+     |                                          ^^^^^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:551:56
+     |
+ 551 |         |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
+     |                                                        ^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:551:59
+     |
+ 551 |         |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
+     |                                                           ^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/sparql-conformance/src/compare.rs:551:62
+     |
+ 551 |         |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
+     |                                                              ^
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1280:12
+     |
+1280 |     pub fn intern_triple(
+     |            ^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 551 |         |builder, _, s, p, o| Ok(builder.intern_triple(s.expect("REASON"), p, o)),
+     |                                                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 551 |         |builder, _, s, p, o| Ok(builder.intern_triple(s, p.expect("REASON"), o)),
+     |                                                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 551 |         |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o.expect("REASON"))),
+     |                                                               +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-conformance/src/compare.rs:554:19
+    |
+524 | ) -> TermId {
+    |      ------ expected `TermId` because of return type
+...
+554 |         Ok(id) => id,
+    |                   ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |
+    = note: expected struct `TermId`
+                 found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+554 |         Ok(id) => id.expect("REASON"),
+    |                     +++++++++++++++++
+
+error[E0004]: non-exhaustive patterns: `Err(GradeError::Storage(_))` not covered
+   --> crates/sparql-conformance/src/community.rs:728:33
+    |
+728 |             Ok(report) => match compare_report(case, law, shapes, &report) {
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ pattern `Err(GradeError::Storage(_))` not covered
+    |
+note: `std::result::Result<(), GradeError>` defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:558:1
+    |
+558 | pub enum Result<T, E> {
+    | ^^^^^^^^^^^^^^^^^^^^^
+...
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     --- not covered
+    = note: the matched value is of type `std::result::Result<(), GradeError>`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+748 ~                 },
+749 ~                 Err(GradeError::Storage(_)) => todo!(),
+    |
+
+Some errors have detailed explanations: E0004, E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `purrdf-sparql-conformance` (lib) due to 14 previous errors
+error[E0308]: mismatched types
+   --> crates/rdf-wasm/src/dataset.rs:776:43
+    |
+776 |             Err(error) => (Err(iri_to_err(&error)), false),
+    |                                ---------- ^^^^^^ expected `&IriError`, found `&IriReadError`
+    |                                |
+    |                                arguments to this function are incorrect
+    |
+    = note: expected reference `&IriError`
+               found reference `&IriReadError`
+note: function defined here
+   --> crates/rdf-wasm/src/dataset.rs:311:15
+    |
+311 | pub(crate) fn iri_to_err(err: &purrdf::IriError) -> JsError {
+    |               ^^^^^^^^^^ ----------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-wasm/src/dataset.rs:882:59
+    |
+882 |             out.insert(qv.clone()).map_err(|e| iri_to_err(&e))?;
+    |                                                ---------- ^^ expected `&IriError`, found `&IriReadError`
+    |                                                |
+    |                                                arguments to this function are incorrect
+    |
+    = note: expected reference `&IriError`
+               found reference `&IriReadError`
+note: function defined here
+   --> crates/rdf-wasm/src/dataset.rs:311:15
+    |
+311 | pub(crate) fn iri_to_err(err: &purrdf::IriError) -> JsError {
+    |               ^^^^^^^^^^ ----------------------
+
+error[E0004]: non-exhaustive patterns: `&ShapesError::Storage(_)` not covered
+   --> crates/rdf-wasm/src/shacl.rs:163:11
+    |
+163 |     match error {
+    |           ^^^^^ pattern `&ShapesError::Storage(_)` not covered
+    |
+note: `ShapesError` defined here
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+ 50 |     /// Logical capacity or physical storage refused an operation.
+ 51 |     Storage(purrdf_lex::allocation::StorageError),
+    |     ------- not covered
+    = note: the matched value is of type `&ShapesError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+170 ~         ShapesError::SparqlTargetDisagreement(refusal) => refusal.to_string(),
+171 ~         &ShapesError::Storage(_) => todo!(),
+    |
+
+Some errors have detailed explanations: E0004, E0308.
+error: could not compile `purrdf-wasm` (lib) due to 3 previous errors
+error[E0308]: mismatched types
+  --> bindings/python/src/py_gts.rs:71:5
+   |
+70 | fn dataset_from_quads(quads: &[RdfQuad]) -> Result<std::sync::Arc<RdfDataset>, String> {
+   |                                             ------------------------------------------ expected `std::result::Result<Arc<purrdf::RdfDataset>, std::string::String>` because of return type
+71 |     flat_dataset_from_quads(quads)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Arc<RdfDataset>, String>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+   |
+   = note: expected enum `Result<_, std::string::String>`
+              found enum `Result<_, purrdf::RdfDiagnostic>`
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_gts.rs:101:13
+    |
+100 |         bundle.add_unit(
+    |                -------- arguments to this method are incorrect
+101 |             unit,
+    |             ^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+    |
+    = note: expected struct `UnitId`
+                 found enum `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/bundle.rs:398:12
+    |
+398 |     pub fn add_unit(&mut self, unit: UnitId, meta: UnitMetadata) -> &mut Self {
+    |            ^^^^^^^^
+help: use the `?` operator to extract the `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+101 |             unit?,
+    |                 +
+
+error[E0308]: arguments to this method are incorrect
+   --> bindings/python/src/py_gts.rs:108:16
+    |
+108 |         bundle.add_artifact(
+    |                ^^^^^^^^^^^^
+    |
+note: expected `ArtifactId`, found `Result<ArtifactId, StorageError>`
+   --> bindings/python/src/py_gts.rs:109:13
+    |
+109 |             artifact,
+    |             ^^^^^^^^
+    = note: expected struct `ArtifactId`
+                 found enum `std::result::Result<ArtifactId, purrdf_lex::allocation::StorageError>`
+note: expected `UnitId`, found `Result<UnitId, StorageError>`
+   --> bindings/python/src/py_gts.rs:110:13
+    |
+110 |             unit,
+    |             ^^^^
+    = note: expected struct `UnitId`
+                 found enum `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/bundle.rs:412:12
+    |
+412 |     pub fn add_artifact(
+    |            ^^^^^^^^^^^^
+help: use the `?` operator to extract the `std::result::Result<ArtifactId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+109 |             artifact?,
+    |                     +
+help: use the `?` operator to extract the `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+110 |             unit?,
+    |                 +
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_gts.rs:116:52
+    |
+116 |         bundle.associate_segment(SNAPSHOT_SEGMENT, unit);
+    |                -----------------                   ^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `UnitId`
+                 found enum `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/bundle.rs:432:12
+    |
+432 |     pub fn associate_segment(&mut self, segment: usize, unit: UnitId) -> &mut Self {
+    |            ^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+116 |         bundle.associate_segment(SNAPSHOT_SEGMENT, unit?);
+    |                                                        +
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> bindings/python/src/py_store/io.rs:440:50
+    |
+432 | ) -> Result<Vec<u8>, String> {
+    |      ----------------------- expected `std::string::String` because of this
+...
+440 |     let dataset = flat_dataset_from_quads(&quads)?;
+    |                   -------------------------------^ the trait `From<purrdf::RdfDiagnostic>` is not implemented for `std::string::String`
+    |                   |
+    |                   this can't be annotated with `?` because it has type `Result<_, purrdf::RdfDiagnostic>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+              From<std::boxed::Box<str>>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> bindings/python/src/py_store/io.rs:465:49
+    |
+464 | ) -> Result<Vec<u8>, String> {
+    |      ----------------------- expected `std::string::String` because of this
+465 |     let dataset = flat_dataset_from_quads(quads)?;
+    |                   ------------------------------^ the trait `From<purrdf::RdfDiagnostic>` is not implemented for `std::string::String`
+    |                   |
+    |                   this can't be annotated with `?` because it has type `Result<_, purrdf::RdfDiagnostic>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+              From<std::boxed::Box<str>>
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_store/io.rs:492:5
+    |
+491 | ) -> Result<Arc<RdfDataset>, String> {
+    |      ------------------------------- expected `std::result::Result<Arc<purrdf::RdfDataset>, std::string::String>` because of return type
+492 |     flat_dataset_from_quads_declaring(quads, declared_graphs)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Arc<RdfDataset>, String>`, found `Result<Arc<RdfDataset>, RdfDiagnostic>`
+    |
+    = note: expected enum `Result<_, std::string::String>`
+               found enum `Result<_, purrdf::RdfDiagnostic>`
+
+error[E0308]: mismatched types
+  --> bindings/python/src/py_store/mutable.rs:82:50
+   |
+82 |                     .map_err(|e| iri_value_error(&e))?;
+   |                                  --------------- ^^ expected `&IriError`, found `&IriReadError`
+   |                                  |
+   |                                  arguments to this function are incorrect
+   |
+   = note: expected reference `&IriError`
+              found reference `&IriReadError`
+note: function defined here
+  --> bindings/python/src/py_store.rs:78:15
+   |
+78 | pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {
+   |               ^^^^^^^^^^^^^^^ ---------------------------
+
+error[E0308]: mismatched types
+  --> bindings/python/src/py_store/mutable.rs:99:42
+   |
+99 |             .map_err(|e| iri_value_error(&e))
+   |                          --------------- ^^ expected `&IriError`, found `&IriReadError`
+   |                          |
+   |                          arguments to this function are incorrect
+   |
+   = note: expected reference `&IriError`
+              found reference `&IriReadError`
+note: function defined here
+  --> bindings/python/src/py_store.rs:78:15
+   |
+78 | pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {
+   |               ^^^^^^^^^^^^^^^ ---------------------------
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_store/store.rs:109:50
+    |
+109 |                     .map_err(|e| iri_value_error(&e))?;
+    |                                  --------------- ^^ expected `&IriError`, found `&IriReadError`
+    |                                  |
+    |                                  arguments to this function are incorrect
+    |
+    = note: expected reference `&IriError`
+               found reference `&IriReadError`
+note: function defined here
+   --> bindings/python/src/py_store.rs:78:15
+    |
+ 78 | pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {
+    |               ^^^^^^^^^^^^^^^ ---------------------------
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_store/store.rs:142:42
+    |
+142 |             .map_err(|e| iri_value_error(&e))?;
+    |                          --------------- ^^ expected `&IriError`, found `&IriReadError`
+    |                          |
+    |                          arguments to this function are incorrect
+    |
+    = note: expected reference `&IriError`
+               found reference `&IriReadError`
+note: function defined here
+   --> bindings/python/src/py_store.rs:78:15
+    |
+ 78 | pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {
+    |               ^^^^^^^^^^^^^^^ ---------------------------
+
+error[E0308]: mismatched types
+    --> bindings/python/src/shacl.rs:1193:9
+     |
+1191 |     fn to_ntriples(&self, py: Python<'_>) -> String {
+     |                                              ------ expected `std::string::String` because of return type
+1192 |         let report = &self.inner;
+1193 |         py.detach(|| report.to_ntriples())
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `String`, found `Result<String, ShapesError>`
+     |
+     = note: expected struct `String`
+                  found enum `std::result::Result<String, ShapesError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::string::String, ShapesError>` value, panicking if the value is a `Result::Err`
+     |
+1193 |         py.detach(|| report.to_ntriples()).expect("REASON")
+     |                                           +++++++++++++++++
+
+error[E0004]: non-exhaustive patterns: `ShapesError::Storage(_)` not covered
+    --> bindings/python/src/shacl.rs:1861:11
+     |
+1861 |     match error {
+     |           ^^^^^ pattern `ShapesError::Storage(_)` not covered
+     |
+note: `ShapesError` defined here
+    --> crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+  50 |     /// Logical capacity or physical storage refused an operation.
+  51 |     Storage(purrdf_lex::allocation::StorageError),
+     |     ------- not covered
+     = note: the matched value is of type `ShapesError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+     |
+1880 ~         },
+1881 +         ShapesError::Storage(_) => todo!()
+     |
+
+Some errors have detailed explanations: E0004, E0277, E0308.
+error: could not compile `purrdf-python` (lib) due to 13 previous errors
+terminal_status=101

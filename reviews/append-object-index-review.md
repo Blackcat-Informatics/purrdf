@@ -1,0 +1,28 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# Targeted append ownership and Datalog position review
+
+VERDICT: PASS FOR THESE TWO TARGETED FINDINGS ONLY (whole S1 delivery remains open)
+
+Read-only source review of the dirty S1 checkout at HEAD `dd79ef77e94212314adc9db5af42fdd72ec18222` on 2026-10-12, refreshed against the revised dirty source and `.stage/typed-capacity-errors-instead-of-u32/recovery-object-permutation-plan-lazy-runtime.log`. The owner reported focused PASS receipts for 44 builder, two graph-append, one escaped-lookup allocation and eight `construct_builder` cases. The inspected log shows the object-position focused results below. I did not execute the checks. The combined log's final command exits 101 on 55 unrelated unadapted evaluator lib-test API callsites; the seam-cause test did not run. This targeted review is not a complete S1 qualification or delivery verdict.
+
+## Append accounting: DISCHARGED in current source
+
+Earlier source cloned the entire destination into the supplied `Memory`, dropping the clone without refund on late error and dropping the old same-grant builder without releasing its charge on success. Current `crates/rdf-core/src/ir/builder.rs:1965-2005` instead resumes the resident wrapper at its checked original `native_buffer_bytes()` and runs `append_builder_with_memory` inside the existing outer `transaction_with_memory`. The clone path is removed. The API now explicitly requires a caller to charge old destination buffers to the same `Memory` before passing a preexisting destination. `native_buffer_bytes()` is a public checked readback at :2482 onward.
+
+The bounded production caller, `crates/sparql-eval/src/engine/graph_build.rs:556-574`, still creates a fresh zero-live `LexicalFrame`, but now admits `destination.native_buffer_bytes()` before the in-place append. Thus growth and any refund of replaced buffers occur against an account that includes the old live destination. That publication frame is transient and drops after the operation, as before; the destination is caller-resident after publication. The unbounded path uses the resident wrapper. I found no remaining production caller that invokes the with-memory append on a preexisting uncharged destination.
+
+`transaction_with_memory` checkpoints terms, rows, location count, graph declarations, scope journal, next merge scope and interner flags; it removes newly inserted hash entries and content IDs on error and refunds dead scratch/payload while retaining grown capacities and their admission. The revised test in `builder.rs:3820-3890` constructs the original under one `Memory`, sweeps late refusal points, checks prior terms/rows/scope and native-buffer charge, retries, repeats append and discards to zero. The older zero-grant pointer control now explicitly attempts to admit old resident bytes first, so its refusal still occurs before allocation; it does not assert late pointer identity. The location-bearing integration test likewise admits old resident bytes before append. The reported focused receipts cover these paths; they are not a final complete qualification claim.
+
+## CapacityError representation: prior source observation superseded
+
+The earlier private-byte count experiment in this review was reverted. Current `crates/lex/src/allocation.rs:62-95` uses direct public `u128` attempted/limit fields; the owner found an existing 16-aligned error variant was already responsible for the evaluated layout. No compact-count performance or error-size claim survives this source revision. The broader evaluator test-compilation failure remains open outside these two targeted findings.
+
+## Datalog object-position truncation: DISCHARGED in current source
+
+The original source constructed `(0..self.len() as u32)` for an unbounded consolidated batch and could omit high positions. Current `crates/datalog/src/store.rs:465-580` stores `ObjectIndex.perm` as `Box<[usize]>`, builds `(0..self.len())`, and returns `&[usize]` from both `object_order` and `object_positions`. In `crates/datalog/src/cursor.rs`, the `RowCursor` batch permutation and `ValueCursor` `OrderedSource::Perm` both consume `usize` positions without narrowing. Thus every physically representable batch position survives the lazy secondary index.
+
+The inspected runtime log records strict evaluator-library checking finishing, the consolidated/high-`RowId` unit case passing 1/1, and the new integration file passing 2/2: one actual 517-row cycle join and a 512-row first-probe allocation/reuse check. The unit test proves batch position count and `usize` allocation shape while independently using `RowId`s beyond `u32::MAX`; it does not fabricate a billion-row physical batch. The integration test asserts exactly one `size_of::<usize>()` address per row at first object probe, zero requested bytes on reuse, and the real joined answer set. Those are focused source/run controls, not a full capacity or portability gate.
+
+`crates/datalog/src/cursor.rs:467-486` still casts mutable-tail positions to `u32`, but production seals at `TAIL_SEAL_THRESHOLD = 64` (`store.rs:776,819-824`), so that cast cannot truncate under ordinary insertion. It is not a second reachable batch-width defect. `store.rs:859` uses `b * 2`, and `merge_batches` at :597 uses `left.len() + right.len()` for output capacities. Both must be judged against the actual physical arrays (including the eight-byte `RowId` column) and native layout limits. For successfully resident 32/64-bit production batches, these expressions do not establish a reachable `usize` overflow; a merged output may still be unallocatable under the separate allocation-failure contract.

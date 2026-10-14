@@ -1,0 +1,30 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error: using `clone` on type `StorageError` which implements the `Copy` trait
+   --> crates/datalog/src/term.rs:380:53
+    |
+380 |         assert_eq!(dag.intern_leaf("new-leaf"), Err(expected.clone()));
+    |                                                     ^^^^^^^^^^^^^^^^ help: try removing the `clone` call: `expected`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#clone_on_copy
+    = note: `-D clippy::clone-on-copy` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::clone_on_copy)]`
+
+error: using `clone` on type `StorageError` which implements the `Copy` trait
+   --> crates/datalog/src/term.rs:381:53
+    |
+381 |         assert_eq!(dag.intern_free("new-free"), Err(expected.clone()));
+    |                                                     ^^^^^^^^^^^^^^^^ help: try removing the `clone` call: `expected`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#clone_on_copy
+
+error: using `clone` on type `StorageError` which implements the `Copy` trait
+   --> crates/datalog/src/term.rs:382:49
+    |
+382 |         assert_eq!(dag.intern_free("kept"), Err(expected.clone()));
+    |                                                 ^^^^^^^^^^^^^^^^ help: try removing the `clone` call: `expected`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#clone_on_copy
+
+error: could not compile `purrdf-datalog` (lib test) due to 3 previous errors
+terminal_status=101

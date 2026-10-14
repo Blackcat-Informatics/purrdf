@@ -1,0 +1,67 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+error: unused `std::result::Result` that must be used
+   --> crates/slice/src/rdf_query.rs:541:13
+    |
+541 |             builder.push_owned_quad(&quad);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+541 |             let _ = builder.push_owned_quad(&quad);
+    |             +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/slice/src/rdf_query.rs:555:13
+    |
+555 |             builder.push_owned_quad(quad);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+555 |             let _ = builder.push_owned_quad(quad);
+    |             +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/slice/src/rdf_query.rs:838:5
+    |
+838 |     builder.push_dataset(ds);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+838 |     let _ = builder.push_dataset(ds);
+    |     +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/slice/src/rdf_query.rs:875:9
+    |
+875 |         self.builder.push_dataset(&parsed);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+875 |         let _ = self.builder.push_dataset(&parsed);
+    |         +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/slice/src/rdf_query.rs:903:9
+    |
+903 |         self.builder.push_dataset(dataset.inner());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+903 |         let _ = self.builder.push_dataset(dataset.inner());
+    |         +++++++
+
+error: could not compile `purrdf-slice` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+terminal_status=101

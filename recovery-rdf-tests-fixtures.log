@@ -1,0 +1,4 @@
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 42.52s
+  Executable unittests src/lib.rs (target/capacity-build/debug/build/purrdf-rdf/5a18473667e252bd/out/purrdf_rdf-5a18473667e252bd)
+terminal_status=0

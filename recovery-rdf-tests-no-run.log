@@ -1,0 +1,145 @@
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling proc-macro2 v1.0.106
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling getrandom v0.3.4
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling ctutils v0.4.2
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/ed25519)
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling universal-hash v0.6.1
+   Compiling polyval v0.7.3
+   Compiling visual-hashing v1.0.0
+   Compiling ghash v0.6.0
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/jsonschema)
+   Compiling aes-gcm v0.11.1
+   Compiling syn v2.0.118
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+error[E0624]: method `term_count` is private
+    --> crates/rdf/src/gts_import_sink.rs:572:37
+     |
+ 572 |             assert_eq!(sink.builder.term_count(), 1);
+     |                                     ^^^^^^^^^^ private method
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:1936:5
+     |
+1936 |     pub(crate) fn term_count(&self) -> usize {
+     |     ---------------------------------------- private method defined here
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_import_sink.rs:731:13
+    |
+730 |         ) -> Result<(), RdfDiagnostic> {
+    |              ------------------------- expected `Result<(), purrdf_core::RdfDiagnostic>` because of return type
+731 |             self.inner.push_quad(segment_index, s, p, o, g).unwrap()
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<(), RdfDiagnostic>`, found `()`
+    |
+    = note:   expected enum `Result<(), purrdf_core::RdfDiagnostic>`
+            found unit type `()`
+note: method `unwrap` modifies its receiver in-place
+   --> crates/rdf/src/gts_import_sink.rs:731:61
+    |
+731 |             self.inner.push_quad(segment_index, s, p, o, g).unwrap()
+    |             ----------------------------------------------- ^^^^^^ this call modifies its receiver in-place
+    |             |
+    |             you probably want to use this value after calling the method...
+    = note: ...instead of the `()` output of method `unwrap`
+help: try adding an expression at the end of the block
+    |
+731 ~             self.inner.push_quad(segment_index, s, p, o, g).unwrap();
+732 +             Ok(())
+    |
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_import_sink.rs:743:13
+    |
+742 |           ) -> Result<(), RdfDiagnostic> {
+    |                ------------------------- expected `Result<(), purrdf_core::RdfDiagnostic>` because of return type
+743 | /             self.inner
+744 | |                 .push_reifier(segment_index, reifier, s, p, o, g)
+745 | |                 .unwrap()
+    | |_________________________^ expected `Result<(), RdfDiagnostic>`, found `()`
+    |
+    = note:   expected enum `Result<(), purrdf_core::RdfDiagnostic>`
+            found unit type `()`
+note: method `unwrap` modifies its receiver in-place
+   --> crates/rdf/src/gts_import_sink.rs:745:18
+    |
+743 | /             self.inner
+744 | |                 .push_reifier(segment_index, reifier, s, p, o, g)
+    | |_________________________________________________________________- you probably want to use this value after calling the method...
+745 |                   .unwrap()
+    |                    ^^^^^^ this call modifies its receiver in-place
+    = note: ...instead of the `()` output of method `unwrap`
+help: try adding an expression at the end of the block
+    |
+745 ~                 .unwrap();
+746 +             Ok(())
+    |
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_import_sink.rs:756:13
+    |
+755 |           ) -> Result<(), RdfDiagnostic> {
+    |                ------------------------- expected `Result<(), purrdf_core::RdfDiagnostic>` because of return type
+756 | /             self.inner
+757 | |                 .push_annotation(segment_index, reifier, p, o, g)
+758 | |                 .unwrap()
+    | |_________________________^ expected `Result<(), RdfDiagnostic>`, found `()`
+    |
+    = note:   expected enum `Result<(), purrdf_core::RdfDiagnostic>`
+            found unit type `()`
+note: method `unwrap` modifies its receiver in-place
+   --> crates/rdf/src/gts_import_sink.rs:758:18
+    |
+756 | /             self.inner
+757 | |                 .push_annotation(segment_index, reifier, p, o, g)
+    | |_________________________________________________________________- you probably want to use this value after calling the method...
+758 |                   .unwrap()
+    |                    ^^^^^^ this call modifies its receiver in-place
+    = note: ...instead of the `()` output of method `unwrap`
+help: try adding an expression at the end of the block
+    |
+758 ~                 .unwrap();
+759 +             Ok(())
+    |
+
+error[E0599]: no method named `unwrap` found for type `usize` in the current scope
+    --> crates/rdf/src/native_codecs/serialize.rs:1516:55
+     |
+1516 |             let idx = interner.intern_triple(s, p, o).unwrap();
+     |                                                       ^^^^^^ method not found in `usize`
+
+error[E0308]: mismatched types
+    --> crates/rdf/src/gts_compose.rs:1971:42
+     |
+1971 |             crate::canonical_flat_nquads(&expected).unwrap(),
+     |             ---------------------------- ^^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&Result<RdfDataset, purrdf_core::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf/src/native_quads.rs:272:8
+     |
+ 272 | pub fn canonical_flat_nquads(dataset: &RdfDataset) -> Result<String, String> {
+     |        ^^^^^^^^^^^^^^^^^^^^^ --------------------
+
+Some errors have detailed explanations: E0308, E0599, E0624.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-rdf` (lib test) due to 6 previous errors
+terminal_status=101

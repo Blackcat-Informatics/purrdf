@@ -1,0 +1,111 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+error[E0599]: no method named `source_context` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/validate/src/complete.rs:201:25
+    |
+201 |     let context = graph.source_context();
+    |                         ^^^^^^^^^^^^^^ method not found in `std::result::Result<CompleteReportGraph, ShapesError>`
+    |
+note: the method `source_context` exists on the type `CompleteReportGraph`
+   --> crates/shapes/src/report.rs:751:5
+    |
+751 |     pub const fn source_context(&self) -> &Arc<ReportSourceContext> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `CompleteReportGraph` value, propagating a `Result::Err` value to the caller
+    |
+201 |     let context = graph?.source_context();
+    |                        +
+
+error[E0599]: no method named `blank_labels` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/validate/src/complete.rs:211:36
+    |
+211 |     let mut blanks: Vec<_> = graph.blank_labels().sources().collect();
+    |                                    ^^^^^^^^^^^^ method not found in `std::result::Result<CompleteReportGraph, ShapesError>`
+    |
+note: the method `blank_labels` exists on the type `CompleteReportGraph`
+   --> crates/shapes/src/report.rs:745:5
+    |
+745 |     pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `CompleteReportGraph` value, propagating a `Result::Err` value to the caller
+    |
+211 |     let mut blanks: Vec<_> = graph?.blank_labels().sources().collect();
+    |                                   +
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/validate/src/complete.rs:241:37
+    |
+241 |         .with("graph", encode(graph.dataset())?)
+    |                                     ^^^^^^^ method not found in `std::result::Result<CompleteReportGraph, ShapesError>`
+    |
+note: the method `dataset` exists on the type `CompleteReportGraph`
+   --> crates/shapes/src/report.rs:733:5
+    |
+733 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `CompleteReportGraph` value, propagating a `Result::Err` value to the caller
+    |
+241 |         .with("graph", encode(graph?.dataset())?)
+    |                                    +
+
+error[E0599]: no method named `root` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/validate/src/complete.rs:242:29
+    |
+242 |         .with("root", graph.root().to_string())
+    |                             ^^^^ method not found in `std::result::Result<CompleteReportGraph, ShapesError>`
+    |
+note: the method `root` exists on the type `CompleteReportGraph`
+   --> crates/shapes/src/report.rs:739:5
+    |
+739 |     pub const fn root(&self) -> &Term {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `CompleteReportGraph` value, propagating a `Result::Err` value to the caller
+    |
+242 |         .with("root", graph?.root().to_string())
+    |                            +
+
+error[E0308]: mismatched types
+    --> crates/validate/src/expr_selector.rs:432:37
+     |
+ 432 |         builder.declare_named_graph(id);
+     |                 ------------------- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                 |
+     |                 arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1019:12
+     |
+1019 |     pub fn declare_named_graph(&mut self, g: TermId) {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `std::result::Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 432 |         builder.declare_named_graph(id?);
+     |                                       +
+
+error[E0004]: non-exhaustive patterns: `&ShapesProductRefusal::Shapes(ShapesError::Storage(_))` not covered
+   --> crates/validate/src/product.rs:120:15
+    |
+120 |         match self {
+    |               ^^^^ pattern `&ShapesProductRefusal::Shapes(ShapesError::Storage(_))` not covered
+    |
+note: `ShapesProductRefusal` defined here
+   --> crates/validate/src/product.rs:67:10
+    |
+ 67 | pub enum ShapesProductRefusal {
+    |          ^^^^^^^^^^^^^^^^^^^^
+...
+ 71 |     Shapes(ShapesError),
+    |     ------ not covered
+    = note: the matched value is of type `&ShapesProductRefusal`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+130 ~             Self::Admission(error) => error.message().into(),
+131 ~             &ShapesProductRefusal::Shapes(ShapesError::Storage(_)) => todo!(),
+    |
+
+Some errors have detailed explanations: E0004, E0308, E0599.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `purrdf-validate` (lib) due to 6 previous errors
+terminal_status=101

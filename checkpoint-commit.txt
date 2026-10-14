@@ -1,0 +1,17 @@
+Make native capacity refusal typed and compose sparse dataset views
+
+Propagate fallible storage admission through native builders and their RDF,
+query, rules and host callers. Preserve prior identities on failed compound
+imports, retain original allocation ownership, widen Datalog IDs and global
+text ranges, and carry host dictionaries and typed source failures through
+rule execution.
+
+Compose chronological segmented sources through one admitted operation with
+lazy value identities, shallow immutable publications, retained evidence,
+effective RDF 1.2 streams and consumer-owned atomic replacement.
+
+This is an implementation checkpoint, not completed issue qualification.
+Focused strict core and RDF/umbrella library checks pass. Boundary and rollback
+controls, actual raw/prepared engine parity, generated chronological parity
+and encoded purge controls pass. Full portable/host acceptance, the required
+capacity census and the complete repository gate remain open.

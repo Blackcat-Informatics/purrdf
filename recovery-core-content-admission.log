@@ -1,0 +1,39 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 37.17s
+     Running unittests src/lib.rs (target/capacity-build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 5 tests
+test ir::builder::native_graph_birth_tests::native_graph_refuses_before_the_first_arena_allocation ... ok
+test ir::builder::native_graph_birth_tests::content_id_side_table_refusal_does_not_publish_an_unindexed_term ... ok
+test ir::builder::native_graph_birth_tests::native_structural_failure_releases_builder_and_retains_only_the_diagnostic ... ok
+test ir::builder::native_graph_birth_tests::reifier_row_refusal_does_not_publish_its_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1303 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (target/capacity-build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 18 tests
+test content_id::tests::accepts_valid_lowercase_hex ... ok
+test content_id::tests::is_a_distinct_type_from_content_digest ... ok
+test content_id::tests::rejects_non_hex_char ... ok
+test content_id::tests::rejects_uppercase_hex ... ok
+test content_id::tests::rejects_wrong_length ... ok
+test content_id::tests::round_trips_through_hex ... ok
+test content_id::tests::scheme_accepts_prefix_ending_in_non_hex_char ... ok
+test content_id::tests::scheme_rejects_empty_prefix ... ok
+test content_id::tests::scheme_rejects_prefix_ending_in_hex_digit ... ok
+test ir::builder::tests::intern_blank_never_recognized_as_content_id ... ok
+test ir::builder::native_graph_birth_tests::content_id_side_table_refusal_does_not_publish_an_unindexed_term ... ok
+test ir::builder::tests::intern_iri_content_id_is_idempotent ... ok
+test ir::builder::tests::intern_iri_ordinary_iri_has_no_content_id ... ok
+test ir::builder::tests::intern_iri_recognizes_content_id ... ok
+test ir::dataset::tests::content_addressing::content_id_lookup_is_stable_across_freeze ... ok
+test ir::dataset::tests::content_addressing::content_ids_and_derivation_predicate_round_trip ... ok
+test ir::embedding::writer::tests::matrix_content_identity_matches_the_normative_helper ... ok
+test evidence::reason::tests::repeated_missing_constraint_has_one_content_identity_without_retained_scratch ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1290 filtered out; finished in 0.00s
+
+terminal_status=0

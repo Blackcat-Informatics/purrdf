@@ -1,0 +1,14 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# Task 2 review — host identity and sparse segmented stack, 2026-10-13
+
+VERDICT: PASS — scoped behavior and source review only; full gate and delivery remain open.
+
+**Scoped behavior/source PASS for Task 2; #495 and the pair are not delivered.** This maps the existing segmented effective-view, source-owner and host-ID reviews with retained native/portable receipts. I ran no new build. Current published `ab743e1d1` incorporates the reviewed main synchronization; the final full gate `56153` is still live.
+
+`SegmentedStack::publish` authenticates replacement descriptors before changing the published list; `snapshot` shallow-pins descriptor and head owners without dictionary or historical-removal traversal. The registered 1,000-source control admits one cumulative request budget, reads headers/proofs only, touches zero terms and performs no snapshot provider read. At fixed four descriptors/head, 10→100 historical terms and removal entries leave actual snapshot allocation count, requested/retained bytes and peak working bytes identical. The query view uses per-source dictionaries and source-qualified identities instead of a publication-wide remap. Generated 16×8 chronological publications compare complete typed packs to an eager PagedStack fold; 48 raw/prepared evaluator executions over two histories compare actual solution bags. The persisted purge test rewrites only the affected source, retains old-snapshot reads until final pin release, verifies untouched bytes/owner identity, and scans remaining encoded providers for both the removed lexical marker and its datatype. Consumer-owned persistence and segment selection remain the issue's stated boundary.
+
+The host-ID addendum is exercised through `NativeSparqlEngine::query_fallible_view`, `TermDictionary::Id` and `RelationStore<D>`/guarded Datalog fixpoint. Type-tagged 64-bit/triple IDs survive real joins and probes without synthetic remap IDs; lexical ordering and deletion/source faults retain original causes. Registered stack 14/14 and SPARQL host identity 3/3 pass natively and in actual Node/wasm32. The shared Datalog `rules_runtime` six production-route cases pass natively and under wasm32. Installed C controls 6/6, Python 57/57 and optimized WASM 47/47 passed at their recorded source/package identities; they establish ordinary host wiring, not a fabricated installed synthetic-capacity refusal.
+
+No separate #484 statistics contract is claimed. Final current-source gate, hosted checks, material integration review, PR, `ghprsq` merge and verified closures remain open as Task 3/4 work. Focused prior receipts retain their exact source/package scope; they are not a complete pair-delivery verdict.

@@ -1,0 +1,940 @@
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+error[E0308]: mismatched types
+    --> crates/rdf/src/projections/lpg/mapping.rs:497:51
+     |
+ 497 |         builder.push_annotation_in_graph(reifier, predicate, object, graph_name);
+     |                 ------------------------          ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                 |
+     |                 arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2130:12
+     |
+2130 |     pub fn push_annotation_in_graph(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 497 |         builder.push_annotation_in_graph(reifier, predicate?, object, graph_name);
+     |                                                            +
+
+error[E0308]: mismatched types
+    --> crates/rdf/src/projections/lpg/mapping.rs:715:32
+     |
+ 715 |     builder.push_quad(subject, predicate, object, graph);
+     |             ---------          ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |             |
+     |             arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 715 |     builder.push_quad(subject, predicate?, object, graph);
+     |                                         +
+
+error[E0308]: mismatched types
+    --> crates/rdf/src/projections/skos/mapping.rs:726:40
+     |
+ 726 |             builder.push_quad(subject, predicate, object, None);
+     |                     ---------          ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 726 |             builder.push_quad(subject, predicate?, object, None);
+     |                                                 +
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/projections/skos/mapping.rs:835:42
+    |
+835 |         ProjectionTerm::Iri { value } => builder.intern_iri(value),
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+835 |         ProjectionTerm::Iri { value } => builder.intern_iri(value)?,
+    |                                                                   +
+
+error[E0308]: mismatched types
+  --> crates/rdf/src/native_quads.rs:78:43
+   |
+78 |                     FoldNode::Triple { s, p, o }
+   |                                           ^ expected `TermId`, found `Result<TermId, StorageError>`
+   |
+   = note: expected struct `TermId`
+                found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+   |
+78 |                     FoldNode::Triple { s, p: p?, o }
+   |                                            ++++
+
+error[E0308]: mismatched types
+  --> crates/rdf/src/native_quads.rs:89:17
+   |
+89 |                 predicate,
+   |                 ^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+   |
+   = note: expected struct `TermId`
+                found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+   |
+89 |                 predicate: predicate?,
+   |                          ++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:82:11
+     |
+  82 |         b.push_quad(s, p, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:82:21
+     |
+  82 |         b.push_quad(s, p, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:82:24
+     |
+  82 |         b.push_quad(s, p, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:82:27
+     |
+  82 |         b.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  82 |         b.push_quad(s.expect("REASON"), p, o, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  82 |         b.push_quad(s, p.expect("REASON"), o, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  82 |         b.push_quad(s, p, o.expect("REASON"), None);
+     |                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:83:11
+     |
+  83 |         b.push_quad(s, q, plain, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:83:21
+     |
+  83 |         b.push_quad(s, q, plain, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:83:24
+     |
+  83 |         b.push_quad(s, q, plain, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:83:27
+     |
+  83 |         b.push_quad(s, q, plain, None);
+     |                           ^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  83 |         b.push_quad(s.expect("REASON"), q, plain, None);
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  83 |         b.push_quad(s, q.expect("REASON"), plain, None);
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  83 |         b.push_quad(s, q, plain.expect("REASON"), None);
+     |                                +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:85:45
+    |
+ 85 |         b.push_quad(s, p, directional, Some(g1));
+    |                                        ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                        |
+    |                                        arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:85:40
+    |
+ 85 |         b.push_quad(s, p, directional, Some(g1));
+    |                                        ^^^^^--^
+    |                                             |
+    |                                             this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+ 85 |         b.push_quad(s, p, directional, Some(g1.expect("REASON")));
+    |                                               +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:85:11
+     |
+  85 |         b.push_quad(s, p, directional, Some(g1));
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:85:21
+     |
+  85 |         b.push_quad(s, p, directional, Some(g1));
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:85:24
+     |
+  85 |         b.push_quad(s, p, directional, Some(g1));
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:85:27
+     |
+  85 |         b.push_quad(s, p, directional, Some(g1));
+     |                           ^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  85 |         b.push_quad(s.expect("REASON"), p, directional, Some(g1));
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  85 |         b.push_quad(s, p.expect("REASON"), directional, Some(g1));
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  85 |         b.push_quad(s, p, directional.expect("REASON"), Some(g1));
+     |                                      +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:86:40
+    |
+ 86 |         b.push_quad(s, q, tagged, Some(g2));
+    |                                   ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                   |
+    |                                   arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:86:35
+    |
+ 86 |         b.push_quad(s, q, tagged, Some(g2));
+    |                                   ^^^^^--^
+    |                                        |
+    |                                        this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+ 86 |         b.push_quad(s, q, tagged, Some(g2.expect("REASON")));
+    |                                          +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:86:11
+     |
+  86 |         b.push_quad(s, q, tagged, Some(g2));
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:86:21
+     |
+  86 |         b.push_quad(s, q, tagged, Some(g2));
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:86:24
+     |
+  86 |         b.push_quad(s, q, tagged, Some(g2));
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:86:27
+     |
+  86 |         b.push_quad(s, q, tagged, Some(g2));
+     |                           ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  86 |         b.push_quad(s.expect("REASON"), q, tagged, Some(g2));
+     |                      +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  86 |         b.push_quad(s, q.expect("REASON"), tagged, Some(g2));
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  86 |         b.push_quad(s, q, tagged.expect("REASON"), Some(g2));
+     |                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:92:40
+    |
+ 92 |         b.push_quad(shared, p, o, Some(g1));
+    |                                   ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                   |
+    |                                   arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:92:35
+    |
+ 92 |         b.push_quad(shared, p, o, Some(g1));
+    |                                   ^^^^^--^
+    |                                        |
+    |                                        this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+ 92 |         b.push_quad(shared, p, o, Some(g1.expect("REASON")));
+    |                                          +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:92:11
+     |
+  92 |         b.push_quad(shared, p, o, Some(g1));
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:92:21
+     |
+  92 |         b.push_quad(shared, p, o, Some(g1));
+     |                     ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:92:29
+     |
+  92 |         b.push_quad(shared, p, o, Some(g1));
+     |                             ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:92:32
+     |
+  92 |         b.push_quad(shared, p, o, Some(g1));
+     |                                ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  92 |         b.push_quad(shared.expect("REASON"), p, o, Some(g1));
+     |                           +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  92 |         b.push_quad(shared, p.expect("REASON"), o, Some(g1));
+     |                              +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  92 |         b.push_quad(shared, p, o.expect("REASON"), Some(g1));
+     |                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:93:40
+    |
+ 93 |         b.push_quad(scoped, q, o, Some(g1));
+    |                                   ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                   |
+    |                                   arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:93:35
+    |
+ 93 |         b.push_quad(scoped, q, o, Some(g1));
+    |                                   ^^^^^--^
+    |                                        |
+    |                                        this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+ 93 |         b.push_quad(scoped, q, o, Some(g1.expect("REASON")));
+    |                                          +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:93:11
+     |
+  93 |         b.push_quad(scoped, q, o, Some(g1));
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:93:21
+     |
+  93 |         b.push_quad(scoped, q, o, Some(g1));
+     |                     ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:93:29
+     |
+  93 |         b.push_quad(scoped, q, o, Some(g1));
+     |                             ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:93:32
+     |
+  93 |         b.push_quad(scoped, q, o, Some(g1));
+     |                                ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  93 |         b.push_quad(scoped.expect("REASON"), q, o, Some(g1));
+     |                           +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  93 |         b.push_quad(scoped, q.expect("REASON"), o, Some(g1));
+     |                              +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  93 |         b.push_quad(scoped, q, o.expect("REASON"), Some(g1));
+     |                                 +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:95:28
+     |
+  95 |             let triple = b.intern_triple(shared, p, directional);
+     |                            ^^^^^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:95:42
+     |
+  95 |             let triple = b.intern_triple(shared, p, directional);
+     |                                          ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:95:50
+     |
+  95 |             let triple = b.intern_triple(shared, p, directional);
+     |                                                  ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:95:53
+     |
+  95 |             let triple = b.intern_triple(shared, p, directional);
+     |                                                     ^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1236:12
+     |
+1236 |     pub fn intern_triple(
+     |            ^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  95 |             let triple = b.intern_triple(shared.expect("REASON"), p, directional);
+     |                                                +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  95 |             let triple = b.intern_triple(shared, p.expect("REASON"), directional);
+     |                                                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  95 |             let triple = b.intern_triple(shared, p, directional.expect("REASON"));
+     |                                                                +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:97:59
+    |
+ 97 |             b.push_reifier_in_graph(reifier, triple, Some(g1));
+    |                                                      ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                                      |
+    |                                                      arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:97:54
+    |
+ 97 |             b.push_reifier_in_graph(reifier, triple, Some(g1));
+    |                                                      ^^^^^--^
+    |                                                           |
+    |                                                           this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+ 97 |             b.push_reifier_in_graph(reifier, triple, Some(g1.expect("REASON")));
+    |                                                             +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:97:15
+     |
+  97 |             b.push_reifier_in_graph(reifier, triple, Some(g1));
+     |               ^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:97:37
+     |
+  97 |             b.push_reifier_in_graph(reifier, triple, Some(g1));
+     |                                     ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:97:46
+     |
+  97 |             b.push_reifier_in_graph(reifier, triple, Some(g1));
+     |                                              ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2072:12
+     |
+2072 |     pub fn push_reifier_in_graph(
+     |            ^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  97 |             b.push_reifier_in_graph(reifier.expect("REASON"), triple, Some(g1));
+     |                                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  97 |             b.push_reifier_in_graph(reifier, triple.expect("REASON"), Some(g1));
+     |                                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:98:65
+    |
+ 98 |             b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+    |                                                            ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                                            |
+    |                                                            arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:98:60
+    |
+ 98 |             b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+    |                                                            ^^^^^--^
+    |                                                                 |
+    |                                                                 this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+ 98 |             b.push_annotation_in_graph(reifier, q, tagged, Some(g1.expect("REASON")));
+    |                                                                   +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:98:15
+     |
+  98 |             b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:98:40
+     |
+  98 |             b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+     |                                        ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:98:49
+     |
+  98 |             b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+     |                                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:98:52
+     |
+  98 |             b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+     |                                                    ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2130:12
+     |
+2130 |     pub fn push_annotation_in_graph(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  98 |             b.push_annotation_in_graph(reifier.expect("REASON"), q, tagged, Some(g1));
+     |                                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  98 |             b.push_annotation_in_graph(reifier, q.expect("REASON"), tagged, Some(g1));
+     |                                                  +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  98 |             b.push_annotation_in_graph(reifier, q, tagged.expect("REASON"), Some(g1));
+     |                                                          +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf/src/gts_fixtures.rs:102:27
+     |
+ 102 |     b.declare_named_graph(declared);
+     |       ------------------- ^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |       |
+     |       arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1015:12
+     |
+1015 |     pub fn declare_named_graph(&mut self, g: TermId) {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 102 |     b.declare_named_graph(declared.expect("REASON"));
+     |                                   +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:124:38
+    |
+124 |         b.push_quad(node, p, o, Some(g));
+    |                                 ---- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                 |
+    |                                 arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:124:33
+    |
+124 |         b.push_quad(node, p, o, Some(g));
+    |                                 ^^^^^-^
+    |                                      |
+    |                                      this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+124 |         b.push_quad(node, p, o, Some(g.expect("REASON")));
+    |                                       +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:124:11
+     |
+ 124 |         b.push_quad(node, p, o, Some(g));
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:124:21
+     |
+ 124 |         b.push_quad(node, p, o, Some(g));
+     |                     ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:124:27
+     |
+ 124 |         b.push_quad(node, p, o, Some(g));
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:124:30
+     |
+ 124 |         b.push_quad(node, p, o, Some(g));
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 124 |         b.push_quad(node.expect("REASON"), p, o, Some(g));
+     |                         +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 124 |         b.push_quad(node, p.expect("REASON"), o, Some(g));
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 124 |         b.push_quad(node, p, o.expect("REASON"), Some(g));
+     |                               +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:125:43
+    |
+125 |         b.push_quad(elsewhere, q, o, Some(g));
+    |                                      ---- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                      |
+    |                                      arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:125:38
+    |
+125 |         b.push_quad(elsewhere, q, o, Some(g));
+    |                                      ^^^^^-^
+    |                                           |
+    |                                           this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+125 |         b.push_quad(elsewhere, q, o, Some(g.expect("REASON")));
+    |                                            +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:125:11
+     |
+ 125 |         b.push_quad(elsewhere, q, o, Some(g));
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:125:21
+     |
+ 125 |         b.push_quad(elsewhere, q, o, Some(g));
+     |                     ^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:125:32
+     |
+ 125 |         b.push_quad(elsewhere, q, o, Some(g));
+     |                                ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:125:35
+     |
+ 125 |         b.push_quad(elsewhere, q, o, Some(g));
+     |                                   ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 125 |         b.push_quad(elsewhere.expect("REASON"), q, o, Some(g));
+     |                              +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 125 |         b.push_quad(elsewhere, q.expect("REASON"), o, Some(g));
+     |                                 +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 125 |         b.push_quad(elsewhere, q, o.expect("REASON"), Some(g));
+     |                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf/src/gts_fixtures.rs:127:42
+    |
+127 |     b.push_quad(node, q, elsewhere, Some(g));
+    |                                     ---- ^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                                     |
+    |                                     arguments to this enum variant are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: the type constructed contains `Result<TermId, purrdf_lex::allocation::StorageError>` due to the type of the argument passed
+   --> crates/rdf/src/gts_fixtures.rs:127:37
+    |
+127 |     b.push_quad(node, q, elsewhere, Some(g));
+    |                                     ^^^^^-^
+    |                                          |
+    |                                          this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+127 |     b.push_quad(node, q, elsewhere, Some(g.expect("REASON")));
+    |                                           +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/gts_fixtures.rs:127:7
+     |
+ 127 |     b.push_quad(node, q, elsewhere, Some(g));
+     |       ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:127:17
+     |
+ 127 |     b.push_quad(node, q, elsewhere, Some(g));
+     |                 ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:127:23
+     |
+ 127 |     b.push_quad(node, q, elsewhere, Some(g));
+     |                       ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/gts_fixtures.rs:127:26
+     |
+ 127 |     b.push_quad(node, q, elsewhere, Some(g));
+     |                          ^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 127 |     b.push_quad(node.expect("REASON"), q, elsewhere, Some(g));
+     |                     +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 127 |     b.push_quad(node, q.expect("REASON"), elsewhere, Some(g));
+     |                        +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 127 |     b.push_quad(node, q, elsewhere.expect("REASON"), Some(g));
+     |                                   +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf/src/turtle_normalize.rs:58:17
+     |
+  58 |         builder.push_quad(s, p, o, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/turtle_normalize.rs:58:27
+     |
+  58 |         builder.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/turtle_normalize.rs:58:30
+     |
+  58 |         builder.push_quad(s, p, o, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/rdf/src/turtle_normalize.rs:58:33
+     |
+  58 |         builder.push_quad(s, p, o, None);
+     |                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1985:12
+     |
+1985 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+  58 |         builder.push_quad(s?, p, o, None);
+     |                            +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+  58 |         builder.push_quad(s, p?, o, None);
+     |                               +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+  58 |         builder.push_quad(s, p, o?, None);
+     |                                  +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-rdf` (lib) due to 29 previous errors
+terminal_status=101

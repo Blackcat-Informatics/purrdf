@@ -1,0 +1,317 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error[E0425]: cannot find function `iri` in this scope
+    --> crates/rdf-core/src/ir/builder.rs:3918:25
+     |
+3918 |         let predicate = iri(&mut source, "p");
+     |                         ^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/rdf-core/src/backend.rs:332:5
+     |
+ 332 |     fn iri(value: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::backend::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/collections.rs:672:5
+     |
+ 672 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::collections::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/dataset_view.rs:2053:5
+     |
+2053 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::dataset_view::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/describe.rs:570:5
+     |
+ 570 |     fn iri(v: &str) -> RdfTerm {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::describe::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:3280:5
+     |
+3280 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::builder::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/canon.rs:2881:5
+     |
+2881 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::canon::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/compare.rs:135:5
+     |
+ 135 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::compare::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/dataset.rs:2476:5
+     |
+2476 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::dataset::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/event_sink.rs:116:5
+     |
+ 116 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::event_sink::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/ingest.rs:685:5
+     |
+ 685 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::ingest::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/mutable/delta_view.rs:926:5
+     |
+ 926 |     fn iri(local: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::mutable::delta_view::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/dict.rs:1412:5
+     |
+1412 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::dict::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/side.rs:768:5
+     |
+ 768 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::side::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/triples.rs:1223:5
+     |
+1223 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::triples::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/paged/graph_index.rs:257:5
+     |
+ 257 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::paged::graph_index::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pipeline_bundle.rs:1946:5
+     |
+1946 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pipeline_bundle::tests::iri`: not accessible
+...
+2453 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pipeline_bundle::core_tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/validate.rs:698:5
+     |
+ 698 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::validate::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/turtle.rs:544:5
+     |
+ 544 |     fn iri(value: &str) -> RdfTerm {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::turtle::tests::iri`: not accessible
+help: consider importing this function
+     |
+3670 +     use crate::term_fixture::iri;
+     |
+
+error[E0425]: cannot find function `iri` in this scope
+    --> crates/rdf-core/src/ir/builder.rs:3919:21
+     |
+3919 |         let graph = iri(&mut source, "graph");
+     |                     ^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/rdf-core/src/backend.rs:332:5
+     |
+ 332 |     fn iri(value: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::backend::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/collections.rs:672:5
+     |
+ 672 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::collections::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/dataset_view.rs:2053:5
+     |
+2053 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::dataset_view::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/describe.rs:570:5
+     |
+ 570 |     fn iri(v: &str) -> RdfTerm {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::describe::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:3280:5
+     |
+3280 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::builder::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/canon.rs:2881:5
+     |
+2881 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::canon::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/compare.rs:135:5
+     |
+ 135 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::compare::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/dataset.rs:2476:5
+     |
+2476 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::dataset::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/event_sink.rs:116:5
+     |
+ 116 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::event_sink::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/ingest.rs:685:5
+     |
+ 685 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::ingest::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/mutable/delta_view.rs:926:5
+     |
+ 926 |     fn iri(local: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::mutable::delta_view::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/dict.rs:1412:5
+     |
+1412 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::dict::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/side.rs:768:5
+     |
+ 768 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::side::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/triples.rs:1223:5
+     |
+1223 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::triples::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/paged/graph_index.rs:257:5
+     |
+ 257 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::paged::graph_index::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pipeline_bundle.rs:1946:5
+     |
+1946 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pipeline_bundle::tests::iri`: not accessible
+...
+2453 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pipeline_bundle::core_tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/validate.rs:698:5
+     |
+ 698 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::validate::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/turtle.rs:544:5
+     |
+ 544 |     fn iri(value: &str) -> RdfTerm {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::turtle::tests::iri`: not accessible
+help: consider importing this function
+     |
+3670 +     use crate::term_fixture::iri;
+     |
+
+error[E0425]: cannot find function `iri` in this scope
+    --> crates/rdf-core/src/ir/builder.rs:3920:21
+     |
+3920 |         let empty = iri(&mut source, "empty");
+     |                     ^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/rdf-core/src/backend.rs:332:5
+     |
+ 332 |     fn iri(value: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::backend::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/collections.rs:672:5
+     |
+ 672 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::collections::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/dataset_view.rs:2053:5
+     |
+2053 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::dataset_view::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/describe.rs:570:5
+     |
+ 570 |     fn iri(v: &str) -> RdfTerm {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::describe::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:3280:5
+     |
+3280 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::builder::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/canon.rs:2881:5
+     |
+2881 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::canon::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/compare.rs:135:5
+     |
+ 135 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::compare::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/dataset.rs:2476:5
+     |
+2476 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::dataset::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/event_sink.rs:116:5
+     |
+ 116 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::event_sink::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/ingest.rs:685:5
+     |
+ 685 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::ingest::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/mutable/delta_view.rs:926:5
+     |
+ 926 |     fn iri(local: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::mutable::delta_view::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/dict.rs:1412:5
+     |
+1412 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::dict::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/side.rs:768:5
+     |
+ 768 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::side::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pack/triples.rs:1223:5
+     |
+1223 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pack::triples::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/paged/graph_index.rs:257:5
+     |
+ 257 |     fn iri(name: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::paged::graph_index::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/pipeline_bundle.rs:1946:5
+     |
+1946 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pipeline_bundle::tests::iri`: not accessible
+...
+2453 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::pipeline_bundle::core_tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/ir/validate.rs:698:5
+     |
+ 698 |     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::ir::validate::tests::iri`: not accessible
+     |
+    ::: crates/rdf-core/src/turtle.rs:544:5
+     |
+ 544 |     fn iri(value: &str) -> RdfTerm {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::turtle::tests::iri`: not accessible
+help: consider importing this function
+     |
+3670 +     use crate::term_fixture::iri;
+     |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-core` (lib test) due to 3 previous errors
+
+terminal_status=101

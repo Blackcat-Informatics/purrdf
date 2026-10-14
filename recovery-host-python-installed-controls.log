@@ -1,0 +1,15 @@
++ cd bindings/python
++ uv run --locked python -c $'import hashlib, pathlib, sys\nimport purrdf\nnative = pathlib.Path(sys.modules["purrdf.purrdf_native"].__file__).resolve()\nwith native.open("rb") as stream:\n    digest = hashlib.file_digest(stream, "sha256").hexdigest()\nprint("native_extension", native)\nprint("sha256", digest)\ndocument = \'<http://example.org/s> <http://example.org/p> "[_:b, <<( _:b <http://example.org/q> _:c )>>]"^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/List> .\'\nplain = \'<http://example.org/plain> <http://example.org/q> <http://example.org/o> .\'\nfor container in (purrdf.Store, purrdf.MutableDataset):\n    store = container()\n    store.load("", format=purrdf.RdfFormat.TURTLE)\n    store.load(document, format=purrdf.RdfFormat.TURTLE)\n    store.load(plain, format=purrdf.RdfFormat.TURTLE)\n    store.load(document, format=purrdf.RdfFormat.TURTLE)\n    values = {quad.object.value for quad in store if quad.predicate.value == "http://example.org/p"}\n    assert len(values) == 2, (container.__name__, values)\n    assert len(list(store)) == 3\n    print(container.__name__, "CDT document scopes PASS", sorted(values))\n'
+Uninstalled 1 package in 5ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 1 package in 15ms
+native_extension /home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python/python/src/purrdf/purrdf_native.abi3.so
+sha256 06af1766e05a8ae1be956b49d09625e89ce934ed376bcdf902bcaa30da373df3
+Store CDT document scopes PASS ['[_:purrdfesc1_b, <<( _:purrdfesc1_b <http://example.org/q> _:purrdfesc1_c )>>]', '[_:purrdfesc2_b, <<( _:purrdfesc2_b <http://example.org/q> _:purrdfesc2_c )>>]']
+MutableDataset CDT document scopes PASS ['[_:purrdfesc1_b, <<( _:purrdfesc1_b <http://example.org/q> _:purrdfesc1_c )>>]', '[_:purrdfesc2_b, <<( _:purrdfesc2_b <http://example.org/q> _:purrdfesc2_c )>>]']
++ uv run --locked pytest -q tests/test_native_store_contract.py tests/test_query_presentation.py tests/test_serialize_loss.py tests/test_serialize_declared_empty_graphs.py tests/test_shacl_tools.py tests/test_gts_ingest_report.py
+.........................................................                [100%]
+57 passed in 0.20s
+terminal_status=0

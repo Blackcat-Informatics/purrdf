@@ -1,0 +1,816 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:27:18
+    |
+ 27 |     writer.class(root, "Document");
+    |            ----- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |            |
+    |            arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:114:8
+    |
+114 |     fn class(&mut self, subject: TermId, class: &str) {
+    |        ^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 27 |     writer.class(root?, "Document");
+    |                      +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:28:16
+    |
+ 28 |     writer.iri(root, "source", document.source.id);
+    |            --- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |            |
+    |            arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:124:8
+    |
+124 |     fn iri(&mut self, subject: TermId, predicate: &str, object: &str) {
+    |        ^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 28 |     writer.iri(root?, "source", document.source.id);
+    |                    +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:30:9
+    |
+ 29 |     writer.typed(
+    |            ----- arguments to this method are incorrect
+ 30 |         root,
+    |         ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:134:8
+    |
+134 |     fn typed(&mut self, subject: TermId, predicate: &str, value: &str, datatype: &str) {
+    |        ^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 30 |         root?,
+    |             +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:35:19
+    |
+ 35 |     writer.number(root, "byteLength", document.text.len());
+    |            ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |            |
+    |            arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:141:8
+    |
+141 |     fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 35 |     writer.number(root?, "byteLength", document.text.len());
+    |                       +
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/mime/src/project.rs:30:22
+     |
+  30 |         self.builder.push_quad(subject, predicate, object, None);
+     |                      ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/mime/src/project.rs:30:32
+     |
+  30 |         self.builder.push_quad(subject, predicate, object, None);
+     |                                ^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/mime/src/project.rs:30:41
+     |
+  30 |         self.builder.push_quad(subject, predicate, object, None);
+     |                                         ^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/mime/src/project.rs:30:52
+     |
+  30 |         self.builder.push_quad(subject, predicate, object, None);
+     |                                                    ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  30 |         self.builder.push_quad(subject.expect("REASON"), predicate, object, None);
+     |                                       +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  30 |         self.builder.push_quad(subject, predicate.expect("REASON"), object, None);
+     |                                                  +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+  30 |         self.builder.push_quad(subject, predicate, object.expect("REASON"), None);
+     |                                                          +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:36:19
+    |
+ 36 |     writer.string(root, "profile", &profile.identity().to_hex());
+    |            ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |            |
+    |            arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:129:8
+    |
+129 |     fn string(&mut self, subject: TermId, predicate: &str, value: &str) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 36 |     writer.string(root?, "profile", &profile.identity().to_hex());
+    |                       +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:42:22
+    |
+ 42 |         writer.class(node, "Value");
+    |                ----- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:114:8
+    |
+114 |     fn class(&mut self, subject: TermId, class: &str) {
+    |        ^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 42 |         writer.class(node?, "Value");
+    |                          +
+
+error[E0308]: arguments to this method are incorrect
+   --> crates/json/src/project.rs:43:16
+    |
+ 43 |         writer.link(node, "document", root);
+    |                ^^^^
+    |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+   --> crates/json/src/project.rs:43:21
+    |
+ 43 |         writer.link(node, "document", root);
+    |                     ^^^^
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+   --> crates/json/src/project.rs:43:39
+    |
+ 43 |         writer.link(node, "document", root);
+    |                                       ^^^^
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:119:8
+    |
+119 |     fn link(&mut self, subject: TermId, predicate: &str, object: TermId) {
+    |        ^^^^            ---------------                   --------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 43 |         writer.link(node?, "document", root);
+    |                         +
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 43 |         writer.link(node, "document", root?);
+    |                                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:44:23
+    |
+ 44 |         writer.number(node, "byteStart", value.span.start);
+    |                ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:141:8
+    |
+141 |     fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 44 |         writer.number(node?, "byteStart", value.span.start);
+    |                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:45:23
+    |
+ 45 |         writer.number(node, "byteEnd", value.span.end);
+    |                ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:141:8
+    |
+141 |     fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 45 |         writer.number(node?, "byteEnd", value.span.end);
+    |                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:46:23
+    |
+ 46 |         writer.number(node, "occurrence", index);
+    |                ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:141:8
+    |
+141 |     fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 46 |         writer.number(node?, "occurrence", index);
+    |                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:47:23
+    |
+ 47 |         writer.number(node, "ordinal", value.ordinal);
+    |                ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:141:8
+    |
+141 |     fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 47 |         writer.number(node?, "ordinal", value.ordinal);
+    |                           +
+
+error[E0308]: mismatched types
+    --> crates/json/src/project.rs:51:33
+     |
+  51 |             value.parent.map_or(root, |parent| value_ids[parent]),
+     |                          ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                          |
+     |                          arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, StorageError>`
+help: the return type of this call is `Result<TermId, StorageError>` due to the type of the argument passed
+    --> crates/json/src/project.rs:51:13
+     |
+  51 |             value.parent.map_or(root, |parent| value_ids[parent]),
+     |             ^^^^^^^^^^^^^^^^^^^^----^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |                                 |
+     |                                 this argument influences the return type of `map_or`
+note: method defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1224:18
+     |
+1224 |     pub const fn map_or<U, F>(self, default: U, f: F) -> U
+     |                  ^^^^^^
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+  51 |             value.parent.map_or(root?, |parent| value_ids[parent]),
+     |                                     +
+
+error[E0308]: arguments to this method are incorrect
+   --> crates/json/src/project.rs:48:16
+    |
+ 48 |         writer.link(
+    |                ^^^^
+    |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+   --> crates/json/src/project.rs:49:13
+    |
+ 49 |             node,
+    |             ^^^^
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+   --> crates/json/src/project.rs:51:13
+    |
+ 51 |             value.parent.map_or(root, |parent| value_ids[parent]),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:119:8
+    |
+119 |     fn link(&mut self, subject: TermId, predicate: &str, object: TermId) {
+    |        ^^^^            ---------------                   --------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 49 |             node?,
+    |                 +
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 51 |             value.parent.map_or(root, |parent| value_ids[parent])?,
+    |                                                                  +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:53:23
+    |
+ 53 |         writer.string(node, "path", &value.path);
+    |                ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:129:8
+    |
+129 |     fn string(&mut self, subject: TermId, predicate: &str, value: &str) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 53 |         writer.string(node?, "path", &value.path);
+    |                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:54:23
+    |
+ 54 |         writer.string(node, "kind", value.kind.name());
+    |                ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:129:8
+    |
+129 |     fn string(&mut self, subject: TermId, predicate: &str, value: &str) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 54 |         writer.string(node?, "kind", value.kind.name());
+    |                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:56:27
+    |
+ 56 |             writer.string(node, "text", &document.text[value.span.clone()]);
+    |                    ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                    |
+    |                    arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:129:8
+    |
+129 |     fn string(&mut self, subject: TermId, predicate: &str, value: &str) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 56 |             writer.string(node?, "text", &document.text[value.span.clone()]);
+    |                               +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:58:27
+    |
+ 58 |             writer.number(node, "size", value.size as usize);
+    |                    ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                    |
+    |                    arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:141:8
+    |
+141 |     fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 58 |             writer.number(node?, "size", value.size as usize);
+    |                               +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:65:22
+    |
+ 65 |         writer.class(node, "Structure");
+    |                ----- ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:114:8
+    |
+114 |     fn class(&mut self, subject: TermId, class: &str) {
+    |        ^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 65 |         writer.class(node?, "Structure");
+    |                          +
+
+error[E0308]: arguments to this method are incorrect
+   --> crates/json/src/project.rs:66:16
+    |
+ 66 |         writer.link(node, "document", root);
+    |                ^^^^
+    |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+   --> crates/json/src/project.rs:66:21
+    |
+ 66 |         writer.link(node, "document", root);
+    |                     ^^^^
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+   --> crates/json/src/project.rs:66:39
+    |
+ 66 |         writer.link(node, "document", root);
+    |                                       ^^^^
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:119:8
+    |
+119 |     fn link(&mut self, subject: TermId, predicate: &str, object: TermId) {
+    |        ^^^^            ---------------                   --------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 66 |         writer.link(node?, "document", root);
+    |                         +
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 66 |         writer.link(node, "document", root?);
+    |                                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:67:23
+    |
+ 67 |         writer.number(node, "byteStart", run.start);
+    |                ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:141:8
+    |
+141 |     fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 67 |         writer.number(node?, "byteStart", run.start);
+    |                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:68:23
+    |
+ 68 |         writer.number(node, "byteEnd", run.end);
+    |                ------ ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:141:8
+    |
+141 |     fn number(&mut self, subject: TermId, predicate: &str, value: usize) {
+    |        ^^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 68 |         writer.number(node?, "byteEnd", run.end);
+    |                           +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:70:13
+    |
+ 69 |         writer.typed(
+    |                ----- arguments to this method are incorrect
+ 70 |             node,
+    |             ^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:134:8
+    |
+134 |     fn typed(&mut self, subject: TermId, predicate: &str, value: &str, datatype: &str) {
+    |        ^^^^^            ---------------
+help: use the `?` operator to extract the `Result<TermId, StorageError>` value, propagating a `Result::Err` value to the caller
+    |
+ 70 |             node?,
+    |                 +
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:100:13
+    |
+100 |             terms,
+    |             ^^^^^ expected `[(&str, TermId); 20]`, found `[(&str, Result<TermId, _>); 20]`
+    |
+    = note: expected array `[(&'static str, TermId); 20]`
+               found array `[(&str, Result<TermId, StorageError>); 20]`
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:101:13
+    |
+101 |             rdf_type,
+    |             ^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<TermId, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+101 |             rdf_type: rdf_type.expect("REASON"),
+    |                     +++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:126:39
+    |
+126 |         self.link(subject, predicate, object);
+    |              ----                     ^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |              |
+    |              arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:119:8
+    |
+119 |     fn link(&mut self, subject: TermId, predicate: &str, object: TermId) {
+    |        ^^^^                                              --------------
+help: consider using `Result::expect` to unwrap the `Result<TermId, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+126 |         self.link(subject, predicate, object.expect("REASON"));
+    |                                             +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:131:39
+    |
+131 |         self.link(subject, predicate, object);
+    |              ----                     ^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |              |
+    |              arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:119:8
+    |
+119 |     fn link(&mut self, subject: TermId, predicate: &str, object: TermId) {
+    |        ^^^^                                              --------------
+help: consider using `Result::expect` to unwrap the `Result<TermId, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+131 |         self.link(subject, predicate, object.expect("REASON"));
+    |                                             +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:138:39
+    |
+138 |         self.link(subject, predicate, object);
+    |              ----                     ^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |              |
+    |              arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:119:8
+    |
+119 |     fn link(&mut self, subject: TermId, predicate: &str, object: TermId) {
+    |        ^^^^                                              --------------
+help: consider using `Result::expect` to unwrap the `Result<TermId, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+138 |         self.link(subject, predicate, object.expect("REASON"));
+    |                                             +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/json/src/project.rs:145:39
+    |
+145 |         self.link(subject, predicate, object);
+    |              ----                     ^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+    |              |
+    |              arguments to this method are incorrect
+    |
+    = note: expected struct `TermId`
+                 found enum `Result<TermId, StorageError>`
+note: method defined here
+   --> crates/json/src/project.rs:119:8
+    |
+119 |     fn link(&mut self, subject: TermId, predicate: &str, object: TermId) {
+    |        ^^^^                                              --------------
+help: consider using `Result::expect` to unwrap the `Result<TermId, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+145 |         self.link(subject, predicate, object.expect("REASON"));
+    |                                             +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/columnar/src/reader.rs:546:41
+     |
+ 546 |             builder.declare_named_graph(ids[index]);
+     |                     ------------------- ^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1019:12
+     |
+1019 |     pub fn declare_named_graph(&mut self, g: TermId) {
+     |            ^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 546 |             builder.declare_named_graph(ids[index]?);
+     |                                                   +
+
+For more information about this error, try `rustc --explain E0308`.
+error[E0308]: arguments to this method are incorrect
+    --> crates/columnar/src/reader.rs:550:17
+     |
+ 550 |         builder.push_quad(ids[s], ids[p], ids[o], g.map(|id| ids[id]));
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/columnar/src/reader.rs:550:27
+     |
+ 550 |         builder.push_quad(ids[s], ids[p], ids[o], g.map(|id| ids[id]));
+     |                           ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/columnar/src/reader.rs:550:35
+     |
+ 550 |         builder.push_quad(ids[s], ids[p], ids[o], g.map(|id| ids[id]));
+     |                                   ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/columnar/src/reader.rs:550:43
+     |
+ 550 |         builder.push_quad(ids[s], ids[p], ids[o], g.map(|id| ids[id]));
+     |                                           ^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+    --> crates/columnar/src/reader.rs:550:51
+     |
+ 550 |         builder.push_quad(ids[s], ids[p], ids[o], g.map(|id| ids[id]));
+     |                                                   ^^^^^^^^^^^^^^^^^^^
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 550 |         builder.push_quad(ids[s]?, ids[p], ids[o], g.map(|id| ids[id]));
+     |                                 +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 550 |         builder.push_quad(ids[s], ids[p]?, ids[o], g.map(|id| ids[id]));
+     |                                         +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 550 |         builder.push_quad(ids[s], ids[p], ids[o]?, g.map(|id| ids[id]));
+     |                                                 +
+
+error: could not compile `purrdf-mime` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: arguments to this method are incorrect
+    --> crates/columnar/src/reader.rs:564:17
+     |
+ 564 |         builder.push_reifier_in_graph(ids[reifier], ids[*triple], g.map(|id| ids[id]));
+     |                 ^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/columnar/src/reader.rs:564:39
+     |
+ 564 |         builder.push_reifier_in_graph(ids[reifier], ids[*triple], g.map(|id| ids[id]));
+     |                                       ^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/columnar/src/reader.rs:564:53
+     |
+ 564 |         builder.push_reifier_in_graph(ids[reifier], ids[*triple], g.map(|id| ids[id]));
+     |                                                     ^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+    --> crates/columnar/src/reader.rs:564:67
+     |
+ 564 |         builder.push_reifier_in_graph(ids[reifier], ids[*triple], g.map(|id| ids[id]));
+     |                                                                   ^^^^^^^^^^^^^^^^^^^
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2082:12
+     |
+2082 |     pub fn push_reifier_in_graph(
+     |            ^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 564 |         builder.push_reifier_in_graph(ids[reifier]?, ids[*triple], g.map(|id| ids[id]));
+     |                                                   +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 564 |         builder.push_reifier_in_graph(ids[reifier], ids[*triple]?, g.map(|id| ids[id]));
+     |                                                                 +
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/columnar/src/reader.rs:567:17
+     |
+ 567 |         builder.push_annotation_in_graph(
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/columnar/src/reader.rs:568:13
+     |
+ 568 |             ids[reifier],
+     |             ^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/columnar/src/reader.rs:569:13
+     |
+ 569 |             ids[predicate],
+     |             ^^^^^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `TermId`, found `Result<TermId, StorageError>`
+    --> crates/columnar/src/reader.rs:570:13
+     |
+ 570 |             ids[value],
+     |             ^^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: expected `Option<TermId>`, found `Option<Result<TermId, StorageError>>`
+    --> crates/columnar/src/reader.rs:571:13
+     |
+ 571 |             graph.map(|id| ids[id]),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^
+     = note: expected enum `Option<TermId>`
+                found enum `Option<Result<TermId, purrdf_lex::allocation::StorageError>>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:2140:12
+     |
+2140 |     pub fn push_annotation_in_graph(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 568 |             ids[reifier]?,
+     |                         +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 569 |             ids[predicate]?,
+     |                           +
+help: use the `?` operator to extract the `Result<TermId, purrdf_lex::allocation::StorageError>` value, propagating a `Result::Err` value to the caller
+     |
+ 570 |             ids[value]?,
+     |                       +
+
+error: could not compile `purrdf-json` (lib) due to 28 previous errors
+error: could not compile `purrdf-columnar` (lib) due to 4 previous errors
+terminal_status=101

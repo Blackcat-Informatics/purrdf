@@ -1,0 +1,67 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Finished `test` profile [optimized] target(s) in 10.93s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-lex/fe1d3e916639c520/out/purrdf_lex-fe1d3e916639c520)
+
+running 1 test
+test allocation::resumed_memory_regressions::capacity_counts_preserve_full_width_numeric_identity_without_wide_alignment ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 309 filtered out; finished in 0.00s
+
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 1m 09s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-datalog/9166702f3a632274/out/purrdf_datalog-9166702f3a632274)
+
+running 1 test
+EvalError size=120 align=8; CapacityError size=33 align=1
+test seminaive::tests::capacity_cause_stays_inline_without_inflating_the_operational_error ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 367 filtered out; finished in 0.00s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 4m 24s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 16 tests
+test describe::tests::full_description_table_replacement_preserves_original_capacity_and_grant ... ok
+test evidence::answer::tests::exact_witness_questions_stop_without_any_metadata_capacity_or_false_classification ... ok
+test evidence::column::tests::default_rows_and_reordered_bags_need_no_capacity ... ok
+test evidence::standpoint::tests::malformed_and_cyclic_orders_fail_without_publishing_or_retaining_capacity ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_checks_logical_sum_before_host_width_and_skips_only_hints ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_public_text_miss_is_atomic_and_duplicate_survives ... ok
+test ir::builder::native_graph_birth_tests::merge_scope_capacity_is_minted_only_for_actual_blank_ingress ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_public_rows_and_duplicate_full_import_preserve_original_state ... ok
+test ir::mutable::tests::delta_capacity_public_insert_rolls_back_only_attempted_terms ... ok
+test imports::tests::public_import_closure_preserves_exact_scope_capacity_and_original_inputs ... ok
+test ir::ingest::tests::event_scope_capacity_preserves_original_count_and_prior_state ... ok
+test query_scope::counters::tests::satisfied_candidates_need_no_temporary_decision_capacity ... ok
+test provenance::tests::provenance_zero_based_capacity_includes_last_u32_slot ... ok
+test provenance::tests::provenance_capacity_refusal_preserves_all_public_interner_streams ... ok
+test ir::dataset::tests::lazy_permutation_capacity_refuses_before_allocation_and_retries ... ok
+test small::tests::capacity_overflow_panics ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 1324 filtered out; finished in 0.01s
+
+    Finished `test` profile [optimized] target(s) in 0.31s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-datalog/9166702f3a632274/out/purrdf_datalog-9166702f3a632274)
+
+running 11 tests
+test cache::tests::a_zero_capacity_cache_is_refused - should panic ... ok
+test evidence::tests::ordinary_facts_need_no_evidence_capacity_and_foreign_rows_are_refused ... ok
+test proof::tests::proof_capacity_preserves_axiom_and_rule_hits_before_admission ... ok
+test schedule::tests::layer_capacity_refusal_preserves_identity_and_stops_later_phases ... ok
+test id::tests::every_native_brand_preserves_exact_capacity_and_wide_logical_identity ... ok
+test seminaive::tests::capacity_cause_stays_inline_without_inflating_the_operational_error ... ok
+test store::tests::native_row_capacity_refuses_before_terms_and_preserves_duplicate_hits ... ok
+test store::tests::partition_capacity_keeps_existing_partition_growth_and_refuses_new_keys ... ok
+test term::tests::symbol_capacity_preserves_existing_named_nodes ... ok
+test store::tests::dependent_term_capacity_rolls_back_lexical_identity_and_original_rows ... ok
+test term::tests::named_node_capacity_rolls_back_only_new_symbols_and_preserves_hits ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 357 filtered out; finished in 0.00s
+
+terminal_status=0

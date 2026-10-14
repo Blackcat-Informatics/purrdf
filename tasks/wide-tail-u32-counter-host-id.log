@@ -1,0 +1,10 @@
+    Finished `test` profile [optimized] target(s) in 0.29s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-datalog/9166702f3a632274/out/purrdf_datalog-9166702f3a632274)
+
+running 1 test
+test store::tests::arrangements_preserve_tagged_host_ids_across_batches_and_tail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 366 filtered out; finished in 0.00s
+
+
+terminal_status=0

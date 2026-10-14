@@ -1,0 +1,45 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 43s
+   Doc-tests purrdf_core
+
+running 26 tests
+test crates/rdf-core/src/bytes.rs - bytes::read_u32_le (line 31) ... ok
+test crates/rdf-core/src/bytes.rs - bytes::put_u32_le (line 71) ... ok
+test crates/rdf-core/src/bytes.rs - bytes::read_u64_le (line 51) ... ok
+test crates/rdf-core/src/bytes.rs - bytes::put_u64_le (line 89) ... ok
+test crates/rdf-core/src/collections.rs - collections::build_rdf_list (line 502) ... ok
+test crates/rdf-core/src/collections.rs - collections::convertible_list_cells (line 631) ... ok
+test crates/rdf-core/src/csv/mod.rs - csv::Dialect (line 192) ... ok
+test crates/rdf-core/src/csv/mod.rs - csv::Encoding::from_label (line 99) ... ok
+test crates/rdf-core/src/csv/write.rs - csv::write::FieldWriter (line 227) ... ok
+test crates/rdf-core/src/csv/write.rs - csv::write::Writer (line 333) ... ok
+test crates/rdf-core/src/csv/read.rs - csv::read::read_table (line 204) ... ok
+test crates/rdf-core/src/distance/mod.rs - distance::Resolved (line 761) ... ok
+test crates/rdf-core/src/graph.rs - graph::scc_component_index (line 157) ... ok
+test crates/rdf-core/src/graph.rs - graph::tarjan_scc (line 96) ... ok
+test crates/rdf-core/src/graph_roles.rs - graph_roles::GraphRoleIndex (line 154) ... ok
+test crates/rdf-core/src/imports.rs - imports::ImportMap (line 231) ... ok
+test crates/rdf-core/src/imports.rs - imports::ImportMap::try_insert (line 276) ... ok
+test crates/rdf-core/src/imports.rs - imports::ImportMap::unanchored_imports (line 406) ... ok
+test crates/rdf-core/src/imports.rs - imports::declared_import_targets (line 801) ... ok
+test crates/rdf-core/src/imports.rs - imports::ImportMap::unresolved_imports (line 528) ... ok
+test crates/rdf-core/src/imports.rs - imports::imported_iris (line 938) ... ok
+test crates/rdf-core/src/imports.rs - imports::unanchored_import_triples (line 1000) ... ok
+test crates/rdf-core/src/small.rs - small::SmallVec (line 99) ... ok
+test crates/rdf-core/src/term_writer.rs - term_writer::write_term_value (line 33) ... ok
+test crates/rdf-core/src/small.rs - small::smallvec (line 1430) ... ok
+test crates/rdf-core/src/xsd_regex/mod.rs - xsd_regex::CompiledPattern::is_match (line 285) ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 5 tests
+test crates/rdf-core/src/ir/embedding/verify.rs - ir::embedding::verify::ResidentEmbeddingCertificate (line 102) - compile fail ... ok
+test crates/rdf-core/src/diagnostic.rs - diagnostic::RdfDiagnostic (line 250) - compile fail ... ok
+test crates/rdf-core/src/distance/mod.rs - distance::Resolved (line 741) - compile fail ... ok
+test crates/rdf-core/src/distance/mod.rs - distance::Resolved (line 749) - compile fail ... ok
+test crates/rdf-core/src/ir/embedding/verify.rs - ir::embedding::verify::ResidentEmbeddingCertificate (line 88) - compile fail ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+all doctests ran in 1.36s; merged doctests compilation took 1.28s

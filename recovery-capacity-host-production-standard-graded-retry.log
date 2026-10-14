@@ -1,0 +1,154 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/conformance-kit)
+error[E0277]: the trait bound `GradeError: From<ViewCanonError<!, ()>>` is not satisfied
+   --> crates/conformance-kit/src/report.rs:176:9
+    |
+176 | /         purrdf_core::try_canonicalize_flat_view(expected, purrdf_core::CanonHash::Sha256)
+177 | |             .map_err(GradeError::from)?;
+    | |______________________________________^ unsatisfied trait bound
+    |
+help: the trait `From<ViewCanonError<!, ()>>` is not implemented for `GradeError`
+   --> crates/conformance-kit/src/lib.rs:28:1
+    |
+ 28 | pub enum GradeError {
+    | ^^^^^^^^^^^^^^^^^^^
+help: `GradeError` implements trait `From<T>`
+   --> crates/conformance-kit/src/lib.rs:60:1
+    |
+ 60 | purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StorageError>`
+ 61 |
+ 62 | impl From<purrdf_core::RdfDiagnostic> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<RdfDiagnostic>`
+...
+ 70 | impl From<purrdf_core::CanonError> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<CanonError>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `GradeError: From<ViewCanonError<!, ()>>` is not satisfied
+   --> crates/conformance-kit/src/report.rs:177:14
+    |
+177 |             .map_err(GradeError::from)?;
+    |              ^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `From<ViewCanonError<!, ()>>` is not implemented for `GradeError`
+   --> crates/conformance-kit/src/lib.rs:28:1
+    |
+ 28 | pub enum GradeError {
+    | ^^^^^^^^^^^^^^^^^^^
+help: `GradeError` implements trait `From<T>`
+   --> crates/conformance-kit/src/lib.rs:60:1
+    |
+ 60 | purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StorageError>`
+ 61 |
+ 62 | impl From<purrdf_core::RdfDiagnostic> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<RdfDiagnostic>`
+...
+ 70 | impl From<purrdf_core::CanonError> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<CanonError>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `GradeError: From<ViewCanonError<!, ()>>` is not satisfied
+   --> crates/conformance-kit/src/report.rs:177:22
+    |
+177 |             .map_err(GradeError::from)?;
+    |                      ^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `From<ViewCanonError<!, ()>>` is not implemented for `GradeError`
+   --> crates/conformance-kit/src/lib.rs:28:1
+    |
+ 28 | pub enum GradeError {
+    | ^^^^^^^^^^^^^^^^^^^
+help: `GradeError` implements trait `From<T>`
+   --> crates/conformance-kit/src/lib.rs:60:1
+    |
+ 60 | purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StorageError>`
+ 61 |
+ 62 | impl From<purrdf_core::RdfDiagnostic> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<RdfDiagnostic>`
+...
+ 70 | impl From<purrdf_core::CanonError> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<CanonError>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `GradeError: From<ViewCanonError<!, ()>>` is not satisfied
+   --> crates/conformance-kit/src/report.rs:178:18
+    |
+178 |       let actual = purrdf_core::try_canonicalize_flat_view(actual, purrdf_core::CanonHash::Sha256)
+    |  __________________^
+179 | |         .map_err(GradeError::from)?;
+    | |__________________________________^ unsatisfied trait bound
+    |
+help: the trait `From<ViewCanonError<!, ()>>` is not implemented for `GradeError`
+   --> crates/conformance-kit/src/lib.rs:28:1
+    |
+ 28 | pub enum GradeError {
+    | ^^^^^^^^^^^^^^^^^^^
+help: `GradeError` implements trait `From<T>`
+   --> crates/conformance-kit/src/lib.rs:60:1
+    |
+ 60 | purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StorageError>`
+ 61 |
+ 62 | impl From<purrdf_core::RdfDiagnostic> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<RdfDiagnostic>`
+...
+ 70 | impl From<purrdf_core::CanonError> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<CanonError>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `GradeError: From<ViewCanonError<!, ()>>` is not satisfied
+   --> crates/conformance-kit/src/report.rs:179:10
+    |
+179 |         .map_err(GradeError::from)?;
+    |          ^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `From<ViewCanonError<!, ()>>` is not implemented for `GradeError`
+   --> crates/conformance-kit/src/lib.rs:28:1
+    |
+ 28 | pub enum GradeError {
+    | ^^^^^^^^^^^^^^^^^^^
+help: `GradeError` implements trait `From<T>`
+   --> crates/conformance-kit/src/lib.rs:60:1
+    |
+ 60 | purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StorageError>`
+ 61 |
+ 62 | impl From<purrdf_core::RdfDiagnostic> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<RdfDiagnostic>`
+...
+ 70 | impl From<purrdf_core::CanonError> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<CanonError>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `GradeError: From<ViewCanonError<!, ()>>` is not satisfied
+   --> crates/conformance-kit/src/report.rs:179:18
+    |
+179 |         .map_err(GradeError::from)?;
+    |                  ^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `From<ViewCanonError<!, ()>>` is not implemented for `GradeError`
+   --> crates/conformance-kit/src/lib.rs:28:1
+    |
+ 28 | pub enum GradeError {
+    | ^^^^^^^^^^^^^^^^^^^
+help: `GradeError` implements trait `From<T>`
+   --> crates/conformance-kit/src/lib.rs:60:1
+    |
+ 60 | purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<StorageError>`
+ 61 |
+ 62 | impl From<purrdf_core::RdfDiagnostic> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<RdfDiagnostic>`
+...
+ 70 | impl From<purrdf_core::CanonError> for GradeError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<CanonError>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-conformance-kit` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+terminal_status=101

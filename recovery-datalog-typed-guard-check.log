@@ -1,0 +1,192 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error[E0599]: no method named `contains` found for enum `GuardError` in the current scope
+    --> crates/datalog/src/guard.rs:384:25
+     |
+ 262 | pub enum GuardError {
+     | ------------------- method `contains` not found for this enum
+...
+ 384 |         assert!(refusal.contains("rule 3"), "{refusal}");
+     |                         ^^^^^^^^ method not found in `GuardError`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0277]: `?` couldn't convert the error to `GuardError`
+   --> crates/datalog/src/schedule.rs:896:75
+    |
+896 |                 let value = int_of(call.inputs[0]).ok_or("not an integer")?;
+    |                                                    -----------------------^ the trait `From<&str>` is not implemented for `GuardError`
+    |                                                    |
+    |                                                    this can't be annotated with `?` because it has type `Result<_, &str>`
+    |
+note: `GuardError` needs to implement `From<&str>`
+   --> crates/datalog/src/guard.rs:262:1
+    |
+262 | pub enum GuardError {
+    | ^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `GuardError` implements trait `From<T>`
+   --> crates/datalog/src/guard.rs:287:1
+    |
+287 | / purrdf_lex::variant_from!(GuardError {
+288 | |     Storage(purrdf_lex::allocation::StorageError),
+289 | |     Evaluation(String),
+290 | | });
+    | |  ^
+    | |  |
+    | |__`From<purrdf_lex::allocation::StorageError>`
+    |    `From<std::string::String>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `?` couldn't convert the error to `GuardError`
+   --> crates/datalog/src/schedule.rs:918:75
+    |
+918 |                 let value = int_of(call.inputs[0]).ok_or("not an integer")?;
+    |                                                    -----------------------^ the trait `From<&str>` is not implemented for `GuardError`
+    |                                                    |
+    |                                                    this can't be annotated with `?` because it has type `Result<_, &str>`
+    |
+note: `GuardError` needs to implement `From<&str>`
+   --> crates/datalog/src/guard.rs:262:1
+    |
+262 | pub enum GuardError {
+    | ^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `GuardError` implements trait `From<T>`
+   --> crates/datalog/src/guard.rs:287:1
+    |
+287 | / purrdf_lex::variant_from!(GuardError {
+288 | |     Storage(purrdf_lex::allocation::StorageError),
+289 | |     Evaluation(String),
+290 | | });
+    | |  ^
+    | |  |
+    | |__`From<purrdf_lex::allocation::StorageError>`
+    |    `From<std::string::String>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `?` couldn't convert the error to `GuardError`
+   --> crates/datalog/src/schedule.rs:927:79
+    |
+927 |                     let value = int_of(call.inputs[0]).ok_or("not an integer")?;
+    |                                                        -----------------------^ the trait `From<&str>` is not implemented for `GuardError`
+    |                                                        |
+    |                                                        this can't be annotated with `?` because it has type `Result<_, &str>`
+    |
+note: `GuardError` needs to implement `From<&str>`
+   --> crates/datalog/src/guard.rs:262:1
+    |
+262 | pub enum GuardError {
+    | ^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `GuardError` implements trait `From<T>`
+   --> crates/datalog/src/guard.rs:287:1
+    |
+287 | / purrdf_lex::variant_from!(GuardError {
+288 | |     Storage(purrdf_lex::allocation::StorageError),
+289 | |     Evaluation(String),
+290 | | });
+    | |  ^
+    | |  |
+    | |__`From<purrdf_lex::allocation::StorageError>`
+    |    `From<std::string::String>`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/schedule.rs:938:31
+    |
+938 |                 "fail" => Err("the guard could not decide".to_owned()),
+    |                           --- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `GuardError`, found `String`
+    |                           |
+    |                           arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `std::string::String` due to the type of the argument passed
+   --> crates/datalog/src/schedule.rs:938:27
+    |
+938 |                 "fail" => Err("the guard could not decide".to_owned()),
+    |                           ^^^^---------------------------------------^
+    |                               |
+    |                               this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `guard::GuardError::Evaluation`
+    |
+938 |                 "fail" => Err(guard::GuardError::Evaluation("the guard could not decide".to_owned())),
+    |                               ++++++++++++++++++++++++++++++                                       +
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/schedule.rs:945:30
+    |
+945 |                 other => Err(format!("unknown guard {other}")),
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `GuardError`, found `String`
+    |
+help: call `Into::into` on this expression to convert `std::string::String` into `GuardError`
+    |
+945 |                 other => Err(format!("unknown guard {other}").into()),
+    |                                                              +++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/schedule.rs:1808:29
+     |
+1808 |                         Err("first-later-row".to_owned())
+     |                         --- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `GuardError`, found `String`
+     |                         |
+     |                         arguments to this enum variant are incorrect
+     |
+help: the type constructed contains `std::string::String` due to the type of the argument passed
+    --> crates/datalog/src/schedule.rs:1808:25
+     |
+1808 |                         Err("first-later-row".to_owned())
+     |                         ^^^^----------------------------^
+     |                             |
+     |                             this argument influences the type of `Err`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+     |
+ 567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+     |     ^^^
+help: try wrapping the expression in `guard::GuardError::Evaluation`
+     |
+1808 |                         Err(guard::GuardError::Evaluation("first-later-row".to_owned()))
+     |                             ++++++++++++++++++++++++++++++                            +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/schedule.rs:1812:32
+     |
+1812 |                     return Err("second-earlier-row".to_owned());
+     |                            --- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `GuardError`, found `String`
+     |                            |
+     |                            arguments to this enum variant are incorrect
+     |
+help: the type constructed contains `std::string::String` due to the type of the argument passed
+    --> crates/datalog/src/schedule.rs:1812:28
+     |
+1812 |                     return Err("second-earlier-row".to_owned());
+     |                            ^^^^-------------------------------^
+     |                                |
+     |                                this argument influences the type of `Err`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+     |
+ 567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+     |     ^^^
+help: try wrapping the expression in `guard::GuardError::Evaluation`
+     |
+1812 |                     return Err(guard::GuardError::Evaluation("second-earlier-row".to_owned()));
+     |                                ++++++++++++++++++++++++++++++                               +
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib test) due to 8 previous errors
+terminal_status=101

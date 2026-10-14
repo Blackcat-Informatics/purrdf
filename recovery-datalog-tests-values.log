@@ -1,0 +1,51 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error: unused `Result` that must be used
+   --> crates/datalog/src/cache.rs:791:13
+    |
+791 | /             store.insert(
+792 | |                 &format!("<{subject}>"),
+793 | |                 &format!("<{predicate}>"),
+794 | |                 &format!("<{object}>"),
+795 | |                 RelationStore::DEFAULT_GRAPH,
+796 | |             );
+    | |_____________^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+791 |             let _ = store.insert(
+    |             +++++++
+
+error: unused `Result` that must be used
+    --> crates/datalog/src/chase.rs:1580:13
+     |
+1580 | /             store.insert(
+1581 | |                 &iri(subject),
+1582 | |                 &iri(predicate),
+1583 | |                 &iri(object),
+1584 | |                 RelationStore::DEFAULT_GRAPH,
+1585 | |             );
+     | |_____________^
+     |
+     = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+     |
+1580 |             let _ = store.insert(
+     |             +++++++
+
+error: unused `Result` that must be used
+  --> crates/datalog/src/synth_corpus.rs:69:13
+   |
+69 |             store.insert(subject, predicate, object, graph);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+   |
+69 |             let _ = store.insert(subject, predicate, object, graph);
+   |             +++++++
+
+error: could not compile `purrdf-datalog` (lib test) due to 3 previous errors
+terminal_status=101

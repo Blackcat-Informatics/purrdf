@@ -1,0 +1,2368 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 35.90s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test diagnostic::tests::shared_attachments_preserve_original_reporting_and_admitted_ownership ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1341 filtered out; finished in 0.00s
+
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/envelope-probe)
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/support/turtle.rs:26:5
+   |
+26 |     parse_shapes(&format!("{prefixes}{shapes_ttl}"), None).map_err(String::from)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/support/turtle.rs:26:60
+   |
+26 |     parse_shapes(&format!("{prefixes}{shapes_ttl}"), None).map_err(String::from)
+   |                                                            ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/support/turtle.rs:26:68
+   |
+26 |     parse_shapes(&format!("{prefixes}{shapes_ttl}"), None).map_err(String::from)
+   |                                                                    ^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (test "unique_values_for") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-shapes` (test "dated_execution") due to 3 previous errors
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/shapes_graph_wellformedness.rs:1602:21
+     |
+1602 |         report_text.contains("<http://www.w3.org/ns/shacl#detail>"),
+     |                     ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+1602 |         report_text.expect("REASON").contains("<http://www.w3.org/ns/shacl#detail>"),
+     |                    +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/tests/shapes_graph_wellformedness.rs:1603:10
+     |
+1603 |         "{report_text}"
+     |          ^^^^^^^^^^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+Some errors have detailed explanations: E0277, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (test "shapes_graph_wellformedness") due to 5 previous errors
+error[E0308]: mismatched types
+  --> crates/shapes/tests/custom_node_expressions.rs:89:5
+   |
+85 |   fn eval_error(data_ttl: &str, shapes_ttl: &str, focus: &str) -> String {
+   |                                                                   ------ expected `std::string::String` because of return type
+...
+89 | /     eval_node_expr(&store, &ex_term(focus), &expr, &mut guard)
+90 | |         .expect_err("the expression must be refused")
+   | |_____________________________________________________^ expected `String`, found `ShapesError`
+   |
+help: try using a conversion method
+   |
+90 |         .expect_err("the expression must be refused").to_string()
+   |                                                      ++++++++++++
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/tests/custom_node_expressions.rs:106:72
+    |
+105 | fn validate(data_ttl: &str, shapes_ttl: &str) -> Result<ValidationReport, String> {
+    |                                                  -------------------------------- expected `std::string::String` because of this
+106 |     let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)?;
+    |                  ------------------------------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |                  |
+    |                  this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/custom_node_expressions.rs:107:5
+    |
+107 |     validate_with(&store_of(data_ttl), &shapes).map_err(Into::into)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/custom_node_expressions.rs:107:49
+    |
+107 |     validate_with(&store_of(data_ttl), &shapes).map_err(Into::into)
+    |                                                 ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/custom_node_expressions.rs:107:57
+    |
+107 |     validate_with(&store_of(data_ttl), &shapes).map_err(Into::into)
+    |                                                         ^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+Some errors have detailed explanations: E0277, E0308.
+error: could not compile `purrdf-shapes` (test "custom_node_expressions") due to 8 previous errors
+error[E0308]: mismatched types
+   --> crates/shapes/tests/product_fixture/mod.rs:164:5
+    |
+163 | pub(crate) fn report_nt(prepared: &PreparedShapes) -> String {
+    |                                                       ------ expected `std::string::String` because of return type
+164 |     report(prepared).to_ntriples()
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `String`, found `Result<String, ShapesError>`
+    |
+    = note: expected struct `String`
+                 found enum `std::result::Result<String, purrdf_shapes::ShapesError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+    |
+164 |     report(prepared).to_ntriples().expect("REASON")
+    |                                   +++++++++++++++++
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/host_entry_points.rs:213:5
+    |
+213 | /     evaluate(&FreeExpression {
+214 | |         shapes: &doc.dataset,
+215 | |         prefixes: &doc.prefixes,
+216 | |         root: &root,
+...   |
+222 | |     .map(|evaluated| evaluated.outputs.iter().map(ToString::to_string).collect())
+223 | |     .map_err(String::from)
+    | |__________________________^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+For more information about this error, try `rustc --explain E0308`.
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/host_entry_points.rs:223:6
+    |
+223 |     .map_err(String::from)
+    |      ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/host_entry_points.rs:223:14
+    |
+223 |     .map_err(String::from)
+    |              ^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/tests/host_entry_points.rs:297:91
+    |
+295 | fn run_rules(options: &RuleOptions) -> Result<purrdf_shapes::Inference, String> {
+    |                                        ---------------------------------------- expected `std::string::String` because of this
+296 |     let shapes =
+297 |         engine::parse_shapes(&format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}{TOOLS}"), None)?;
+    |         ----------------------------------------------------------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |         |
+    |         this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/tests/host_entry_points.rs:298:61
+    |
+295 | fn run_rules(options: &RuleOptions) -> Result<purrdf_shapes::Inference, String> {
+    |                                        ---------------------------------------- expected `std::string::String` because of this
+...
+298 |     let projected = engine::project_dataset(data().as_ref())?;
+    |                     ----------------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |                     |
+    |                     this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/host_entry_points.rs:300:5
+    |
+295 | fn run_rules(options: &RuleOptions) -> Result<purrdf_shapes::Inference, String> {
+    |                                        ---------------------------------------- expected `std::result::Result<purrdf_shapes::Inference, std::string::String>` because of return type
+...
+300 |     infer(&holder, &shapes, options)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Inference, String>`, found `Result<Inference, ShapesError>`
+    |
+    = note: expected enum `Result<_, std::string::String>`
+               found enum `Result<_, purrdf_shapes::ShapesError>`
+
+error[E0599]: no method named `contains` found for enum `purrdf_shapes::ShapesError` in the current scope
+    --> crates/shapes/tests/host_entry_points.rs:389:21
+     |
+ 389 |     assert!(refused.contains("past the limit of 3"), "{refused}");
+     |                     ^^^^^^^^ method not found in `purrdf_shapes::ShapesError`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `contains` found for enum `purrdf_shapes::ShapesError` in the current scope
+    --> crates/shapes/tests/host_entry_points.rs:428:21
+     |
+ 428 |     assert!(refused.contains("facts"), "{refused}");
+     |                     ^^^^^^^^ method not found in `purrdf_shapes::ShapesError`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+error: could not compile `purrdf-shapes` (test "product_wasm") due to 1 previous error
+error: could not compile `purrdf-shapes` (test "host_entry_points") due to 8 previous errors
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/shacl_shacl_differential.rs:214:5
+    |
+214 | /     from_dataset_with_base(
+215 | |         &input.dataset,
+216 | |         None,
+217 | |         &input.prefixes,
+...   |
+222 | |     .err()
+223 | |     .map(String::from)
+    | |______________________^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/shacl_shacl_differential.rs:223:6
+    |
+223 |     .map(String::from)
+    |      ^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/shacl_shacl_differential.rs:223:10
+    |
+223 |     .map(String::from)
+    |          ^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error: could not compile `purrdf-shapes` (test "shacl_shacl_differential") due to 3 previous errors
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/constraint_annotations.rs:592:14
+     |
+ 590 |           !default_report
+     |  __________-
+ 591 | |             .to_ntriples()
+ 592 | |             .contains("conformanceDisallows")
+     | |             -^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     | |_____________|
+     |
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 591 |             .to_ntriples().expect("REASON")
+     |                           +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/tests/constraint_annotations.rs:595:44
+     |
+ 595 |         conformance_disallows_from_dataset(&default_report.to_dataset()).expect("readable"),
+     |         ---------------------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |         |
+     |         arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2561:8
+     |
+2561 | pub fn conformance_disallows_from_dataset(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/tests/constraint_annotations.rs:607:44
+     |
+ 607 |         conformance_disallows_from_dataset(&report.to_dataset()).expect("readable"),
+     |         ---------------------------------- ^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |         |
+     |         arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2561:8
+     |
+2561 | pub fn conformance_disallows_from_dataset(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/constraint_annotations.rs:610:34
+     |
+ 610 |     assert!(report.to_ntriples().contains(
+     |             ---------------------^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 610 |     assert!(report.to_ntriples().expect("REASON").contains(
+     |                                 +++++++++++++++++
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/constraint_annotations.rs:769:12
+     |
+ 769 |         nt.contains("<http://www.w3.org/ns/shacl#resultMessage> \"Too many\"@en ."),
+     |            ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 769 |         nt.expect("REASON").contains("<http://www.w3.org/ns/shacl#resultMessage> \"Too many\"@en ."),
+     |           +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+   --> crates/shapes/tests/constraint_annotations.rs:770:10
+    |
+770 |         "{nt}"
+    |          ^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+    = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/constraint_annotations.rs:773:12
+     |
+ 773 |         nt.contains("<http://www.w3.org/ns/shacl#resultMessage> \"Zu viele\"@de ."),
+     |            ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 773 |         nt.expect("REASON").contains("<http://www.w3.org/ns/shacl#resultMessage> \"Zu viele\"@de ."),
+     |           +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+   --> crates/shapes/tests/constraint_annotations.rs:774:10
+    |
+774 |         "{nt}"
+    |          ^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+    = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `matches` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/constraint_annotations.rs:790:19
+     |
+ 790 |     assert_eq!(nt.matches("resultMessage").count(), 1, "{nt}");
+     |                   ^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `matches` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:2044:5
+     |
+2044 |     pub fn matches<P: Pattern>(&self, pat: P) -> Matches<'_, P> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 790 |     assert_eq!(nt.expect("REASON").matches("resultMessage").count(), 1, "{nt}");
+     |                  +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+   --> crates/shapes/tests/constraint_annotations.rs:790:57
+    |
+790 |     assert_eq!(nt.matches("resultMessage").count(), 1, "{nt}");
+    |                                                         ^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+    = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/constraint_annotations.rs:792:12
+     |
+ 792 |         nt.contains("<http://www.w3.org/ns/shacl#resultMessage> \"one\" ."),
+     |            ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 792 |         nt.expect("REASON").contains("<http://www.w3.org/ns/shacl#resultMessage> \"one\" ."),
+     |           +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+   --> crates/shapes/tests/constraint_annotations.rs:793:10
+    |
+793 |         "{nt}"
+    |          ^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+    = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error: could not compile `purrdf-shapes` (test "constraint_annotations") due to 15 previous errors
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:133:5
+    |
+133 |     validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:133:51
+    |
+133 |     validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
+    |                                                   ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:133:59
+    |
+133 |     validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
+    |                                                           ^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:254:5
+    |
+254 |     validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:254:51
+    |
+254 |     validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
+    |                                                   ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:254:59
+    |
+254 |     validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
+    |                                                           ^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:645:5
+    |
+645 |     validate_dataset(&data(), &sparql_constraint_shapes(predicate)).map_err(Into::into)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:645:69
+    |
+645 |     validate_dataset(&data(), &sparql_constraint_shapes(predicate)).map_err(Into::into)
+    |                                                                     ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:645:77
+    |
+645 |     validate_dataset(&data(), &sparql_constraint_shapes(predicate)).map_err(Into::into)
+    |                                                                             ^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:895:5
+    |
+895 |     validate_dataset(&data(), &shapes).map_err(Into::into)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:895:40
+    |
+895 |     validate_dataset(&data(), &shapes).map_err(Into::into)
+    |                                        ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:895:48
+    |
+895 |     validate_dataset(&data(), &shapes).map_err(Into::into)
+    |                                                ^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:903:5
+    |
+903 |     validate_dataset(&data(), &shapes).map_err(Into::into)
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:903:40
+    |
+903 |     validate_dataset(&data(), &shapes).map_err(Into::into)
+    |                                        ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/function_body_relation.rs:903:48
+    |
+903 |     validate_dataset(&data(), &shapes).map_err(Into::into)
+    |                                                ^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0599]: no method named `contains` found for enum `purrdf_shapes::ShapesError` in the current scope
+    --> crates/shapes/tests/function_body_relation.rs:1031:17
+     |
+1031 |         refused.contains(REL_MISSING),
+     |                 ^^^^^^^^ method not found in `purrdf_shapes::ShapesError`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-shapes` (test "function_body_relation") due to 16 previous errors
+error[E0308]: mismatched types
+  --> crates/shapes/tests/support/report.rs:24:5
+   |
+23 |   pub fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
+   |                                                                          ------ expected `std::string::String` because of return type
+24 | /     prepared
+25 | |         .bind_shared_dataset(Arc::clone(data))
+26 | |         .expect("binding the data graph")
+27 | |         .validate()
+28 | |         .expect("validation runs")
+29 | |         .to_ntriples()
+   | |______________________^ expected `String`, found `Result<String, ShapesError>`
+   |
+   = note: expected struct `String`
+                found enum `std::result::Result<String, purrdf_shapes::ShapesError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+   |
+29 |         .to_ntriples().expect("REASON")
+   |                       +++++++++++++++++
+
+error: could not compile `purrdf-shapes` (test "product_refusal") due to 1 previous error
+error[E0308]: mismatched types
+   --> crates/shapes/tests/conformance.rs:98:57
+    |
+ 98 |         let produced_graph = canonical_without_messages(&report.to_ntriples());
+    |                              -------------------------- ^^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&Result<String, ShapesError>`
+    |                              |
+    |                              arguments to this function are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+note: function defined here
+   --> crates/shapes/tests/conformance.rs:144:4
+    |
+144 | fn canonical_without_messages(nt: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^ --------
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/node_expr_reference.rs:999:8
+    |
+999 |     Ok(first)
+    |     -- ^^^^^ expected `Result<Vec<Term>, String>`, found `Result<Vec<Term>, ShapesError>`
+    |     |
+    |     arguments to this enum variant are incorrect
+    |
+    = note: expected enum `Result<_, std::string::String>`
+               found enum `Result<_, purrdf_shapes::ShapesError>`
+help: the type constructed contains `std::result::Result<std::vec::Vec<purrdf_shapes::term::Term>, purrdf_shapes::ShapesError>` due to the type of the argument passed
+   --> crates/shapes/tests/node_expr_reference.rs:999:5
+    |
+999 |     Ok(first)
+    |     ^^^-----^
+    |        |
+    |        this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+   --> crates/shapes/tests/conformance.rs:104:17
+    |
+103 |                  sh:resultMessage aside):\n  PRODUCED:\n{}\n  EXPECTED:\n{}",
+    |                                                         -- required by this formatting parameter
+104 |                 report.to_ntriples(),
+    |                 ^^^^^^^^^^^^^^^^^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+    = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error: could not compile `purrdf-shapes` (test "conformance") due to 2 previous errors
+error: could not compile `purrdf-shapes` (test "node_expr_reference") due to 1 previous error
+error: useless conversion to the same type: `purrdf_shapes::ShapesError`
+   --> crates/validate/src/entail.rs:100:47
+    |
+100 |           run_rules(source, data, limits, knobs).map_err(ShapesError::from)
+    |  _______________________________________________-^^^^^^^^^^^^^^^^^^^^^^^^^^
+101 | |     })
+    | |____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#useless_conversion
+    = note: `-D clippy::useless-conversion` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::useless_conversion)]`
+
+error: useless conversion to the same type: `purrdf_shapes::ShapesError`
+   --> crates/validate/src/shapes_tools.rs:223:47
+    |
+223 |           run_rules(source, data, limits, knobs).map_err(ShapesError::from)
+    |  _______________________________________________-^^^^^^^^^^^^^^^^^^^^^^^^^^
+224 | |     })
+    | |____- help: consider removing
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#useless_conversion
+
+error: could not compile `purrdf-validate` (lib) due to 2 previous errors
+error: could not compile `purrdf-shapes` (test "spec_linker") due to 4 previous errors
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/tests/rules_conformance.rs:122:60
+    |
+116 | fn load(case: &Case) -> Result<(purrdf_shapes::shapes::Shapes, Arc<RdfDataset>), String> {
+    |                         ---------------------------------------------------------------- expected `std::string::String` because of this
+...
+122 |     let projected = engine::project_dataset(input.as_ref())?;
+    |                     ---------------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |                     |
+    |                     this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error: could not compile `purrdf-shapes` (test "rules_conformance") due to 2 previous errors
+error: could not compile `purrdf-shapes` (test "native_xpath") due to 3 previous errors
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/product_corpus_equivalence.rs:395:9
+    |
+395 |         validate_dataset_with_shapes_graph(data, shapes, None).map_err(String::from)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/product_corpus_equivalence.rs:395:64
+    |
+395 |         validate_dataset_with_shapes_graph(data, shapes, None).map_err(String::from)
+    |                                                                ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/product_corpus_equivalence.rs:395:72
+    |
+395 |         validate_dataset_with_shapes_graph(data, shapes, None).map_err(String::from)
+    |                                                                        ^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/product_corpus_equivalence.rs:407:17
+    |
+407 |         answer: answer.map(|report| (report.to_ntriples(), report.results.len())),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<(String, usize), String>`, found `Result<(_, usize), String>`
+    |
+    = note: expected enum `Result<(String, _), _>`
+               found enum `Result<(std::result::Result<String, purrdf_shapes::ShapesError>, _), _>`
+
+error: could not compile `purrdf-shapes` (test "product_corpus_equivalence") due to 4 previous errors
+error[E0308]: mismatched types
+   --> crates/shapes/tests/vocabulary_import_invariance.rs:145:5
+    |
+143 |   fn report(input: &Input, shapes: &Shapes) -> Result<String, String> {
+    |                                                ---------------------- expected `std::result::Result<std::string::String, std::string::String>` because of return type
+144 |       let data = input.data.as_ref().map_err(Clone::clone)?;
+145 | /     validate_dataset_with_shapes_graph(data, shapes, None)
+146 | |         .map(|report| report.to_ntriples())
+147 | |         .map_err(Into::into)
+    | |____________________________^ expected `Result<String, String>`, found `Result<Result<String, ShapesError>, _>`
+    |
+    = note: expected enum `Result<String, std::string::String>`
+               found enum `Result<std::result::Result<String, purrdf_shapes::ShapesError>, _>`
+
+error: could not compile `purrdf-shapes` (test "vocabulary_import_invariance") due to 1 previous error
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/result_annotations.rs:97:12
+     |
+  97 |         nt.contains(&format!("{} \"urgent\"", ex("label"))),
+     |            ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+  97 |         nt.expect("REASON").contains(&format!("{} \"urgent\"", ex("label"))),
+     |           +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+  --> crates/shapes/tests/result_annotations.rs:98:51
+   |
+98 |         "the annotation reaches the report graph: {nt}"
+   |                                                   ^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+   |
+   = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+   = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/result_annotations.rs:100:36
+     |
+ 100 |     assert!(!control.to_ntriples().contains(&ex("label")));
+     |                                    ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 100 |     assert!(!control.to_ntriples().expect("REASON").contains(&ex("label")));
+     |                                   +++++++++++++++++
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/result_annotations.rs:221:25
+     |
+ 221 |     assert!(restored_nt.contains(&format!("{} \"urgent\"", ex("label"))));
+     |                         ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 221 |     assert!(restored_nt.expect("REASON").contains(&format!("{} \"urgent\"", ex("label"))));
+     |                        +++++++++++++++++
+
+error: could not compile `purrdf-shapes` (test "result_annotations") due to 7 previous errors
+error: could not compile `purrdf-shapes` (test "closed_by_types") due to 3 previous errors
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/tests/sparql_node_expressions.rs:724:48
+    |
+723 | ) -> Result<purrdf_shapes::report::ValidationReport, String> {
+    |      ------------------------------------------------------- expected `std::string::String` because of this
+724 |     let shapes = parse_shapes(shapes_ttl, None)?;
+    |                  ------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |                  |
+    |                  this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/sparql_node_expressions.rs:726:5
+    |
+726 | /     purrdf_shapes::engine::validate_dataset_with_shapes_graph(&data, &shapes, None)
+727 | |         .map_err(Into::into)
+    | |____________________________^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/sparql_node_expressions.rs:727:10
+    |
+727 |         .map_err(Into::into)
+    |          ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/sparql_node_expressions.rs:727:18
+    |
+727 |         .map_err(Into::into)
+    |                  ^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error: could not compile `purrdf-shapes` (test "sparql_node_expressions") due to 7 previous errors
+error: could not compile `purrdf-shapes` (test "values_default_compliance") due to 3 previous errors
+error[E0599]: no method named `len` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/change_path_alloc.rs:2396:46
+     |
+2396 |     let mut out = String::with_capacity(text.len());
+     |                                              ^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `len` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/string.rs:1902:5
+     |
+1902 |     pub const fn len(&self) -> usize {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2396 |     let mut out = String::with_capacity(text.expect("REASON").len());
+     |                                             +++++++++++++++++
+
+error[E0599]: no method named `as_str` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/change_path_alloc.rs:2397:25
+     |
+2397 |     let mut rest = text.as_str();
+     |                         ^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `as_str` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/string.rs:1073:5
+     |
+1073 |     pub const fn as_str(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2397 |     let mut rest = text.expect("REASON").as_str();
+     |                        +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-shapes` (test "change_path_alloc") due to 2 previous errors
+error: could not compile `purrdf-shapes` (test "large_schema_emission") due to 3 previous errors
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/shapes_graph_well_formed_report.rs:76:22
+     |
+  76 |         assert!(text.contains(WELL_FORMED_TRUE), "{constraint}: {text}");
+     |                      ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+  76 |         assert!(text.expect("REASON").contains(WELL_FORMED_TRUE), "{constraint}: {text}");
+     |                     +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+  --> crates/shapes/tests/shapes_graph_well_formed_report.rs:76:65
+   |
+76 |         assert!(text.contains(WELL_FORMED_TRUE), "{constraint}: {text}");
+   |                                                                 ^^^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+   |
+   = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+   = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/shapes_graph_well_formed_report.rs:77:23
+     |
+  77 |         assert!(!text.contains(WELL_FORMED_FALSE), "{constraint}: {text}");
+     |                       ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+  77 |         assert!(!text.expect("REASON").contains(WELL_FORMED_FALSE), "{constraint}: {text}");
+     |                      +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+  --> crates/shapes/tests/shapes_graph_well_formed_report.rs:77:67
+   |
+77 |         assert!(!text.contains(WELL_FORMED_FALSE), "{constraint}: {text}");
+   |                                                                   ^^^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+   |
+   = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+   = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/shapes_graph_well_formed_report.rs:198:35
+     |
+ 198 |     assert!(!report.to_ntriples().contains("shapesGraphWellFormed"));
+     |                                   ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 198 |     assert!(!report.to_ntriples().expect("REASON").contains("shapesGraphWellFormed"));
+     |                                  +++++++++++++++++
+
+error: could not compile `purrdf-shapes` (test "shapes_graph_well_formed_report") due to 5 previous errors
+error: could not compile `purrdf-shapes` (test "owl_value_semantics") due to 3 previous errors
+error: could not compile `purrdf-shapes` (test "product_reuse_semantics") due to 1 previous error
+error[E0599]: no method named `contains` found for enum `purrdf_shapes::ShapesError` in the current scope
+    --> crates/shapes/tests/node_expressions.rs:272:17
+     |
+ 272 |     assert!(err.contains("shnex:focusNode"), "got: {err}");
+     |                 ^^^^^^^^ method not found in `purrdf_shapes::ShapesError`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `contains` found for enum `purrdf_shapes::ShapesError` in the current scope
+    --> crates/shapes/tests/node_expressions.rs:1205:13
+     |
+1205 |         err.contains("is not a shape of this shapes graph"),
+     |             ^^^^^^^^ method not found in `purrdf_shapes::ShapesError`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `contains` found for enum `purrdf_shapes::ShapesError` in the current scope
+    --> crates/shapes/tests/node_expressions.rs:1250:17
+     |
+1250 |             err.contains("must produce exactly one shape IRI"),
+     |                 ^^^^^^^^ method not found in `purrdf_shapes::ShapesError`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/tests/node_expressions.rs:1271:5
+     |
+1260 |   fn try_outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Result<Vec<String>, String> {
+     |                                                                    --------------------------- expected `std::result::Result<std::vec::Vec<std::string::String>, std::string::String>` because of return type
+...
+1271 | /     eval_node_expr(&store, &focus_term, &expr, &mut guard)
+1272 | |         .map(|out| out.iter().map(ToString::to_string).collect())
+     | |_________________________________________________________________^ expected `Result<Vec<String>, String>`, found `Result<_, ShapesError>`
+     |
+     = note: expected enum `Result<std::vec::Vec<std::string::String>, std::string::String>`
+                found enum `Result<_, purrdf_shapes::ShapesError>`
+help: use the `?` operator to extract the `std::result::Result<_, purrdf_shapes::ShapesError>` value, propagating a `Result::Err` value to the caller
+     |
+1272 |         .map(|out| out.iter().map(ToString::to_string).collect())?
+     |                                                                  +
+
+error: could not compile `purrdf-shapes` (test "node_expressions") due to 7 previous errors
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/rules_engine.rs:47:5
+   |
+47 |     parse_shapes(&format!("{PREFIXES}\n{body}"), None).map_err(String::from)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/rules_engine.rs:47:56
+   |
+47 |     parse_shapes(&format!("{PREFIXES}\n{body}"), None).map_err(String::from)
+   |                                                        ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/rules_engine.rs:47:64
+   |
+47 |     parse_shapes(&format!("{PREFIXES}\n{body}"), None).map_err(String::from)
+   |                                                                ^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+  --> crates/shapes/tests/rules_engine.rs:64:61
+   |
+62 | ) -> Result<Vec<(String, String, String)>, String> {
+   |      --------------------------------------------- expected `std::string::String` because of this
+63 |     let shapes = shapes(shapes_body)?;
+64 |     let inference = infer(&data(data_ttl), &shapes, options)?;
+   |                     ----------------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |                     |
+   |                     this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/tests/rules_engine.rs:371:69
+    |
+371 |         let report = engine::validate_with(&data(data_ttl), &shapes)?;
+    |                      -----------------------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |                      |
+    |                      this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error: could not compile `purrdf-shapes` (test "rules_engine") due to 5 previous errors
+error[E0308]: mismatched types
+   --> crates/shapes/benches/shared_views.rs:290:64
+    |
+290 |             ("native_owned", Arc::new(ShaclDatasetView::native(native))),
+    |                                       ------------------------ ^^^^^^ expected `Arc<RdfDataset>`, found `Arc<Result<RdfDataset, RdfDiagnostic>>`
+    |                                       |
+    |                                       arguments to this function are incorrect
+    |
+    = note: expected struct `Arc<RdfDataset>`
+               found struct `Arc<std::result::Result<RdfDataset, purrdf_rdf::RdfDiagnostic>>`
+note: associated function defined here
+   --> crates/shapes/src/data_view.rs:331:12
+    |
+331 |     pub fn native(source: Arc<RdfDataset>) -> Self {
+    |            ^^^^^^
+
+error: could not compile `purrdf-shapes` (bench "shared_views") due to 1 previous error
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/component_parameters.rs:26:5
+   |
+26 |     from_dataset(&dataset(body)).map_err(String::from)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/component_parameters.rs:26:34
+   |
+26 |     from_dataset(&dataset(body)).map_err(String::from)
+   |                                  ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/component_parameters.rs:26:42
+   |
+26 |     from_dataset(&dataset(body)).map_err(String::from)
+   |                                          ^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error: could not compile `purrdf-shapes` (test "component_parameters") due to 3 previous errors
+error: could not compile `purrdf-shapes` (test "product_determinism") due to 1 previous error
+error: could not compile `purrdf-shapes` (test "execution_scope") due to 1 previous error
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/rule_capacity_limits.rs:86:18
+   |
+86 |     let shapes = parse_shapes(&format!("{PREFIXES}\n{rules}"), None).map_err(String::from)?;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/rule_capacity_limits.rs:86:70
+   |
+86 |     let shapes = parse_shapes(&format!("{PREFIXES}\n{rules}"), None).map_err(String::from)?;
+   |                                                                      ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+  --> crates/shapes/tests/rule_capacity_limits.rs:86:78
+   |
+86 |     let shapes = parse_shapes(&format!("{PREFIXES}\n{rules}"), None).map_err(String::from)?;
+   |                                                                              ^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+   |
+   = help: `std::string::String` implements trait `std::convert::From<T>`:
+             std::convert::From<&mut str>
+             std::convert::From<&std::string::String>
+             std::convert::From<&str>
+             std::convert::From<char>
+             std::convert::From<purrdf_shapes::rules::RulesError>
+             std::convert::From<std::borrow::Cow<'_, str>>
+             std::convert::From<std::boxed::Box<str>>
+
+error[E0308]: mismatched types
+  --> crates/shapes/tests/rule_capacity_limits.rs:87:5
+   |
+85 | fn shacl(data: &ShaclData, rules: &str, options: &RuleOptions) -> Result<usize, String> {
+   |                                                                   --------------------- expected `std::result::Result<usize, std::string::String>` because of return type
+86 |     let shapes = parse_shapes(&format!("{PREFIXES}\n{rules}"), None).map_err(String::from)?;
+87 |     infer(data, &shapes, options).map(|inference| inference.inferred().len())
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<usize, String>`, found `Result<usize, ShapesError>`
+   |
+   = note: expected enum `Result<_, std::string::String>`
+              found enum `Result<_, purrdf_shapes::ShapesError>`
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/rule_capacity_limits.rs:325:13
+    |
+325 | /             Err(
+326 | |                 "SHACL rules did not complete: evaluation exceeded the fixed term arena bytes \
+327 | |                  ceiling: 16782539 observed, 16777216 permitted"
+328 | |                     .to_owned()
+329 | |             )
+    | |_____________^ expected `Result<usize, ShapesError>`, found `Result<_, String>`
+    |
+    = note: expected enum `Result<usize, purrdf_shapes::ShapesError>`
+               found enum `Result<_, std::string::String>`
+
+error[E0599]: no method named `starts_with` found for enum `purrdf_shapes::ShapesError` in the current scope
+    --> crates/shapes/tests/rule_capacity_limits.rs:335:16
+     |
+ 335 |         rounds.starts_with(
+     |         -------^^^^^^^^^^^ method not found in `purrdf_shapes::ShapesError`
+     |
+note: the method `starts_with` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1420:5
+     |
+1420 |     pub fn starts_with<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-shapes` (test "rule_capacity_limits") due to 6 previous errors
+error[E0308]: mismatched types
+   --> crates/shapes/tests/named_graph_view.rs:267:53
+    |
+267 |     let oracle = ShaclDatasetView::project(Arc::new(source.project_named_graph(GRAPH)));
+    |                                            -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RdfDataset`, found `Result<RdfDataset, RdfDiagnostic>`
+    |                                            |
+    |                                            arguments to this function are incorrect
+    |
+    = note: expected struct `RdfDataset`
+                 found enum `std::result::Result<RdfDataset, purrdf_rdf::RdfDiagnostic>`
+note: associated function defined here
+   --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/sync.rs:444:12
+    |
+444 |     pub fn new(data: T) -> Arc<T> {
+    |            ^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_rdf::RdfDataset, purrdf_rdf::RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+267 |     let oracle = ShaclDatasetView::project(Arc::new(source.project_named_graph(GRAPH).expect("REASON")));
+    |                                                                                      +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/named_graph_view.rs:270:20
+    |
+270 |         owned_rows(view.materialized()),
+    |         ---------- ^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `Result<&Arc<RdfDataset>, ShapesError>`
+    |         |
+    |         arguments to this function are incorrect
+    |
+    = note: expected reference `&purrdf_rdf::RdfDataset`
+                    found enum `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: closure parameter defined here
+   --> crates/shapes/tests/named_graph_view.rs:268:23
+    |
+268 |     let owned_rows = |dataset: &RdfDataset| dataset.owned_quads().collect::<FastSet<_>>();
+    |                       ^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+    |
+270 |         owned_rows(view.materialized().expect("REASON")),
+    |                                       +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/named_graph_view.rs:271:20
+    |
+271 |         owned_rows(oracle.materialized())
+    |         ---------- ^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `Result<&Arc<RdfDataset>, ShapesError>`
+    |         |
+    |         arguments to this function are incorrect
+    |
+    = note: expected reference `&purrdf_rdf::RdfDataset`
+                    found enum `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: closure parameter defined here
+   --> crates/shapes/tests/named_graph_view.rs:268:23
+    |
+268 |     let owned_rows = |dataset: &RdfDataset| dataset.owned_quads().collect::<FastSet<_>>();
+    |                       ^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+    |
+271 |         owned_rows(oracle.materialized().expect("REASON"))
+    |                                         +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/tests/named_graph_view.rs:273:26
+     |
+ 273 |     assert!(!Arc::ptr_eq(view.materialized(), &source));
+     |              ----------- ^^^^^^^^^^^^^^^^^^^ expected `&Arc<RdfDataset>`, found `Result<&Arc<RdfDataset>, ShapesError>`
+     |              |
+     |              arguments to this function are incorrect
+     |
+     = note: expected reference `&std::sync::Arc<purrdf_rdf::RdfDataset>`
+                     found enum `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: associated function defined here
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/sync.rs:2278:12
+     |
+2278 |     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
+     |            ^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+     |
+ 273 |     assert!(!Arc::ptr_eq(view.materialized().expect("REASON"), &source));
+     |                                             +++++++++++++++++
+
+error[E0308]: arguments to this function are incorrect
+    --> crates/shapes/tests/named_graph_view.rs:274:13
+     |
+ 274 |     assert!(Arc::ptr_eq(view.materialized(), view.materialized()));
+     |             ^^^^^^^^^^^
+     |
+note: expected `&Arc<_, _>`, found `Result<&Arc<RdfDataset>, ShapesError>`
+    --> crates/shapes/tests/named_graph_view.rs:274:25
+     |
+ 274 |     assert!(Arc::ptr_eq(view.materialized(), view.materialized()));
+     |                         ^^^^^^^^^^^^^^^^^^^
+     = note: expected reference `&std::sync::Arc<_, _>`
+                     found enum `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: expected `&Arc<_, _>`, found `Result<&Arc<RdfDataset>, ShapesError>`
+    --> crates/shapes/tests/named_graph_view.rs:274:46
+     |
+ 274 |     assert!(Arc::ptr_eq(view.materialized(), view.materialized()));
+     |                                              ^^^^^^^^^^^^^^^^^^^
+     = note: expected reference `&std::sync::Arc<_, _>`
+                     found enum `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: associated function defined here
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/sync.rs:2278:12
+     |
+2278 |     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
+     |            ^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+     |
+ 274 |     assert!(Arc::ptr_eq(view.materialized().expect("REASON"), view.materialized()));
+     |                                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `std::result::Result<&std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+     |
+ 274 |     assert!(Arc::ptr_eq(view.materialized(), view.materialized().expect("REASON")));
+     |                                                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/tests/named_graph_view.rs:328:23
+     |
+ 328 |         .bind_dataset(&source.project_named_graph(GRAPH))
+     |          ------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |          |
+     |          arguments to this method are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&std::result::Result<RdfDataset, purrdf_rdf::RdfDiagnostic>`
+note: method defined here
+    --> crates/shapes/src/engine.rs:2143:12
+     |
+2143 |     pub fn bind_dataset(&self, data: &RdfDataset) -> Result<PreparedValidator, ShapesError> {
+     |            ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/tests/named_graph_view.rs:361:23
+     |
+ 361 |         .bind_dataset(&source.project_named_graph(GRAPH))
+     |          ------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |          |
+     |          arguments to this method are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&std::result::Result<RdfDataset, purrdf_rdf::RdfDiagnostic>`
+note: method defined here
+    --> crates/shapes/src/engine.rs:2143:12
+     |
+2143 |     pub fn bind_dataset(&self, data: &RdfDataset) -> Result<PreparedValidator, ShapesError> {
+     |            ^^^^^^^^^^^^
+
+error: could not compile `purrdf-shapes` (test "named_graph_view") due to 7 previous errors
+error[E0308]: mismatched types
+   --> crates/shapes/tests/w3c12_conformance.rs:274:17
+    |
+272 | ) -> Result<Vec<Term>, String> {
+    |      ------------------------- expected `std::result::Result<std::vec::Vec<purrdf_shapes::term::Term>, std::string::String>` because of return type
+273 |     match bindings.split_first() {
+274 |         None => eval_node_expr_in_scope(data, focus, expr, guard, scope),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Vec<Term>, String>`, found `Result<Vec<Term>, ShapesError>`
+    |
+    = note: expected enum `Result<_, std::string::String>`
+               found enum `Result<_, purrdf_shapes::ShapesError>`
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/tests/w3c12_conformance.rs:301:65
+    |
+283 | fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
+    |                                              ------------------------- expected `std::string::String` because of this
+...
+301 |     let projected = engine::project_dataset(tc.dataset.as_ref())?;
+    |                     --------------------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |                     |
+    |                     this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/tests/w3c12_conformance.rs:370:67
+    |
+347 | fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
+    |                             -------------------------------------------------- expected `std::string::String` because of this
+...
+370 |     let projected = engine::project_dataset(data_dataset.as_ref())?;
+    |                     ----------------------------------------------^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |                     |
+    |                     this can't be annotated with `?` because it has type `Result<_, purrdf_shapes::ShapesError>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+
+error: could not compile `purrdf-shapes` (test "w3c12_conformance") due to 4 previous errors
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/product_carried_analysis.rs:290:16
+     |
+ 290 |         report.contains("ClassConstraintComponent"),
+     |                ^^^^^^^^ method not found in `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+ 290 |         report.expect("REASON").contains("ClassConstraintComponent"),
+     |               +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` doesn't implement `std::fmt::Display`
+   --> crates/shapes/tests/product_carried_analysis.rs:292:44
+    |
+292 |          passes by both sides being empty: {report}"
+    |                                            ^^^^^^^^ `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` cannot be formatted with the default formatter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, purrdf_shapes::ShapesError>`
+    = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/product_carried_analysis.rs:294:5
+    |
+280 | fn report_nt(prepared: &PreparedShapes) -> String {
+    |                                            ------ expected `std::string::String` because of return type
+...
+294 |     report
+    |     ^^^^^^ expected `String`, found `Result<String, ShapesError>`
+    |
+    = note: expected struct `String`
+                 found enum `std::result::Result<String, purrdf_shapes::ShapesError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+    |
+294 |     report.expect("REASON")
+    |           +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/product_carried_analysis.rs:637:5
+    |
+634 |   fn lowered_report_nt(prepared: &PreparedShapes) -> String {
+    |                                                      ------ expected `std::string::String` because of return type
+...
+637 | /     prepared
+638 | |         .bind_shared_dataset(data)
+639 | |         .expect("the data graph binds")
+640 | |         .validate()
+641 | |         .expect("validation runs")
+642 | |         .to_ntriples()
+    | |______________________^ expected `String`, found `Result<String, ShapesError>`
+    |
+    = note: expected struct `String`
+                 found enum `std::result::Result<String, purrdf_shapes::ShapesError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::string::String, purrdf_shapes::ShapesError>` value, panicking if the value is a `Result::Err`
+    |
+642 |         .to_ntriples().expect("REASON")
+    |                       +++++++++++++++++
+
+error: could not compile `purrdf-shapes` (test "product_carried_analysis") due to 4 previous errors
+error: could not compile `purrdf-shapes` (test "evaluated_targets") due to 3 previous errors
+error[E0308]: mismatched types
+  --> crates/shapes/tests/complete_reports.rs:54:24
+   |
+54 |         property_count(&complete.to_dataset(), sh::SOURCE_CONSTRAINT),
+   |         -------------- ^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+   |         |
+   |         arguments to this function are incorrect
+   |
+   = note: expected reference `&purrdf_rdf::RdfDataset`
+              found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: function defined here
+  --> crates/shapes/tests/complete_reports.rs:27:4
+   |
+27 | fn property_count(dataset: &purrdf_rdf::RdfDataset, property: &str) -> usize {
+   |    ^^^^^^^^^^^^^^ --------------------------------
+
+error[E0308]: mismatched types
+  --> crates/shapes/tests/complete_reports.rs:58:24
+   |
+58 |         property_count(&legacy.to_dataset(), sh::SOURCE_CONSTRAINT),
+   |         -------------- ^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+   |         |
+   |         arguments to this function are incorrect
+   |
+   = note: expected reference `&purrdf_rdf::RdfDataset`
+              found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: function defined here
+  --> crates/shapes/tests/complete_reports.rs:27:4
+   |
+27 | fn property_count(dataset: &purrdf_rdf::RdfDataset, property: &str) -> usize {
+   |    ^^^^^^^^^^^^^^ --------------------------------
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:98:10
+    |
+ 97 |       let identities: Vec<_> = graph
+    |  ______________________________-
+ 98 | |         .dataset()
+    | |         -^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    | |_________|
+    |
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+ 97 |     let identities: Vec<_> = graph.expect("REASON")
+    |                                   +++++++++++++++++
+
+error[E0599]: no method named `blank_labels` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:105:19
+    |
+105 |             graph.blank_labels().source_of(&label).unwrap().clone()
+    |                   ^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `blank_labels` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:754:5
+    |
+754 |     pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+105 |             graph.expect("REASON").blank_labels().source_of(&label).unwrap().clone()
+    |                  +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/complete_reports.rs:269:31
+    |
+269 |     assert_eq!(property_count(&report.to_dataset(), sh::RESULT), 2);
+    |                -------------- ^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+    |                |
+    |                arguments to this function are incorrect
+    |
+    = note: expected reference `&purrdf_rdf::RdfDataset`
+               found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: function defined here
+   --> crates/shapes/tests/complete_reports.rs:27:4
+    |
+ 27 | fn property_count(dataset: &purrdf_rdf::RdfDataset, property: &str) -> usize {
+    |    ^^^^^^^^^^^^^^ --------------------------------
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/complete_reports.rs:271:24
+    |
+271 |         property_count(&report.to_dataset(), sh::SOURCE_CONSTRAINT),
+    |         -------------- ^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+    |         |
+    |         arguments to this function are incorrect
+    |
+    = note: expected reference `&purrdf_rdf::RdfDataset`
+               found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: function defined here
+   --> crates/shapes/tests/complete_reports.rs:27:4
+    |
+ 27 | fn property_count(dataset: &purrdf_rdf::RdfDataset, property: &str) -> usize {
+    |    ^^^^^^^^^^^^^^ --------------------------------
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/complete_reports.rs:316:31
+    |
+316 |     assert_eq!(property_count(&graph, sh::DETAIL), 2);
+    |                -------------- ^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+    |                |
+    |                arguments to this function are incorrect
+    |
+    = note: expected reference `&purrdf_rdf::RdfDataset`
+               found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: function defined here
+   --> crates/shapes/tests/complete_reports.rs:27:4
+    |
+ 27 | fn property_count(dataset: &purrdf_rdf::RdfDataset, property: &str) -> usize {
+    |    ^^^^^^^^^^^^^^ --------------------------------
+
+error[E0308]: mismatched types
+   --> crates/shapes/tests/complete_reports.rs:317:31
+    |
+317 |     assert_eq!(property_count(&graph, sh::SOURCE_CONSTRAINT), 2);
+    |                -------------- ^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+    |                |
+    |                arguments to this function are incorrect
+    |
+    = note: expected reference `&purrdf_rdf::RdfDataset`
+               found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+note: function defined here
+   --> crates/shapes/tests/complete_reports.rs:27:4
+    |
+ 27 | fn property_count(dataset: &purrdf_rdf::RdfDataset, property: &str) -> usize {
+    |    ^^^^^^^^^^^^^^ --------------------------------
+
+error[E0599]: no method named `source_context` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:340:22
+    |
+340 |     assert_eq!(graph.source_context().data().dataset().quad_count(), 1);
+    |                      ^^^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `source_context` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:760:5
+    |
+760 |     pub const fn source_context(&self) -> &Arc<ReportSourceContext> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+340 |     assert_eq!(graph.expect("REASON").source_context().data().dataset().quad_count(), 1);
+    |                     +++++++++++++++++
+
+error[E0599]: no method named `root` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:341:39
+    |
+341 |     let Term::BlankNode(root) = graph.root() else {
+    |                                       ^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `root` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:748:5
+    |
+748 |     pub const fn root(&self) -> &Term {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+341 |     let Term::BlankNode(root) = graph.expect("REASON").root() else {
+    |                                      +++++++++++++++++
+
+error[E0599]: no method named `blank_labels` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:344:22
+    |
+344 |     assert_eq!(graph.blank_labels().source_of(root), None);
+    |                      ^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `blank_labels` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:754:5
+    |
+754 |     pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+344 |     assert_eq!(graph.expect("REASON").blank_labels().source_of(root), None);
+    |                     +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:345:37
+    |
+345 |     assert_eq!(property_count(graph.dataset(), sh::RESULT), 1);
+    |                                     ^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+345 |     assert_eq!(property_count(graph.expect("REASON").dataset(), sh::RESULT), 1);
+    |                                    +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:346:37
+    |
+346 |     assert_eq!(property_count(graph.dataset(), sh::SOURCE_CONSTRAINT), 1);
+    |                                     ^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+346 |     assert_eq!(property_count(graph.expect("REASON").dataset(), sh::SOURCE_CONSTRAINT), 1);
+    |                                    +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/complete_reports.rs:423:28
+     |
+ 423 |         terms.to_dataset().owned_quads().collect::<Vec<_>>(),
+     |                            ^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1059:5
+     |
+1059 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 423 |         terms.to_dataset().expect("REASON").owned_quads().collect::<Vec<_>>(),
+     |                           +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/complete_reports.rs:424:26
+     |
+ 424 |         ids.to_dataset().owned_quads().collect::<Vec<_>>()
+     |                          ^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1059:5
+     |
+1059 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 424 |         ids.to_dataset().expect("REASON").owned_quads().collect::<Vec<_>>()
+     |                         +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:465:10
+    |
+464 |       let sources: Vec<_> = graph
+    |  ___________________________-
+465 | |         .dataset()
+    | |         -^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    | |_________|
+    |
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+464 |     let sources: Vec<_> = graph.expect("REASON")
+    |                                +++++++++++++++++
+
+error[E0599]: no method named `blank_labels` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:474:23
+    |
+474 |                 graph.blank_labels().source_of(&label).cloned(),
+    |                       ^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `blank_labels` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:754:5
+    |
+754 |     pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+474 |                 graph.expect("REASON").blank_labels().source_of(&label).cloned(),
+    |                      +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:544:10
+    |
+543 |       let values: Vec<_> = graph
+    |  __________________________-
+544 | |         .dataset()
+    | |         -^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    | |_________|
+    |
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+543 |     let values: Vec<_> = graph.expect("REASON")
+    |                               +++++++++++++++++
+
+error[E0599]: no method named `blank_labels` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:559:18
+    |
+558 | /             graph
+559 | |                 .blank_labels()
+    | |                 -^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    | |_________________|
+    |
+    |
+note: the method `blank_labels` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:754:5
+    |
+754 |     pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+558 |             graph.expect("REASON")
+    |                  +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:586:37
+    |
+586 |     assert_eq!(property_count(graph.dataset(), sh::INVERSE_PATH), 1);
+    |                                     ^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+586 |     assert_eq!(property_count(graph.expect("REASON").dataset(), sh::INVERSE_PATH), 1);
+    |                                    +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:588:30
+    |
+588 |         property_count(graph.dataset(), purrdf_iri::vocab::rdf::FIRST),
+    |                              ^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+588 |         property_count(graph.expect("REASON").dataset(), purrdf_iri::vocab::rdf::FIRST),
+    |                             +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:592:30
+    |
+592 |         property_count(graph.dataset(), purrdf_iri::vocab::rdf::REST),
+    |                              ^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+592 |         property_count(graph.expect("REASON").dataset(), purrdf_iri::vocab::rdf::REST),
+    |                             +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:596:10
+    |
+595 |       for quad in graph
+    |  _________________-
+596 | |         .dataset()
+    | |         -^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    | |_________|
+    |
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+595 |     for quad in graph.expect("REASON")
+    |                      +++++++++++++++++
+
+error[E0599]: no method named `blank_labels` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:601:30
+    |
+601 |             assert_eq!(graph.blank_labels().source_of(&label), None);
+    |                              ^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `blank_labels` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:754:5
+    |
+754 |     pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+601 |             assert_eq!(graph.expect("REASON").blank_labels().source_of(&label), None);
+    |                             +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/complete_reports.rs:631:33
+     |
+ 631 |             report.to_dataset().owned_quads().collect::<Vec<_>>(),
+     |                                 ^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1059:5
+     |
+1059 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 631 |             report.to_dataset().expect("REASON").owned_quads().collect::<Vec<_>>(),
+     |                                +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/complete_reports.rs:632:35
+     |
+ 632 |             original.to_dataset().owned_quads().collect::<Vec<_>>()
+     |                                   ^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1059:5
+     |
+1059 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 632 |             original.to_dataset().expect("REASON").owned_quads().collect::<Vec<_>>()
+     |                                  +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:682:14
+    |
+681 |           let values: std::collections::BTreeSet<_> = graph
+    |  _____________________________________________________-
+682 | |             .dataset()
+    | |             -^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    | |_____________|
+    |
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+681 |         let values: std::collections::BTreeSet<_> = graph.expect("REASON")
+    |                                                          +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/shapes/tests/complete_reports.rs:688:41
+    |
+688 |         assert_eq!(property_count(graph.dataset(), sh::SOURCE_CONSTRAINT), 4);
+    |                                         ^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+688 |         assert_eq!(property_count(graph.expect("REASON").dataset(), sh::SOURCE_CONSTRAINT), 4);
+    |                                        +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/complete_reports.rs:738:10
+     |
+ 734 |       let first = binding
+     |  _________________-
+ 735 | |         .validate()
+ 736 | |         .unwrap()
+ 737 | |         .to_dataset()
+ 738 | |         .owned_quads()
+     | |         -^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+     | |_________|
+     |
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1059:5
+     |
+1059 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 737 |         .to_dataset().expect("REASON")
+     |                      +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/tests/complete_reports.rs:750:40
+     |
+ 750 |         assert_eq!(report.to_dataset().owned_quads().collect::<Vec<_>>(), first);
+     |                                        ^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_shapes::ShapesError>`
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1059:5
+     |
+1059 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 750 |         assert_eq!(report.to_dataset().expect("REASON").owned_quads().collect::<Vec<_>>(), first);
+     |                                       +++++++++++++++++
+
+error: could not compile `purrdf-shapes` (test "complete_reports") due to 33 previous errors
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/relation_incompleteness.rs:145:5
+    |
+145 | /     validate_dataset_with_governors(&people(), &shapes(), None, &QueryGovernors::UNBOUNDED)
+146 | |         .map_err(Into::into)
+    | |____________________________^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/relation_incompleteness.rs:146:10
+    |
+146 |         .map_err(Into::into)
+    |          ^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_shapes::ShapesError>` is not satisfied
+   --> crates/shapes/tests/relation_incompleteness.rs:146:18
+    |
+146 |         .map_err(Into::into)
+    |                  ^^^^^^^^^^ the trait `std::convert::From<purrdf_shapes::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<purrdf_shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_shapes::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error: could not compile `purrdf-shapes` (test "relation_incompleteness") due to 3 previous errors
+error[E0308]: mismatched types
+    --> crates/validate/src/build.rs:1677:13
+     |
+1677 |             unit,
+     |             ^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+     |
+     = note: expected struct `UnitId`
+                  found enum `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::UnitId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1677 |             unit: unit.expect("REASON"),
+     |                 +++++++++++++++++++++++
+
+error[E0599]: `std::result::Result<purrdf_core::UnitId, purrdf_lex::allocation::StorageError>` doesn't implement `std::fmt::Display`
+    --> crates/validate/src/build.rs:1691:28
+     |
+1691 |         let numeric = unit.to_string();
+     |                            ^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+     |
+    ::: /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:558:1
+     |
+ 558 | pub enum Result<T, E> {
+     | --------------------- doesn't satisfy `_: Display` or `_: ToString`
+     |
+     = note: the following trait bounds were not satisfied:
+             `std::result::Result<purrdf_core::UnitId, purrdf_lex::allocation::StorageError>: std::fmt::Display`
+             which is required by `std::result::Result<purrdf_core::UnitId, purrdf_lex::allocation::StorageError>: std::string::ToString`
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-validate` (lib test) due to 2 previous errors
+terminal_status=101

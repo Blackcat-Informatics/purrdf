@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against dd79ef77e942 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/490-typed-capacity-errors-instead-of-u32 301ca51c1] Project native storage status into the C header
+ 2 files changed, 20 insertions(+), 2 deletions(-)
+terminal_status=0

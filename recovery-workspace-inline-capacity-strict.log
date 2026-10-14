@@ -1,0 +1,361 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/ed25519)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/helper-census)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/conformance-kit)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+error: the `Err`-variant returned from this function is very large
+   --> crates/retrieval/tests/on_demand_receipt.rs:302:51
+    |
+302 | fn searched(left: Index, dataset: &RdfDataset) -> Result<SearchResult, SearchError> {
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `purrdf_retrieval::SearchError`, for example by boxing large elements or replacing it with `Box<purrdf_retrieval::SearchError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/retrieval/tests/on_demand_receipt.rs:311:6
+    |
+311 | ) -> Result<SearchResult, SearchError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `purrdf_retrieval::SearchError`, for example by boxing large elements or replacing it with `Box<purrdf_retrieval::SearchError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: could not compile `purrdf-retrieval` (test "on_demand_receipt") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: the `Err`-variant returned from this function is very large
+    --> crates/retrieval/tests/search.rs:1886:59
+     |
+1886 | fn search_against(registry: &PropertyFunctionRegistry) -> Result<SearchResult, SearchError> {
+     |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+     |
+     = help: try reducing the size of `purrdf_retrieval::SearchError`, for example by boxing large elements or replacing it with `Box<purrdf_retrieval::SearchError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+     = note: `-D clippy::result-large-err` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: could not compile `purrdf-retrieval` (test "search") due to 1 previous error
+error: the `Err`-variant returned from this function is very large
+    --> crates/retrieval/tests/boundary.rs:1635:6
+     |
+1635 | ) -> Result<SearchResult, SearchError>
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+     |
+     = help: try reducing the size of `purrdf_retrieval::SearchError`, for example by boxing large elements or replacing it with `Box<purrdf_retrieval::SearchError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+     = note: `-D clippy::result-large-err` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: could not compile `purrdf-retrieval` (test "boundary") due to 1 previous error
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/bench)
+error: unused `std::result::Result` that must be used
+   --> crates/bench/src/lubm/check.rs:389:9
+    |
+389 |         builder.push_owned_quad(&quad);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+389 |         let _ = builder.push_owned_quad(&quad);
+    |         +++++++
+
+error: could not compile `purrdf-bench` (lib) due to 1 previous error
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/slice/src/error.rs:71:30
+   |
+71 |     pub(crate) fn rdf(error: purrdf_rdf::RdfDiagnostic, context: &str) -> Self {
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+   |
+71 |     pub(crate) fn rdf(error: &purrdf_rdf::RdfDiagnostic, context: &str) -> Self {
+   |                              +
+
+error: could not compile `purrdf-slice` (lib) due to 1 previous error
+error: could not compile `purrdf-bench` (lib test) due to 1 previous error
+error[E0308]: mismatched types
+   --> crates/rdf/tests/content_id_byte_determinism.rs:312:30
+    |
+312 |     assert_flat_differential(&unioned, "blank label collision across scopes");
+    |     ------------------------ ^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+    |     |
+    |     arguments to this function are incorrect
+    |
+    = note: expected reference `&RdfDataset`
+               found reference `&std::result::Result<RdfDataset, purrdf_core::RdfDiagnostic>`
+note: function defined here
+   --> crates/rdf/tests/content_id_byte_determinism.rs:241:4
+    |
+241 | fn assert_flat_differential(dataset: &RdfDataset, case: &str) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^ --------------------
+
+error[E0277]: the trait bound `Result<RdfDataset, RdfDiagnostic>: FallibleDatasetView` is not satisfied
+   --> crates/rdf/tests/content_id_byte_determinism.rs:629:53
+    |
+629 |     let via_projection = try_canonicalize_flat_view(&projected, CanonHash::Sha256)
+    |                          -------------------------- ^^^^^^^^^^ unsatisfied trait bound
+    |                          |
+    |                          required by a bound introduced by this call
+    |
+    = help: the trait `purrdf_core::FallibleDatasetView` is not implemented for `std::result::Result<purrdf_core::RdfDataset, purrdf_core::RdfDiagnostic>`
+    = help: the following other types implement trait `purrdf_core::FallibleDatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+              purrdf_core::SegmentedStackQuery<'_>
+              purrdf_core::evidence::LedgerDataset<'a, S, L>
+              std::sync::Arc<T>
+note: required by a bound in `purrdf_core::try_canonicalize_flat_view`
+   --> crates/rdf-core/src/ir/canon.rs:728:38
+    |
+728 | pub fn try_canonicalize_flat_view<D: FallibleDatasetView>(
+    |                                      ^^^^^^^^^^^^^^^^^^^ required by this bound in `try_canonicalize_flat_view`
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-rdf/bf5dbfe1f1648c18/out/content_id_byte_determinism-bf5dbfe1f1648c18.long-type-13708738731424767476.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `Result<RdfDataset, RdfDiagnostic>: DatasetView` is not satisfied
+   --> crates/rdf/tests/content_id_byte_determinism.rs:629:26
+    |
+629 |     let via_projection = try_canonicalize_flat_view(&projected, CanonHash::Sha256)
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `std::result::Result<purrdf_core::RdfDataset, purrdf_core::RdfDiagnostic>`
+    |
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PackView<'_>
+              purrdf_core::PagedDataset
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+            and 3 others
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-rdf/bf5dbfe1f1648c18/out/content_id_byte_determinism-bf5dbfe1f1648c18.long-type-9458852710294151795.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `Result<RdfDataset, RdfDiagnostic>: FallibleDatasetView` is not satisfied
+   --> crates/rdf/tests/content_id_byte_determinism.rs:629:26
+    |
+629 |     let via_projection = try_canonicalize_flat_view(&projected, CanonHash::Sha256)
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+    = help: the trait `purrdf_core::FallibleDatasetView` is not implemented for `std::result::Result<purrdf_core::RdfDataset, purrdf_core::RdfDiagnostic>`
+    = help: the following other types implement trait `purrdf_core::FallibleDatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+              purrdf_core::SegmentedStackQuery<'_>
+              purrdf_core::evidence::LedgerDataset<'a, S, L>
+              std::sync::Arc<T>
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-rdf/bf5dbfe1f1648c18/out/content_id_byte_determinism-bf5dbfe1f1648c18.long-type-13708738731424767476.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-rdf` (test "content_id_byte_determinism") due to 4 previous errors
+error: could not compile `purrdf-slice` (lib test) due to 1 previous error
+error[E0599]: no method named `intern_batch` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf/tests/segmented_trig_roundtrip.rs:53:14
+     |
+  52 | /         builder
+  53 | |             .intern_batch(std::slice::from_ref(value), |_, id| ids.push(id))
+     | |_____________-^^^^^^^^^^^^
+     |
+note: the method `intern_batch` exists on the type `purrdf_core::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:132:5
+     |
+ 132 | /     pub fn intern_batch(
+ 133 | |         &mut self,
+ 134 | |         values: &[TermValue],
+ 135 | |         mut visit: impl FnMut(&TermValue, GlobalTermId),
+ 136 | |     ) -> Result<(), SegmentedError> {
+     | |___________________________________^
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+  52 |         builder.expect("REASON")
+     |                +++++++++++++++++
+
+error[E0599]: no method named `intern_batch` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf/tests/segmented_trig_roundtrip.rs:59:18
+     |
+  58 | /             builder
+  59 | |                 .intern_batch(
+     | |_________________-^^^^^^^^^^^^
+     |
+note: the method `intern_batch` exists on the type `purrdf_core::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:132:5
+     |
+ 132 | /     pub fn intern_batch(
+ 133 | |         &mut self,
+ 134 | |         values: &[TermValue],
+ 135 | |         mut visit: impl FnMut(&TermValue, GlobalTermId),
+ 136 | |     ) -> Result<(), SegmentedError> {
+     | |___________________________________^
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+  58 |             builder.expect("REASON")
+     |                    +++++++++++++++++
+
+error[E0599]: no method named `push_quad` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf/tests/segmented_trig_roundtrip.rs:69:10
+    |
+ 68 | /     builder
+ 69 | |         .push_quad(QuadIds {
+    | |         -^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    | |_________|
+    |
+    |
+note: the method `push_quad` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:176:5
+    |
+176 |     pub fn push_quad(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+ 68 |     builder.expect("REASON")
+    |            +++++++++++++++++
+
+error[E0599]: no method named `push_quad` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf/tests/segmented_trig_roundtrip.rs:77:10
+    |
+ 76 | /     builder
+ 77 | |         .push_quad(QuadIds {
+    | |         -^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    | |_________|
+    |
+    |
+note: the method `push_quad` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:176:5
+    |
+176 |     pub fn push_quad(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+ 76 |     builder.expect("REASON")
+    |            +++++++++++++++++
+
+error[E0599]: no method named `push_reifier` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf/tests/segmented_trig_roundtrip.rs:84:13
+    |
+ 84 |     builder.push_reifier(ids[5], ids[4], Some(ids[6])).unwrap();
+    |             ^^^^^^^^^^^^
+    |
+note: the method `push_reifier` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:192:5
+    |
+192 | /     pub fn push_reifier(
+193 | |         &mut self,
+194 | |         reifier: GlobalTermId,
+195 | |         triple: GlobalTermId,
+196 | |         graph: Option<GlobalTermId>,
+197 | |     ) -> Result<(), SegmentedError> {
+    | |___________________________________^
+help: there is a method `as_ref` with a similar name, but with different arguments
+   --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:769:5
+    |
+769 |     pub const fn as_ref(&self) -> Result<&T, &E> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+ 84 |     builder.expect("REASON").push_reifier(ids[5], ids[4], Some(ids[6])).unwrap();
+    |            +++++++++++++++++
+
+error[E0599]: no method named `push_annotation` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf/tests/segmented_trig_roundtrip.rs:86:10
+    |
+ 85 | /     builder
+ 86 | |         .push_annotation(QuadIds {
+    | |         -^^^^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    | |_________|
+    |
+    |
+note: the method `push_annotation` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:225:5
+    |
+225 |     pub fn push_annotation(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+ 85 |     builder.expect("REASON")
+    |            +++++++++++++++++
+
+error[E0599]: no method named `declare_named_graph` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf/tests/segmented_trig_roundtrip.rs:93:13
+    |
+ 93 |     builder.declare_named_graph(ids[7]).unwrap();
+    |             ^^^^^^^^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    |
+note: the method `declare_named_graph` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:241:5
+    |
+241 |     pub fn declare_named_graph(&mut self, graph: GlobalTermId) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+ 93 |     builder.expect("REASON").declare_named_graph(ids[7]).unwrap();
+    |            +++++++++++++++++
+
+error[E0599]: no method named `seal` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf/tests/segmented_trig_roundtrip.rs:94:25
+    |
+ 94 |     let image = builder.seal().unwrap();
+    |                         ^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    |
+note: the method `seal` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:253:5
+    |
+253 |     pub fn seal(self) -> Result<SegmentedImage, SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+ 94 |     let image = builder.expect("REASON").seal().unwrap();
+    |                        +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-rdf` (test "segmented_trig_roundtrip") due to 8 previous errors
+terminal_status=101

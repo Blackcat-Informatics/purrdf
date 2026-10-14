@@ -1,0 +1,33 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Finished `test` profile [optimized] target(s) in 32.86s
+   Doc-tests purrdf_entail
+
+running 24 tests
+test crates/entail/src/entails/imports.rs - entails::imports::rif_resolver (line 116) ... ok
+test crates/entail/src/calculus/mod.rs - calculus::calculus_program (line 478) ... ok
+test crates/entail/src/explain.rs - explain::explain_conclusion (line 531) ... ok
+test crates/entail/src/entails/mod.rs - entails::certain_answers (line 624) ... ok
+test crates/entail/src/entails/warrant.rs - entails::warrant::verify (line 731) ... ok
+test crates/entail/src/entails/mod.rs - entails::entails (line 1058) ... ok
+test crates/entail/src/explain.rs - explain::justify (line 800) ... ok
+test crates/entail/src/reasoner/mod.rs - reasoner::Reasoner (line 141) ... ok
+test crates/entail/src/lib.rs - Materialization (line 279) ... ok
+test crates/entail/src/reasoner/module.rs - reasoner::module::extract_module (line 230) ... ok
+test crates/entail/src/reasoner/mod.rs - reasoner::Reasoner::proof_context (line 456) ... ok
+test crates/entail/src/reasoner/module.rs - reasoner::module::extract_module_with_proofs (line 275) ... ok
+test crates/entail/src/report.rs - report::Completeness::for_regime (line 202) ... ok
+test crates/entail/src/reasoner/profile.rs - reasoner::profile::profile (line 222) ... ok
+test crates/entail/src/report.rs - report::Completeness::for_run (line 242) ... ok
+test crates/entail/src/report.rs - report::ReasoningReport::new (line 1190) ... ok
+test crates/entail/src/report.rs - report::ReasoningReport::with_boundary (line 1437) ... ok
+test crates/entail/src/rules.rs - rules::RuleId::is_extension (line 122) ... ok
+test crates/entail/src/rules.rs - rules::extensions (line 888) ... ok
+test crates/entail/src/rules.rs - rules::implemented (line 830) ... ok
+test crates/entail/src/rules.rs - rules::rules (line 787) ... ok
+test crates/entail/src/lib.rs - materialize (line 806) ... ok
+test crates/entail/src/report.rs - report::TerminationCertificate (line 94) ... ok
+test crates/entail/src/report.rs - report::ReasoningReport::extensions (line 1527) ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+all doctests ran in 0.85s; merged doctests compilation took 0.83s

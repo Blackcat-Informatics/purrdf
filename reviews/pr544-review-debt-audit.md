@@ -1,0 +1,14 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# PR 544 review-debt audit — 2026-10-13
+
+VERDICT: BLOCKED for final integration; the captured current-head hosted run has a `doc` failure and many jobs pending. This is a read-only Stage 3 assessment of PR head `03f46b41ae58be8409dc0b4981320288dda64444` against base `5144f5c1a7dc824f32165eca91d3c2a6df6226fb`, not a new whole-contract audit or a source correction.
+
+The captured review surface is complete for this checkpoint: `pr-reviews.json` and `pr-inline-comments.json` are empty; `pr-review-threads.json` has zero thread nodes. The three PR comments are (1) CodeRabbit's automated status, (2) the published plan, and (3) the author's scoped local-qualification report. The plan and qualification comments accurately leave hosted integration and issue closure open; neither is independent approval or an unresolved change request. CodeRabbit explicitly skipped substantive review of 627 selected files because its limit is 300, despite a `SUCCESS` check. There is no bot finding to remediate and no bot approval to claim. The existing independent issue, source, capacity-row and T1/T2/T3 reviews remain evidence within their stated scopes; root's final integration judgment is still required.
+
+`pr-checks.txt` now records `FAILURE doc` at job `115487437495`. The cause is not in these captured artifacts; E is fetching its exact log, so this audit does not classify it as inherited or S1-induced. Most required workspace, architecture, conformance, C/Python, native and WASM jobs are still `IN_PROGRESS`, including `wasm-package`. The observed `SUCCESS` static/publisher jobs, `NEUTRAL` CodeQL and skipped native-profile/SIMD-projection jobs do not satisfy the pending matrix. The known sibling optimized #531 recursion floors remain an open dependency only if the current package reproduces them; their outcome on this head is not yet captured here.
+
+Local evidence remains valid at its recorded source: `make check` terminal0 on `ab743e1d1`, followed by root-reviewed twelve-path affected strict, Python, native fixture, rustdoc and census qualification terminal0, then normal hook and push to this PR head. The current `validation.md` and `tasks/T3-review.md` map those scopes. They cannot override the current hosted `doc` failure or pending checks.
+
+Required next disposition: obtain the exact hosted `doc` failure; fix and requalify it if attributable to this head, or document a source-backed inherited cause without treating the check as green. Refresh all current-head checks and the complete feedback surface after any push, perform root's final integration review, and only then assess `ghprsq` eligibility. Issues #490 and #495 remain open; no merge or closure is credited.

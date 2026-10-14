@@ -1,0 +1,15 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 43.94s
+     Running tests/rules_runtime.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-datalog/194ed7bfa895a9e6/out/rules_runtime-194ed7bfa895a9e6)
+
+running 6 tests
+test public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error ... ok
+test connected_rule_restores_all_authored_premises ... ok
+test independent_head_projects_without_cartesian_work ... ok
+test later_partial_delta_keeps_both_productive_anchors ... ok
+test original_guarded_pair_has_exact_connected_work_and_authored_proofs ... ok
+test recursive_factor_preserves_authored_proofs_and_typed_limits ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+terminal_status=0

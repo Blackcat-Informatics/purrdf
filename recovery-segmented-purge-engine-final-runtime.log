@@ -1,0 +1,47 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 7.46s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1.44s
+     Running tests/segmented_stack.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 13 tests
+test admitted_identity_walk_releases_spill_and_preserves_hash_law ... ok
+test empty_certified_streams_do_not_probe_dictionary_for_bound_head_row ... ok
+test final_query_readiness_checks_untouched_evicted_descriptors ... ok
+test chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs ... ok
+test fallible_evidence_pins_complete_publication_and_immutable_request_prefix ... ok
+test memoized_term_hits_allocate_nothing_and_failed_import_latches ... ok
+test query_ids_touch_only_values_and_preserve_source_scopes ... ok
+test removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view ... ok
+test persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last ... ok
+test resident_head_copy_refuses_under_the_shared_operation_grant ... ok
+test effective_annotation_classification_uses_original_chronology_and_first_occurrence ... ok
+test tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation ... ok
+test thousand_distinct_sources_open_only_headers_under_one_request_budget ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 16.69s
+     Running tests/segmented_query.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-sparql-eval/75e071c550c35b0c/out/segmented_query-75e071c550c35b0c)
+
+running 2 tests
+test chronological_segmented_provider_failure_preserves_original_final_evidence ... ok
+test chronological_segmented_stack_matches_eager_raw_and_prepared_queries ... ok
+
+successes:
+
+---- chronological_segmented_stack_matches_eager_raw_and_prepared_queries stdout ----
+COUNT reinsert=false prepared=false: requests=36841 io=4667904 evictions=4391 peak=3305057
+COUNT reinsert=false prepared=true: requests=36841 io=4667904 evictions=4391 peak=3298610
+COUNT reinsert=true prepared=false: requests=36814 io=4665600 evictions=4388 peak=3297975
+COUNT reinsert=true prepared=true: requests=36814 io=4665600 evictions=4388 peak=3297975
+
+
+successes:
+    chronological_segmented_provider_failure_preserves_original_final_evidence
+    chronological_segmented_stack_matches_eager_raw_and_prepared_queries
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.36s
+
+terminal_status=0

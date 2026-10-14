@@ -1,0 +1,45 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 17.18s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 56.95s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 21 tests
+test ir::builder::native_graph_birth_tests::blank_term_refusal_does_not_reserve_its_scope ... ok
+test ir::builder::native_graph_birth_tests::checked_owned_document_refusal_rolls_back_prefix_and_retains_malformed_cause ... ok
+test ir::builder::native_graph_birth_tests::compound_literal_refusal_rolls_back_children_and_sorted_scopes ... ok
+test ir::builder::native_graph_birth_tests::content_id_side_table_refusal_does_not_publish_an_unindexed_term ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_checks_logical_sum_before_host_width_and_skips_only_hints ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_public_rows_and_duplicate_full_import_preserve_original_state ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_public_text_miss_is_atomic_and_duplicate_survives ... ok
+test ir::builder::native_graph_birth_tests::merge_scope_capacity_is_minted_only_for_actual_blank_ingress ... FAILED
+test ir::builder::native_graph_birth_tests::named_graph_growth_refusal_keeps_prior_declarations_and_duplicate_hits ... ok
+test ir::builder::native_graph_birth_tests::native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes ... ok
+test ir::builder::native_graph_birth_tests::escaped_owned_blank_hits_need_no_growth_and_match_materialized_hashes ... ok
+test ir::builder::native_graph_birth_tests::checked_owned_document_growth_sweep_uses_original_admission ... ok
+test ir::builder::native_graph_birth_tests::native_graph_refuses_before_the_first_arena_allocation ... ok
+test ir::builder::native_graph_birth_tests::native_structural_failure_releases_builder_and_retains_only_the_diagnostic ... ok
+test ir::builder::native_graph_birth_tests::owned_overlay_refusal_restores_children_and_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::refused_literal_does_not_poison_later_healthy_freeze ... ok
+test ir::builder::native_graph_birth_tests::reifier_row_refusal_does_not_publish_its_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::owned_quad_refusal_restores_terms_rows_scopes_and_location_payloads ... ok
+test ir::builder::native_graph_birth_tests::validated_append_keeps_original_account_exact_across_refusal_and_repetition ... ok
+test ir::builder::native_graph_birth_tests::content_id_rollback_preserves_retained_charge_and_prior_lookup ... ok
+test ir::builder::native_graph_birth_tests::push_dataset_refusal_rolls_back_all_streams_and_merge_scope ... ok
+
+failures:
+
+---- ir::builder::native_graph_birth_tests::merge_scope_capacity_is_minted_only_for_actual_blank_ingress stdout ----
+
+thread 'ir::builder::native_graph_birth_tests::merge_scope_capacity_is_minted_only_for_actual_blank_ingress' (1666884) panicked at crates/rdf-core/src/ir/builder.rs:4398:42:
+called `Result::unwrap()` on an `Err` value: RdfDiagnostic { severity: Error, code: "rdf-ir-triple-subject", message: "triple term #4 subject must be an IRI or blank node; RDF 1.2 nests a triple term only in the OBJECT of another triple term", detail: None, location: None, presentation: None, storage: None }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ir::builder::native_graph_birth_tests::merge_scope_capacity_is_minted_only_for_actual_blank_ingress
+
+test result: FAILED. 20 passed; 1 failed; 0 ignored; 0 measured; 1318 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`
+terminal_status=101

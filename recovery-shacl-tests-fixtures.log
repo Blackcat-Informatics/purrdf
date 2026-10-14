@@ -1,0 +1,4 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 54.23s
+  Executable unittests src/lib.rs (target/capacity-build/debug/build/purrdf-shapes/0ca11a8dd234d5cb/out/purrdf_shapes-0ca11a8dd234d5cb)
+terminal_status=0

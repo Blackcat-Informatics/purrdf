@@ -1,0 +1,27 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 14.53s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error[E0369]: binary operation `==` cannot be applied to type `Result<bool, purrdf_iri::IriReadError>`
+    --> crates/rdf-core/src/ir/mutable.rs:1973:13
+     |
+1973 | /             assert_eq!(
+1974 | |                 mutable.insert(next.clone()),
+1975 | |                 Err(IriReadError::Storage(StorageError::Capacity(
+1976 | |                     CapacityError {
+...    |
+1981 | |                 )))
+1982 | |             );
+     | |             ^
+     | |             |
+     | |_____________Result<bool, purrdf_iri::IriReadError>
+     |               Result<_, purrdf_iri::IriReadError>
+     |
+note: `Result<bool, purrdf_iri::IriReadError>` does not implement `PartialEq<Result<_, purrdf_iri::IriReadError>>`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:558:1
+     |
+ 558 | pub enum Result<T, E> {
+     | ^^^^^^^^^^^^^^^^^^^^^ `Result<bool, purrdf_iri::IriReadError>` is defined in another crate
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `purrdf-core` (lib test) due to 1 previous error
+terminal_status=101

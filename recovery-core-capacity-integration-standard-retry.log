@@ -1,0 +1,48 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 5.98s
+     Running tests/pack_graph_declarations.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/a46d3d2792e2332f/out/pack_graph_declarations-a46d3d2792e2332f)
+
+running 8 tests
+test a_declaration_pack_keeps_the_v1_frame ... ok
+test a_pack_view_enumerates_iri_and_blank_named_declared_empty_graphs ... ok
+test a_pack_view_enumerates_graphs_that_own_only_statement_layer_rows ... ok
+test a_pack_view_merges_every_graph_source_once_in_ascending_order ... ok
+test declarations_change_the_pack_bytes_but_not_its_canonical_digest ... ok
+test every_reconstruction_of_a_pack_keeps_its_declared_graphs ... ok
+test packs_without_declaration_only_graphs_are_byte_identical_to_the_previous_writer ... ok
+test the_committed_golden_pack_reads_and_rewrites_unchanged ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/segmented.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/699105bc0bc52225/out/segmented-699105bc0bc52225)
+
+running 13 tests
+test cache_eviction_preserves_exact_non_cache_owner_conservation ... ok
+test exact_evidence_and_workspace_refuse_before_unbounded_growth ... ok
+test live_pins_are_charged_and_cannot_be_evicted ... ok
+test corruption_cannot_turn_an_omitted_fact_into_success ... ok
+test persisted_certification_reopens_only_with_retained_authority ... ok
+test rdf12_references_empty_graphs_and_streamed_lines_survive ... ok
+test snapshot_qualified_handles_do_not_reinterpret_reused_compact_ids ... ok
+test retained_v1_pack_reader_migrates_into_the_versioned_representation ... ok
+test cancellation_retains_the_exact_failed_request_and_refuses_partial_drains ... ok
+test pin_refusal_precedes_io_and_owned_pin_survives_session_drop ... ok
+test composite_lexical_blank_references_keep_their_scoped_dictionary_closure ... ok
+test indexed_reopen_preserves_high_ids_and_bidirectional_batches ... ok
+test charged_read_peak_covers_measured_allocations_including_streamed_output ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/validated_append.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/692c36e7f553de84/out/validated_append-692c36e7f553de84)
+
+running 6 tests
+test append_validated_preserves_scopes_and_both_graph_qualified_layers ... ok
+test independent_merge_avoids_manually_interned_scopes ... ok
+test embedded_only_composite_blank_scope_is_reserved_before_independent_merge ... ok
+test independent_merge_avoids_validated_append_scopes ... ok
+test validated_append_rebinds_locations_after_deduplication_and_sorting ... ok
+test validated_append_drops_unrealized_handles_and_preserves_real_locations ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+terminal_status=0

@@ -1,0 +1,2034 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling libc v0.2.186
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-events)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/alloc-probe)
+   Compiling hashbrown v0.17.1
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/stack)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling regex-automata v0.4.14
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/testkit)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/deflate)
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+error[E0277]: the trait bound `!: From<diagnostic::RdfDiagnostic>` is not satisfied
+    --> crates/rdf-core/src/ir/skolem.rs:1146:26
+     |
+1146 |             type Error = Infallible;
+     |                          ^^^^^^^^^^ the trait `From<diagnostic::RdfDiagnostic>` is not implemented for `!`
+     |
+note: required by a bound in `skolem::TermMapper::Error`
+    --> crates/rdf-core/src/ir/skolem.rs:340:62
+     |
+ 340 |     type Error: From<purrdf_lex::allocation::StorageError> + From<crate::RdfDiagnostic>;
+     |                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TermMapper::Error`
+
+error[E0277]: the trait bound `!: From<purrdf_lex::allocation::StorageError>` is not satisfied
+    --> crates/rdf-core/src/ir/skolem.rs:1146:26
+     |
+1146 |             type Error = Infallible;
+     |                          ^^^^^^^^^^ the trait `From<purrdf_lex::allocation::StorageError>` is not implemented for `!`
+     |
+note: required by a bound in `skolem::TermMapper::Error`
+    --> crates/rdf-core/src/ir/skolem.rs:340:17
+     |
+ 340 |     type Error: From<purrdf_lex::allocation::StorageError> + From<crate::RdfDiagnostic>;
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TermMapper::Error`
+
+error[E0277]: the trait bound `!: From<diagnostic::RdfDiagnostic>` is not satisfied
+    --> crates/rdf-core/src/ir/skolem.rs:1358:22
+     |
+1358 |         type Error = Infallible;
+     |                      ^^^^^^^^^^ the trait `From<diagnostic::RdfDiagnostic>` is not implemented for `!`
+     |
+note: required by a bound in `skolem::TermMapper::Error`
+    --> crates/rdf-core/src/ir/skolem.rs:340:62
+     |
+ 340 |     type Error: From<purrdf_lex::allocation::StorageError> + From<crate::RdfDiagnostic>;
+     |                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TermMapper::Error`
+
+error[E0277]: the trait bound `!: From<purrdf_lex::allocation::StorageError>` is not satisfied
+    --> crates/rdf-core/src/ir/skolem.rs:1358:22
+     |
+1358 |         type Error = Infallible;
+     |                      ^^^^^^^^^^ the trait `From<purrdf_lex::allocation::StorageError>` is not implemented for `!`
+     |
+note: required by a bound in `skolem::TermMapper::Error`
+    --> crates/rdf-core/src/ir/skolem.rs:340:17
+     |
+ 340 |     type Error: From<purrdf_lex::allocation::StorageError> + From<crate::RdfDiagnostic>;
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TermMapper::Error`
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/bundle.rs:608:42
+    |
+608 |         resegmented.associate_segment(0, unit);
+    |                     -----------------    ^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+    |                     |
+    |                     arguments to this method are incorrect
+    |
+    = note: expected struct `UnitId`
+                 found enum `Result<UnitId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/bundle.rs:432:12
+    |
+432 |     pub fn associate_segment(&mut self, segment: usize, unit: UnitId) -> &mut Self {
+    |            ^^^^^^^^^^^^^^^^^                            ------------
+help: consider using `Result::expect` to unwrap the `Result<provenance::UnitId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+608 |         resegmented.associate_segment(0, unit.expect("REASON"));
+    |                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/bundle.rs:609:42
+    |
+609 |         resegmented.associate_segment(1, unit);
+    |                     -----------------    ^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+    |                     |
+    |                     arguments to this method are incorrect
+    |
+    = note: expected struct `UnitId`
+                 found enum `Result<UnitId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/bundle.rs:432:12
+    |
+432 |     pub fn associate_segment(&mut self, segment: usize, unit: UnitId) -> &mut Self {
+    |            ^^^^^^^^^^^^^^^^^                            ------------
+help: consider using `Result::expect` to unwrap the `Result<provenance::UnitId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+609 |         resegmented.associate_segment(1, unit.expect("REASON"));
+    |                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/imports.rs:1970:72
+     |
+1970 |             TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope)).unwrap(),
+     |                                                    ------------        ^^^^^^^^^^^^^^^^^^^ expected `BlankScope`, found `Result<BlankScope, StorageError>`
+     |                                                    |
+     |                                                    arguments to this method are incorrect
+     |
+     = note: expected struct `BlankScope`
+                  found enum `Result<BlankScope, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:918:12
+     |
+ 918 |     pub fn intern_blank(&mut self, label: &str, scope: BlankScope) -> Result<TermId, StorageError> {
+     |            ^^^^^^^^^^^^                         -----------------
+help: consider using `Result::expect` to unwrap the `Result<ir::term::BlankScope, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1970 |             TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope).expect("REASON")).unwrap(),
+     |                                                                                           +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/imports.rs:2017:17
+     |
+2017 |                 reference_intern(&mut expected, &value, &mut ScopeMap::Identity),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<TermId, StorageError>`, found `TermId`
+     |
+     = note: expected enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+              found struct `TermId`
+help: try wrapping the expression in `Ok`
+     |
+2017 |                 Ok(reference_intern(&mut expected, &value, &mut ScopeMap::Identity)),
+     |                 +++                                                                +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/imports.rs:2032:17
+     |
+2032 |                 reference_intern(&mut expected, &value, &mut expected_map),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<TermId, StorageError>`, found `TermId`
+     |
+     = note: expected enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+              found struct `TermId`
+help: try wrapping the expression in `Ok`
+     |
+2032 |                 Ok(reference_intern(&mut expected, &value, &mut expected_map)),
+     |                 +++                                                          +
+
+error[E0599]: no method named `index` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/imports.rs:2064:63
+     |
+2064 |                 intern_scoped(&mut builder, &value, &mut map).index(),
+     |                                                               ^^^^^ method not found in `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `index` exists on the type `ir::term::TermId`
+    --> crates/rdf-core/src/ir/term.rs:83:5
+     |
+  83 |     pub fn index(self) -> usize {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `ir::term::TermId` value, panicking if the value is a `Result::Err`
+     |
+2064 |                 intern_scoped(&mut builder, &value, &mut map).expect("REASON").index(),
+     |                                                              +++++++++++++++++
+
+error[E0277]: a value of type `Vec<ir::term::TermId>` cannot be built from an iterator over elements of type `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>`
+    --> crates/rdf-core/src/ir/builder.rs:2431:14
+     |
+2431 |             .collect();
+     |              ^^^^^^^ value of type `Vec<ir::term::TermId>` cannot be built from `std::iter::Iterator<Item=Result<ir::term::TermId, purrdf_lex::allocation::StorageError>>`
+     |
+help: the trait `FromIterator<Result<TermId, purrdf_lex::allocation::StorageError>>` is not implemented for `Vec<ir::term::TermId>`
+      but trait `FromIterator<TermId>` is implemented for it
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `ir::term::TermId`, found `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>`
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/builder.rs:2440:63
+     |
+2440 |             assert_eq!(interner.intern(TermLookup::Iri(iri)), id);
+     |                                                               ^^ expected `Result<TermId, StorageError>`, found `TermId`
+     |
+     = note: expected enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+              found struct `TermId`
+help: try wrapping the expression in `Ok`
+     |
+2440 |             assert_eq!(interner.intern(TermLookup::Iri(iri)), Ok(id));
+     |                                                               +++  +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/builder.rs:2456:13
+     |
+2456 |             datatype,
+     |             ^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2456 |             datatype: datatype.expect("REASON"),
+     |                     +++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/builder.rs:2462:16
+     |
+2462 |             s: blank_id,
+     |                ^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2462 |             s: blank_id.expect("REASON"),
+     |                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/builder.rs:2463:16
+     |
+2463 |             p: datatype,
+     |                ^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2463 |             p: datatype.expect("REASON"),
+     |                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/builder.rs:2464:16
+     |
+2464 |             o: literal_id,
+     |                ^^^^^^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2464 |             o: literal_id.expect("REASON"),
+     |                          +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/builder.rs:2479:80
+     |
+2479 |             assert_eq!(hash, hash_stored_value(interner.arena(), interner.term(id)));
+     |                                                                           ---- ^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                                                                           |
+     |                                                                           arguments to this method are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:482:8
+     |
+ 482 |     fn term(&self, id: TermId) -> &InternedTerm {
+     |        ^^^^        ----------
+help: consider using `Result::expect` to unwrap the `Result<ir::term::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+2479 |             assert_eq!(hash, hash_stored_value(interner.arena(), interner.term(id.expect("REASON"))));
+     |                                                                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1959:49
+     |
+1959 |             .pin_handle(graph, payload.clone(), digest)
+     |              ----------                         ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |              |
+     |              arguments to this method are incorrect
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `Result<ContentDigest, pipeline_bundle::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+...
+ 992 |         content_digest: ContentDigest,
+     |         -----------------------------
+help: consider using `Result::expect` to unwrap the `Result<content_store::ContentDigest, pipeline_bundle::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+1959 |             .pin_handle(graph, payload.clone(), digest.expect("REASON"))
+     |                                                       +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2009:17
+     |
+2004 |             .pin_handle(
+     |              ---------- arguments to this method are incorrect
+...
+2009 |                 d1,
+     |                 ^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `Result<ContentDigest, pipeline_bundle::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+...
+ 992 |         content_digest: ContentDigest,
+     |         -----------------------------
+help: consider using `Result::expect` to unwrap the `Result<content_store::ContentDigest, pipeline_bundle::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2009 |                 d1.expect("REASON"),
+     |                   +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2025:65
+     |
+2025 |         assert_eq!(bundle.handle(g1).map(|h| h.content_digest), Some(d1));
+     |                                                                 ^^^^^^^^ expected `Option<ContentDigest>`, found `Option<Result<ContentDigest, _>>`
+     |
+     = note: expected enum `Option<ContentDigest>`
+                found enum `Option<Result<ContentDigest, pipeline_bundle::PipelineBundleError>>`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2045:17
+     |
+2040 |             .pin_handle(
+     |              ---------- arguments to this method are incorrect
+...
+2045 |                 d1,
+     |                 ^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `Result<ContentDigest, pipeline_bundle::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+...
+ 992 |         content_digest: ContentDigest,
+     |         -----------------------------
+help: consider using `Result::expect` to unwrap the `Result<content_store::ContentDigest, pipeline_bundle::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2045 |                 d1.expect("REASON"),
+     |                   +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2081:65
+     |
+2081 |         assert_eq!(bundle.handle(g1).map(|h| h.content_digest), Some(d1));
+     |                                                                 ^^^^^^^^ expected `Option<ContentDigest>`, found `Option<Result<ContentDigest, _>>`
+     |
+     = note: expected enum `Option<ContentDigest>`
+                found enum `Option<Result<ContentDigest, pipeline_bundle::PipelineBundleError>>`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2113:13
+     |
+2113 |             ContentDigest::of(canonicalize(&empty_ds).nquads.as_bytes())
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `Result<ContentDigest, pipeline_bundle::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2113 |             Ok(ContentDigest::of(canonicalize(&empty_ds).nquads.as_bytes()))
+     |             +++                                                            +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2201:17
+     |
+2196 |             .pin_handle(
+     |              ---------- arguments to this method are incorrect
+...
+2201 |                 pinned,
+     |                 ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `Result<ContentDigest, pipeline_bundle::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+...
+ 992 |         content_digest: ContentDigest,
+     |         -----------------------------
+help: consider using `Result::expect` to unwrap the `Result<content_store::ContentDigest, pipeline_bundle::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2201 |                 pinned.expect("REASON"),
+     |                       +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2247:17
+     |
+2242 |             .pin_handle(
+     |              ---------- arguments to this method are incorrect
+...
+2247 |                 digest,
+     |                 ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `Result<ContentDigest, pipeline_bundle::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+...
+ 992 |         content_digest: ContentDigest,
+     |         -----------------------------
+help: consider using `Result::expect` to unwrap the `Result<content_store::ContentDigest, pipeline_bundle::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2247 |                 digest.expect("REASON"),
+     |                       +++++++++++++++++
+
+error[E0599]: no method named `to_hex` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2458:44
+     |
+2458 |             bundle(base()).pipeline_root().to_hex(),
+     |                                            ^^^^^^ method not found in `Result<content_store::ContentDigest, pipeline_bundle::PipelineBundleError>`
+     |
+note: the method `to_hex` exists on the type `content_store::ContentDigest`
+    --> crates/rdf-core/src/content_store.rs:60:5
+     |
+  60 |     pub fn to_hex(&self) -> String {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `content_store::ContentDigest` value, panicking if the value is a `Result::Err`
+     |
+2458 |             bundle(base()).pipeline_root().expect("REASON").to_hex(),
+     |                                           +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:2477:9
+     |
+2477 |         assert_ne!(carrier.pipeline_root(), carrier.digest());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |         expected because this is `Result<content_store::ContentDigest, pipeline_bundle::PipelineBundleError>`
+     |
+     = note: expected enum `Result<ContentDigest, pipeline_bundle::PipelineBundleError>`
+              found struct `ContentDigest`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/canon.rs:4008:38
+     |
+4008 |         let projected = canonicalize(&ds.project_named_graph(graph)).nquads;
+     |                         ------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |                         |
+     |                         arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&Result<RdfDataset, diagnostic::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^ ---------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/canon.rs:4027:33
+     |
+4027 |         assert_eq!(canonicalize(&ds.project_named_graph(absent)).nquads, "");
+     |                    ------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |                    |
+     |                    arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&Result<RdfDataset, diagnostic::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^ ---------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/canon.rs:4056:26
+     |
+4056 |             canonicalize(&ds.project_named_graph("http://example.org/clean")).nquads
+     |             ------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&Result<RdfDataset, diagnostic::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^ ---------------
+
+error[E0277]: the trait bound `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>: dataset_view::FallibleDatasetView` is not satisfied
+    --> crates/rdf-core/src/ir/canon.rs:4923:40
+     |
+4923 |             try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
+     |             -------------------------- ^^^^^^^^^^ the trait `dataset_view::FallibleDatasetView` is not implemented for `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |             |
+     |             required by a bound introduced by this call
+     |
+     = help: the following other types implement trait `dataset_view::FallibleDatasetView`:
+               CompositeDatasetView
+               FlatProbeView
+               LedgerDataset<'a, S, L>
+               PagedQueryView<'_>
+               PagedStackQueryView<'_>
+               SegmentedSession
+               dataset::RdfDataset
+               delta_view::DeltaDatasetView
+               std::sync::Arc<T>
+note: required by a bound in `canon::try_canonicalize_flat_view`
+    --> crates/rdf-core/src/ir/canon.rs:728:38
+     |
+ 728 | pub fn try_canonicalize_flat_view<D: FallibleDatasetView>(
+     |                                      ^^^^^^^^^^^^^^^^^^^ required by this bound in `try_canonicalize_flat_view`
+
+error[E0277]: the trait bound `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>: dataset_view::DatasetView` is not satisfied
+    --> crates/rdf-core/src/ir/canon.rs:4923:13
+     |
+4923 |             try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `dataset_view::DatasetView` is not implemented for `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+     = help: the following other types implement trait `dataset_view::DatasetView`:
+               CompositeDatasetView
+               FlatProbeView
+               ForeignDatatypeView
+               LedgerDataset<'a, S, L>
+               PackView<'_>
+               PagedQueryView<'_>
+               PagedStackQueryView<'_>
+               SegmentedSession
+             and 4 others
+
+error[E0277]: the trait bound `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>: dataset_view::FallibleDatasetView` is not satisfied
+    --> crates/rdf-core/src/ir/canon.rs:4923:13
+     |
+4923 |             try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `dataset_view::FallibleDatasetView` is not implemented for `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+     = help: the following other types implement trait `dataset_view::FallibleDatasetView`:
+               CompositeDatasetView
+               FlatProbeView
+               LedgerDataset<'a, S, L>
+               PagedQueryView<'_>
+               PagedStackQueryView<'_>
+               SegmentedSession
+               dataset::RdfDataset
+               delta_view::DeltaDatasetView
+               std::sync::Arc<T>
+
+error[E0599]: no method named `extend` found for struct `builder::RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:2777:11
+     |
+2777 |         b.extend([
+     |         --^^^^^^
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:505:1
+     |
+ 505 | pub struct RdfDatasetBuilder {
+     | ---------------------------- method `extend` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following trait defines an item `extend`, perhaps you need to implement it:
+             candidate #1: `Extend`
+help: there is a method `extend_quads` with a similar name
+     |
+2777 |         b.extend_quads([
+     |                 ++++++
+
+error[E0599]: no method named `extend` found for struct `builder::RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:2809:11
+     |
+2809 |         b.extend(core::iter::empty::<QuadIds>());
+     |           ^^^^^^
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:505:1
+     |
+ 505 | pub struct RdfDatasetBuilder {
+     | ---------------------------- method `extend` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following trait defines an item `extend`, perhaps you need to implement it:
+             candidate #1: `Extend`
+help: there is a method `extend_quads` with a similar name
+     |
+2809 |         b.extend_quads(core::iter::empty::<QuadIds>());
+     |                 ++++++
+
+error[E0599]: no method named `extend` found for struct `builder::RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:2815:11
+     |
+2815 |         b.extend([q, q]);
+     |           ^^^^^^
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:505:1
+     |
+ 505 | pub struct RdfDatasetBuilder {
+     | ---------------------------- method `extend` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following trait defines an item `extend`, perhaps you need to implement it:
+             candidate #1: `Extend`
+help: there is a method `extend_quads` with a similar name
+     |
+2815 |         b.extend_quads([q, q]);
+     |                 ++++++
+
+error[E0599]: no method named `quad_count` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3310:23
+     |
+3310 |         assert_eq!(ab.quad_count(), 2, "both quads survive the union");
+     |                       ^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `quad_count` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2117:5
+     |
+2117 |     pub fn quad_count(&self) -> usize {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3310 |         assert_eq!(ab.expect("REASON").quad_count(), 2, "both quads survive the union");
+     |                      +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/dataset.rs:3312:26
+     |
+3312 |             canonicalize(&ab).nquads,
+     |             ------------ ^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&Result<RdfDataset, diagnostic::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^ ---------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/dataset.rs:3313:26
+     |
+3313 |             canonicalize(&ba).nquads,
+     |             ------------ ^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&Result<RdfDataset, diagnostic::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^ ---------------
+
+error[E0599]: no method named `quad_count` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3334:22
+     |
+3334 |         assert_eq!(u.quad_count(), 3, "shared quad collapses, distinct survive");
+     |                      ^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `quad_count` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2117:5
+     |
+2117 |     pub fn quad_count(&self) -> usize {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3334 |         assert_eq!(u.expect("REASON").quad_count(), 3, "shared quad collapses, distinct survive");
+     |                     +++++++++++++++++
+
+error[E0599]: no method named `reifiers` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3358:22
+     |
+3358 |         assert_eq!(u.reifiers().count(), 1, "reifier binding survives union");
+     |                      ^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `reifiers` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1702:5
+     |
+1702 |     pub fn reifiers(&self) -> impl Iterator<Item = (TermId, TermId)> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3358 |         assert_eq!(u.expect("REASON").reifiers().count(), 1, "reifier binding survives union");
+     |                     +++++++++++++++++
+
+error[E0599]: no method named `annotations` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3359:22
+     |
+3359 |         assert_eq!(u.annotations().count(), 1, "annotation survives union");
+     |                      ^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `annotations` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1718:5
+     |
+1718 |     pub fn annotations(&self) -> impl Iterator<Item = (TermId, TermId, TermId)> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3359 |         assert_eq!(u.expect("REASON").annotations().count(), 1, "annotation survives union");
+     |                     +++++++++++++++++
+
+error[E0599]: no method named `owned_reifiers` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3361:25
+     |
+3361 |         let reifier = u.owned_reifiers().next().expect("one reifier");
+     |                         ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_reifiers` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1065:5
+     |
+1065 |     pub fn owned_reifiers(&self) -> impl Iterator<Item = RdfReifier> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3361 |         let reifier = u.expect("REASON").owned_reifiers().next().expect("one reifier");
+     |                        +++++++++++++++++
+
+error[E0599]: no method named `owned_annotations` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3367:28
+     |
+3367 |         let annotation = u.owned_annotations().next().expect("one annotation");
+     |                            ^^^^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_annotations` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1071:5
+     |
+1071 |     pub fn owned_annotations(&self) -> impl Iterator<Item = RdfAnnotation> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3367 |         let annotation = u.expect("REASON").owned_annotations().next().expect("one annotation");
+     |                           +++++++++++++++++
+
+error[E0599]: no method named `quad_count` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3398:15
+     |
+3398 |             u.quad_count(),
+     |               ^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `quad_count` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2117:5
+     |
+2117 |     pub fn quad_count(&self) -> usize {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3398 |             u.expect("REASON").quad_count(),
+     |              +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3405:14
+     |
+3404 |           let heads: crate::FastSet<String> = u
+     |  _____________________________________________-
+3405 | |             .owned_quads()
+     | |             -^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     | |_____________|
+     |
+     |
+note: the method `owned_quads` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+     |
+1058 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3404 |         let heads: crate::FastSet<String> = u.expect("REASON")
+     |                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/dataset.rs:3429:26
+     |
+3429 |             canonicalize(&u).nquads,
+     |             ------------ ^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&Result<RdfDataset, diagnostic::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^ ---------------
+
+error[E0599]: no method named `content_id_scheme` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3471:15
+     |
+3471 |             u.content_id_scheme(),
+     |               ^^^^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `content_id_scheme` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2277:5
+     |
+2277 |     pub fn content_id_scheme(&self) -> Option<&ContentIdScheme> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3471 |             u.expect("REASON").content_id_scheme(),
+     |              +++++++++++++++++
+
+error[E0599]: no method named `content_ids` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3476:15
+     |
+3476 |             u.content_ids().count(),
+     |               ^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `content_ids` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2315:5
+     |
+2315 |     pub fn content_ids(&self) -> impl Iterator<Item = (TermId, Blake3ContentId)> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3476 |             u.expect("REASON").content_ids().count(),
+     |              +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3480:20
+     |
+3480 |         let ua = u.term_id_by_iri(IRI_A).expect("A survives the merge");
+     |                    ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `term_id_by_iri` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+     |
+1507 |     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3480 |         let ua = u.expect("REASON").term_id_by_iri(IRI_A).expect("A survives the merge");
+     |                   +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3481:20
+     |
+3481 |         let ub = u.term_id_by_iri(IRI_B).expect("B survives the merge");
+     |                    ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `term_id_by_iri` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+     |
+1507 |     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3481 |         let ub = u.expect("REASON").term_id_by_iri(IRI_B).expect("B survives the merge");
+     |                   +++++++++++++++++
+
+error[E0599]: no method named `predecessors` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3483:15
+     |
+3483 |             u.predecessors(ua),
+     |               ^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `predecessors` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2349:5
+     |
+2349 |     pub fn predecessors(&self, successor: TermId) -> &[TermId] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3483 |             u.expect("REASON").predecessors(ua),
+     |              +++++++++++++++++
+
+error[E0599]: no method named `content_id_scheme` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3517:15
+     |
+3517 |             u.content_id_scheme(),
+     |               ^^^^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `content_id_scheme` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2277:5
+     |
+2277 |     pub fn content_id_scheme(&self) -> Option<&ContentIdScheme> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3517 |             u.expect("REASON").content_id_scheme(),
+     |              +++++++++++++++++
+
+error[E0599]: no method named `content_ids` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3522:15
+     |
+3522 |             u.content_ids().count(),
+     |               ^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `content_ids` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2315:5
+     |
+2315 |     pub fn content_ids(&self) -> impl Iterator<Item = (TermId, Blake3ContentId)> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3522 |             u.expect("REASON").content_ids().count(),
+     |              +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3566:23
+     |
+3566 |             let c = u.term_id_by_iri(IRI_C).expect("C");
+     |                       ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `term_id_by_iri` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+     |
+1507 |     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3566 |             let c = u.expect("REASON").term_id_by_iri(IRI_C).expect("C");
+     |                      +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3567:23
+     |
+3567 |             let a = u.term_id_by_iri(IRI_A).expect("A");
+     |                       ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `term_id_by_iri` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+     |
+1507 |     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3567 |             let a = u.expect("REASON").term_id_by_iri(IRI_A).expect("A");
+     |                      +++++++++++++++++
+
+error[E0599]: no method named `predecessors` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3568:26
+     |
+3568 |             assert_eq!(u.predecessors(c), &[a], "interned={interned}");
+     |                          ^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `predecessors` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2349:5
+     |
+2349 |     pub fn predecessors(&self, successor: TermId) -> &[TermId] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3568 |             assert_eq!(u.expect("REASON").predecessors(c), &[a], "interned={interned}");
+     |                         +++++++++++++++++
+
+error[E0599]: no method named `content_id_scheme` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3593:25
+     |
+3593 |         assert_eq!(snap.content_id_scheme(), Some(&scheme));
+     |                         ^^^^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `content_id_scheme` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2277:5
+     |
+2277 |     pub fn content_id_scheme(&self) -> Option<&ContentIdScheme> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3593 |         assert_eq!(snap.expect("REASON").content_id_scheme(), Some(&scheme));
+     |                        +++++++++++++++++
+
+error[E0599]: no method named `content_ids` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3594:25
+     |
+3594 |         assert_eq!(snap.content_ids().count(), 2);
+     |                         ^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `content_ids` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2315:5
+     |
+2315 |     pub fn content_ids(&self) -> impl Iterator<Item = (TermId, Blake3ContentId)> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3594 |         assert_eq!(snap.expect("REASON").content_ids().count(), 2);
+     |                        +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3595:23
+     |
+3595 |         let sa = snap.term_id_by_iri(IRI_A).expect("A survives the snapshot");
+     |                       ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `term_id_by_iri` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+     |
+1507 |     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3595 |         let sa = snap.expect("REASON").term_id_by_iri(IRI_A).expect("A survives the snapshot");
+     |                      +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_iri` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3596:23
+     |
+3596 |         let sb = snap.term_id_by_iri(IRI_B).expect("B survives the snapshot");
+     |                       ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `term_id_by_iri` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1507:5
+     |
+1507 |     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3596 |         let sb = snap.expect("REASON").term_id_by_iri(IRI_B).expect("B survives the snapshot");
+     |                      +++++++++++++++++
+
+error[E0599]: no method named `predecessors` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3597:25
+     |
+3597 |         assert_eq!(snap.predecessors(sa), &[sb]);
+     |                         ^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `predecessors` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:2349:5
+     |
+2349 |     pub fn predecessors(&self, successor: TermId) -> &[TermId] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3597 |         assert_eq!(snap.expect("REASON").predecessors(sa), &[sb]);
+     |                        +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3879:36
+     |
+3879 |             let quads: Vec<_> = g1.owned_quads().collect();
+     |                                    ^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_quads` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+     |
+1058 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3879 |             let quads: Vec<_> = g1.expect("REASON").owned_quads().collect();
+     |                                   +++++++++++++++++
+
+error[E0599]: no method named `owned_reifiers` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3886:39
+     |
+3886 |             let reifiers: Vec<_> = g1.owned_reifiers().collect();
+     |                                       ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_reifiers` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1065:5
+     |
+1065 |     pub fn owned_reifiers(&self) -> impl Iterator<Item = RdfReifier> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3886 |             let reifiers: Vec<_> = g1.expect("REASON").owned_reifiers().collect();
+     |                                      +++++++++++++++++
+
+error[E0599]: no method named `owned_annotations` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3900:42
+     |
+3900 |             let annotations: Vec<_> = g1.owned_annotations().collect();
+     |                                          ^^^^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_annotations` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1071:5
+     |
+1071 |     pub fn owned_annotations(&self) -> impl Iterator<Item = RdfAnnotation> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3900 |             let annotations: Vec<_> = g1.expect("REASON").owned_annotations().collect();
+     |                                         +++++++++++++++++
+
+error[E0599]: no method named `owned_reifiers` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3911:39
+     |
+3911 |             let reifiers: Vec<_> = g2.owned_reifiers().collect();
+     |                                       ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_reifiers` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1065:5
+     |
+1065 |     pub fn owned_reifiers(&self) -> impl Iterator<Item = RdfReifier> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3911 |             let reifiers: Vec<_> = g2.expect("REASON").owned_reifiers().collect();
+     |                                      +++++++++++++++++
+
+error[E0599]: no method named `owned_annotations` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3912:42
+     |
+3912 |             let annotations: Vec<_> = g2.owned_annotations().collect();
+     |                                          ^^^^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_annotations` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1071:5
+     |
+1071 |     pub fn owned_annotations(&self) -> impl Iterator<Item = RdfAnnotation> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3912 |             let annotations: Vec<_> = g2.expect("REASON").owned_annotations().collect();
+     |                                         +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3939:27
+     |
+3939 |             assert_eq!(g1.owned_quads().count(), 1);
+     |                           ^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_quads` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+     |
+1058 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3939 |             assert_eq!(g1.expect("REASON").owned_quads().count(), 1);
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `owned_reifiers` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3940:27
+     |
+3940 |             assert_eq!(g1.owned_reifiers().count(), 0);
+     |                           ^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_reifiers` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1065:5
+     |
+1065 |     pub fn owned_reifiers(&self) -> impl Iterator<Item = RdfReifier> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3940 |             assert_eq!(g1.expect("REASON").owned_reifiers().count(), 0);
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `owned_annotations` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:3941:27
+     |
+3941 |             assert_eq!(g1.owned_annotations().count(), 0);
+     |                           ^^^^^^^^^^^^^^^^^ method not found in `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>`
+     |
+note: the method `owned_annotations` exists on the type `dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/dataset.rs:1071:5
+     |
+1071 |     pub fn owned_annotations(&self) -> impl Iterator<Item = RdfAnnotation> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `dataset::RdfDataset` value, panicking if the value is a `Result::Err`
+     |
+3941 |             assert_eq!(g1.expect("REASON").owned_annotations().count(), 0);
+     |                          +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/global.rs:927:55
+    |
+927 |             assert_eq!(dict.intern_iri(iri).unwrap(), Ok(id));
+    |                                                       ^^^^^^ expected `GlobalTermId`, found `Result<GlobalTermId, _>`
+    |
+    = note: expected struct `GlobalTermId`
+                 found enum `Result<GlobalTermId, _>`
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/global.rs:949:16
+    |
+949 |             s: blank_id,
+    |                ^^^^^^^^ expected `GlobalTermId`, found `Result<GlobalTermId, StorageError>`
+    |
+    = note: expected struct `GlobalTermId`
+                 found enum `Result<GlobalTermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<global::GlobalTermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+949 |             s: blank_id.expect("REASON"),
+    |                        +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/global.rs:951:16
+    |
+951 |             o: literal_id,
+    |                ^^^^^^^^^^ expected `GlobalTermId`, found `Result<GlobalTermId, StorageError>`
+    |
+    = note: expected struct `GlobalTermId`
+                 found enum `Result<GlobalTermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<global::GlobalTermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+951 |             o: literal_id.expect("REASON"),
+    |                          +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/global.rs:960:21
+    |
+960 |             (blank, blank_id),
+    |                     ^^^^^^^^ expected `GlobalTermId`, found `Result<GlobalTermId, StorageError>`
+    |
+    = note: expected struct `GlobalTermId`
+                 found enum `Result<GlobalTermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<global::GlobalTermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+960 |             (blank, blank_id.expect("REASON")),
+    |                             +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/global.rs:961:23
+    |
+961 |             (literal, literal_id),
+    |                       ^^^^^^^^^^ expected `GlobalTermId`, found `Result<GlobalTermId, StorageError>`
+    |
+    = note: expected struct `GlobalTermId`
+                 found enum `Result<GlobalTermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<global::GlobalTermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+961 |             (literal, literal_id.expect("REASON")),
+    |                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/global.rs:962:22
+    |
+962 |             (triple, triple_id),
+    |                      ^^^^^^^^^ expected `GlobalTermId`, found `Result<GlobalTermId, StorageError>`
+    |
+    = note: expected struct `GlobalTermId`
+                 found enum `Result<GlobalTermId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<global::GlobalTermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+962 |             (triple, triple_id.expect("REASON")),
+    |                               +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/global.rs:969:52
+    |
+969 |             assert_eq!(dict.intern_lookup(lookup), id);
+    |                                                    ^^ expected `Result<GlobalTermId, StorageError>`, found `GlobalTermId`
+    |
+    = note: expected enum `Result<GlobalTermId, purrdf_lex::allocation::StorageError>`
+             found struct `GlobalTermId`
+help: try wrapping the expression in `Ok`
+    |
+969 |             assert_eq!(dict.intern_lookup(lookup), Ok(id));
+    |                                                    +++  +
+
+error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+    --> crates/rdf-core/src/ir/global.rs:1194:25
+     |
+ 307 | pub struct GlobalDictionary {
+     | --------------------------- method `reintern_validated` not found for this struct
+...
+1194 |         assert_eq!(dict.reintern_validated(&value), triple);
+     |                         ^^^^^^^^^^^^^^^^^^
+     |
+help: there is a method `try_reintern_validated` with a similar name
+     |
+1194 |         assert_eq!(dict.try_reintern_validated(&value), triple);
+     |                         ++++
+
+error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+    --> crates/rdf-core/src/ir/global.rs:1227:42
+     |
+ 307 | pub struct GlobalDictionary {
+     | --------------------------- method `reintern_validated` not found for this struct
+...
+1227 |             let validated_id = validated.reintern_validated(&value);
+     |                                          ^^^^^^^^^^^^^^^^^^
+     |
+help: there is a method `try_reintern_validated` with a similar name
+     |
+1227 |             let validated_id = validated.try_reintern_validated(&value);
+     |                                          ++++
+
+error[E0599]: no method named `reintern_validated` found for mutable reference `&mut global::GlobalDictionary` in the current scope
+    --> crates/rdf-core/src/ir/global.rs:1256:33
+     |
+1256 |                 assert_eq!(dict.reintern_validated(&value), ordinary_id);
+     |                                 ^^^^^^^^^^^^^^^^^^
+     |
+help: there is a method `try_reintern_validated` with a similar name
+     |
+1256 |                 assert_eq!(dict.try_reintern_validated(&value), ordinary_id);
+     |                                 ++++
+
+error[E0599]: no method named `expect_err` found for struct `global::GlobalTermId` in the current scope
+    --> crates/rdf-core/src/ir/global.rs:1361:59
+     |
+  67 | pub struct GlobalTermId(NonZeroU64);
+     | ----------------------- method `expect_err` not found for this struct
+...
+1361 |         let err = dict.intern_iri("notAbsolute").unwrap().expect_err("relative IRI");
+     |                        -------------------------          ^^^^^^^^^^ method not found in `global::GlobalTermId`
+     |                        |
+     |                        method `expect_err` is available on `Result<global::GlobalTermId, IriReadError>`
+
+error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+    --> crates/rdf-core/src/ir/global.rs:1388:25
+     |
+ 307 | pub struct GlobalDictionary {
+     | --------------------------- method `reintern_validated` not found for this struct
+...
+1388 |         assert_eq!(dict.reintern_validated(&value), first);
+     |                         ^^^^^^^^^^^^^^^^^^
+     |
+help: there is a method `try_reintern_validated` with a similar name
+     |
+1388 |         assert_eq!(dict.try_reintern_validated(&value), first);
+     |                         ++++
+
+error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+    --> crates/rdf-core/src/ir/global.rs:1470:29
+     |
+ 307 | pub struct GlobalDictionary {
+     | --------------------------- method `reintern_validated` not found for this struct
+...
+1470 |             assert_eq!(dict.reintern_validated(&value), id, "seed {seed}");
+     |                             ^^^^^^^^^^^^^^^^^^
+     |
+help: there is a method `try_reintern_validated` with a similar name
+     |
+1470 |             assert_eq!(dict.try_reintern_validated(&value), id, "seed {seed}");
+     |                             ++++
+
+error[E0599]: no method named `reintern_validated` found for struct `global::GlobalDictionary` in the current scope
+    --> crates/rdf-core/src/ir/global.rs:1487:29
+     |
+ 307 | pub struct GlobalDictionary {
+     | --------------------------- method `reintern_validated` not found for this struct
+...
+1487 |             assert_eq!(dict.reintern_validated(&value), id);
+     |                             ^^^^^^^^^^^^^^^^^^
+     |
+help: there is a method `try_reintern_validated` with a similar name
+     |
+1487 |             assert_eq!(dict.try_reintern_validated(&value), id);
+     |                             ++++
+
+error[E0599]: no method named `term` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/import.rs:481:24
+     |
+ 481 |                 single.term(id)
+     |                        ^^^^
+     |
+note: the method `term` exists on the type `DatasetImporter<'_, '_, D>`
+    --> crates/rdf-core/src/ir/import.rs:277:5
+     |
+ 277 | /     pub fn term(&mut self, id: D::Id) -> Result<TermId, DatasetImportError<Infallible>>
+ 278 | |     where
+ 279 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `term`, perhaps you need to implement one of them:
+             candidate #1: `TermGuard`
+             candidate #2: `event_sink::RdfDatasetVisitor`
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `DatasetImporter<'_, '_, D>` value, panicking if the value is a `Result::Err`
+     |
+ 481 |                 single.expect("REASON").term(id)
+     |                       +++++++++++++++++
+
+error[E0599]: no method named `term` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/import.rs:539:30
+     |
+ 539 |                     importer.term(id),
+     |                              ^^^^
+     |
+note: the method `term` exists on the type `DatasetImporter<'_, '_, dataset::RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:277:5
+     |
+ 277 | /     pub fn term(&mut self, id: D::Id) -> Result<TermId, DatasetImportError<Infallible>>
+ 278 | |     where
+ 279 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `term`, perhaps you need to implement one of them:
+             candidate #1: `TermGuard`
+             candidate #2: `event_sink::RdfDatasetVisitor`
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `DatasetImporter<'_, '_, dataset::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 539 |                     importer.expect("REASON").term(id),
+     |                             +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/import.rs:540:36
+    |
+540 |                     reference_term(&mut expected, id),
+    |                     -------------- ^^^^^^^^^^^^^ expected `&mut DatasetImporter<'_, '_, _>`, found `&mut Result<_, _>`
+    |                     |
+    |                     arguments to this function are incorrect
+    |
+    = note: expected mutable reference `&mut DatasetImporter<'_, '_, _>`
+               found mutable reference `&mut Result<DatasetImporter<'_, '_, dataset::RdfDataset>, DatasetImportError<!>>`
+note: function defined here
+   --> crates/rdf-core/src/ir/import.rs:459:8
+    |
+459 |     fn reference_term<D: DatasetView<ReadError = Infallible>>(
+    |        ^^^^^^^^^^^^^^
+460 |         importer: &mut DatasetImporter<'_, '_, D>,
+    |         -----------------------------------------
+
+error[E0599]: no method named `stats` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/import.rs:544:33
+    |
+544 |             assert_eq!(importer.stats(), expected.stats(), "seed {seed}");
+    |                                 ^^^^^ method not found in `Result<DatasetImporter<'_, '_, dataset::RdfDataset>, DatasetImportError<!>>`
+    |
+note: the method `stats` exists on the type `DatasetImporter<'_, '_, dataset::RdfDataset>`
+   --> crates/rdf-core/src/ir/import.rs:412:5
+    |
+412 |     pub const fn stats(&self) -> DatasetImportStats {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `DatasetImporter<'_, '_, dataset::RdfDataset>` value, panicking if the value is a `Result::Err`
+    |
+544 |             assert_eq!(importer.expect("REASON").stats(), expected.stats(), "seed {seed}");
+    |                                +++++++++++++++++
+
+error[E0599]: no method named `stats` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/import.rs:544:51
+    |
+544 |             assert_eq!(importer.stats(), expected.stats(), "seed {seed}");
+    |                                                   ^^^^^ method not found in `Result<DatasetImporter<'_, '_, dataset::RdfDataset>, DatasetImportError<!>>`
+    |
+note: the method `stats` exists on the type `DatasetImporter<'_, '_, dataset::RdfDataset>`
+   --> crates/rdf-core/src/ir/import.rs:412:5
+    |
+412 |     pub const fn stats(&self) -> DatasetImportStats {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `DatasetImporter<'_, '_, dataset::RdfDataset>` value, panicking if the value is a `Result::Err`
+    |
+544 |             assert_eq!(importer.stats(), expected.expect("REASON").stats(), "seed {seed}");
+    |                                                  +++++++++++++++++
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:417:36
+    |
+417 |         let global_b = translation.to_global(b);
+    |                                    ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+417 |         let global_b = translation.expect("REASON").to_global(b);
+    |                                   +++++++++++++++++
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:418:36
+    |
+418 |         let global_a = translation.to_global(a);
+    |                                    ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+418 |         let global_a = translation.expect("REASON").to_global(a);
+    |                                   +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:423:27
+    |
+423 |             admit_pattern(&translation, Some(global_b), None, None, GraphMatch::Any),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:428:27
+    |
+428 |             admit_pattern(&translation, Some(global_a), None, None, GraphMatch::Any),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:447:36
+    |
+447 |         let global_a = translation.to_global(a);
+    |                                    ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+447 |         let global_a = translation.expect("REASON").to_global(a);
+    |                                   +++++++++++++++++
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:448:36
+    |
+448 |         let global_p = translation.to_global(p);
+    |                                    ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+448 |         let global_p = translation.expect("REASON").to_global(p);
+    |                                   +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:452:27
+    |
+452 |             admit_pattern(&translation, None, Some(global_a), None, GraphMatch::Any),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:457:27
+    |
+457 |             admit_pattern(&translation, None, Some(global_p), None, GraphMatch::Any),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:476:36
+    |
+476 |         let global_p = translation.to_global(p);
+    |                                    ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+476 |         let global_p = translation.expect("REASON").to_global(p);
+    |                                   +++++++++++++++++
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:477:36
+    |
+477 |         let global_b = translation.to_global(b);
+    |                                    ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+477 |         let global_b = translation.expect("REASON").to_global(b);
+    |                                   +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:481:27
+    |
+481 |             admit_pattern(&translation, None, None, Some(global_p), GraphMatch::Any),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:486:27
+    |
+486 |             admit_pattern(&translation, None, None, Some(global_b), GraphMatch::Any),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:513:36
+    |
+513 |         let global_g = translation.to_global(g);
+    |                                    ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+513 |         let global_g = translation.expect("REASON").to_global(g);
+    |                                   +++++++++++++++++
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:514:37
+    |
+514 |         let global_g1 = translation.to_global(g1);
+    |                                     ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+514 |         let global_g1 = translation.expect("REASON").to_global(g1);
+    |                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:517:27
+    |
+517 |             admit_pattern(&translation, None, None, None, GraphMatch::Named(global_g)),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:522:27
+    |
+522 |             admit_pattern(&translation, None, None, None, GraphMatch::Named(global_g1)),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:547:37
+    |
+547 |         let global_g1 = translation.to_global(g1);
+    |                                     ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+547 |         let global_g1 = translation.expect("REASON").to_global(g1);
+    |                                    +++++++++++++++++
+
+error[E0599]: no method named `to_global` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/admission.rs:548:37
+    |
+548 |         let global_g2 = translation.to_global(g2);
+    |                                     ^^^^^^^^^ method not found in `Result<translation::PageTranslation, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `to_global` exists on the type `translation::PageTranslation`
+   --> crates/rdf-core/src/ir/paged/translation.rs:131:5
+    |
+131 |     pub fn to_global(&self, local: TermId) -> GlobalTermId {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `translation::PageTranslation` value, panicking if the value is a `Result::Err`
+    |
+548 |         let global_g2 = translation.expect("REASON").to_global(g2);
+    |                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:553:27
+    |
+553 |             admit_pattern(&translation, None, None, None, GraphMatch::Named(global_g2)),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:558:27
+    |
+558 |             admit_pattern(&translation, None, None, None, GraphMatch::Named(global_g1)),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:581:27
+    |
+581 |             admit_pattern(&translation, None, None, None, GraphMatch::Default),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:595:27
+    |
+595 |             admit_pattern(&translation2, None, None, None, GraphMatch::Default),
+    |             ------------- ^^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/paged/admission.rs:618:27
+    |
+618 |             admit_pattern(&translation, None, None, None, GraphMatch::Any),
+    |             ------------- ^^^^^^^^^^^^ expected `&PageTranslation`, found `&Result<PageTranslation, StorageError>`
+    |             |
+    |             arguments to this function are incorrect
+    |
+    = note: expected reference `&PageTranslation`
+               found reference `&Result<PageTranslation, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/src/ir/paged/admission.rs:94:15
+    |
+ 94 | pub(crate) fn admit_pattern(
+    |               ^^^^^^^^^^^^^
+ 95 |     translation: &PageTranslation,
+    |     -----------------------------
+
+error[E0599]: no method named `graph_index` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/graph_index.rs:403:14
+    |
+402 |           let compacted_values: BTreeSet<String> = compacted
+    |  __________________________________________________-
+403 | |             .graph_index()
+    | |             -^^^^^^^^^^^ method not found in `Result<paged::PagedDataset, purrdf_lex::allocation::StorageError>`
+    | |_____________|
+    |
+    |
+note: the method `graph_index` exists on the type `paged::PagedDataset`
+   --> crates/rdf-core/src/ir/paged/mod.rs:857:5
+    |
+857 |     pub(crate) fn graph_index(&self) -> &GraphPageIndex {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `paged::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+402 |         let compacted_values: BTreeSet<String> = compacted.expect("REASON")
+    |                                                           +++++++++++++++++
+
+error[E0599]: no method named `dictionary` found for enum `Result<T, E>` in the current scope
+   --> crates/rdf-core/src/ir/paged/graph_index.rs:406:50
+    |
+406 |             .map(|&id| format!("{:?}", compacted.dictionary().term_value(id)))
+    |                                                  ^^^^^^^^^^ method not found in `Result<paged::PagedDataset, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `dictionary` exists on the type `paged::PagedDataset`
+   --> crates/rdf-core/src/ir/paged/mod.rs:835:5
+    |
+835 |     pub fn dictionary(&self) -> &GlobalDictionary {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `paged::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+406 |             .map(|&id| format!("{:?}", compacted.expect("REASON").dictionary().term_value(id)))
+    |                                                 +++++++++++++++++
+
+error[E0599]: no method named `intern_batch` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/segmented/build.rs:1192:17
+     |
+1192 |         builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+     |                 ^^^^^^^^^^^^
+     |
+note: the method `intern_batch` exists on the type `build::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:129:5
+     |
+ 129 | /     pub fn intern_batch(
+ 130 | |         &mut self,
+ 131 | |         values: &[TermValue],
+ 132 | |         mut visit: impl FnMut(&TermValue, GlobalTermId),
+ 133 | |     ) -> Result<(), SegmentedError> {
+     | |___________________________________^
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `build::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1192 |         builder.expect("REASON").intern_batch(&values, |_, id| ids.push(id)).unwrap();
+     |                +++++++++++++++++
+
+error[E0599]: no method named `push_quad` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/segmented/build.rs:1195:18
+     |
+1194 | /             builder
+1195 | |                 .push_quad(QuadIds {
+     | |                 -^^^^^^^^^ method not found in `Result<build::SegmentedBuilder, segmented::SegmentedError>`
+     | |_________________|
+     |
+     |
+note: the method `push_quad` exists on the type `build::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:174:5
+     |
+ 174 |     pub fn push_quad(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `build::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1194 |             builder.expect("REASON")
+     |                    +++++++++++++++++
+
+error[E0599]: no method named `declare_named_graph` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/segmented/build.rs:1203:17
+     |
+1203 |         builder.declare_named_graph(ids[12]).unwrap();
+     |                 ^^^^^^^^^^^^^^^^^^^ method not found in `Result<build::SegmentedBuilder, segmented::SegmentedError>`
+     |
+note: the method `declare_named_graph` exists on the type `build::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:236:5
+     |
+ 236 |     pub fn declare_named_graph(&mut self, graph: GlobalTermId) -> Result<(), SegmentedError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `build::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1203 |         builder.expect("REASON").declare_named_graph(ids[12]).unwrap();
+     |                +++++++++++++++++
+
+error[E0599]: no method named `seal` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/segmented/build.rs:1204:17
+     |
+1204 |         builder.seal().unwrap()
+     |                 ^^^^ method not found in `Result<build::SegmentedBuilder, segmented::SegmentedError>`
+     |
+note: the method `seal` exists on the type `build::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:247:5
+     |
+ 247 |     pub fn seal(self) -> Result<SegmentedImage, SegmentedError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `build::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1204 |         builder.expect("REASON").seal().unwrap()
+     |                +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/skolem.rs:849:74
+    |
+849 |         Arc::try_unwrap(b.freeze().expect("valid")).unwrap_or_else(|arc| arc.owned_snapshot())
+    |                                                                          ^^^^^^^^^^^^^^^^^^^^ expected `RdfDataset`, found `Result<RdfDataset, RdfDiagnostic>`
+    |
+    = note: expected struct `RdfDataset`
+                 found enum `Result<RdfDataset, diagnostic::RdfDiagnostic>`
+help: consider using `Result::expect` to unwrap the `Result<dataset::RdfDataset, diagnostic::RdfDiagnostic>` value, panicking if the value is a `Result::Err`
+    |
+849 |         Arc::try_unwrap(b.freeze().expect("valid")).unwrap_or_else(|arc| arc.owned_snapshot().expect("REASON"))
+    |                                                                                              +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/provenance.rs:802:27
+    |
+802 |         assert_eq!(i.name(id), "root-ontology");
+    |                      ---- ^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+    |                      |
+    |                      arguments to this method are incorrect
+    |
+    = note: expected struct `UnitId`
+                 found enum `Result<UnitId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/provenance.rs:311:12
+    |
+311 |     pub fn name(&self, id: UnitId) -> &str {
+    |            ^^^^        ----------
+help: consider using `Result::expect` to unwrap the `Result<provenance::UnitId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+802 |         assert_eq!(i.name(id.expect("REASON")), "root-ontology");
+    |                             +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/provenance.rs:828:27
+    |
+828 |         assert_eq!(i.path(id), "ontology/purrdf.ttl");
+    |                      ---- ^^ expected `ArtifactId`, found `Result<ArtifactId, StorageError>`
+    |                      |
+    |                      arguments to this method are incorrect
+    |
+    = note: expected struct `ArtifactId`
+                 found enum `Result<ArtifactId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/provenance.rs:357:12
+    |
+357 |     pub fn path(&self, id: ArtifactId) -> &str {
+    |            ^^^^        --------------
+help: consider using `Result::expect` to unwrap the `Result<provenance::ArtifactId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+828 |         assert_eq!(i.path(id.expect("REASON")), "ontology/purrdf.ttl");
+    |                             +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/provenance.rs:875:25
+    |
+875 |         let set = i.set(id);
+    |                     --- ^^ expected `OriginSetId`, found `Result<OriginSetId, StorageError>`
+    |                     |
+    |                     arguments to this method are incorrect
+    |
+    = note: expected struct `OriginSetId`
+                 found enum `Result<OriginSetId, purrdf_lex::allocation::StorageError>`
+note: method defined here
+   --> crates/rdf-core/src/provenance.rs:408:12
+    |
+408 |     pub fn set(&self, id: OriginSetId) -> &[(UnitId, ArtifactId)] {
+    |            ^^^        ---------------
+help: consider using `Result::expect` to unwrap the `Result<provenance::OriginSetId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+875 |         let set = i.set(id.expect("REASON"));
+    |                           +++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (lib test) due to 122 previous errors
+terminal_status=101

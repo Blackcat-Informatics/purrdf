@@ -1,0 +1,87 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 48.49s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 42 tests
+test ir::builder::native_graph_birth_tests::blank_term_refusal_does_not_reserve_its_scope ... ok
+test ir::builder::native_graph_birth_tests::content_id_side_table_refusal_does_not_publish_an_unindexed_term ... ok
+test ir::builder::native_graph_birth_tests::compound_literal_refusal_rolls_back_children_and_sorted_scopes ... ok
+test ir::builder::native_graph_birth_tests::named_graph_growth_refusal_keeps_prior_declarations_and_duplicate_hits ... ok
+test ir::builder::native_graph_birth_tests::native_graph_refuses_before_the_first_arena_allocation ... ok
+test ir::builder::native_graph_birth_tests::native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes ... ok
+test ir::builder::native_graph_birth_tests::native_structural_failure_releases_builder_and_retains_only_the_diagnostic ... ok
+test ir::builder::native_graph_birth_tests::refused_literal_does_not_poison_later_healthy_freeze ... ok
+test ir::builder::native_graph_birth_tests::reifier_row_refusal_does_not_publish_its_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::owned_overlay_refusal_restores_children_and_implicit_predicate ... ok
+test ir::builder::tests::blank_scope_distinctness ... ok
+test ir::builder::tests::datatype_expansion_equality ... ok
+test ir::builder::tests::all_term_kinds_match_borrowed_and_stored_hashes ... ok
+test ir::builder::tests::directional_literal_distinctness ... ok
+test ir::builder::tests::freeze_dedupes_annotations ... ok
+test ir::builder::tests::freeze_dedupes_quads ... ok
+test ir::builder::native_graph_birth_tests::owned_quad_refusal_restores_terms_rows_scopes_and_location_payloads ... ok
+test ir::builder::tests::freeze_keeps_multiple_reifiers_for_one_triple ... ok
+test ir::builder::tests::freeze_preserves_named_graphs ... ok
+test ir::builder::tests::intern_blank_is_idempotent ... ok
+test ir::builder::tests::intern_blank_never_recognized_as_content_id ... ok
+test ir::builder::tests::intern_iri_content_id_is_idempotent ... ok
+test ir::builder::tests::intern_iri_is_idempotent ... ok
+test ir::builder::tests::intern_iri_no_recognition_when_scheme_inactive ... ok
+test ir::builder::tests::intern_iri_ordinary_iri_has_no_content_id ... ok
+test ir::builder::tests::intern_iri_recognizes_content_id ... ok
+test ir::builder::tests::intern_iri_rejects_malformed_suffix_as_ordinary_iri ... ok
+test ir::builder::tests::intern_literal_is_idempotent ... ok
+test ir::builder::tests::lang_tagged_distinct_from_plain ... ok
+test ir::builder::tests::language_lowercasing ... ok
+test ir::builder::tests::nested_triple_term_structural_identity ... ok
+test ir::builder::tests::new_builder_has_no_content_scheme ... ok
+test ir::builder::tests::push_dataset_carries_reifiers_and_annotations ... ok
+test ir::builder::tests::iri_hash_matches_stored_form_across_lengths_and_table_growth ... ok
+test ir::builder::tests::push_dataset_keeps_two_scopes_of_one_label_apart ... ok
+test ir::builder::tests::push_dataset_merges_and_dedupes_quads ... ok
+test ir::builder::tests::push_dataset_standardizes_apart_blank_nodes ... ok
+test ir::builder::tests::validated_builder_type_state_freezes_after_validation ... ok
+test ir::builder::tests::the_owned_round_trip_preserves_blank_label_identity ... ok
+test ir::builder::tests::with_content_addressing_sets_config ... ok
+test ir::builder::native_graph_birth_tests::content_id_rollback_preserves_retained_charge_and_prior_lookup ... ok
+test ir::builder::tests::property_idempotence_and_bounded_count ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 1277 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 27 tests
+test blank_label::tests::a_marker_token_never_merges_with_the_label_it_names ... ok
+test blank_label::tests::a_legal_label_equal_to_an_envelope_is_encoded_away_from_it ... ok
+test blank_label::tests::a_marker_token_outside_the_image_is_verbatim ... ok
+test blank_label::tests::a_token_outside_the_reserved_namespace_is_verbatim ... ok
+test blank_label::tests::ascii_sweep_blank_node_label ... ok
+test blank_label::tests::ascii_sweep_ncname ... ok
+test blank_label::tests::dispatch_via_is_valid_label ... ok
+test blank_label::tests::decode_inverts_encode_and_accepts_nothing_else ... ok
+test blank_label::tests::encode_is_deterministic_across_runs ... ok
+test blank_label::tests::encode_is_injective_over_label_scope_pairs ... ok
+test blank_label::tests::encode_output_is_always_legal_under_the_target_alphabet ... ok
+test blank_label::tests::every_envelope_is_legal_in_every_alphabet ... ok
+test blank_label::tests::internal_tables_match_independent_transcription ... ok
+test blank_label::tests::legal_prefix_always_yields_a_legal_minted_label ... ok
+test blank_label::tests::rewritten_labels_are_ascii_word_characters_only ... ok
+test blank_label::tests::retarget_owned_label_equals_a_direct_encode ... ok
+test blank_label::tests::structural_blank_node_label ... ok
+test blank_label::tests::structural_blank_node_label_prefix ... ok
+test blank_label::tests::structural_ncname ... ok
+test blank_label::tests::the_dotted_and_marker_family_stays_five_distinct_labels ... ok
+test blank_label::tests::the_envelope_is_the_documented_grammar ... ok
+test blank_label::tests::unicode_boundary_accepted_blank_node_label ... ok
+test blank_label::tests::unicode_boundary_rejected_blank_node_label ... ok
+test blank_label::tests::unscoped_legal_labels_are_borrowed_byte_identically ... ok
+test blank_label::tests::xml_text_admits_representable_non_whitespace_and_refuses_the_rest ... ok
+test blank_label::tests::decode_inverts_encode_for_every_scalar_position ... ok
+test blank_label::tests::encode_output_is_legal_for_every_scalar_position ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 1292 filtered out; finished in 0.01s
+
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.48s
+terminal_status=0

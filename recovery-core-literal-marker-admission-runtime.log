@@ -1,0 +1,26 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error[E0599]: no method named `unwrap` found for unit type `()` in the current scope
+    --> crates/rdf-core/src/ir/mutable.rs:2670:11
+     |
+2667 | /         assert_eq!(
+2668 | |             m.declare_named_graph(literal).map_err(|e| e.code),
+2669 | |             Err("rdf-ir-graph-name-invalid".into())
+2670 | |         ).unwrap();
+     | |          -^^^^^^ method not found in `()`
+     | |__________|
+     |
+
+error[E0599]: no method named `unwrap` found for unit type `()` in the current scope
+    --> crates/rdf-core/src/ir/segmented/build.rs:1268:16
+     |
+1265 | /             assert!(matches!(
+1266 | |                 builder.declare_named_graph(foreign),
+1267 | |                 Err(SegmentedError::Corrupt("foreign constructor term ID"))
+1268 | |             )).unwrap();
+     | |               -^^^^^^ method not found in `()`
+     | |_______________|
+     |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors
+terminal_status=101

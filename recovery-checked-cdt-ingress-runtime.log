@@ -1,0 +1,41 @@
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 40.29s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 2 tests
+test ir::builder::native_graph_birth_tests::checked_owned_document_refusal_rolls_back_prefix_and_retains_malformed_cause ... ok
+test ir::builder::native_graph_birth_tests::checked_owned_document_growth_sweep_uses_original_admission ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1323 filtered out; finished in 0.00s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 22.41s
+     Running tests/cdt_blank_storage.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/a6ecd34b8f0280f3/out/cdt_blank_storage-a6ecd34b8f0280f3)
+
+running 7 tests
+test checked_malformed_payload_keeps_exact_original_grant_until_drop ... ok
+test malformed_and_non_image_envelopes_keep_identity_and_release_scratch ... ok
+test checked_nested_binding_accounts_for_grammar_and_only_retains_output ... ok
+test nested_binding_peak_and_surviving_output_use_original_admission ... ok
+test plain_and_non_composite_binding_preserve_borrowed_bytes ... ok
+test physical_refusals_never_become_unmodified_composite_success ... ok
+test decoder_image_scratch_dies_before_publication_and_refusal_is_typed ... FAILED
+
+failures:
+
+---- decoder_image_scratch_dies_before_publication_and_refusal_is_typed stdout ----
+
+thread 'decoder_image_scratch_dies_before_publication_and_refusal_is_typed' (660232) panicked at crates/rdf-core/tests/cdt_blank_storage.rs:286:10:
+called `Result::unwrap_err()` on an `Ok` value: ("x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._x é._", BlankScope(4294967295))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    decoder_image_scratch_dies_before_publication_and_refusal_is_typed
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-core --test cdt_blank_storage`
+
+terminal_status=101

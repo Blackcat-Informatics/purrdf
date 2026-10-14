@@ -1,0 +1,807 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error[E0599]: no method named `intern_batch` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/named_graph_membership.rs:192:14
+     |
+ 191 | /         builder
+ 192 | |             .intern_batch(&terms, |_, id| ids.push(id))
+     | |_____________-^^^^^^^^^^^^
+     |
+note: the method `intern_batch` exists on the type `purrdf_core::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:132:5
+     |
+ 132 | /     pub fn intern_batch(
+ 133 | |         &mut self,
+ 134 | |         values: &[TermValue],
+ 135 | |         mut visit: impl FnMut(&TermValue, GlobalTermId),
+ 136 | |     ) -> Result<(), SegmentedError> {
+     | |___________________________________^
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+ 191 |         builder.expect("REASON")
+     |                +++++++++++++++++
+
+error[E0599]: no method named `push_quad` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/named_graph_membership.rs:195:14
+    |
+194 | /         builder
+195 | |             .push_quad(QuadIds {
+    | |             -^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    | |_____________|
+    |
+    |
+note: the method `push_quad` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:176:5
+    |
+176 |     pub fn push_quad(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+194 |         builder.expect("REASON")
+    |                +++++++++++++++++
+
+error[E0599]: no method named `seal` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/named_graph_membership.rs:207:13
+    |
+207 |     builder.seal().expect("the image seals")
+    |             ^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    |
+note: the method `seal` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:253:5
+    |
+253 |     pub fn seal(self) -> Result<SegmentedImage, SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+207 |     builder.expect("REASON").seal().expect("the image seals")
+    |            +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (test "named_graph_membership") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: the `Err`-variant returned from this closure is very large
+   --> crates/datalog/tests/rules_runtime.rs:353:9
+    |
+353 |         |options: &EvalOptions| evaluate_guarded(&program, input.clone(), &NoGuards, options, None);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+    |
+    = help: try reducing the size of `purrdf_datalog::seminaive::EvalError`, for example by boxing large elements or replacing it with `Box<purrdf_datalog::seminaive::EvalError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 1 previous error
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+  --> crates/datalog/tests/object_permutation_allocation.rs:87:9
+   |
+87 |         drop(cursor);
+   |         ^^^^^^^^^^^^
+   |
+note: argument has type `purrdf_datalog::cursor::RowCursor<'_>`
+  --> crates/datalog/tests/object_permutation_allocation.rs:87:14
+   |
+87 |         drop(cursor);
+   |              ^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+   = note: `-D clippy::drop-non-drop` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::drop_non_drop)]`
+
+error: could not compile `purrdf-datalog` (test "object_permutation_allocation") due to 1 previous error
+error: unused `std::result::Result` that must be used
+   --> crates/datalog/tests/never_derive.rs:142:9
+    |
+142 | /         input.insert(
+143 | |             "<https://example.org/alice>",
+144 | |             &format!("<{predicate}>"),
+145 | |             object,
+146 | |             RelationStore::DEFAULT_GRAPH,
+147 | |         );
+    | |_________^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+142 |         let _ = input.insert(
+    |         +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/datalog/tests/never_derive.rs:150:9
+    |
+150 | /         input.insert(
+151 | |             "<https://example.org/alice>",
+152 | |             &format!("<{predicate}>"),
+153 | |             "<https://example.org/statement>",
+154 | |             RelationStore::DEFAULT_GRAPH,
+155 | |         );
+    | |_________^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+150 |         let _ = input.insert(
+    |         +++++++
+
+error: unused `std::result::Result` that must be used
+   --> crates/datalog/tests/never_derive.rs:360:5
+    |
+360 | /     input.insert(
+361 | |         "<https://example.org/alice>",
+362 | |         &format!("<{FLAGGED}>"),
+363 | |         "<https://example.org/statement>",
+364 | |         RelationStore::DEFAULT_GRAPH,
+365 | |     );
+    | |_____^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+360 |     let _ = input.insert(
+    |     +++++++
+
+error: could not compile `purrdf-datalog` (test "never_derive") due to 3 previous errors
+error: unused `std::result::Result` that must be used
+  --> crates/datalog/tests/negative_guard_admission.rs:73:5
+   |
+73 | /     input.insert(
+74 | |         "<https://example.org/s>",
+75 | |         "<https://example.org/source>",
+76 | |         "<https://example.org/o>",
+77 | |         RelationStore::DEFAULT_GRAPH,
+78 | |     );
+   | |_____^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+   = note: `-D unused-must-use` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+   |
+73 |     let _ = input.insert(
+   |     +++++++
+
+error: could not compile `purrdf-datalog` (test "negative_guard_admission") due to 1 previous error
+error[E0599]: no method named `unwrap` found for unit type `()` in the current scope
+   --> crates/rdf-core/tests/blank_publication.rs:260:6
+    |
+256 | /     assert_eq!(
+257 | |         mutable.declare_named_graph(TermValue::iri(format!("{EX}empty"))),
+258 | |         Ok(true)
+259 | |     )
+260 | |     .unwrap();
+    | |     -^^^^^^ method not found in `()`
+    | |_____|
+    |
+
+error: could not compile `purrdf-core` (test "blank_publication") due to 1 previous error
+error[E0599]: no method named `unwrap` found for unit type `()` in the current scope
+   --> crates/rdf-core/benches/mutable.rs:390:6
+    |
+385 | /     assert!(
+386 | |         cow.declare_named_graph(graph.clone())
+387 | |             .expect("the bench graph name is an absolute IRI"),
+388 | |         "the bench graph is declared once"
+389 | |     )
+390 | |     .unwrap();
+    | |     -^^^^^^ method not found in `()`
+    | |_____|
+    |
+
+error: could not compile `purrdf-core` (bench "mutable") due to 1 previous error
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_stack.rs:613:83
+     |
+ 613 |     purrdf_core::ir::import::DatasetImporter::new(&mut oracle, ordinary.as_ref()).append();
+     |                                                                                   ^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/afbaacb3bd182627/out/paged_stack-afbaacb3bd182627.long-type-3085723966127271841.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 613 |     purrdf_core::ir::import::DatasetImporter::new(&mut oracle, ordinary.as_ref()).expect("REASON").append();
+     |                                                                                  +++++++++++++++++
+
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_stack.rs:614:80
+     |
+ 614 |     purrdf_core::ir::import::DatasetImporter::new(&mut oracle, typed.as_ref()).append();
+     |                                                                                ^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/afbaacb3bd182627/out/paged_stack-afbaacb3bd182627.long-type-3441878090577249718.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 614 |     purrdf_core::ir::import::DatasetImporter::new(&mut oracle, typed.as_ref()).expect("REASON").append();
+     |                                                                               +++++++++++++++++
+
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_stack.rs:743:6
+     |
+ 739 | /     purrdf_core::ir::import::DatasetImporter::new(
+ 740 | |         &mut builder,
+ 741 | |         page(std::slice::from_ref(&q)).as_ref(),
+ 742 | |     )
+ 743 | |     .append();
+     | |_____-^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/afbaacb3bd182627/out/paged_stack-afbaacb3bd182627.long-type-13647943990365198133.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 742 |     ).expect("REASON")
+     |      +++++++++++++++++
+
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_stack.rs:748:6
+     |
+ 744 | /     purrdf_core::ir::import::DatasetImporter::new(
+ 745 | |         &mut builder,
+ 746 | |         typed_page(std::slice::from_ref(&declaration), &[]).as_ref(),
+ 747 | |     )
+ 748 | |     .append();
+     | |_____-^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/afbaacb3bd182627/out/paged_stack-afbaacb3bd182627.long-type-14768184939632029445.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 747 |     ).expect("REASON")
+     |      +++++++++++++++++
+
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_stack.rs:775:86
+     |
+ 775 |         purrdf_core::ir::import::DatasetImporter::new(&mut builder, source.as_ref()).append();
+     |                                                                                      ^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/afbaacb3bd182627/out/paged_stack-afbaacb3bd182627.long-type-13294142561867008343.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 775 |         purrdf_core::ir::import::DatasetImporter::new(&mut builder, source.as_ref()).expect("REASON").append();
+     |                                                                                     +++++++++++++++++
+
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_stack.rs:1097:88
+     |
+1097 |         purrdf_core::ir::import::DatasetImporter::new(&mut builder, ordinary.as_ref()).append();
+     |                                                                                        ^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/afbaacb3bd182627/out/paged_stack-afbaacb3bd182627.long-type-5713679298723894319.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, purrdf_core::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+1097 |         purrdf_core::ir::import::DatasetImporter::new(&mut builder, ordinary.as_ref()).expect("REASON").append();
+     |                                                                                       +++++++++++++++++
+
+error: could not compile `purrdf-core` (test "paged_stack") due to 6 previous errors
+error[E0599]: no method named `dictionary` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:743:19
+    |
+743 |         compacted.dictionary().len(),
+    |                   ^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `dictionary` exists on the type `purrdf_core::PagedDataset`
+   --> crates/rdf-core/src/ir/paged/mod.rs:839:5
+    |
+839 |     pub fn dictionary(&self) -> &GlobalDictionary {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+743 |         compacted.expect("REASON").dictionary().len(),
+    |                  +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_value` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:750:18
+    |
+749 | /             compacted
+750 | |                 .term_id_by_value(&reclaimed)
+    | |                 -^^^^^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    | |_________________|
+    |
+    |
+note: the method `term_id_by_value` exists on the type `purrdf_core::PagedDataset`
+   --> crates/rdf-core/src/dataset_view.rs:850:5
+    |
+850 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+749 |             compacted.expect("REASON")
+    |                      +++++++++++++++++
+
+error[E0277]: the trait bound `Result<PagedDataset, StorageError>: DatasetView` is not satisfied
+   --> crates/rdf-core/tests/paged_backend.rs:759:22
+    |
+759 |         collect_rows(&compacted),
+    |         ------------ ^^^^^^^^^^ unsatisfied trait bound
+    |         |
+    |         required by a bound introduced by this call
+    |
+    = help: the trait `purrdf_core::DatasetView` is not implemented for `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PackView<'_>
+              purrdf_core::PagedDataset
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+            and 3 others
+note: required by a bound in `values::collect_rows`
+   --> crates/rdf-core/tests/support/values.rs:30:24
+    |
+ 30 | pub fn collect_rows<V: DatasetView>(v: &V) -> Vec<Vec<TermValue>> {
+    |                        ^^^^^^^^^^^ required by this bound in `collect_rows`
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/ac3163209970137f/out/paged_backend-ac3163209970137f.long-type-10778793019878802877.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0599]: no method named `dictionary` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:782:19
+    |
+782 |         compacted.dictionary().len(),
+    |                   ^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `dictionary` exists on the type `purrdf_core::PagedDataset`
+   --> crates/rdf-core/src/ir/paged/mod.rs:839:5
+    |
+839 |     pub fn dictionary(&self) -> &GlobalDictionary {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+782 |         compacted.expect("REASON").dictionary().len(),
+    |                  +++++++++++++++++
+
+error[E0599]: no method named `dictionary` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:783:25
+    |
+783 |         compacted_again.dictionary().len()
+    |                         ^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `dictionary` exists on the type `purrdf_core::PagedDataset`
+   --> crates/rdf-core/src/ir/paged/mod.rs:839:5
+    |
+839 |     pub fn dictionary(&self) -> &GlobalDictionary {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+783 |         compacted_again.expect("REASON").dictionary().len()
+    |                        +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_value` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:788:18
+    |
+787 | /             compacted
+788 | |                 .term_id_by_value(&value)
+    | |                 -^^^^^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    | |_________________|
+    |
+    |
+note: the method `term_id_by_value` exists on the type `purrdf_core::PagedDataset`
+   --> crates/rdf-core/src/dataset_view.rs:850:5
+    |
+850 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+787 |             compacted.expect("REASON")
+    |                      +++++++++++++++++
+
+error[E0599]: no method named `term_id_by_value` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:791:18
+    |
+790 | /             compacted_again
+791 | |                 .term_id_by_value(&value)
+    | |                 -^^^^^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    | |_________________|
+    |
+    |
+note: the method `term_id_by_value` exists on the type `purrdf_core::PagedDataset`
+   --> crates/rdf-core/src/dataset_view.rs:850:5
+    |
+850 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+790 |             compacted_again.expect("REASON")
+    |                            +++++++++++++++++
+
+error[E0599]: no method named `dictionary` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/tests/paged_backend.rs:797:27
+    |
+797 |     for i in 0..compacted.dictionary().len() {
+    |                           ^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    |
+note: the method `dictionary` exists on the type `purrdf_core::PagedDataset`
+   --> crates/rdf-core/src/ir/paged/mod.rs:839:5
+    |
+839 |     pub fn dictionary(&self) -> &GlobalDictionary {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+    |
+797 |     for i in 0..compacted.expect("REASON").dictionary().len() {
+    |                          +++++++++++++++++
+
+error[E0277]: the trait bound `Result<PagedDataset, StorageError>: DatasetView` is not satisfied
+   --> crates/rdf-core/tests/paged_backend.rs:801:22
+    |
+801 |             to_value(&compacted, id),
+    |             -------- ^^^^^^^^^^ unsatisfied trait bound
+    |             |
+    |             required by a bound introduced by this call
+    |
+    = help: the trait `purrdf_core::DatasetView` is not implemented for `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PackView<'_>
+              purrdf_core::PagedDataset
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+            and 3 others
+note: required by a bound in `values::to_value`
+   --> crates/rdf-core/tests/support/values.rs:16:20
+    |
+ 16 | pub fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
+    |                    ^^^^^^^^^^^ required by this bound in `to_value`
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/ac3163209970137f/out/paged_backend-ac3163209970137f.long-type-10778793019878802877.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `Result<PagedDataset, StorageError>: DatasetView` is not satisfied
+   --> crates/rdf-core/tests/paged_backend.rs:802:22
+    |
+802 |             to_value(&compacted_again, id),
+    |             -------- ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |             |
+    |             required by a bound introduced by this call
+    |
+    = help: the trait `purrdf_core::DatasetView` is not implemented for `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PackView<'_>
+              purrdf_core::PagedDataset
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+            and 3 others
+note: required by a bound in `values::to_value`
+   --> crates/rdf-core/tests/support/values.rs:16:20
+    |
+ 16 | pub fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
+    |                    ^^^^^^^^^^^ required by this bound in `to_value`
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/ac3163209970137f/out/paged_backend-ac3163209970137f.long-type-10778793019878802877.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `Result<PagedDataset, StorageError>: DatasetView` is not satisfied
+   --> crates/rdf-core/tests/paged_backend.rs:801:34
+    |
+801 |             to_value(&compacted, id),
+    |                                  ^^ unsatisfied trait bound
+    |
+    = help: the trait `purrdf_core::DatasetView` is not implemented for `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PackView<'_>
+              purrdf_core::PagedDataset
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+            and 3 others
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/ac3163209970137f/out/paged_backend-ac3163209970137f.long-type-10778793019878802877.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `Result<PagedDataset, StorageError>: DatasetView` is not satisfied
+   --> crates/rdf-core/tests/paged_backend.rs:802:40
+    |
+802 |             to_value(&compacted_again, id),
+    |                                        ^^ unsatisfied trait bound
+    |
+    = help: the trait `purrdf_core::DatasetView` is not implemented for `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PackView<'_>
+              purrdf_core::PagedDataset
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+            and 3 others
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/ac3163209970137f/out/paged_backend-ac3163209970137f.long-type-10778793019878802877.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/paged_backend.rs:839:47
+    |
+839 |     let materialized = materialize_to_dataset(&compacted);
+    |                        ---------------------- ^^^^^^^^^^ expected `&PagedDataset`, found `&Result<PagedDataset, StorageError>`
+    |                        |
+    |                        arguments to this function are incorrect
+    |
+    = note: expected reference `&PagedDataset`
+               found reference `&std::result::Result<PagedDataset, purrdf_lex::allocation::StorageError>`
+note: function defined here
+   --> crates/rdf-core/tests/paged_backend.rs:811:4
+    |
+811 | fn materialize_to_dataset(paged: &PagedDataset) -> Arc<RdfDataset> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^ --------------------
+
+error[E0599]: no method named `to_parts` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_backend.rs:1404:64
+     |
+1404 |     let (_, compacted_generation, compacted_parts) = compacted.to_parts();
+     |                                                                ^^^^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `to_parts` exists on the type `purrdf_core::PagedDataset`
+    --> crates/rdf-core/src/ir/paged/mod.rs:655:5
+     |
+ 655 |     pub fn to_parts(&self) -> (GlobalDictionary, PageGeneration, Vec<PagePart>) {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+     |
+1404 |     let (_, compacted_generation, compacted_parts) = compacted.expect("REASON").to_parts();
+     |                                                               +++++++++++++++++
+
+error[E0599]: no method named `quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/paged_backend.rs:1413:26
+     |
+1413 |     assert_eq!(compacted.quads().count(), 2, "metadata remains usable");
+     |                          ^^^^^ method not found in `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `quads` exists on the type `purrdf_core::PagedDataset`
+    --> crates/rdf-core/src/dataset_view.rs:654:5
+     |
+ 654 |     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::PagedDataset` value, panicking if the value is a `Result::Err`
+     |
+1413 |     assert_eq!(compacted.expect("REASON").quads().count(), 2, "metadata remains usable");
+     |                         +++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (test "paged_backend") due to 15 previous errors
+error[E0599]: no method named `intern_batch` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/benches/ir_layout.rs:530:13
+     |
+ 530 |     builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+     |             ^^^^^^^^^^^^
+     |
+note: the method `intern_batch` exists on the type `purrdf_core::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:132:5
+     |
+ 132 | /     pub fn intern_batch(
+ 133 | |         &mut self,
+ 134 | |         values: &[TermValue],
+ 135 | |         mut visit: impl FnMut(&TermValue, GlobalTermId),
+ 136 | |     ) -> Result<(), SegmentedError> {
+     | |___________________________________^
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+ 530 |     builder.expect("REASON").intern_batch(&values, |_, id| ids.push(id)).unwrap();
+     |            +++++++++++++++++
+
+error[E0599]: no method named `push_quad` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/benches/ir_layout.rs:533:14
+    |
+532 | /         builder
+533 | |             .push_quad(QuadIds {
+    | |             -^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    | |_____________|
+    |
+    |
+note: the method `push_quad` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:176:5
+    |
+176 |     pub fn push_quad(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+532 |         builder.expect("REASON")
+    |                +++++++++++++++++
+
+error[E0599]: no method named `seal` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/benches/ir_layout.rs:541:25
+    |
+541 |     let image = builder.seal().unwrap();
+    |                         ^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    |
+note: the method `seal` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:253:5
+    |
+253 |     pub fn seal(self) -> Result<SegmentedImage, SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_core::SegmentedBuilder` value, panicking if the value is a `Result::Err`
+    |
+541 |     let image = builder.expect("REASON").seal().unwrap();
+    |                        +++++++++++++++++
+
+error: could not compile `purrdf-core` (bench "ir_layout") due to 3 previous errors
+error[E0599]: no method named `unwrap` found for unit type `()` in the current scope
+   --> crates/rdf-core/tests/graph_existence_modes.rs:308:14
+    |
+304 | /             assert_eq!(
+305 | |                 mutable.declare_named_graph(graph).unwrap_err().code,
+306 | |                 "rdf-ir-graph-name-invalid"
+307 | |             )
+308 | |             .unwrap();
+    | |             -^^^^^^ method not found in `()`
+    | |_____________|
+    |
+
+error: could not compile `purrdf-core` (test "graph_existence_modes") due to 1 previous error
+error: unused `std::result::Result` that must be used
+   --> crates/rdf-core/tests/paged_admission_law.rs:241:9
+    |
+241 |         builders[empty_graph_page].declare_named_graph(g_empty_ids[empty_graph_page]);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+241 |         let _ = builders[empty_graph_page].declare_named_graph(g_empty_ids[empty_graph_page]);
+    |         +++++++
+
+error: could not compile `purrdf-core` (test "paged_admission_law") due to 1 previous error
+error: redundant clone
+    --> crates/datalog/src/seminaive.rs:4757:27
+     |
+4757 |                 ..expected.clone()
+     |                           ^^^^^^^^ help: remove this
+     |
+note: cloned value is neither consumed nor mutated
+    --> crates/datalog/src/seminaive.rs:4757:19
+     |
+4757 |                 ..expected.clone()
+     |                   ^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+     = note: `-D clippy::redundant-clone` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: `into_iter` call on a collection with only one item
+    --> crates/datalog/src/seminaive.rs:5152:23
+     |
+5152 |             surfaces: [(u64::MAX, "original".into())].into_iter().collect(),
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `std::iter::once((u64::MAX, "original".into()))`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_on_single_items
+     = note: `-D clippy::iter-on-single-items` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::iter_on_single_items)]`
+
+error: used `unwrap_err()` on `Err` value
+   --> crates/datalog/src/term.rs:383:51
+    |
+383 |         assert_eq!(dag.fresh_meta().unwrap_err(), expected.unwrap_err());
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the `Err` and `unwrap_err()`
+   --> crates/datalog/src/term.rs:374:24
+    |
+374 |           let expected = Err(StorageError::Capacity(CapacityError {
+    |  ________________________^
+375 | |             space: CapacitySpace::DatalogNodes,
+376 | |             attempted: 2,
+377 | |             limit: 1,
+378 | |         }));
+    | |___________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_literal_unwrap
+    = note: `-D clippy::unnecessary-literal-unwrap` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_literal_unwrap)]`
+
+error: could not compile `purrdf-datalog` (lib test) due to 3 previous errors
+terminal_status=101

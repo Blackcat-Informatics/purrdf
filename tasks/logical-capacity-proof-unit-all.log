@@ -1,0 +1,9 @@
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/helper-census)
+error[E0282]: type annotations needed
+    --> crates/helper-census/src/capacity.rs:1348:9
+     |
+1348 |         assert_ne!(proofs(&duplicate, &workspace).1, []);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `helper-census` (bin "helper-census" test) due to 1 previous error

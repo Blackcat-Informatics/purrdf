@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "5144f5c1a7dc824f32165eca91d3c2a6df6226fb",
+  "headRefName": "paudley/490-typed-capacity-errors-instead-of-u32",
+  "headRefOid": "10316f2c1eabe8c58f835e61e6370b3f447614ce",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 544,
+  "state": "OPEN",
+  "title": "Return typed capacity failures and add sparse segmented dataset stacks",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/544"
+}

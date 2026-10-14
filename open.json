@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 490,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32",
+  "branch": "paudley/490-typed-capacity-errors-instead-of-u32",
+  "slug": "typed-capacity-errors-instead-of-u32",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/.stage/typed-capacity-errors-instead-of-u32",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "e88a8e0e22c0745d8a9f3b305fe526b70b891817",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32",
+    "branch:paudley/490-typed-capacity-errors-instead-of-u32",
+    "stage:/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/.stage/typed-capacity-errors-instead-of-u32",
+    "issue:/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/.stage/typed-capacity-errors-instead-of-u32/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-10T16:59:47-0600"
+}

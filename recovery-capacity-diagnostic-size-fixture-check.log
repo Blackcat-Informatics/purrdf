@@ -1,0 +1,702 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 38.77s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 4 tests
+test diagnostic::tests::template_drift_is_refused_and_large_arguments_remain_exact ... ok
+test diagnostic::tests::native_diagnostic_copy_preserves_typed_fields_and_exact_original_layouts ... ok
+test diagnostic::tests::storage_cause_keeps_exact_fields_in_an_admitted_compact_diagnostic ... ok
+test diagnostic::tests::iri_fields_render_the_existing_english ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1313 filtered out; finished in 0.00s
+
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: returning the result of a `let` binding from a block
+    --> crates/rdf-core/src/imports.rs:1226:5
+     |
+1215 | /     let interned = try_fold_nested(
+1216 | |         value,
+1217 | |         &mut (b, rescope),
+1218 | |         |(b, rescope), value| {
+...    |
+1224 | |         |(b, _), _, s, p, o| b.intern_triple(s, p, o),
+1225 | |     );
+     | |______- unnecessary `let` binding
+1226 |       interned
+     |       ^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#let_and_return
+     = note: `-D clippy::let-and-return` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::let_and_return)]`
+help: return the expression directly
+     |
+1215 ~     
+1216 ~     try_fold_nested(
+1217 +         value,
+1218 +         &mut (b, rescope),
+1219 +         |(b, rescope), value| {
+1220 +             Ok::<_, purrdf_lex::allocation::StorageError>(match value {
+1221 +                 TermValue::Triple { s, p, o } => Nested::Triple(&**s, &**p, &**o),
+1222 +                 leaf => Nested::Leaf(intern_leaf(b, leaf, rescope)?),
+1223 +             })
+1224 +         },
+1225 +         |(b, _), _, s, p, o| b.intern_triple(s, p, o),
+1226 +     )
+     |
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/rdf-core/src/ir/builder.rs:1931:17
+     |
+1931 |         source: ValidatedRdfDatasetBuilder,
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+     = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+     |
+1931 |         source: &ValidatedRdfDatasetBuilder,
+     |                 +
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/builder.rs:2368:5
+     |
+2368 | /     pub fn push_quad_with_handle(
+2369 | |         &mut self,
+2370 | |         s: TermId,
+2371 | |         p: TermId,
+2372 | |         o: TermId,
+2373 | |         g: Option<TermId>,
+2374 | |     ) -> Result<QuadHandle, StorageError> {
+     | |_________________________________________^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/builder.rs:2365:5
+     |
+2365 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+     = note: `-D clippy::double-must-use` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::double_must_use)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pipeline_bundle.rs:495:10
+    |
+265 | /     Canonicalization {
+266 | |         /// What was being canonicalized when the refusal was raised.
+267 | |         scope: CanonScopeName,
+268 | |         /// The refusal itself.
+269 | |         source: CanonError,
+270 | |     },
+    | |_____- the largest variant contains at least 136 bytes
+...
+495 |       ) -> Result<(), PipelineBundleError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pipeline_bundle.rs:688:65
+    |
+265 | /     Canonicalization {
+266 | |         /// What was being canonicalized when the refusal was raised.
+267 | |         scope: CanonScopeName,
+268 | |         /// The refusal itself.
+269 | |         source: CanonError,
+270 | |     },
+    | |_____- the largest variant contains at least 136 bytes
+...
+688 |   fn check_containment(contribution: &RdfDataset, graph: &str) -> Result<(), PipelineBundleError> {
+    |                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pipeline_bundle.rs:993:10
+    |
+265 | /     Canonicalization {
+266 | |         /// What was being canonicalized when the refusal was raised.
+267 | |         scope: CanonScopeName,
+268 | |         /// The refusal itself.
+269 | |         source: CanonError,
+270 | |     },
+    | |_____- the largest variant contains at least 136 bytes
+...
+993 |       ) -> Result<(), PipelineBundleError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1052:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1052 |       ) -> Result<(), PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1110:5
+     |
+1110 |     pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1109:5
+     |
+1109 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1110:48
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1110 |       pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+     |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1149:5
+     |
+1149 |     pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1148:5
+     |
+1148 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1149:36
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1149 |       pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1153:18
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1153 |               .map(|graph| {
+     |  __________________^
+1154 | |                 let digest = self.graph_digest(&graph)?;
+1155 | |                 Ok((graph, digest))
+1156 | |             })
+     | |_____________^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1183:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1183 |       ) -> Result<PipelineViewBundle<H>, PipelineBundleError>
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1201:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1201 |       ) -> Result<PipelineViewBundle<H>, PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1313:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1313 |       ) -> Result<Self, PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1386:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1386 |       ) -> Result<Self, PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1415:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1415 |       ) -> Result<Self, PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1538:48
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1538 |       pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+     |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1555:29
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1555 |       pub fn digest(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1564:33
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1564 |       fn residue_digest(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1580:36
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1580 |       pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1604:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1604 |       ) -> Result<(), PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1672:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1672 |       ) -> Result<(), PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1773:37
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1773 |       pub fn to_flat_bundle(&self) -> Result<PipelineBundle<H>, PipelineBundleError>
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1786:38
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1786 |       pub fn into_flat_bundle(self) -> Result<PipelineBundle<H>, PipelineBundleError> {
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1816:86
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1816 |   fn flat_graph_digest(dataset: &RdfDataset, work: &DigestWorkCounter, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+     |                                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1838:6
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1838 |   ) -> Result<ContentDigest, PipelineBundleError> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1842:69
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1842 |           Some(owner) => owner.guard.try_memoized_graph_digest(graph, || {
+     |  _____________________________________________________________________^
+1843 | |             let digest = try_graph_digest_view(&*owner.base, graph)
+1844 | |                 .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.to_owned()), source))?;
+1845 | |             DigestWorkCounter::bump(&work.graph_canonicalizations);
+1846 | |             Ok(digest)
+1847 | |         })?,
+     | |_________^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1870:6
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1870 |   ) -> Result<ContentDigest, PipelineBundleError> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1892:6
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 136 bytes
+...
+1892 |   ) -> Result<ContentDigest, PipelineBundleError> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/dataset.rs:1123:5
+     |
+1123 |     pub fn project_named_graph(&self, graph: &str) -> Result<Self, crate::RdfDiagnostic> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/dataset.rs:1122:5
+     |
+1122 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/dataset.rs:2065:5
+     |
+2065 |     pub fn union(datasets: &[&Self]) -> Result<Self, crate::RdfDiagnostic> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/dataset.rs:2064:5
+     |
+2064 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: function call inside of `ok_or`
+   --> crates/rdf-core/src/ir/global.rs:388:58
+    |
+388 |           let id = GlobalTermId::checked_from_index(index).ok_or(StorageError::Capacity(CapacityError {
+    |  __________________________________________________________^
+389 | |             space: CapacitySpace::GlobalTerms, attempted, limit: u128::from(u64::MAX),
+390 | |         }))?;
+    | |___________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+    = note: `-D clippy::or-fun-call` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+help: try
+    |
+388 ~         let id = GlobalTermId::checked_from_index(index).ok_or_else(|| StorageError::Capacity(CapacityError {
+389 +             space: CapacitySpace::GlobalTerms, attempted, limit: u128::from(u64::MAX),
+390 ~         }))?;
+    |
+
+error: redundant closure
+   --> crates/rdf-core/src/ir/import.rs:249:22
+    |
+249 |             .map_err(|error| DatasetImportError::Capacity(error))?;
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the tuple variant itself: `DatasetImportError::Capacity`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure
+    = note: `-D clippy::redundant-closure` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure)]`
+
+error: redundant closure
+   --> crates/rdf-core/src/ir/import.rs:252:22
+    |
+252 |             .map_err(|error| DatasetImportError::Capacity(error))?;
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the tuple variant itself: `DatasetImportError::Capacity`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure
+
+error: redundant closure
+   --> crates/rdf-core/src/ir/import.rs:255:22
+    |
+255 |             .map_err(|error| DatasetImportError::Capacity(error))?;
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the tuple variant itself: `DatasetImportError::Capacity`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+  --> crates/rdf-core/src/ir/paged/translation.rs:78:5
+   |
+78 |     pub fn build(page: &RdfDataset, dict: &mut GlobalDictionary) -> Result<Self, StorageError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove `must_use`
+  --> crates/rdf-core/src/ir/paged/translation.rs:77:5
+   |
+77 |     #[must_use]
+   |     ^^^^^^^^^^^
+   = note: alternatively, you may add an explicit reason to the `must_use` attribute
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+   --> crates/rdf-core/src/ir/paged/mod.rs:769:5
+    |
+769 |     pub fn compact(&self) -> Result<Self, purrdf_lex::allocation::StorageError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove `must_use`
+   --> crates/rdf-core/src/ir/paged/mod.rs:768:5
+    |
+768 |     #[must_use]
+    |     ^^^^^^^^^^^
+    = note: alternatively, you may add an explicit reason to the `must_use` attribute
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+  --> crates/rdf-core/src/ir/segmented/build.rs:88:5
+   |
+88 |     pub fn new(limits: SegmentedBuildLimits) -> Result<Self, SegmentedError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove `must_use`
+  --> crates/rdf-core/src/ir/segmented/build.rs:87:5
+   |
+87 |     #[must_use]
+   |     ^^^^^^^^^^^
+   = note: alternatively, you may add an explicit reason to the `must_use` attribute
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/rdf-core/src/ir/segmented/mod.rs:165:24
+    |
+165 |     fn from_rdf(error: crate::RdfDiagnostic, invalid: &'static str) -> Self {
+    |                        ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+165 |     fn from_rdf(error: &crate::RdfDiagnostic, invalid: &'static str) -> Self {
+    |                        +
+
+error: unnecessary structure name repetition
+   --> crates/rdf-core/src/ir/term.rs:236:24
+    |
+236 |     const LIMIT: u64 = u32::MAX as u64;
+    |                        ^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+    = note: `-D clippy::use-self` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: unnecessary structure name repetition
+   --> crates/rdf-core/src/ir/term.rs:241:18
+    |
+241 |     const LIMIT: u64 = u64::MAX;
+    |                  ^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+   --> crates/rdf-core/src/ir/term.rs:241:24
+    |
+241 |     const LIMIT: u64 = u64::MAX;
+    |                        ^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: could not compile `purrdf-core` (lib) due to 43 previous errors
+terminal_status=101

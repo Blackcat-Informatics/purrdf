@@ -1,0 +1,128 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0308]: mismatched types
+    --> crates/shapes/src/engine.rs:1268:9
+     |
+1267 |       ) -> Result<Vec<Self::Result>, String> {
+     |            --------------------------------- expected `std::result::Result<Vec<ValidationResult>, std::string::String>` because of return type
+1268 | /         crate::constraints::validate_shape_with_plan_at(
+1269 | |             data,
+1270 | |             focus,
+1271 | |             shapes.box_role_vocab.as_ref(),
+1272 | |             plan,
+1273 | |         )
+     | |_________^ expected `Result<Vec<ValidationResult>, String>`, found `Result<Vec<ValidationResult>, _>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/engine.rs:1289:9
+     |
+1288 |       ) -> Result<Vec<Self::Result>, String> {
+     |            --------------------------------- expected `std::result::Result<Vec<ResultRecord>, std::string::String>` because of return type
+1289 | /         crate::constraints::validate_shape_with_evidence_at(
+1290 | |             data,
+1291 | |             focus,
+1292 | |             shapes.box_role_vocab.as_ref(),
+1293 | |             plan,
+1294 | |             self.0,
+1295 | |         )
+     | |_________^ expected `Result<Vec<ResultRecord>, String>`, found `Result<Vec<ResultRecord>, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+    --> crates/shapes/src/engine.rs:1332:38
+     |
+1306 | ) -> Result<Vec<R::Result>, String> {
+     |      ------------------------------ expected `std::string::String` because of this
+...
+1332 |         plan.warm_unique_values(data)?;
+     |              ------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+     |              |
+     |              this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+     |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+    --> crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<Cow<'_, str>>
+               From<RulesError>
+               From<char>
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/engine.rs:3740:5
+     |
+3737 | ) -> Result<ValidationReport, String> {
+     |      -------------------------------- expected `std::result::Result<ValidationReport, std::string::String>` because of return type
+...
+3740 |     validate_linked_with_focus_filter(&data, shapes, |_, _| true)
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ValidationReport, String>`, found `Result<ValidationReport, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+    --> crates/shapes/src/rules.rs:1881:71
+     |
+1879 | fn conditions_hold(data: &ShaclData, focus: &Term, plan: &RulePlan<'_>) -> Result<bool, String> {
+     |                                                                            -------------------- expected `std::string::String` because of this
+1880 |     for position in 0..plan.conditions.len() {
+1881 |         if !conforms_with_plan(data, focus, plan.condition(position)?)? {
+     |             ----------------------------------------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+     |             |
+     |             this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+     |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+    --> crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | ^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<Cow<'_, str>>
+               From<RulesError>
+               From<char>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/src/target_eval.rs:121:77
+    |
+108 | ) -> Result<Vec<TermId>, String> {
+    |      --------------------------- expected `std::string::String` because of this
+...
+121 |         if conforms_with_id_depth(data, &FocusNode::Interned(node), plan, 0)? {
+    |            -----------------------------------------------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+    |            |
+    |            this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+    |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Box<str>>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 6 previous errors
+terminal_status=101

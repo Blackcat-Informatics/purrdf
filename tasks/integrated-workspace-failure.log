@@ -1,0 +1,275 @@
+workspace	Check workspace	﻿2026-10-14T05:25:29.9070683Z ##[group]Run cargo check --workspace --lib --tests --locked
+workspace	Check workspace	2026-10-14T05:25:29.9071056Z ^[[36;1mcargo check --workspace --lib --tests --locked^[[0m
+workspace	Check workspace	2026-10-14T05:25:29.9125763Z shell: /usr/bin/bash -e {0}
+workspace	Check workspace	2026-10-14T05:25:29.9125986Z env:
+workspace	Check workspace	2026-10-14T05:25:29.9126157Z   CARGO_HOME: /home/runner/.cargo
+workspace	Check workspace	2026-10-14T05:25:29.9126369Z   CARGO_INCREMENTAL: 0
+workspace	Check workspace	2026-10-14T05:25:29.9126549Z   CARGO_TERM_COLOR: always
+workspace	Check workspace	2026-10-14T05:25:29.9126732Z ##[endgroup]
+workspace	Check workspace	2026-10-14T05:25:29.9738945Z ^[[1m^[[92m    Updating^[[0m crates.io index
+workspace	Check workspace	2026-10-14T05:25:30.1148474Z ^[[1m^[[92m Downloading^[[0m crates ...
+workspace	Check workspace	2026-10-14T05:25:30.1624303Z ^[[1m^[[92m  Downloaded^[[0m aead v0.6.1
+workspace	Check workspace	2026-10-14T05:25:30.1637120Z ^[[1m^[[92m  Downloaded^[[0m anstream v1.0.0
+workspace	Check workspace	2026-10-14T05:25:30.1652753Z ^[[1m^[[92m  Downloaded^[[0m anstyle v1.0.14
+workspace	Check workspace	2026-10-14T05:25:30.1760225Z ^[[1m^[[92m  Downloaded^[[0m colorchoice v1.0.5
+workspace	Check workspace	2026-10-14T05:25:30.1794984Z ^[[1m^[[92m  Downloaded^[[0m ghash v0.6.0
+workspace	Check workspace	2026-10-14T05:25:30.1803909Z ^[[1m^[[92m  Downloaded^[[0m leb128fmt v0.1.0
+workspace	Check workspace	2026-10-14T05:25:30.1816106Z ^[[1m^[[92m  Downloaded^[[0m utf8parse v0.2.2
+workspace	Check workspace	2026-10-14T05:25:30.1823458Z ^[[1m^[[92m  Downloaded^[[0m inout v0.2.2
+workspace	Check workspace	2026-10-14T05:25:30.1832707Z ^[[1m^[[92m  Downloaded^[[0m is_terminal_polyfill v1.70.2
+workspace	Check workspace	2026-10-14T05:25:30.1840402Z ^[[1m^[[92m  Downloaded^[[0m strsim v0.11.1
+workspace	Check workspace	2026-10-14T05:25:30.1868977Z ^[[1m^[[92m  Downloaded^[[0m clap_lex v1.1.0
+workspace	Check workspace	2026-10-14T05:25:30.1918958Z ^[[1m^[[92m  Downloaded^[[0m anstyle-query v1.1.5
+workspace	Check workspace	2026-10-14T05:25:30.1954884Z ^[[1m^[[92m  Downloaded^[[0m pyo3-macros v0.29.0
+workspace	Check workspace	2026-10-14T05:25:30.1961747Z ^[[1m^[[92m  Downloaded^[[0m wasm-bindgen-macro v0.2.125
+workspace	Check workspace	2026-10-14T05:25:30.1972057Z ^[[1m^[[92m  Downloaded^[[0m cpubits v0.1.1
+workspace	Check workspace	2026-10-14T05:25:30.1978899Z ^[[1m^[[92m  Downloaded^[[0m universal-hash v0.6.1
+workspace	Check workspace	2026-10-14T05:25:30.1991410Z ^[[1m^[[92m  Downloaded^[[0m wasm-bindgen-shared v0.2.125
+workspace	Check workspace	2026-10-14T05:25:30.2059364Z ^[[1m^[[92m  Downloaded^[[0m ctr v0.10.1
+workspace	Check workspace	2026-10-14T05:25:30.2081454Z ^[[1m^[[92m  Downloaded^[[0m heck v0.5.0
+workspace	Check workspace	2026-10-14T05:25:30.2094243Z ^[[1m^[[92m  Downloaded^[[0m anstyle-parse v1.0.0
+workspace	Check workspace	2026-10-14T05:25:30.2110579Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-deque v0.8.6
+workspace	Check workspace	2026-10-14T05:25:30.2125280Z ^[[1m^[[92m  Downloaded^[[0m polyval v0.7.3
+workspace	Check workspace	2026-10-14T05:25:30.2146691Z ^[[1m^[[92m  Downloaded^[[0m rustversion v1.0.22
+workspace	Check workspace	2026-10-14T05:25:30.2175110Z ^[[1m^[[92m  Downloaded^[[0m either v1.16.0
+workspace	Check workspace	2026-10-14T05:25:30.2190736Z ^[[1m^[[92m  Downloaded^[[0m fastrand v2.4.1
+workspace	Check workspace	2026-10-14T05:25:30.2205599Z ^[[1m^[[92m  Downloaded^[[0m visual-hashing v1.0.0
+workspace	Check workspace	2026-10-14T05:25:30.2224045Z ^[[1m^[[92m  Downloaded^[[0m cmov v0.5.4
+workspace	Check workspace	2026-10-14T05:25:30.2237343Z ^[[1m^[[92m  Downloaded^[[0m ctutils v0.4.2
+workspace	Check workspace	2026-10-14T05:25:30.2252543Z ^[[1m^[[92m  Downloaded^[[0m quote v1.0.46
+workspace	Check workspace	2026-10-14T05:25:30.2276397Z ^[[1m^[[92m  Downloaded^[[0m target-lexicon v0.13.5
+workspace	Check workspace	2026-10-14T05:25:30.2290026Z ^[[1m^[[92m  Downloaded^[[0m clap_derive v4.6.1
+workspace	Check workspace	2026-10-14T05:25:30.2308770Z ^[[1m^[[92m  Downloaded^[[0m twox-hash v2.1.2
+workspace	Check workspace	2026-10-14T05:25:30.2326270Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-epoch v0.9.18
+workspace	Check workspace	2026-10-14T05:25:30.2346568Z ^[[1m^[[92m  Downloaded^[[0m once_cell v1.21.4
+workspace	Check workspace	2026-10-14T05:25:30.2371459Z ^[[1m^[[92m  Downloaded^[[0m cipher v0.5.2
+workspace	Check workspace	2026-10-14T05:25:30.2390180Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-utils v0.8.21
+workspace	Check workspace	2026-10-14T05:25:30.2410504Z ^[[1m^[[92m  Downloaded^[[0m aes v0.9.3
+workspace	Check workspace	2026-10-14T05:25:30.2439850Z ^[[1m^[[92m  Downloaded^[[0m getrandom v0.3.4
+workspace	Check workspace	2026-10-14T05:25:30.2466475Z ^[[1m^[[92m  Downloaded^[[0m proc-macro2 v1.0.106
+workspace	Check workspace	2026-10-14T05:25:30.2490684Z ^[[1m^[[92m  Downloaded^[[0m const-oid v0.10.2
+workspace	Check workspace	2026-10-14T05:25:30.2509390Z ^[[1m^[[92m  Downloaded^[[0m pyo3-build-config v0.29.0
+workspace	Check workspace	2026-10-14T05:25:30.2519901Z ^[[1m^[[92m  Downloaded^[[0m unicode-ident v1.0.24
+workspace	Check workspace	2026-10-14T05:25:30.2541455Z ^[[1m^[[92m  Downloaded^[[0m wasm-bindgen v0.2.125
+workspace	Check workspace	2026-10-14T05:25:30.2561768Z ^[[1m^[[92m  Downloaded^[[0m rayon-core v1.13.0
+workspace	Check workspace	2026-10-14T05:25:30.2591934Z ^[[1m^[[92m  Downloaded^[[0m clap v4.6.1
+workspace	Check workspace	2026-10-14T05:25:30.2666257Z ^[[1m^[[92m  Downloaded^[[0m wasm-encoder v0.259.0
+workspace	Check workspace	2026-10-14T05:25:30.2699549Z ^[[1m^[[92m  Downloaded^[[0m wasm-bindgen-macro-support v0.2.125
+workspace	Check workspace	2026-10-14T05:25:30.2719279Z ^[[1m^[[92m  Downloaded^[[0m bumpalo v3.20.3
+workspace	Check workspace	2026-10-14T05:25:30.2739760Z ^[[1m^[[92m  Downloaded^[[0m pyo3-ffi v0.29.0
+workspace	Check workspace	2026-10-14T05:25:30.2799111Z ^[[1m^[[92m  Downloaded^[[0m pyo3-macros-backend v0.29.0
+workspace	Check workspace	2026-10-14T05:25:30.2820786Z ^[[1m^[[92m  Downloaded^[[0m aes-gcm v0.11.1
+workspace	Check workspace	2026-10-14T05:25:30.2844800Z ^[[1m^[[92m  Downloaded^[[0m hashbrown v0.17.1
+workspace	Check workspace	2026-10-14T05:25:30.2886086Z ^[[1m^[[92m  Downloaded^[[0m clap_builder v4.6.0
+workspace	Check workspace	2026-10-14T05:25:30.2935786Z ^[[1m^[[92m  Downloaded^[[0m rayon v1.12.0
+workspace	Check workspace	2026-10-14T05:25:30.3009275Z ^[[1m^[[92m  Downloaded^[[0m syn v2.0.118
+workspace	Check workspace	2026-10-14T05:25:30.3095531Z ^[[1m^[[92m  Downloaded^[[0m libc v0.2.186
+workspace	Check workspace	2026-10-14T05:25:30.3405453Z ^[[1m^[[92m  Downloaded^[[0m structured-zstd v0.0.49
+workspace	Check workspace	2026-10-14T05:25:30.3635538Z ^[[1m^[[92m  Downloaded^[[0m pyo3 v0.29.0
+workspace	Check workspace	2026-10-14T05:25:30.6638487Z ^[[1m^[[92m    Checking^[[0m typenum v1.20.1
+workspace	Check workspace	2026-10-14T05:25:30.6639255Z ^[[1m^[[92m    Checking^[[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+workspace	Check workspace	2026-10-14T05:25:30.6639845Z ^[[1m^[[92m    Checking^[[0m cpufeatures v0.3.0
+workspace	Check workspace	2026-10-14T05:25:30.6640297Z ^[[1m^[[92m    Checking^[[0m cfg-if v1.0.4
+workspace	Check workspace	2026-10-14T05:25:30.6817896Z ^[[1m^[[92m    Checking^[[0m const-oid v0.10.2
+workspace	Check workspace	2026-10-14T05:25:30.6889120Z ^[[1m^[[92m    Checking^[[0m regex-syntax v0.8.11
+workspace	Check workspace	2026-10-14T05:25:30.7708842Z ^[[1m^[[92m   Compiling^[[0m libc v0.2.186
+workspace	Check workspace	2026-10-14T05:25:31.7483186Z ^[[1m^[[92m    Checking^[[0m hybrid-array v0.4.15
+workspace	Check workspace	2026-10-14T05:25:31.9500699Z ^[[1m^[[92m    Checking^[[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+workspace	Check workspace	2026-10-14T05:25:32.0108803Z ^[[1m^[[92m    Checking^[[0m regex-automata v0.4.14
+workspace	Check workspace	2026-10-14T05:25:32.2172018Z ^[[1m^[[92m    Checking^[[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+workspace	Check workspace	2026-10-14T05:25:32.2498915Z ^[[1m^[[92m    Checking^[[0m crypto-common v0.2.2
+workspace	Check workspace	2026-10-14T05:25:32.2839580Z ^[[1m^[[92m    Checking^[[0m block-buffer v0.12.1
+workspace	Check workspace	2026-10-14T05:25:32.3558953Z ^[[1m^[[92m   Compiling^[[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+workspace	Check workspace	2026-10-14T05:25:32.6429224Z ^[[1m^[[92m    Checking^[[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+workspace	Check workspace	2026-10-14T05:25:32.6968921Z ^[[1m^[[92m    Checking^[[0m digest v0.11.3
+workspace	Check workspace	2026-10-14T05:25:32.7746105Z ^[[1m^[[92m    Checking^[[0m sha2 v0.11.0
+workspace	Check workspace	2026-10-14T05:25:33.2464480Z ^[[1m^[[92m    Checking^[[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+workspace	Check workspace	2026-10-14T05:25:33.5199870Z ^[[1m^[[92m    Checking^[[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+workspace	Check workspace	2026-10-14T05:25:33.5313680Z ^[[1m^[[92m    Checking^[[0m regex v1.12.4
+workspace	Check workspace	2026-10-14T05:25:33.7888731Z ^[[1m^[[92m    Checking^[[0m hashbrown v0.17.1
+workspace	Check workspace	2026-10-14T05:25:33.8342212Z ^[[1m^[[92m   Compiling^[[0m crossbeam-utils v0.8.21
+workspace	Check workspace	2026-10-14T05:25:34.2038448Z ^[[1m^[[92m   Compiling^[[0m rayon-core v1.13.0
+workspace	Check workspace	2026-10-14T05:25:34.2779203Z ^[[1m^[[92m    Checking^[[0m either v1.16.0
+workspace	Check workspace	2026-10-14T05:25:34.2798363Z ^[[1m^[[92m    Checking^[[0m purrdf-alloc-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/alloc-probe)
+workspace	Check workspace	2026-10-14T05:25:34.3378693Z ^[[1m^[[92m    Checking^[[0m crossbeam-epoch v0.9.18
+workspace	Check workspace	2026-10-14T05:25:34.3478329Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.3.4
+workspace	Check workspace	2026-10-14T05:25:34.3848813Z ^[[1m^[[92m    Checking^[[0m inout v0.2.2
+workspace	Check workspace	2026-10-14T05:25:34.4326020Z ^[[1m^[[92m    Checking^[[0m cmov v0.5.4
+workspace	Check workspace	2026-10-14T05:25:34.4931693Z ^[[1m^[[92m    Checking^[[0m crossbeam-deque v0.8.6
+workspace	Check workspace	2026-10-14T05:25:34.5459200Z ^[[1m^[[92m    Checking^[[0m ctutils v0.4.2
+workspace	Check workspace	2026-10-14T05:25:34.6558910Z ^[[1m^[[92m    Checking^[[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+workspace	Check workspace	2026-10-14T05:25:34.7459881Z ^[[1m^[[92m    Checking^[[0m cpubits v0.1.1
+workspace	Check workspace	2026-10-14T05:25:34.7638739Z ^[[1m^[[92m    Checking^[[0m twox-hash v2.1.2
+workspace	Check workspace	2026-10-14T05:25:34.7898957Z ^[[1m^[[92m    Checking^[[0m fastrand v2.4.1
+workspace	Check workspace	2026-10-14T05:25:34.8078859Z ^[[1m^[[92m    Checking^[[0m universal-hash v0.6.1
+workspace	Check workspace	2026-10-14T05:25:34.8370689Z ^[[1m^[[92m    Checking^[[0m cipher v0.5.2
+workspace	Check workspace	2026-10-14T05:25:34.8523116Z ^[[1m^[[92m    Checking^[[0m rayon v1.12.0
+workspace	Check workspace	2026-10-14T05:25:34.8768931Z ^[[1m^[[92m    Checking^[[0m structured-zstd v0.0.49
+workspace	Check workspace	2026-10-14T05:25:34.9758136Z ^[[1m^[[92m    Checking^[[0m polyval v0.7.3
+workspace	Check workspace	2026-10-14T05:25:35.0488641Z ^[[1m^[[92m    Checking^[[0m ghash v0.6.0
+workspace	Check workspace	2026-10-14T05:25:35.0778739Z ^[[1m^[[92m    Checking^[[0m aes v0.9.3
+workspace	Check workspace	2026-10-14T05:25:35.3558794Z ^[[1m^[[92m    Checking^[[0m ctr v0.10.1
+workspace	Check workspace	2026-10-14T05:25:35.3989049Z ^[[1m^[[92m    Checking^[[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+workspace	Check workspace	2026-10-14T05:25:35.4348973Z ^[[1m^[[92m    Checking^[[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+workspace	Check workspace	2026-10-14T05:25:36.4159103Z ^[[1m^[[92m    Checking^[[0m aead v0.6.1
+workspace	Check workspace	2026-10-14T05:25:36.4418913Z ^[[1m^[[92m    Checking^[[0m visual-hashing v1.0.0
+workspace	Check workspace	2026-10-14T05:25:36.4578765Z ^[[1m^[[92m    Checking^[[0m aes-gcm v0.11.1
+workspace	Check workspace	2026-10-14T05:25:36.5048946Z ^[[1m^[[92m    Checking^[[0m unicode-ident v1.0.24
+workspace	Check workspace	2026-10-14T05:25:36.5078358Z ^[[1m^[[92m   Compiling^[[0m proc-macro2 v1.0.106
+workspace	Check workspace	2026-10-14T05:25:36.5418634Z ^[[1m^[[92m   Compiling^[[0m quote v1.0.46
+workspace	Check workspace	2026-10-14T05:25:37.2768711Z ^[[1m^[[92m    Checking^[[0m syn v2.0.118
+workspace	Check workspace	2026-10-14T05:25:37.4639023Z ^[[1m^[[92m   Compiling^[[0m heck v0.5.0
+workspace	Check workspace	2026-10-14T05:25:38.1989927Z ^[[1m^[[92m    Checking^[[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+workspace	Check workspace	2026-10-14T05:25:38.6559043Z ^[[1m^[[92m    Checking^[[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+workspace	Check workspace	2026-10-14T05:25:39.0758953Z ^[[1m^[[92m    Checking^[[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+workspace	Check workspace	2026-10-14T05:25:39.1249521Z ^[[1m^[[92m    Checking^[[0m purrdf-jsonschema v3.0.1 (/home/runner/work/purrdf/purrdf/crates/jsonschema)
+workspace	Check workspace	2026-10-14T05:25:40.8121315Z ^[[1m^[[92m    Checking^[[0m utf8parse v0.2.2
+workspace	Check workspace	2026-10-14T05:25:40.8438871Z ^[[1m^[[92m    Checking^[[0m anstyle-parse v1.0.0
+workspace	Check workspace	2026-10-14T05:25:40.8848724Z ^[[1m^[[92m    Checking^[[0m is_terminal_polyfill v1.70.2
+workspace	Check workspace	2026-10-14T05:25:40.9149328Z ^[[1m^[[92m    Checking^[[0m anstyle v1.0.14
+workspace	Check workspace	2026-10-14T05:25:40.9198762Z ^[[1m^[[92m    Checking^[[0m anstyle-query v1.1.5
+workspace	Check workspace	2026-10-14T05:25:40.9408492Z ^[[1m^[[92m    Checking^[[0m colorchoice v1.0.5
+workspace	Check workspace	2026-10-14T05:25:40.9679104Z ^[[1m^[[92m    Checking^[[0m clap_lex v1.1.0
+workspace	Check workspace	2026-10-14T05:25:41.0038852Z ^[[1m^[[92m    Checking^[[0m anstream v1.0.0
+workspace	Check workspace	2026-10-14T05:25:41.0399063Z ^[[1m^[[92m    Checking^[[0m strsim v0.11.1
+workspace	Check workspace	2026-10-14T05:25:41.1224920Z ^[[1m^[[92m   Compiling^[[0m target-lexicon v0.13.5
+workspace	Check workspace	2026-10-14T05:25:41.1363818Z ^[[1m^[[92m    Checking^[[0m clap_builder v4.6.0
+workspace	Check workspace	2026-10-14T05:25:41.7300026Z ^[[1m^[[92m   Compiling^[[0m wasm-bindgen-shared v0.2.125
+workspace	Check workspace	2026-10-14T05:25:42.3839308Z ^[[1m^[[92m   Compiling^[[0m rustversion v1.0.22
+workspace	Check workspace	2026-10-14T05:25:42.4138898Z ^[[1m^[[92m   Compiling^[[0m pyo3-build-config v0.29.0
+workspace	Check workspace	2026-10-14T05:25:42.8148749Z ^[[1m^[[92m    Checking^[[0m once_cell v1.21.4
+workspace	Check workspace	2026-10-14T05:25:44.3959676Z ^[[1m^[[92m    Checking^[[0m purrdf-hash-conformance v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash-conformance)
+workspace	Check workspace	2026-10-14T05:25:44.4278871Z ^[[1m^[[92m   Compiling^[[0m bumpalo v3.20.3
+workspace	Check workspace	2026-10-14T05:25:44.6179052Z ^[[1m^[[92m   Compiling^[[0m wasm-bindgen-macro-support v0.2.125
+workspace	Check workspace	2026-10-14T05:25:45.7118775Z ^[[1m^[[92m   Compiling^[[0m pyo3-ffi v0.29.0
+workspace	Check workspace	2026-10-14T05:25:45.9938886Z ^[[1m^[[92m   Compiling^[[0m wasm-bindgen v0.2.125
+workspace	Check workspace	2026-10-14T05:25:46.2998929Z ^[[1m^[[92m   Compiling^[[0m pyo3 v0.29.0
+workspace	Check workspace	2026-10-14T05:25:46.4259333Z ^[[1m^[[92m   Compiling^[[0m pyo3-macros-backend v0.29.0
+workspace	Check workspace	2026-10-14T05:25:48.8730200Z ^[[1m^[[92m    Checking^[[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+workspace	Check workspace	2026-10-14T05:25:49.2128939Z ^[[1m^[[92m    Checking^[[0m purrdf-geo-kernel v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo-kernel)
+workspace	Check workspace	2026-10-14T05:25:57.9969109Z ^[[1m^[[92m    Checking^[[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+workspace	Check workspace	2026-10-14T05:26:04.6789167Z ^[[1m^[[92m    Checking^[[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+workspace	Check workspace	2026-10-14T05:26:06.4318964Z ^[[1m^[[92m    Checking^[[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+workspace	Check workspace	2026-10-14T05:26:07.6999444Z ^[[1m^[[92m    Checking^[[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+workspace	Check workspace	2026-10-14T05:26:09.8809064Z ^[[1m^[[92m    Checking^[[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+workspace	Check workspace	2026-10-14T05:26:10.4916779Z ^[[1m^[[92m    Checking^[[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+workspace	Check workspace	2026-10-14T05:26:11.2809054Z ^[[1m^[[92m    Checking^[[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+workspace	Check workspace	2026-10-14T05:26:11.7429533Z ^[[1m^[[92m    Checking^[[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+workspace	Check workspace	2026-10-14T05:26:11.7689299Z ^[[1m^[[92m    Checking^[[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+workspace	Check workspace	2026-10-14T05:26:11.7769625Z ^[[1m^[[92m    Checking^[[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+workspace	Check workspace	2026-10-14T05:26:12.1299335Z ^[[1m^[[92m    Checking^[[0m purrdf-mime v3.0.1 (/home/runner/work/purrdf/purrdf/crates/mime)
+workspace	Check workspace	2026-10-14T05:26:12.4059051Z ^[[1m^[[92m    Checking^[[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+workspace	Check workspace	2026-10-14T05:26:12.5875926Z ^[[1m^[[92m    Checking^[[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+workspace	Check workspace	2026-10-14T05:26:13.0108698Z ^[[1m^[[92m   Compiling^[[0m clap_derive v4.6.1
+workspace	Check workspace	2026-10-14T05:26:13.5809606Z ^[[1m^[[92m    Checking^[[0m purrdf-conformance-kit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/conformance-kit)
+workspace	Check workspace	2026-10-14T05:26:13.7149261Z ^[[1m^[[92m   Compiling^[[0m wasm-bindgen-macro v0.2.125
+workspace	Check workspace	2026-10-14T05:26:13.9918633Z ^[[1m^[[92m    Checking^[[0m leb128fmt v0.1.0
+workspace	Check workspace	2026-10-14T05:26:14.0628818Z ^[[1m^[[92m    Checking^[[0m wasm-encoder v0.259.0
+workspace	Check workspace	2026-10-14T05:26:14.6449254Z ^[[1m^[[92m   Compiling^[[0m pyo3-macros v0.29.0
+workspace	Check workspace	2026-10-14T05:26:15.1019438Z ^[[1m^[[92m    Checking^[[0m wasm-link v3.0.1 (/home/runner/work/purrdf/purrdf/crates/wasm-link)
+workspace	Check workspace	2026-10-14T05:26:15.7959163Z ^[[1m^[[92m    Checking^[[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+workspace	Check workspace	2026-10-14T05:26:16.0279339Z ^[[1m^[[92m    Checking^[[0m purrdf-bench v3.0.1 (/home/runner/work/purrdf/purrdf/crates/bench)
+workspace	Check workspace	2026-10-14T05:26:16.4169173Z ^[[1m^[[92m    Checking^[[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+workspace	Check workspace	2026-10-14T05:26:24.9109269Z ^[[1m^[[92m    Checking^[[0m clap v4.6.1
+workspace	Check workspace	2026-10-14T05:26:25.1489117Z ^[[1m^[[92m    Checking^[[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+workspace	Check workspace	2026-10-14T05:26:25.1698869Z ^[[1m^[[92m    Checking^[[0m purrdf-envelope-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/envelope-probe)
+workspace	Check workspace	2026-10-14T05:26:26.9709033Z ^[[1m^[[92m    Checking^[[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+workspace	Check workspace	2026-10-14T05:26:27.1673550Z ^[[1m^[[92m    Checking^[[0m purrdf-cli v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cli)
+workspace	Check workspace	2026-10-14T05:26:27.2109692Z ^[[1m^[[92m    Checking^[[0m purrdf-sparql-conformance v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-conformance)
+workspace	Check workspace	2026-10-14T05:26:27.2145789Z ^[[1m^[[92m    Checking^[[0m purrdf-capi v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-capi)
+workspace	Check workspace	2026-10-14T05:26:27.6658251Z ^[[1m^[[92m    Checking^[[0m purrdf-python v3.0.1 (/home/runner/work/purrdf/purrdf/bindings/python)
+workspace	Check workspace	2026-10-14T05:26:30.2448905Z ^[[1m^[[92m    Checking^[[0m purrdf-wasm v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-wasm)
+workspace	Check workspace	2026-10-14T05:26:39.9234571Z ^[[1m^[[91merror[E0308]^[[0m^[[1m: arguments to this method are incorrect^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9258413Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:30:17
+workspace	Check workspace	2026-10-14T05:26:39.9279984Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9298241Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m|^[[0m         builder.push_quad(subject, predicate, literal, None);
+workspace	Check workspace	2026-10-14T05:26:39.9317990Z      ^[[1m^[[94m|^[[0m                 ^[[1m^[[91m^^^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9323748Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9324196Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+workspace	Check workspace	2026-10-14T05:26:39.9324771Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:30:27
+workspace	Check workspace	2026-10-14T05:26:39.9325229Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9325694Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m|^[[0m         builder.push_quad(subject, predicate, literal, None);
+workspace	Check workspace	2026-10-14T05:26:39.9326271Z      ^[[1m^[[94m|^[[0m                           ^[[1m^[[92m^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9327065Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+workspace	Check workspace	2026-10-14T05:26:39.9338756Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+workspace	Check workspace	2026-10-14T05:26:39.9339635Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+workspace	Check workspace	2026-10-14T05:26:39.9340290Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:30:36
+workspace	Check workspace	2026-10-14T05:26:39.9340748Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9341257Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m|^[[0m         builder.push_quad(subject, predicate, literal, None);
+workspace	Check workspace	2026-10-14T05:26:39.9341887Z      ^[[1m^[[94m|^[[0m                                    ^[[1m^[[92m^^^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9342420Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+workspace	Check workspace	2026-10-14T05:26:39.9343288Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+workspace	Check workspace	2026-10-14T05:26:39.9344193Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+workspace	Check workspace	2026-10-14T05:26:39.9344827Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:30:47
+workspace	Check workspace	2026-10-14T05:26:39.9345279Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9345775Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m|^[[0m         builder.push_quad(subject, predicate, literal, None);
+workspace	Check workspace	2026-10-14T05:26:39.9346421Z      ^[[1m^[[94m|^[[0m                                               ^[[1m^[[92m^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9346938Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+workspace	Check workspace	2026-10-14T05:26:39.9347948Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+workspace	Check workspace	2026-10-14T05:26:39.9348692Z ^[[1m^[[92mnote^[[0m: method defined here
+workspace	Check workspace	2026-10-14T05:26:39.9349159Z     ^[[1m^[[94m--> ^[[0mcrates/rdf-core/src/ir/builder.rs:2509:12
+workspace	Check workspace	2026-10-14T05:26:39.9349573Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9349933Z ^[[1m^[[94m2509^[[0m ^[[1m^[[94m|^[[0m     pub fn push_quad(
+workspace	Check workspace	2026-10-14T05:26:39.9350379Z      ^[[1m^[[94m|^[[0m            ^[[1m^[[92m^^^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9351660Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+workspace	Check workspace	2026-10-14T05:26:39.9352501Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9353101Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m| ^[[0m        builder.push_quad(subject^[[92m.expect("REASON")^[[0m, predicate, literal, None);
+workspace	Check workspace	2026-10-14T05:26:39.9353843Z      ^[[1m^[[94m|^[[0m                                  ^[[92m+++++++++++++++++^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9354953Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+workspace	Check workspace	2026-10-14T05:26:39.9356112Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9356728Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m| ^[[0m        builder.push_quad(subject, predicate^[[92m.expect("REASON")^[[0m, literal, None);
+workspace	Check workspace	2026-10-14T05:26:39.9358418Z      ^[[1m^[[94m|^[[0m                                             ^[[92m+++++++++++++++++^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9359606Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+workspace	Check workspace	2026-10-14T05:26:39.9360474Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9361124Z ^[[1m^[[94m  30^[[0m ^[[1m^[[94m| ^[[0m        builder.push_quad(subject, predicate, literal^[[92m.expect("REASON")^[[0m, None);
+workspace	Check workspace	2026-10-14T05:26:39.9361923Z      ^[[1m^[[94m|^[[0m                                                      ^[[92m+++++++++++++++++^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9362246Z 
+workspace	Check workspace	2026-10-14T05:26:39.9362541Z ^[[1m^[[91merror[E0308]^[[0m^[[1m: arguments to this method are incorrect^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9363163Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:34:13
+workspace	Check workspace	2026-10-14T05:26:39.9363610Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9364101Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m|^[[0m     builder.push_quad(quiet, predicate, punctuation, None);
+workspace	Check workspace	2026-10-14T05:26:39.9364906Z      ^[[1m^[[94m|^[[0m             ^[[1m^[[91m^^^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9365256Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9365687Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+workspace	Check workspace	2026-10-14T05:26:39.9366270Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:34:23
+workspace	Check workspace	2026-10-14T05:26:39.9366795Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9367572Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m|^[[0m     builder.push_quad(quiet, predicate, punctuation, None);
+workspace	Check workspace	2026-10-14T05:26:39.9368161Z      ^[[1m^[[94m|^[[0m                       ^[[1m^[[92m^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9368616Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+workspace	Check workspace	2026-10-14T05:26:39.9369419Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+workspace	Check workspace	2026-10-14T05:26:39.9370072Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+workspace	Check workspace	2026-10-14T05:26:39.9370645Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:34:30
+workspace	Check workspace	2026-10-14T05:26:39.9371092Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9371576Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m|^[[0m     builder.push_quad(quiet, predicate, punctuation, None);
+workspace	Check workspace	2026-10-14T05:26:39.9372175Z      ^[[1m^[[94m|^[[0m                              ^[[1m^[[92m^^^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9372656Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+workspace	Check workspace	2026-10-14T05:26:39.9373480Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+workspace	Check workspace	2026-10-14T05:26:39.9374332Z ^[[1m^[[92mnote^[[0m: expected `TermId`, found `Result<TermId, StorageError>`
+workspace	Check workspace	2026-10-14T05:26:39.9374919Z     ^[[1m^[[94m--> ^[[0mcrates/text/tests/analysis_allocations.rs:34:41
+workspace	Check workspace	2026-10-14T05:26:39.9375362Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9375830Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m|^[[0m     builder.push_quad(quiet, predicate, punctuation, None);
+workspace	Check workspace	2026-10-14T05:26:39.9376446Z      ^[[1m^[[94m|^[[0m                                         ^[[1m^[[92m^^^^^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9376954Z      ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: expected struct `TermId`
+workspace	Check workspace	2026-10-14T05:26:39.9377884Z                   found enum `^[[1m^[[35mResult^[[0m^[[1m^[[35m<^[[0mTermId, ^[[1m^[[35mpurrdf_lex::allocation::StorageError^[[0m^[[1m^[[35m>^[[0m`
+workspace	Check workspace	2026-10-14T05:26:39.9378543Z ^[[1m^[[92mnote^[[0m: method defined here
+workspace	Check workspace	2026-10-14T05:26:39.9378980Z     ^[[1m^[[94m--> ^[[0mcrates/rdf-core/src/ir/builder.rs:2509:12
+workspace	Check workspace	2026-10-14T05:26:39.9379377Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9379717Z ^[[1m^[[94m2509^[[0m ^[[1m^[[94m|^[[0m     pub fn push_quad(
+workspace	Check workspace	2026-10-14T05:26:39.9380163Z      ^[[1m^[[94m|^[[0m            ^[[1m^[[92m^^^^^^^^^^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9381143Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+workspace	Check workspace	2026-10-14T05:26:39.9382217Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9382834Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m| ^[[0m    builder.push_quad(quiet^[[92m.expect("REASON")^[[0m, predicate, punctuation, None);
+workspace	Check workspace	2026-10-14T05:26:39.9383545Z      ^[[1m^[[94m|^[[0m                            ^[[92m+++++++++++++++++^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9384558Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+workspace	Check workspace	2026-10-14T05:26:39.9385425Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9386020Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m| ^[[0m    builder.push_quad(quiet, predicate^[[92m.expect("REASON")^[[0m, punctuation, None);
+workspace	Check workspace	2026-10-14T05:26:39.9386736Z      ^[[1m^[[94m|^[[0m                                       ^[[92m+++++++++++++++++^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9388290Z ^[[1m^[[96mhelp^[[0m: consider using `Result::expect` to unwrap the `Result<TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+workspace	Check workspace	2026-10-14T05:26:39.9389130Z      ^[[1m^[[94m|^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9389703Z ^[[1m^[[94m  34^[[0m ^[[1m^[[94m| ^[[0m    builder.push_quad(quiet, predicate, punctuation^[[92m.expect("REASON")^[[0m, None);
+workspace	Check workspace	2026-10-14T05:26:39.9390625Z      ^[[1m^[[94m|^[[0m                                                    ^[[92m+++++++++++++++++^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9390900Z 
+workspace	Check workspace	2026-10-14T05:26:39.9569093Z ^[[1mFor more information about this error, try `rustc --explain E0308`.^[[0m
+workspace	Check workspace	2026-10-14T05:26:39.9594227Z ^[[1m^[[91merror^[[0m: could not compile `purrdf-text` (test "analysis_allocations") due to 2 previous errors
+workspace	Check workspace	2026-10-14T05:26:39.9601262Z ^[[1m^[[33mwarning^[[0m: build failed, waiting for other jobs to finish...
+workspace	Check workspace	2026-10-14T05:26:41.1359141Z ##[error]Process completed with exit code 101.

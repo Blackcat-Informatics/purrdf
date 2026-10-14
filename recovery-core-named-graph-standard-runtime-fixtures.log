@@ -1,0 +1,39 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 22s
+     Running unittests src/lib.rs (/opt/.cargo/slots/32e51468452a2d41/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 22 tests
+test ir::builder::native_graph_birth_tests::named_graph_growth_refusal_keeps_prior_declarations_and_duplicate_hits ... ok
+test ir::builder::tests::freeze_preserves_named_graphs ... ok
+test ir::canon::tests::the_flat_dedup_law_holds_for_sentinel_and_real_predicate_base_quads_in_a_named_graph ... ok
+test ir::dataset::tests::named_graph_projection::projection_never_claims_a_default_graph_statement_row ... ok
+test ir::dataset::tests::named_graph_projection::projection_does_not_absorb_another_graphs_statement_layer ... ok
+test ir::canon::tests::graph_scoped_canonicalization_matches_the_named_graph_projection ... ok
+test ir::mutable::tests::declared_named_graphs_follow_the_withdrawal_rules ... ok
+test ir::mutable::tests::named_graph_quads_round_trip ... ok
+test ir::mutable::tests::quads_for_pattern_matches_delta_only_named_graph ... ok
+test ir::mutable::tests::declared_named_graphs_survive_freeze_and_snapshot ... ok
+test ir::paged::admission::tests::named_graph_bound_skips_a_term_known_only_as_a_subject_and_admits_a_graph_the_page_owns_rows_in ... ok
+test ir::paged::admission::tests::named_graph_bound_skips_when_page_owns_no_rows_in_it_and_admits_when_it_does ... ok
+test ir::pack::triples::tests::empty_default_graph_with_only_named_graph_quads ... ok
+test ir::validate::tests::freeze_checks_declared_named_graphs ... ok
+test ir::pipeline_bundle::tests::accumulate_named_graph_is_additive_and_pins ... ok
+test named_graph::tests::graph_names_are_written_in_term_syntax ... ok
+test ir::pipeline_bundle::residue_graph_seam_tests::residue_drops_an_iri_named_graph_and_keeps_the_neighbouring_blank_named_one ... ok
+test named_graph::tests::one_graph_reads_singular ... ok
+test named_graph::tests::several_graphs_read_plural_and_list_in_order ... ok
+test named_graph::tests::the_tail_beyond_the_sample_limit_is_counted_not_truncated ... ok
+test loss::tests::profile_for_trig_turtle_includes_named_graph_dropped ... ok
+test loss::tests::empty_named_graph_code_is_registered_but_never_contracted ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 1289 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.16s
+     Running unittests src/lib.rs (/opt/.cargo/slots/32e51468452a2d41/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::segmented::build::certification_tests::conservative_term_admission_does_not_authorize_unminted_ids ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1310 filtered out; finished in 0.00s
+
+terminal_status=0

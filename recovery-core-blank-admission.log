@@ -1,0 +1,68 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 39.96s
+     Running unittests src/lib.rs (target/capacity-build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 6 tests
+test ir::builder::native_graph_birth_tests::blank_term_refusal_does_not_reserve_its_scope ... ok
+test ir::builder::native_graph_birth_tests::content_id_side_table_refusal_does_not_publish_an_unindexed_term ... ok
+test ir::builder::native_graph_birth_tests::native_graph_refuses_before_the_first_arena_allocation ... ok
+test ir::builder::native_graph_birth_tests::reifier_row_refusal_does_not_publish_its_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::native_structural_failure_releases_builder_and_retains_only_the_diagnostic ... ok
+test ir::builder::native_graph_birth_tests::native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1303 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.08s
+     Running unittests src/lib.rs (target/capacity-build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 46 tests
+test blank_label::tests::unscoped_legal_labels_are_borrowed_byte_identically ... ok
+test cdt_blank::tests::an_ambient_scope_reaches_embedded_literals_without_re_escaping ... ok
+test cdt_blank::tests::direct_nesting_opens_no_new_scope ... ok
+test cdt_blank::tests::an_ambient_scope_is_spelled_exactly_as_a_bare_term_would_be ... ok
+test cdt_blank::tests::embedded_composite_literal_nesting_opens_no_new_scope ... ok
+test blank_label::tests::encode_is_injective_over_label_scope_pairs ... ok
+test cdt_blank::tests::text_ingress_at_the_default_scope_is_a_byte_identity ... ok
+test cdt_blank::tests::triple_term_components_are_in_scope ... ok
+test evidence::information::tests::context_polarities_combine_without_unscoped_inheritance ... ok
+test dataset_view::tests::objects_of_predicate_is_the_distinct_range_in_scope ... ok
+test describe::tests::slice_scope_unions_subjects ... ok
+test evidence::ledger::terms::tests::composite_blanks_resolve_in_the_original_scope_while_guards_remain_borrowed ... ok
+test evidence::ledger::terms::tests::borrowed_payloads_structural_lookup_and_blank_scope ... ok
+test evidence::reason::tests::streamed_identity_matches_independent_materialized_framing_and_preserves_blank_scope ... ok
+test ir::builder::native_graph_birth_tests::blank_term_refusal_does_not_reserve_its_scope ... ok
+test ir::builder::tests::blank_scope_distinctness ... ok
+test ir::builder::tests::push_dataset_keeps_two_scopes_of_one_label_apart ... ok
+test ir::canon::tests::a_graph_scoped_refusal_does_not_spread_to_a_neighbouring_graph ... ok
+test ir::canon::tests::graph_scoped_canonicalization_is_idempotent_over_its_own_output ... ok
+test ir::canon::tests::flat_graph_scope_is_flat_dataset_scope_composed_with_projection ... ok
+test ir::canon::tests::graph_scoped_canonicalization_matches_the_named_graph_projection ... ok
+test ir::global::tests::blank_scope_participates_in_identity ... ok
+test ir::global::tests::intern_literal_registers_nested_composite_identities_with_their_scopes ... ok
+test ir::ingest::tests::close_default_or_unopened_scope_is_error ... ok
+test ir::ingest::tests::closed_scope_reference_is_error ... ok
+test ir::ingest::tests::event_scope_capacity_preserves_original_count_and_prior_state ... ok
+test ir::ingest::tests::never_opened_scope_reference_is_error ... ok
+test ir::ingest::tests::redeclaration_in_one_scope_is_error ... ok
+test ir::ingest::tests::round_trip_replay_preserves_reifier_and_annotation_graph_scope ... ok
+test ir::term::conversion_tests::a_blank_node_keeps_its_scope_through_the_owned_model ... ok
+test ir::pack::dict::tests::blank_round_trips_with_scope ... ok
+test ir::term::conversion_tests::a_non_default_scope_takes_every_label_verbatim ... ok
+test ir::term::conversion_tests::the_order_distinguishes_direction_and_scope_and_ties_equal_terms ... ok
+test ir::term::tests::blank_scope_default_is_zero ... ok
+test ir::term::tests::canonical_bytes_includes_blank_scope ... ok
+test ir::term::tests::qualify_label_default_scope_is_verbatim ... ok
+test ir::term::tests::qualify_label_envelopes_scoped_and_reserved_labels ... ok
+test ir::term::tests::qualify_label_is_injective_over_label_scope_pairs ... ok
+test ir::term_walk::tests::blank_identity_visit_preserves_nested_order_scopes_and_occurrences ... ok
+test query_scope::counters::tests::operational_failure_cannot_publish_partial_counts_or_an_unknown_row ... ok
+test ir::term::tests::unqualify_label_inverts_qualify_label_for_every_label_and_scope ... ok
+test query_scope::counters::tests::satisfied_candidates_need_no_temporary_decision_capacity ... ok
+test query_scope::tests::scoped_decoder_borrows_original_payload_and_rejects_malformed_fields ... ok
+test turtle::tests::write_dataset_term_encodes_the_label_and_scope_together ... ok
+test query_scope::counters::tests::unknown_time_is_counted_separately_even_when_place_rejects ... ok
+test imports::term_walk_tests::a_hundred_thousand_level_term_is_rescoped_on_a_128_kib_thread ... ok
+
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 1263 filtered out; finished in 0.04s
+
+terminal_status=0

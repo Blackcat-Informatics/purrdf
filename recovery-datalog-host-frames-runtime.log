@@ -1,0 +1,41 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error[E0283]: type annotations needed
+    --> crates/datalog/src/plan.rs:1955:37
+     |
+1955 |         assert_eq!(IndexChoice::Any.bound(None, None), Some(Bound::Any));
+     |                                     ^^^^^ cannot infer type of the type parameter `I` declared on the method `bound`
+     |
+     = note: the type must implement `TermIdentity`
+note: required by a bound in `plan::IndexChoice::bound`
+    --> crates/datalog/src/plan.rs:315:21
+     |
+ 315 |     pub fn bound<I: TermIdentity>(self, subject: Option<I>, object: Option<I>) -> Option<Bound<I>> {
+     |                     ^^^^^^^^^^^^ required by this bound in `IndexChoice::bound`
+help: consider specifying a concrete type for the type parameter `I`
+     |
+1955 |         assert_eq!(IndexChoice::Any.bound::</* Type */>(None, None), Some(Bound::Any));
+     |                                          ++++++++++++++
+
+error[E0283]: type annotations needed for `T`
+    --> crates/datalog/src/seminaive.rs:4869:13
+     |
+4869 |         let inline = SlotSolution::empty(8);
+     |             ^^^^^^   ---------------------- type must be known at this point
+     |
+     = note: the type must implement `TermIdentity`
+note: required by a bound in `seminaive::SlotSolution::<I>::empty`
+    --> crates/datalog/src/seminaive.rs:1551:9
+     |
+1551 | impl<I: TermIdentity> SlotSolution<I> {
+     |         ^^^^^^^^^^^^ required by this bound in `SlotSolution::<I>::empty`
+...
+1570 |     fn empty(slot_count: usize) -> Self {
+     |        ----- required by a bound in this associated function
+help: consider giving `inline` an explicit type, where the type for type parameter `I` is specified
+     |
+4869 |         let inline: T = SlotSolution::empty(8);
+     |                   +++
+
+For more information about this error, try `rustc --explain E0283`.
+error: could not compile `purrdf-datalog` (lib test) due to 2 previous errors
+terminal_status=101

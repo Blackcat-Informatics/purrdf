@@ -1,0 +1,41 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 35.77s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 5 tests
+diagnostic-owner layouts: outer=96/8 attachments=120/8 storage=33/1 presentation=80/8
+test diagnostic::tests::iri_fields_render_the_existing_english ... ok
+test diagnostic::tests::native_diagnostic_copy_preserves_typed_fields_and_exact_original_layouts ... ok
+test diagnostic::tests::storage_cause_keeps_exact_fields_in_an_admitted_compact_diagnostic ... ok
+test diagnostic::tests::shared_attachments_preserve_original_reporting_and_admitted_ownership ... ok
+test diagnostic::tests::template_drift_is_refused_and_large_arguments_remain_exact ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1337 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 4 tests
+test ir::paged::graph_index::tests::composed_postings_use_resident_offsets_and_preserve_wide_page_ids ... ok
+test ir::paged::graph_index::tests::derive_materializes_no_page ... ok
+test ir::paged::graph_index::tests::derive_indexes_every_stream_and_declared_empty_graphs ... ok
+test ir::paged::graph_index::tests::derive_survives_compaction_and_page_subsetting ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1338 filtered out; finished in 0.00s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 1m 40s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-retrieval/b5d97b90cf740aa1/out/purrdf_retrieval-b5d97b90cf740aa1)
+
+running 1 test
+RdfDiagnostic 96/8 EvalError 96/16 ExecutionError 96/16 SearchError 112/16 PlanError 88/8 AdmissionError 96/8 FusionError 96/16
+test search::temporary_search_error_layout_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 114 filtered out; finished in 0.00s
+
+terminal_status=0

@@ -1,0 +1,33 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error[E0119]: conflicting implementations of trait `Debug` for type `SegmentedOperation`
+   --> crates/rdf-core/src/ir/segmented/session.rs:396:10
+    |
+395 | #[derive(Debug)]
+    |          ----- first implementation here
+396 | #[derive(Debug)]
+    |          ^^^^^ conflicting implementation for `SegmentedOperation`
+
+error[E0283]: type annotations needed
+   --> crates/rdf-core/src/ir/segmented/query.rs:211:13
+    |
+192 |         storage.run(|memory| {
+    |                 --- type must be known at this point
+...
+211 |             Ok(())
+    |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+    = note: the type must implement `Into<SegmentedError>`
+note: required by a bound in `QueryStorage::run`
+   --> crates/rdf-core/src/ir/segmented/query.rs:341:18
+    |
+341 |     fn run<T, E: Into<SegmentedError>>(
+    |                  ^^^^^^^^^^^^^^^^^^^^ required by this bound in `QueryStorage::run`
+help: consider specifying the generic arguments
+    |
+211 |             Ok::<(), E>(())
+    |               +++++++++
+
+Some errors have detailed explanations: E0119, E0283.
+For more information about an error, try `rustc --explain E0119`.
+error: could not compile `purrdf-core` (lib) due to 2 previous errors
+terminal_status=101

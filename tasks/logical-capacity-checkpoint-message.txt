@@ -1,0 +1,15 @@
+Enforce logical capacity refusal at native producer boundaries
+
+Propagate fixture interning and page-construction failures, reject native XPath
+u32 representation overflow before output growth, and diagnose a nonempty
+zero-page split before mutation. Existing fixture callers retain their inputs
+and assertions while handling the typed results.
+
+Add one enforced logical-capacity panic rule to the existing helper census.
+Exact reviewed reconstruction rows pin source authorities and constructor
+closure; stale proofs and mutated local bounds fail both native and JSON gates.
+
+Validation: affected five-package all-target strict and wasm32 library checks;
+XPath and public typed-boundary controls; 35 paged backend tests; 82 checker
+controls; unchanged helper gate (82 enforced jobs, 118 distinct groups).
+Full integration qualification remains pending after current-main sync.

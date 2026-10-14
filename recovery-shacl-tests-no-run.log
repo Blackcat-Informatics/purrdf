@@ -1,0 +1,1367 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0271]: expected `Map<Range<u32>, fn(u32) -> Result<TermId, CapacityError> {TermId::from_index}>` to be an iterator that yields `TermId`, but it yields `Result<TermId, CapacityError>`
+    --> crates/shapes/src/report.rs:2828:42
+     |
+2828 |     fn term_ids(dataset: &RdfDataset) -> impl Iterator<Item = ::purrdf_rdf::TermId> {
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermId`, found `Result<TermId, CapacityError>`
+     |
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, CapacityError>`
+
+error[E0599]: no method named `contains` found for enum `error::ShapesError` in the current scope
+    --> crates/shapes/src/constraints.rs:5229:23
+     |
+5229 |                 error.contains("is not a shape of this shapes graph"),
+     |                       ^^^^^^^^ method not found in `error::ShapesError`
+     |
+    ::: crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | -------------------- method `contains` not found for this enum
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0599]: no method named `contains` found for enum `error::ShapesError` in the current scope
+    --> crates/shapes/src/constraints.rs:5233:23
+     |
+5233 |                 error.contains("NotAShape"),
+     |                       ^^^^^^^^ method not found in `error::ShapesError`
+     |
+    ::: crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | -------------------- method `contains` not found for this enum
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/engine/complete_reports.rs:167:22
+     |
+ 165 | /                 report
+ 166 | |                     .to_dataset()
+ 167 | |                     .owned_quads()
+     | |                     -^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+     | |_____________________|
+     |
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+     |
+1058 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 166 |                     .to_dataset().expect("REASON")
+     |                                  +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/engine/complete_reports.rs:300:41
+     |
+ 300 |         let graph = report.to_dataset().owned_quads().collect::<Vec<_>>();
+     |                                         ^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+     |
+1058 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 300 |         let graph = report.to_dataset().expect("REASON").owned_quads().collect::<Vec<_>>();
+     |                                        +++++++++++++++++
+
+error[E0599]: no method named `owned_quads` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/engine/complete_reports.rs:388:14
+     |
+ 381 |               let graph = crate::report::CompleteValidationReport::from_records(
+     |  _________________________-
+ 382 | |                 records,
+ 383 | |                 &binding.validator.shapes,
+ 384 | |                 Arc::clone(&binding.context),
+...    |
+ 387 | |             .to_dataset()
+ 388 | |             .owned_quads()
+     | |             -^^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+     | |_____________|
+     |
+     |
+note: the method `owned_quads` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1058:5
+     |
+1058 |     pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+ 387 |             .to_dataset().expect("REASON")
+     |                          +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/engine/complete_reports.rs:421:44
+     |
+ 421 |     let first = super::FocusNode::Interned(first);
+     |                 -------------------------- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                 |
+     |                 arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: tuple variant defined here
+    --> crates/shapes/src/engine.rs:1014:5
+     |
+1014 |     Interned(TermId),
+     |     ^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_rdf::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 421 |     let first = super::FocusNode::Interned(first.expect("REASON"));
+     |                                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/engine/complete_reports.rs:422:44
+     |
+ 422 |     let later = super::FocusNode::Interned(later);
+     |                 -------------------------- ^^^^^ expected `TermId`, found `Result<TermId, StorageError>`
+     |                 |
+     |                 arguments to this enum variant are incorrect
+     |
+     = note: expected struct `TermId`
+                  found enum `std::result::Result<TermId, purrdf_lex::allocation::StorageError>`
+note: tuple variant defined here
+    --> crates/shapes/src/engine.rs:1014:5
+     |
+1014 |     Interned(TermId),
+     |     ^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_rdf::TermId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+ 422 |     let later = super::FocusNode::Interned(later.expect("REASON"));
+     |                                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/engine.rs:5219:40
+     |
+5219 |             assert!(Arc::ptr_eq(&data, &binding.data.core_arc()));
+     |                     -----------        ^^^^^^^^^^^^^^^^^^^^^^^^ expected `&Arc<RdfDataset>`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                     |
+     |                     arguments to this function are incorrect
+     |
+     = note: expected reference `&Arc<_>`
+                found reference `&std::result::Result<Arc<_>, error::ShapesError>`
+note: associated function defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/sync.rs:2278:12
+     |
+2278 |     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
+     |            ^^^^^^
+
+error[E0599]: no method named `contains` found for enum `error::ShapesError` in the current scope
+    --> crates/shapes/src/expression.rs:2876:21
+     |
+2876 |         assert!(err.contains("myFn"), "got: {err}");
+     |                     ^^^^^^^^ method not found in `error::ShapesError`
+     |
+    ::: crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | -------------------- method `contains` not found for this enum
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0599]: no method named `contains` found for enum `error::ShapesError` in the current scope
+    --> crates/shapes/src/expression.rs:2974:21
+     |
+2974 |         assert!(err.contains("custom SPARQL function"), "got: {err}");
+     |                     ^^^^^^^^ method not found in `error::ShapesError`
+     |
+    ::: crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | -------------------- method `contains` not found for this enum
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0599]: no method named `contains` found for enum `error::ShapesError` in the current scope
+    --> crates/shapes/src/expression.rs:3201:21
+     |
+3201 |         assert!(err.contains("missing"), "got: {err}");
+     |                     ^^^^^^^^ method not found in `error::ShapesError`
+     |
+    ::: crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | -------------------- method `contains` not found for this enum
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0599]: no method named `contains` found for enum `error::ShapesError` in the current scope
+    --> crates/shapes/src/expression.rs:3645:17
+     |
+3645 |             err.contains("node expression nesting depth exceeded"),
+     |                 ^^^^^^^^ method not found in `error::ShapesError`
+     |
+    ::: crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | -------------------- method `contains` not found for this enum
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0599]: no method named `contains` found for enum `error::ShapesError` in the current scope
+    --> crates/shapes/src/expression.rs:3649:17
+     |
+3649 |             err.contains(&MAX_NODE_EXPR_DEPTH.to_string()),
+     |                 ^^^^^^^^ method not found in `error::ShapesError`
+     |
+    ::: crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | -------------------- method `contains` not found for this enum
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0599]: no method named `contains` found for enum `error::ShapesError` in the current scope
+    --> crates/shapes/src/expression.rs:3752:17
+     |
+3752 |             err.contains("recursion depth"),
+     |                 ^^^^^^^^ method not found in `error::ShapesError`
+     |
+    ::: crates/shapes/src/error.rs:49:1
+     |
+  49 | pub enum ShapesError {
+     | -------------------- method `contains` not found for this enum
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `contains`, perhaps you need to implement one of them:
+             candidate #1: `DatasetMut`
+             candidate #2: `RangeBounds`
+
+error[E0308]: mismatched types
+   --> crates/shapes/src/product/tests.rs:214:5
+    |
+213 | fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
+    |                                                                    ------ expected `std::string::String` because of return type
+214 |     validate(prepared, data).to_ntriples()
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `String`, found `Result<String, ShapesError>`
+    |
+    = note: expected struct `String`
+                 found enum `std::result::Result<String, error::ShapesError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::string::String, error::ShapesError>` value, panicking if the value is a `Result::Err`
+    |
+214 |     validate(prepared, data).to_ntriples().expect("REASON")
+    |                                           +++++++++++++++++
+
+error[E0599]: no method named `is_empty` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2667:21
+     |
+2667 |         assert!(!nt.is_empty(), "N-Triples output must not be empty");
+     |                     ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `is_empty` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/string.rs:1922:5
+     |
+1922 |     pub const fn is_empty(&self) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2667 |         assert!(!nt.expect("REASON").is_empty(), "N-Triples output must not be empty");
+     |                    +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:2670:34
+     |
+2670 |             tuples_from_ntriples(&nt).expect("N-Triples from to_ntriples() must parse cleanly");
+     |             -------------------- ^^^ expected `&str`, found `&Result<String, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&std::result::Result<std::string::String, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2481:8
+     |
+2481 | pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
+     |        ^^^^^^^^^^^^^^^^^^^^ --------
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2704:16
+     |
+2704 |             nt.contains("<http://www.w3.org/ns/shacl#detail>"),
+     |                ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2704 |             nt.expect("REASON").contains("<http://www.w3.org/ns/shacl#detail>"),
+     |               +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:2705:37
+     |
+2705 |             "the detail is emitted: {nt}"
+     |                                     ^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:2707:43
+     |
+2707 |         let parsed = tuples_from_ntriples(&nt).expect("the report parses");
+     |                      -------------------- ^^^ expected `&str`, found `&Result<String, ShapesError>`
+     |                      |
+     |                      arguments to this function are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&std::result::Result<std::string::String, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2481:8
+     |
+2481 | pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
+     |        ^^^^^^^^^^^^^^^^^^^^ --------
+
+error[E0599]: no method named `as_bytes` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2777:55
+     |
+2777 |         let reparsed = ::purrdf_rdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
+     |                                                       ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `as_bytes` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/string.rs:1480:5
+     |
+1480 |     pub const fn as_bytes(&self) -> &[u8] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2777 |         let reparsed = ::purrdf_rdf::parse_dataset(nt.expect("REASON").as_bytes(), "application/n-triples", None)
+     |                                                      +++++++++++++++++
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2788:25
+     |
+2788 |             assert!(!nt.contains(label), "{nt}");
+     |                         ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2788 |             assert!(!nt.expect("REASON").contains(label), "{nt}");
+     |                        +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:2788:43
+     |
+2788 |             assert!(!nt.contains(label), "{nt}");
+     |                                           ^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:2805:34
+     |
+2805 |             tuples_from_ntriples(&nt).expect("N-Triples from to_ntriples() must parse cleanly");
+     |             -------------------- ^^^ expected `&str`, found `&Result<String, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&std::result::Result<std::string::String, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2481:8
+     |
+2481 | pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
+     |        ^^^^^^^^^^^^^^^^^^^^ --------
+
+error[E0277]: the trait bound `Result<Arc<RdfDataset>, ShapesError>: DatasetView` is not satisfied
+    --> crates/shapes/src/report.rs:2819:13
+     |
+2818 |         let buf = serialize_dataset(
+     |                   ----------------- required by a bound introduced by this call
+2819 |             &report.dataset_as_carried(),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `purrdf_rdf::DatasetView` is not implemented for `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+     |
+     = help: the following other types implement trait `purrdf_rdf::DatasetView`:
+               CompositeDatasetView
+               DeltaDatasetView
+               LedgerDataset<'a, S, L>
+               PackView<'_>
+               PagedDataset
+               PagedQueryView<'_>
+               PagedStackQueryView<'_>
+               SegmentedSession
+             and 4 others
+note: required by a bound in `purrdf_rdf::serialize_dataset`
+    --> crates/rdf/src/native_codecs/serialize.rs:119:29
+     |
+ 119 | pub fn serialize_dataset<D: DatasetView>(
+     |                             ^^^^^^^^^^^ required by this bound in `serialize_dataset`
+     = note: the full name for the type has been written to '/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/target/capacity-build/debug/build/purrdf-shapes/0ca11a8dd234d5cb/out/purrdf_shapes-0ca11a8dd234d5cb.long-type-17919547045226365846.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:2942:51
+     |
+2942 |         let round_tripped = dataset_from_ntriples(&report.to_ntriples())
+     |                             --------------------- ^^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&Result<String, ShapesError>`
+     |                             |
+     |                             arguments to this function are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&std::result::Result<std::string::String, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2488:4
+     |
+2488 | fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
+     |    ^^^^^^^^^^^^^^^^^^^^^ --------
+
+error[E0599]: no method named `quad_count` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2946:20
+     |
+2946 |             direct.quad_count(),
+     |                    ^^^^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+     |
+note: the method `quad_count` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:2117:5
+     |
+2117 |     pub fn quad_count(&self) -> usize {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+2946 |             direct.expect("REASON").quad_count(),
+     |                   +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:2951:40
+     |
+2951 |             ::purrdf_rdf::canonicalize(&direct).nquads,
+     |             -------------------------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0599]: no method named `matches` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2967:16
+     |
+2967 |             nt.matches("<http://www.w3.org/ns/shacl#result>").count(),
+     |                ^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `matches` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:2044:5
+     |
+2044 |     pub fn matches<P: Pattern>(&self, pat: P) -> Matches<'_, P> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2967 |             nt.expect("REASON").matches("<http://www.w3.org/ns/shacl#result>").count(),
+     |               +++++++++++++++++
+
+error[E0599]: no method named `matches` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2974:16
+     |
+2974 |             nt.matches("<http://www.w3.org/ns/shacl#alternativePath>")
+     |                ^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `matches` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:2044:5
+     |
+2044 |     pub fn matches<P: Pattern>(&self, pat: P) -> Matches<'_, P> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2974 |             nt.expect("REASON").matches("<http://www.w3.org/ns/shacl#alternativePath>")
+     |               +++++++++++++++++
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2981:16
+     |
+2981 |             nt.contains("<<("),
+     |                ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+2981 |             nt.expect("REASON").contains("<<("),
+     |               +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:2982:86
+     |
+2982 |             "the triple-term focus node/value must survive as a quoted triple, got:\n{nt}"
+     |                                                                                      ^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:2988:22
+     |
+2988 |             term_ids(&direct)
+     |             -------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2828:8
+     |
+2828 |     fn term_ids(dataset: &RdfDataset) -> impl Iterator<Item = ::purrdf_rdf::TermId> {
+     |        ^^^^^^^^ --------------------
+
+error[E0599]: no method named `resolve` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:2989:43
+     |
+2989 |                 .any(|id| matches!(direct.resolve(id), ::purrdf_rdf::TermRef::Triple { .. })),
+     |                                           ^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+     |
+note: the method `resolve` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1677:5
+     |
+1677 |     pub fn resolve(&self, id: TermId) -> TermRef<'_> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `ImportResolver` defines an item `resolve`, perhaps you need to implement it
+    --> crates/shapes/src/srl/document.rs:249:1
+     |
+ 249 | pub trait ImportResolver {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+2989 |                 .any(|id| matches!(direct.expect("REASON").resolve(id), ::purrdf_rdf::TermRef::Triple { .. })),
+     |                                          +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3008:51
+     |
+3008 |         let round_tripped = dataset_from_ntriples(&report.to_ntriples()).expect("must parse");
+     |                             --------------------- ^^^^^^^^^^^^^^^^^^^^^ expected `&str`, found `&Result<String, ShapesError>`
+     |                             |
+     |                             arguments to this function are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&std::result::Result<std::string::String, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2488:4
+     |
+2488 | fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
+     |    ^^^^^^^^^^^^^^^^^^^^^ --------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3011:40
+     |
+3011 |             ::purrdf_rdf::canonicalize(&direct).nquads,
+     |             -------------------------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3014:42
+     |
+3014 |         assert_eq!(conforms_from_dataset(&direct), Some(true));
+     |                    --------------------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                    |
+     |                    arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2581:8
+     |
+2581 | pub fn conforms_from_dataset(data: &RdfDataset) -> Option<bool> {
+     |        ^^^^^^^^^^^^^^^^^^^^^ -----------------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3015:37
+     |
+3015 |         assert!(tuples_from_dataset(&direct).is_empty());
+     |                 ------------------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                 |
+     |                 arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2502:8
+     |
+2502 | pub fn tuples_from_dataset(data: &RdfDataset) -> BTreeSet<ResultTuple> {
+     |        ^^^^^^^^^^^^^^^^^^^ -----------------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3034:40
+     |
+3034 |             ::purrdf_rdf::canonicalize(&direct).nquads,
+     |             -------------------------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3040:22
+     |
+3040 |             term_ids(&direct).any(|id| matches!(
+     |             -------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2828:8
+     |
+2828 |     fn term_ids(dataset: &RdfDataset) -> impl Iterator<Item = ::purrdf_rdf::TermId> {
+     |        ^^^^^^^^ --------------------
+
+error[E0599]: no method named `resolve` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3041:24
+     |
+3041 |                 direct.resolve(id),
+     |                        ^^^^^^^ method not found in `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+     |
+note: the method `resolve` exists on the type `std::sync::Arc<purrdf_rdf::RdfDataset>`
+    --> crates/rdf-core/src/ir/dataset.rs:1677:5
+     |
+1677 |     pub fn resolve(&self, id: TermId) -> TermRef<'_> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `ImportResolver` defines an item `resolve`, perhaps you need to implement it
+    --> crates/shapes/src/srl/document.rs:249:1
+     |
+ 249 | pub trait ImportResolver {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::sync::Arc<purrdf_rdf::RdfDataset>` value, panicking if the value is a `Result::Err`
+     |
+3041 |                 direct.expect("REASON").resolve(id),
+     |                       +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3048:40
+     |
+3048 |             ::purrdf_rdf::canonicalize(&direct).nquads,
+     |             -------------------------- ^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3049:40
+     |
+3049 |             ::purrdf_rdf::canonicalize(&report.to_dataset()).nquads,
+     |             -------------------------- ^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3073:39
+     |
+3073 |             let focus = object_string(&dataset, &Term::blank(hostile), sh::FOCUS_NODE);
+     |                         ------------- ^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                         |
+     |                         arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2613:4
+     |
+2613 | fn object_string(data: &RdfDataset, subj: &Term, pred: &str) -> Option<String> {
+     |    ^^^^^^^^^^^^^ -----------------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3080:42
+     |
+3080 |             let results = subjects_typed(&dataset, sh::VALIDATION_RESULT);
+     |                           -------------- ^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                           |
+     |                           arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2597:4
+     |
+2597 | fn subjects_typed(data: &RdfDataset, class_iri: &str) -> Vec<Term> {
+     |    ^^^^^^^^^^^^^^ -----------------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3083:31
+     |
+3083 |                 object_string(&dataset, &results[0], sh::FOCUS_NODE).as_deref(),
+     |                 ------------- ^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                 |
+     |                 arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2613:4
+     |
+2613 | fn object_string(data: &RdfDataset, subj: &Term, pred: &str) -> Option<String> {
+     |    ^^^^^^^^^^^^^ -----------------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3094:42
+     |
+3094 |             let reports = subjects_typed(&dataset, sh::VALIDATION_REPORT);
+     |                           -------------- ^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                           |
+     |                           arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2597:4
+     |
+2597 | fn subjects_typed(data: &RdfDataset, class_iri: &str) -> Vec<Term> {
+     |    ^^^^^^^^^^^^^^ -----------------
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3114:24
+     |
+3114 |                 public.contains("_:report ") && public.contains("_:r0 "),
+     |                        ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3114 |                 public.expect("REASON").contains("_:report ") && public.contains("_:r0 "),
+     |                       +++++++++++++++++
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3114:56
+     |
+3114 |                 public.contains("_:report ") && public.contains("_:r0 "),
+     |                                                        ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3114 |                 public.contains("_:report ") && public.expect("REASON").contains("_:r0 "),
+     |                                                       +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:3115:18
+     |
+3115 |                 "{public}"
+     |                  ^^^^^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3118:24
+     |
+3118 |                 public.contains("<http://www.w3.org/ns/shacl#focusNode> _:dg0 ."),
+     |                        ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3118 |                 public.expect("REASON").contains("<http://www.w3.org/ns/shacl#focusNode> _:dg0 ."),
+     |                       +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:3119:18
+     |
+3119 |                 "{public}"
+     |                  ^^^^^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3149:16
+     |
+3149 |             nt.contains("_:report "),
+     |                ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3149 |             nt.expect("REASON").contains("_:report "),
+     |               +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:3150:44
+     |
+3150 |             "plain report label retained:\n{nt}"
+     |                                            ^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3152:20
+     |
+3152 |         assert!(nt.contains("_:r0 "), "plain result label retained:\n{nt}");
+     |                    ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3152 |         assert!(nt.expect("REASON").contains("_:r0 "), "plain result label retained:\n{nt}");
+     |                   +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:3152:70
+     |
+3152 |         assert!(nt.contains("_:r0 "), "plain result label retained:\n{nt}");
+     |                                                                      ^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3171:31
+     |
+3171 |                 object_string(&dataset, &Term::blank(carried), sh::ALTERNATIVE_PATH).is_none()
+     |                 ------------- ^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                 |
+     |                 arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2613:4
+     |
+2613 | fn object_string(data: &RdfDataset, subj: &Term, pred: &str) -> Option<String> {
+     |    ^^^^^^^^^^^^^ -----------------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3172:38
+     |
+3172 |                     && object_string(&dataset, &Term::blank(carried), rdf::FIRST).is_none(),
+     |                        ------------- ^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |                        |
+     |                        arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2613:4
+     |
+2613 | fn object_string(data: &RdfDataset, subj: &Term, pred: &str) -> Option<String> {
+     |    ^^^^^^^^^^^^^ -----------------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3178:40
+     |
+3178 |             ::purrdf_rdf::canonicalize(&dataset).nquads,
+     |             -------------------------- ^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3185:40
+     |
+3185 |             ::purrdf_rdf::canonicalize(&dataset).nquads,
+     |             -------------------------- ^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3186:40
+     |
+3186 |             ::purrdf_rdf::canonicalize(&report.to_dataset()).nquads,
+     |             -------------------------- ^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<Arc<RdfDataset>, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&purrdf_rdf::RdfDataset`
+                found reference `&std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3229:16
+     |
+3229 |             nt.contains("<http://www.w3.org/ns/shacl#sourceShape> _:sg0 .")
+     |                ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3229 |             nt.expect("REASON").contains("<http://www.w3.org/ns/shacl#sourceShape> _:sg0 .")
+     |               +++++++++++++++++
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3230:23
+     |
+3230 |                 && nt.contains("<http://www.w3.org/ns/shacl#value> _:dg0 ."),
+     |                       ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3230 |                 && nt.expect("REASON").contains("<http://www.w3.org/ns/shacl#value> _:dg0 ."),
+     |                      +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:3231:14
+     |
+3231 |             "{nt}"
+     |              ^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3233:21
+     |
+3233 |         assert!(!nt.contains("_:b0"), "{nt}");
+     |                     ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3233 |         assert!(!nt.expect("REASON").contains("_:b0"), "{nt}");
+     |                    +++++++++++++++++
+
+error[E0277]: `std::result::Result<std::string::String, error::ShapesError>` doesn't implement `std::fmt::Display`
+    --> crates/shapes/src/report.rs:3233:40
+     |
+3233 |         assert!(!nt.contains("_:b0"), "{nt}");
+     |                                        ^^^^ `std::result::Result<std::string::String, error::ShapesError>` cannot be formatted with the default formatter
+     |
+     = help: the trait `std::fmt::Display` is not implemented for `std::result::Result<std::string::String, error::ShapesError>`
+     = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+
+error[E0599]: no method named `contains` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/shapes/src/report.rs:3258:16
+     |
+3258 |             nt.contains("true"),
+     |                ^^^^^^^^ method not found in `std::result::Result<std::string::String, error::ShapesError>`
+     |
+note: the method `contains` exists on the type `std::string::String`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/str/mod.rs:1382:5
+     |
+1382 |     pub fn contains<P: Pattern>(&self, pat: P) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::string::String` value, panicking if the value is a `Result::Err`
+     |
+3258 |             nt.expect("REASON").contains("true"),
+     |               +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3263:34
+     |
+3263 |             tuples_from_ntriples(&nt).expect("N-Triples from empty report must parse cleanly");
+     |             -------------------- ^^^ expected `&str`, found `&Result<String, ShapesError>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&std::result::Result<std::string::String, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2481:8
+     |
+2481 | pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
+     |        ^^^^^^^^^^^^^^^^^^^^ --------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3267:42
+     |
+3267 |         let data = dataset_from_ntriples(&nt).unwrap();
+     |                    --------------------- ^^^ expected `&str`, found `&Result<String, ShapesError>`
+     |                    |
+     |                    arguments to this function are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&std::result::Result<std::string::String, error::ShapesError>`
+note: function defined here
+    --> crates/shapes/src/report.rs:2488:4
+     |
+2488 | fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
+     |    ^^^^^^^^^^^^^^^^^^^^^ --------
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3347:23
+     |
+3347 |                 unit: unit_a,
+     |                       ^^^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+     |
+     = note: expected struct `UnitId`
+                  found enum `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+3347 |                 unit: unit_a.expect("REASON"),
+     |                             +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3352:23
+     |
+3352 |                 unit: unit_b,
+     |                       ^^^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+     |
+     = note: expected struct `UnitId`
+                  found enum `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+3352 |                 unit: unit_b.expect("REASON"),
+     |                             +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3410:27
+     |
+3410 |                     unit: unit_shape,
+     |                           ^^^^^^^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+     |
+     = note: expected struct `UnitId`
+                  found enum `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+3410 |                     unit: unit_shape.expect("REASON"),
+     |                                     +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/report.rs:3415:27
+     |
+3415 |                     unit: unit_scope,
+     |                           ^^^^^^^^^^ expected `UnitId`, found `Result<UnitId, StorageError>`
+     |
+     = note: expected struct `UnitId`
+                  found enum `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<UnitId, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+     |
+3415 |                     unit: unit_scope.expect("REASON"),
+     |                                     +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/rules.rs:2209:9
+     |
+2202 |     ) -> Result<Arc<RdfDataset>, String> {
+     |          ------------------------------- expected `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, std::string::String>` because of return type
+...
+2209 |         infer(&holder, &shapes, options).map(|inference| Arc::clone(inference.dataset()))
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Arc<RdfDataset>, String>`, found `Result<Arc<RdfDataset>, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, error::ShapesError>`
+
+error[E0277]: expected an `FnOnce(error::ShapesError)` closure, found `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+   --> crates/shapes/src/shapes/parser/admission.rs:310:26
+    |
+310 |                 .map_err(crate::report::CompleteValidationError::Execution)
+    |                  ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(error::ShapesError)` closure, found `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+    |                  |
+    |                  required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(error::ShapesError)` is not implemented for fn item `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+    = note: expected a closure with signature `fn(error::ShapesError)`
+               found a closure with signature `fn(std::string::String)`
+note: required by a bound in `std::result::Result::<T, E>::map_err`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+    |
+961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+    |                  ------- required by a bound in this associated function
+962 |     where
+963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0277]: expected an `FnOnce(error::ShapesError)` closure, found `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+    --> crates/shapes/src/shapes/parser/admission.rs:1066:30
+     |
+1066 |                     .map_err(crate::report::CompleteValidationError::Execution)
+     |                      ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(error::ShapesError)` closure, found `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+     |                      |
+     |                      required by a bound introduced by this call
+     |
+     = help: the trait `FnOnce(error::ShapesError)` is not implemented for fn item `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+     = note: expected a closure with signature `fn(error::ShapesError)`
+                found a closure with signature `fn(std::string::String)`
+note: required by a bound in `std::result::Result::<T, E>::map_err`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+     |
+ 961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+     |                  ------- required by a bound in this associated function
+ 962 |     where
+ 963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0277]: expected an `FnOnce(error::ShapesError)` closure, found `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+    --> crates/shapes/src/shapes/parser/admission.rs:1091:34
+     |
+1091 |                         .map_err(crate::report::CompleteValidationError::Execution)?;
+     |                          ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(error::ShapesError)` closure, found `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+     |                          |
+     |                          required by a bound introduced by this call
+     |
+     = help: the trait `FnOnce(error::ShapesError)` is not implemented for fn item `fn(std::string::String) -> CompleteValidationError {CompleteValidationError::Execution}`
+     = note: expected a closure with signature `fn(error::ShapesError)`
+                found a closure with signature `fn(std::string::String)`
+note: required by a bound in `std::result::Result::<T, E>::map_err`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+     |
+ 961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+     |                  ------- required by a bound in this associated function
+ 962 |     where
+ 963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0277]: the trait bound `std::string::String: From<error::ShapesError>` is not satisfied
+    --> crates/shapes/src/shapes.rs:3529:9
+     |
+3529 |         from_dataset(dataset).map_err(String::from)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<error::ShapesError>` is not implemented for `std::string::String`
+     |
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<RulesError>
+               From<char>
+               From<std::borrow::Cow<'_, str>>
+
+error[E0277]: the trait bound `std::string::String: From<error::ShapesError>` is not satisfied
+    --> crates/shapes/src/shapes.rs:3529:31
+     |
+3529 |         from_dataset(dataset).map_err(String::from)
+     |                               ^^^^^^^ the trait `From<error::ShapesError>` is not implemented for `std::string::String`
+     |
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<RulesError>
+               From<char>
+               From<std::borrow::Cow<'_, str>>
+
+error[E0277]: the trait bound `std::string::String: From<error::ShapesError>` is not satisfied
+    --> crates/shapes/src/shapes.rs:3529:39
+     |
+3529 |         from_dataset(dataset).map_err(String::from)
+     |                                       ^^^^^^ the trait `From<error::ShapesError>` is not implemented for `std::string::String`
+     |
+     = help: `std::string::String` implements trait `From<T>`:
+               From<&mut str>
+               From<&std::string::String>
+               From<&str>
+               From<Box<str>>
+               From<RulesError>
+               From<char>
+               From<std::borrow::Cow<'_, str>>
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/sparql.rs:3784:9
+     |
+3780 |       ) -> Result<bool, String> {
+     |            -------------------- expected `std::result::Result<bool, std::string::String>` because of return type
+...
+3784 | /         with_cached_execution(&query, &["this"], |execution| {
+3785 | |             execution.bind(0, TermValue::Iri(focus.to_owned()))?;
+3786 | |             run_bound_ask_with_shacl_prebinding_view(
+3787 | |                 &dataset,
+...    |
+3793 | |         })
+     | |__________^ expected `Result<bool, String>`, found `Result<bool, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, error::ShapesError>`
+
+error[E0308]: arguments to this function are incorrect
+   --> crates/shapes/src/srl/equivalence_tests.rs:187:19
+    |
+187 |     let exposed = ShaclData::new(
+    |                   ^^^^^^^^^^^^^^
+    |
+note: expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, ShapesError>`
+   --> crates/shapes/src/srl/equivalence_tests.rs:188:9
+    |
+188 |         data.core_arc(),
+    |         ^^^^^^^^^^^^^^^
+    = note: expected struct `Arc<_>`
+                 found enum `std::result::Result<Arc<_>, error::ShapesError>`
+note: expected `Arc<RdfDataset>`, found `Result<Arc<RdfDataset>, ShapesError>`
+   --> crates/shapes/src/srl/equivalence_tests.rs:189:9
+    |
+189 |         data.core_arc(),
+    |         ^^^^^^^^^^^^^^^
+    = note: expected struct `Arc<_>`
+                 found enum `std::result::Result<Arc<_>, error::ShapesError>`
+note: associated function defined here
+   --> crates/shapes/src/data.rs:154:12
+    |
+154 |     pub fn new(
+    |            ^^^
+155 |         core: Arc<RdfDataset>,
+    |         ---------------------
+156 |         sparql: Arc<RdfDataset>,
+    |         -----------------------
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>` value, panicking if the value is a `Result::Err`
+    |
+188 |         data.core_arc().expect("REASON"),
+    |                        +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, error::ShapesError>` value, panicking if the value is a `Result::Err`
+    |
+189 |         data.core_arc().expect("REASON"),
+    |                        +++++++++++++++++
+
+Some errors have detailed explanations: E0271, E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0271`.
+error: could not compile `purrdf-shapes` (lib test) due to 83 previous errors
+terminal_status=101

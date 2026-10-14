@@ -1,0 +1,121 @@
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-capi)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-conformance)
+error[E0433]: cannot find module or crate `purrdf_iri` in this scope
+  --> bindings/python/src/py_store.rs:85:9
+   |
+85 |         purrdf_iri::IriReadError::Lexical(error) => iri_value_error(error),
+   |         ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_iri`
+   |
+help: there is a crate or module with a similar name
+   |
+85 -         purrdf_iri::IriReadError::Lexical(error) => iri_value_error(error),
+85 +         purrdf_core::IriReadError::Lexical(error) => iri_value_error(error),
+   |
+help: consider importing one of these enums
+   |
+60 + use crate::iri::IriReadError;
+   |
+60 + use purrdf::iri::IriReadError;
+   |
+help: if you import `IriReadError`, refer to it directly
+   |
+85 -         purrdf_iri::IriReadError::Lexical(error) => iri_value_error(error),
+85 +         IriReadError::Lexical(error) => iri_value_error(error),
+   |
+
+error[E0433]: cannot find module or crate `purrdf_iri` in this scope
+   --> crates/rdf-wasm/src/dataset.rs:318:9
+    |
+318 |         purrdf_iri::IriReadError::Lexical(error) => iri_to_err(error),
+    |         ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_iri`
+    |
+help: there is a crate or module with a similar name
+    |
+318 -         purrdf_iri::IriReadError::Lexical(error) => iri_to_err(error),
+318 +         purrdf_core::IriReadError::Lexical(error) => iri_to_err(error),
+    |
+help: consider importing this enum
+    |
+ 13 + use purrdf::iri::IriReadError;
+    |
+help: if you import `IriReadError`, refer to it directly
+    |
+318 -         purrdf_iri::IriReadError::Lexical(error) => iri_to_err(error),
+318 +         IriReadError::Lexical(error) => iri_to_err(error),
+    |
+
+error[E0433]: cannot find module or crate `purrdf_iri` in this scope
+  --> bindings/python/src/py_store.rs:86:9
+   |
+86 |         purrdf_iri::IriReadError::Storage(error) => storage_value_error(*error),
+   |         ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_iri`
+   |
+help: there is a crate or module with a similar name
+   |
+86 -         purrdf_iri::IriReadError::Storage(error) => storage_value_error(*error),
+86 +         purrdf_core::IriReadError::Storage(error) => storage_value_error(*error),
+   |
+help: consider importing one of these enums
+   |
+60 + use crate::iri::IriReadError;
+   |
+60 + use purrdf::iri::IriReadError;
+   |
+help: if you import `IriReadError`, refer to it directly
+   |
+86 -         purrdf_iri::IriReadError::Storage(error) => storage_value_error(*error),
+86 +         IriReadError::Storage(error) => storage_value_error(*error),
+   |
+
+error[E0433]: cannot find module or crate `purrdf_iri` in this scope
+   --> crates/rdf-wasm/src/dataset.rs:319:9
+    |
+319 |         purrdf_iri::IriReadError::Storage(error) => diag_to_err(&(*error).into()),
+    |         ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_iri`
+    |
+help: there is a crate or module with a similar name
+    |
+319 -         purrdf_iri::IriReadError::Storage(error) => diag_to_err(&(*error).into()),
+319 +         purrdf_core::IriReadError::Storage(error) => diag_to_err(&(*error).into()),
+    |
+help: consider importing this enum
+    |
+ 13 + use purrdf::iri::IriReadError;
+    |
+help: if you import `IriReadError`, refer to it directly
+    |
+319 -         purrdf_iri::IriReadError::Storage(error) => diag_to_err(&(*error).into()),
+319 +         IriReadError::Storage(error) => diag_to_err(&(*error).into()),
+    |
+
+error[E0433]: cannot find module or crate `purrdf_iri` in this scope
+   --> crates/rdf-wasm/src/dataset.rs:316:28
+    |
+316 | fn iri_read_to_err(error: &purrdf_iri::IriReadError) -> JsError {
+    |                            ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_iri`
+    |
+help: there is a crate or module with a similar name
+    |
+316 - fn iri_read_to_err(error: &purrdf_iri::IriReadError) -> JsError {
+316 + fn iri_read_to_err(error: &purrdf_core::IriReadError) -> JsError {
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-wasm` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0433]: cannot find module or crate `purrdf_iri` in this scope
+  --> bindings/python/src/py_store.rs:83:44
+   |
+83 | pub(crate) fn iri_read_value_error(error: &purrdf_iri::IriReadError) -> PyErr {
+   |                                            ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_iri`
+   |
+help: there is a crate or module with a similar name
+   |
+83 - pub(crate) fn iri_read_value_error(error: &purrdf_iri::IriReadError) -> PyErr {
+83 + pub(crate) fn iri_read_value_error(error: &purrdf_core::IriReadError) -> PyErr {
+   |
+
+error: could not compile `purrdf-python` (lib) due to 3 previous errors
+terminal_status=101

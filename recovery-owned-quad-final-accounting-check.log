@@ -1,0 +1,2534 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 37.09s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 41 tests
+test ir::builder::native_graph_birth_tests::blank_term_refusal_does_not_reserve_its_scope ... ok
+test ir::builder::native_graph_birth_tests::content_id_side_table_refusal_does_not_publish_an_unindexed_term ... ok
+test ir::builder::native_graph_birth_tests::named_graph_growth_refusal_keeps_prior_declarations_and_duplicate_hits ... ok
+test ir::builder::native_graph_birth_tests::native_graph_refuses_before_the_first_arena_allocation ... ok
+test ir::builder::native_graph_birth_tests::compound_literal_refusal_rolls_back_children_and_sorted_scopes ... ok
+test ir::builder::native_graph_birth_tests::native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes ... ok
+test ir::builder::native_graph_birth_tests::native_structural_failure_releases_builder_and_retains_only_the_diagnostic ... ok
+test ir::builder::native_graph_birth_tests::refused_literal_does_not_poison_later_healthy_freeze ... ok
+test ir::builder::native_graph_birth_tests::reifier_row_refusal_does_not_publish_its_implicit_predicate ... ok
+test ir::builder::tests::blank_scope_distinctness ... ok
+test ir::builder::tests::datatype_expansion_equality ... ok
+test ir::builder::tests::all_term_kinds_match_borrowed_and_stored_hashes ... ok
+test ir::builder::tests::directional_literal_distinctness ... ok
+test ir::builder::tests::freeze_dedupes_annotations ... ok
+test ir::builder::tests::freeze_dedupes_quads ... ok
+test ir::builder::tests::freeze_keeps_multiple_reifiers_for_one_triple ... ok
+test ir::builder::tests::freeze_preserves_named_graphs ... ok
+test ir::builder::tests::intern_blank_is_idempotent ... ok
+test ir::builder::tests::intern_blank_never_recognized_as_content_id ... ok
+test ir::builder::tests::intern_iri_content_id_is_idempotent ... ok
+test ir::builder::tests::intern_iri_is_idempotent ... ok
+test ir::builder::tests::intern_iri_no_recognition_when_scheme_inactive ... ok
+test ir::builder::tests::intern_iri_ordinary_iri_has_no_content_id ... ok
+test ir::builder::tests::intern_iri_recognizes_content_id ... ok
+test ir::builder::tests::intern_iri_rejects_malformed_suffix_as_ordinary_iri ... ok
+test ir::builder::tests::intern_literal_is_idempotent ... ok
+test ir::builder::tests::lang_tagged_distinct_from_plain ... ok
+test ir::builder::tests::language_lowercasing ... ok
+test ir::builder::tests::nested_triple_term_structural_identity ... ok
+test ir::builder::tests::new_builder_has_no_content_scheme ... ok
+test ir::builder::tests::iri_hash_matches_stored_form_across_lengths_and_table_growth ... ok
+test ir::builder::tests::push_dataset_carries_reifiers_and_annotations ... ok
+test ir::builder::tests::push_dataset_keeps_two_scopes_of_one_label_apart ... ok
+test ir::builder::tests::push_dataset_merges_and_dedupes_quads ... ok
+test ir::builder::native_graph_birth_tests::content_id_rollback_preserves_retained_charge_and_prior_lookup ... ok
+test ir::builder::tests::push_dataset_standardizes_apart_blank_nodes ... ok
+test ir::builder::tests::the_owned_round_trip_preserves_blank_label_identity ... ok
+test ir::builder::tests::validated_builder_type_state_freezes_after_validation ... ok
+test ir::builder::tests::with_content_addressing_sets_config ... ok
+test ir::builder::native_graph_birth_tests::owned_quad_refusal_restores_terms_rows_scopes_and_location_payloads ... ok
+test ir::builder::tests::property_idempotence_and_bounded_count ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 1275 filtered out; finished in 0.01s
+
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hash)
+    Checking typenum v1.20.1
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-events)
+    Checking hashbrown v0.17.1
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/deflate)
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/backend.rs:103:10
+    |
+103 |     ) -> Result<(), RdfDiagnostic>;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/backend.rs:273:10
+    |
+273 |     ) -> Result<SparqlResult, RdfDiagnostic>;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/backend.rs:284:10
+    |
+284 |     ) -> Result<(), RdfDiagnostic>;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/backend.rs:323:10
+    |
+323 |     ) -> Result<(), RdfDiagnostic>;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+  --> crates/rdf-core/src/content_id.rs:94:46
+   |
+94 |     pub fn new(prefix: impl Into<String>) -> Result<Self, RdfDiagnostic> {
+   |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+   |
+   = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:180:10
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+180 |     ) -> Result<Self, DescribeError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/describe.rs:182:27
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+182 |             .checked_read(|_| Self::build(dataset, memory))
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:189:10
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+189 |     ) -> Result<Self, DescribeError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:249:50
+    |
+249 |     pub fn describe_iri(&self, subject: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:260:10
+    |
+260 |     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:281:10
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+281 |     ) -> Result<RdfDataset, DescribeError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/describe.rs:298:27
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+298 |             .checked_read(|_| self.describe_seeds_read(seeds, memory))
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:306:10
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+306 |     ) -> Result<RdfDataset, DescribeError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/describe.rs:385:22
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+385 |                 .map(|id| self.map_id(&mut builder, &mut remap, id, memory))
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/describe.rs:393:22
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+393 |                 .map(|id| self.map_id(&mut builder, &mut remap, id, memory))
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/describe.rs:402:22
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+402 |                 .map(|id| self.map_id(&mut builder, &mut remap, id, memory))
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:421:10
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+421 |     ) -> Result<TermId, DescribeError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:442:6
+    |
+ 72 |     Build(NativeBuildError),
+    |     ----------------------- the largest variant contains at least 144 bytes
+...
+442 | ) -> Result<TermId, DescribeError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<describe::DescribeError<<D as dataset_view::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/describe.rs:497:57
+    |
+497 | pub fn describe(dataset: &RdfDataset, subject: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/imports.rs:883:48
+    |
+883 |     pub fn merge(&self, graph: &RdfDataset) -> Result<Option<Arc<RdfDataset>>, RdfDiagnostic> {
+    |                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: returning the result of a `let` binding from a block
+    --> crates/rdf-core/src/imports.rs:1226:5
+     |
+1215 | /     let interned = try_fold_nested(
+1216 | |         value,
+1217 | |         &mut (b, rescope),
+1218 | |         |(b, rescope), value| {
+...    |
+1224 | |         |(b, _), _, s, p, o| b.intern_triple(s, p, o),
+1225 | |     );
+     | |______- unnecessary `let` binding
+1226 |       interned
+     |       ^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#let_and_return
+     = note: `-D clippy::let-and-return` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::let_and_return)]`
+help: return the expression directly
+     |
+1215 ~     
+1216 ~     try_fold_nested(
+1217 +         value,
+1218 +         &mut (b, rescope),
+1219 +         |(b, rescope), value| {
+1220 +             Ok::<_, purrdf_lex::allocation::StorageError>(match value {
+1221 +                 TermValue::Triple { s, p, o } => Nested::Triple(&**s, &**p, &**o),
+1222 +                 leaf => Nested::Leaf(intern_leaf(b, leaf, rescope)?),
+1223 +             })
+1224 +         },
+1225 +         |(b, _), _, s, p, o| b.intern_triple(s, p, o),
+1226 +     )
+     |
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/rdf-core/src/ir/builder.rs:1931:17
+     |
+1931 |         source: ValidatedRdfDatasetBuilder,
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+     = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+     |
+1931 |         source: &ValidatedRdfDatasetBuilder,
+     |                 +
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/builder.rs:2333:10
+     |
+ 707 |     Diagnostic(RdfDiagnostic),
+     |     ------------------------- the largest variant contains at least 144 bytes
+...
+2333 |     ) -> Result<(), NativeBuildError> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/builder.rs:2368:5
+     |
+2368 | /     pub fn push_quad_with_handle(
+2369 | |         &mut self,
+2370 | |         s: TermId,
+2371 | |         p: TermId,
+2372 | |         o: TermId,
+2373 | |         g: Option<TermId>,
+2374 | |     ) -> Result<QuadHandle, StorageError> {
+     | |_________________________________________^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/builder.rs:2365:5
+     |
+2365 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+     = note: `-D clippy::double-must-use` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::double_must_use)]`
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/builder.rs:2513:10
+     |
+ 707 |     Diagnostic(RdfDiagnostic),
+     |     ------------------------- the largest variant contains at least 144 bytes
+...
+2513 |     ) -> Result<RdfDataset, NativeBuildError> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/builder.rs:2606:28
+     |
+2606 |     pub fn freeze(self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/builder.rs:2612:30
+     |
+2612 |     pub fn validate(self) -> Result<ValidatedRdfDatasetBuilder, RdfDiagnostic> {
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/builder.rs:2624:10
+     |
+ 707 |     Diagnostic(RdfDiagnostic),
+     |     ------------------------- the largest variant contains at least 144 bytes
+...
+2624 |     ) -> Result<ValidatedRdfDatasetBuilder, NativeBuildError> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pipeline_bundle.rs:495:10
+    |
+265 | /     Canonicalization {
+266 | |         /// What was being canonicalized when the refusal was raised.
+267 | |         scope: CanonScopeName,
+268 | |         /// The refusal itself.
+269 | |         source: CanonError,
+270 | |     },
+    | |_____- the largest variant contains at least 168 bytes
+...
+276 |       AdmissionBreach(RdfDiagnostic),
+    |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+281 |       Materialization(RdfDiagnostic),
+    |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+495 |       ) -> Result<(), PipelineBundleError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pipeline_bundle.rs:688:65
+    |
+265 | /     Canonicalization {
+266 | |         /// What was being canonicalized when the refusal was raised.
+267 | |         scope: CanonScopeName,
+268 | |         /// The refusal itself.
+269 | |         source: CanonError,
+270 | |     },
+    | |_____- the largest variant contains at least 168 bytes
+...
+276 |       AdmissionBreach(RdfDiagnostic),
+    |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+281 |       Materialization(RdfDiagnostic),
+    |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+688 |   fn check_containment(contribution: &RdfDataset, graph: &str) -> Result<(), PipelineBundleError> {
+    |                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pipeline_bundle.rs:993:10
+    |
+265 | /     Canonicalization {
+266 | |         /// What was being canonicalized when the refusal was raised.
+267 | |         scope: CanonScopeName,
+268 | |         /// The refusal itself.
+269 | |         source: CanonError,
+270 | |     },
+    | |_____- the largest variant contains at least 168 bytes
+...
+276 |       AdmissionBreach(RdfDiagnostic),
+    |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+281 |       Materialization(RdfDiagnostic),
+    |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+993 |       ) -> Result<(), PipelineBundleError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1052:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1052 |       ) -> Result<(), PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1110:5
+     |
+1110 |     pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1109:5
+     |
+1109 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1110:48
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1110 |       pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+     |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1149:5
+     |
+1149 |     pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1148:5
+     |
+1148 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1149:36
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1149 |       pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1153:18
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1153 |               .map(|graph| {
+     |  __________________^
+1154 | |                 let digest = self.graph_digest(&graph)?;
+1155 | |                 Ok((graph, digest))
+1156 | |             })
+     | |_____________^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1183:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1183 |       ) -> Result<PipelineViewBundle<H>, PipelineBundleError>
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1201:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1201 |       ) -> Result<PipelineViewBundle<H>, PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1223:44
+     |
+1223 |     pub(crate) fn owned_snapshot(&self) -> Result<Self, RdfDiagnostic> {
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1313:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1313 |       ) -> Result<Self, PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1386:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1386 |       ) -> Result<Self, PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1415:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1415 |       ) -> Result<Self, PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1538:48
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1538 |       pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+     |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1555:29
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1555 |       pub fn digest(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1564:33
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1564 |       fn residue_digest(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1580:36
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1580 |       pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1604:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1604 |       ) -> Result<(), PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1672:10
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1672 |       ) -> Result<(), PipelineBundleError> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1754:34
+     |
+1754 |     pub fn materialize(&self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1773:37
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1773 |       pub fn to_flat_bundle(&self) -> Result<PipelineBundle<H>, PipelineBundleError>
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1786:38
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1786 |       pub fn into_flat_bundle(self) -> Result<PipelineBundle<H>, PipelineBundleError> {
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1816:86
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1816 |   fn flat_graph_digest(dataset: &RdfDataset, work: &DigestWorkCounter, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+     |                                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1838:6
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1838 |   ) -> Result<ContentDigest, PipelineBundleError> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1842:69
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1842 |           Some(owner) => owner.guard.try_memoized_graph_digest(graph, || {
+     |  _____________________________________________________________________^
+1843 | |             let digest = try_graph_digest_view(&*owner.base, graph)
+1844 | |                 .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.to_owned()), source))?;
+1845 | |             DigestWorkCounter::bump(&work.graph_canonicalizations);
+1846 | |             Ok(digest)
+1847 | |         })?,
+     | |_________^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1870:6
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1870 |   ) -> Result<ContentDigest, PipelineBundleError> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1892:6
+     |
+ 265 | /     Canonicalization {
+ 266 | |         /// What was being canonicalized when the refusal was raised.
+ 267 | |         scope: CanonScopeName,
+ 268 | |         /// The refusal itself.
+ 269 | |         source: CanonError,
+ 270 | |     },
+     | |_____- the largest variant contains at least 168 bytes
+...
+ 276 |       AdmissionBreach(RdfDiagnostic),
+     |       ------------------------------ the variant `AdmissionBreach` contains at least 144 bytes
+...
+ 281 |       Materialization(RdfDiagnostic),
+     |       ------------------------------ the variant `Materialization` contains at least 144 bytes
+...
+1892 |   ) -> Result<ContentDigest, PipelineBundleError> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::pipeline_bundle::PipelineBundleError`, for example by boxing large elements or replacing it with `Box<ir::pipeline_bundle::PipelineBundleError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:498:45
+     |
+ 498 | pub fn try_canonicalize(ds: &RdfDataset) -> Result<Canonicalized, CanonError> {
+     |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:512:6
+     |
+ 512 | ) -> Result<Canonicalized, CanonError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:558:6
+     |
+ 558 | ) -> Result<Canonicalized<D::Id>, CanonError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/rdf-core/src/ir/canon.rs:559:23
+     |
+ 559 |       view.checked_read(|view| {
+     |  _______________________^
+ 560 | |         CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run_fallible()
+ 561 | |     })
+     | |_____^
+...
+2020 |       Invalid(crate::RdfDiagnostic),
+     |       ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:614:6
+     |
+ 614 | ) -> Result<Canonicalized<D::Id>, CanonError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/rdf-core/src/ir/canon.rs:615:23
+     |
+ 615 |       view.checked_read(|view| match graph_scope(view, graph) {
+     |  _______________________^
+ 616 | |         Some(scope) => {
+ 617 | |             CanonState::new(view, scope, CanonPresentation::Overlay, hash).run_fallible()
+...    |
+ 620 | |     })
+     | |_____^
+...
+2020 |       Invalid(crate::RdfDiagnostic),
+     |       ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:651:6
+     |
+ 651 | ) -> Result<ContentDigest, CanonError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:731:6
+     |
+ 731 | ) -> FlatViewResult<D> {
+     |      ^^^^^^^^^^^^^^^^^
+...
+2115 |     Refused(CanonError),
+     |     ------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::ViewCanonError<<D as dataset_view::FallibleDatasetView>::Error, <D as dataset_view::FallibleDatasetView>::Evidence>`, for example by boxing large elements or replacing it with `Box<ir::canon::ViewCanonError<<D as dataset_view::FallibleDatasetView>::Error, <D as dataset_view::FallibleDatasetView>::Evidence>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/rdf-core/src/ir/canon.rs:732:36
+     |
+ 732 |       match checkpointed_drain(view, |v| {
+     |  ____________________________________^
+ 733 | |         CanonState::new(
+ 734 | |             v,
+ 735 | |             CanonScope::Dataset,
+...    |
+ 739 | |         .run_fallible()
+ 740 | |     }) {
+     | |_____^
+...
+2020 |       Invalid(crate::RdfDiagnostic),
+     |       ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:765:6
+     |
+ 765 | ) -> FlatViewResult<D> {
+     |      ^^^^^^^^^^^^^^^^^
+...
+2115 |     Refused(CanonError),
+     |     ------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::ViewCanonError<<D as dataset_view::FallibleDatasetView>::Error, <D as dataset_view::FallibleDatasetView>::Evidence>`, for example by boxing large elements or replacing it with `Box<ir::canon::ViewCanonError<<D as dataset_view::FallibleDatasetView>::Error, <D as dataset_view::FallibleDatasetView>::Evidence>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/rdf-core/src/ir/canon.rs:766:36
+     |
+ 766 |       match checkpointed_drain(view, |v| match graph_scope(v, graph) {
+     |  ____________________________________^
+ 767 | |         Some(scope) => {
+ 768 | |             CanonState::new(v, scope, CanonPresentation::FlatAssertion, hash).run_fallible()
+...    |
+ 771 | |     }) {
+     | |_____^
+...
+2020 |       Invalid(crate::RdfDiagnostic),
+     |       ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:795:6
+     |
+ 795 | ) -> Result<(), ViewCanonError<D::Error, D::Evidence>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2115 |     Refused(CanonError),
+     |     ------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::ViewCanonError<<D as dataset_view::FallibleDatasetView>::Error, <D as dataset_view::FallibleDatasetView>::Evidence>`, for example by boxing large elements or replacing it with `Box<ir::canon::ViewCanonError<<D as dataset_view::FallibleDatasetView>::Error, <D as dataset_view::FallibleDatasetView>::Evidence>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:823:6
+     |
+ 823 | ) -> Result<ContentDigest, ViewCanonError<D::Error, D::Evidence>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2115 |     Refused(CanonError),
+     |     ------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::ViewCanonError<<D as dataset_view::FallibleDatasetView>::Error, <D as dataset_view::FallibleDatasetView>::Evidence>`, for example by boxing large elements or replacing it with `Box<ir::canon::ViewCanonError<<D as dataset_view::FallibleDatasetView>::Error, <D as dataset_view::FallibleDatasetView>::Evidence>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:887:46
+     |
+ 887 | pub fn canonical_relabel(ds: &RdfDataset) -> Result<RdfDataset, CanonError> {
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:947:59
+     |
+ 947 | pub fn canonical_relabel_with_mapping(ds: &RdfDataset) -> Result<CanonicalRelabeling, CanonError> {
+     |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:979:6
+     |
+ 979 | ) -> Result<RdfDataset, CanonError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:2307:30
+     |
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+...
+2307 |     fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError> {
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/canon.rs:2320:34
+     |
+2020 |     Invalid(crate::RdfDiagnostic),
+     |     ----------------------------- the largest variant contains at least 144 bytes
+...
+2320 |     fn issue_labels(mut self) -> Result<Self, CanonError> {
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::canon::CanonError`, for example by boxing large elements or replacing it with `Box<ir::canon::CanonError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/composite.rs:185:10
+    |
+185 |     ) -> Result<Self, RdfDiagnostic> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/composite.rs:749:10
+    |
+749 |     ) -> Result<Self, RdfDiagnostic> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1078:70
+     |
+1078 |     pub fn new(sources: Vec<Arc<RdfDataset>>, limits: ViewLimits) -> Result<Self, RdfDiagnostic> {
+     |                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1090:10
+     |
+1090 |     ) -> Result<Self, RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1102:10
+     |
+1102 |     ) -> Result<Self, RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1111:10
+     |
+1111 |     ) -> Result<Self, RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1132:10
+     |
+1132 |     ) -> Result<Self, RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1184:10
+     |
+1184 |     ) -> Result<Self, RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1261:34
+     |
+1261 |     pub fn materialize(&self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1520:10
+     |
+1520 |     ) -> Result<(), RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1595:46
+     |
+1595 |     fn assemble(self, limits: ViewLimits) -> Result<CompositeDatasetView, RdfDiagnostic> {
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/composite.rs:1723:6
+     |
+1723 | ) -> Result<usize, RdfDiagnostic> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/dataset.rs:1123:5
+     |
+1123 |     pub fn project_named_graph(&self, graph: &str) -> Result<Self, crate::RdfDiagnostic> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/dataset.rs:1122:5
+     |
+1122 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/dataset.rs:1123:55
+     |
+1123 |     pub fn project_named_graph(&self, graph: &str) -> Result<Self, crate::RdfDiagnostic> {
+     |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/dataset.rs:2065:5
+     |
+2065 |     pub fn union(datasets: &[&Self]) -> Result<Self, crate::RdfDiagnostic> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/dataset.rs:2064:5
+     |
+2064 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/dataset.rs:2065:41
+     |
+2065 |     pub fn union(datasets: &[&Self]) -> Result<Self, crate::RdfDiagnostic> {
+     |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+  --> crates/rdf-core/src/ir/mutable/delta_view.rs:92:10
+   |
+92 |     ) -> Result<Self, crate::RdfDiagnostic> {
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+   |
+   = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/mutable/delta_view.rs:237:34
+    |
+237 |     pub fn materialize(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/mutable.rs:377:63
+    |
+377 |     pub fn create_named_graph(&mut self, graph: TermValue) -> Result<bool, crate::RdfDiagnostic> {
+    |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/mutable.rs:417:64
+    |
+417 |     pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, crate::RdfDiagnostic> {
+    |                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/mutable.rs:422:47
+    |
+422 |     fn check_graph_name(graph: &TermValue) -> Result<(), crate::RdfDiagnostic> {
+    |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/mutable.rs:482:63
+    |
+482 |     pub fn insert_record(&mut self, record: &RecordValues) -> Result<bool, crate::RdfDiagnostic> {
+    |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/mutable.rs:529:10
+    |
+529 |     ) -> Result<Vec<RecordValues>, crate::RdfDiagnostic> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/mutable.rs:1346:29
+     |
+1346 |     pub fn freeze(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/mutable.rs:1385:36
+     |
+1385 |     pub fn snapshot_view(&self) -> Result<DeltaDatasetView, crate::RdfDiagnostic> {
+     |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/mutable.rs:1396:10
+     |
+1396 |     ) -> Result<DeltaDatasetView, crate::RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/mutable.rs:1496:10
+     |
+1496 |     ) -> Result<(), crate::RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/mutable.rs:1621:10
+     |
+1621 |     ) -> Result<(usize, usize, usize), crate::RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/mutable.rs:1633:10
+     |
+1633 |     ) -> Result<(), crate::RdfDiagnostic> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+     |
+     = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/view_accounting.rs:109:53
+    |
+109 |     pub(crate) fn check(self, stats: &ViewStats) -> Result<(), RdfDiagnostic> {
+    |                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: function call inside of `ok_or`
+   --> crates/rdf-core/src/ir/global.rs:388:58
+    |
+388 |           let id = GlobalTermId::checked_from_index(index).ok_or(StorageError::Capacity(CapacityError {
+    |  __________________________________________________________^
+389 | |             space: CapacitySpace::GlobalTerms, attempted, limit: u128::from(u64::MAX),
+390 | |         }))?;
+    | |___________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+    = note: `-D clippy::or-fun-call` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+help: try
+    |
+388 ~         let id = GlobalTermId::checked_from_index(index).ok_or_else(|| StorageError::Capacity(CapacityError {
+389 +             space: CapacitySpace::GlobalTerms, attempted, limit: u128::from(u64::MAX),
+390 ~         }))?;
+    |
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/import.rs:106:6
+    |
+106 | ) -> Result<Vec<super::mutable::RecordValues>, crate::RdfDiagnostic> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/import.rs:114:6
+    |
+114 | ) -> Result<Vec<super::mutable::RecordValues>, crate::RdfDiagnostic> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/import.rs:115:14
+    |
+115 |       rows.map(|(kind, q)| {
+    |  ______________^
+116 | |         let value = |id| {
+117 | |             view.term_value(id).map_err(|error| {
+118 | |                 crate::RdfDiagnostic::error("rdf-ir-record-term", error.to_string())
+...   |
+129 | |         })
+130 | |     })
+    | |_____^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/import.rs:116:21
+    |
+116 |           let value = |id| {
+    |  _____________________^
+117 | |             view.term_value(id).map_err(|error| {
+118 | |                 crate::RdfDiagnostic::error("rdf-ir-record-term", error.to_string())
+119 | |             })
+120 | |         };
+    | |_________^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: redundant closure
+   --> crates/rdf-core/src/ir/import.rs:249:22
+    |
+249 |             .map_err(|error| DatasetImportError::Capacity(error))?;
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the tuple variant itself: `DatasetImportError::Capacity`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure
+    = note: `-D clippy::redundant-closure` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure)]`
+
+error: redundant closure
+   --> crates/rdf-core/src/ir/import.rs:252:22
+    |
+252 |             .map_err(|error| DatasetImportError::Capacity(error))?;
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the tuple variant itself: `DatasetImportError::Capacity`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure
+
+error: redundant closure
+   --> crates/rdf-core/src/ir/import.rs:255:22
+    |
+255 |             .map_err(|error| DatasetImportError::Capacity(error))?;
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the tuple variant itself: `DatasetImportError::Capacity`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:147:50
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+147 |     pub fn new(bases: Vec<Arc<PagedDataset>>) -> Result<Self, PagedStackError> {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:169:32
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+169 |     fn check_sources(&self) -> Result<(), PagedStackError> {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:195:10
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+195 |     ) -> Result<(), PagedStackError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:224:49
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+224 |     pub fn contains(&self, row: &QuadValues) -> Result<bool, PagedStackError> {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:238:10
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+238 |     ) -> Result<bool, PagedStackError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:270:50
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+270 |     pub fn insert(&mut self, row: QuadValues) -> Result<bool, PagedStackError> {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:284:51
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+284 |     pub fn remove(&mut self, row: &QuadValues) -> Result<bool, PagedStackError> {
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:301:64
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+301 |     pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, PagedStackError> {
+    |                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:310:30
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+310 |     fn frozen_head(&self) -> Result<Arc<RdfDataset>, PagedStackError> {
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:343:31
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+343 |     pub fn snapshot(&self) -> Result<PagedStackSnapshot, PagedStackError> {
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:350:10
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+350 |     ) -> Result<PagedStackSnapshot, PagedStackError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:472:18
+    |
+ 76 |       Invalid(RdfDiagnostic),
+    |       ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |       Seal(CanonicalPagedError<Infallible>),
+    |       ------------------------------------- the largest variant contains at least 160 bytes
+...
+472 |               .map(|set| {
+    |  __________________^
+473 | |                 set.iter()
+474 | |                     .map(|row| {
+475 | |                         Ok(QuadIds {
+...   |
+496 | |                     .collect::<Result<_, PagedStackError>>()
+497 | |             })
+    | |_____________^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:474:26
+    |
+ 76 |       Invalid(RdfDiagnostic),
+    |       ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |       Seal(CanonicalPagedError<Infallible>),
+    |       ------------------------------------- the largest variant contains at least 160 bytes
+...
+474 |                       .map(|row| {
+    |  __________________________^
+475 | |                         Ok(QuadIds {
+476 | |                             s: dictionary
+477 | |                                 .try_reintern_validated(&row.s)
+...   |
+494 | |                         })
+495 | |                     })
+    | |_____________________^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:488:38
+    |
+ 76 |       Invalid(RdfDiagnostic),
+    |       ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |       Seal(CanonicalPagedError<Infallible>),
+    |       ------------------------------------- the largest variant contains at least 160 bytes
+...
+488 |                                   .map(|g| {
+    |  ______________________________________^
+489 | |                                     dictionary
+490 | |                                         .try_reintern_validated(g)
+491 | |                                         .map_err(PagedStackError::Storage)
+492 | |                                 })
+    | |_________________________________^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:536:61
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+536 |     pub fn seal_head(&mut self, page_rows: NonZeroUsize) -> Result<(), PagedStackError> {
+    |                                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/paged/stack.rs:564:10
+     |
+ 564 |     ) -> Result<PagedDataset, CanonicalPagedError<PagedQueryError>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1026 |     Invalid(RdfDiagnostic),
+     |     ---------------------- the largest variant contains at least 144 bytes
+...
+1030 |     Pack(PackError),
+     |     --------------- the variant `Pack` contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::paged::stack::CanonicalPagedError<ir::paged::query::PagedQueryError>`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::CanonicalPagedError<ir::paged::query::PagedQueryError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/paged/stack.rs:572:39
+    |
+ 76 |     Invalid(RdfDiagnostic),
+    |     ---------------------- the variant `Invalid` contains at least 144 bytes
+...
+ 82 |     Seal(CanonicalPagedError<Infallible>),
+    |     ------------------------------------- the largest variant contains at least 160 bytes
+...
+572 | fn normalize_row(row: &QuadValues) -> Result<QuadValues, PagedStackError> {
+    |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::paged::stack::PagedStackError`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::PagedStackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/paged/stack.rs:683:10
+     |
+ 683 |     ) -> Result<PagedDataset, CanonicalPagedError<PagedQueryError>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1026 |     Invalid(RdfDiagnostic),
+     |     ---------------------- the largest variant contains at least 144 bytes
+...
+1030 |     Pack(PackError),
+     |     --------------- the variant `Pack` contains at least 144 bytes
+     |
+     = help: try reducing the size of `ir::paged::stack::CanonicalPagedError<ir::paged::query::PagedQueryError>`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::CanonicalPagedError<ir::paged::query::PagedQueryError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/paged/stack.rs:1117:6
+     |
+1026 |     Invalid(RdfDiagnostic),
+     |     ---------------------- the largest variant contains at least 144 bytes
+...
+1030 |     Pack(PackError),
+     |     --------------- the variant `Pack` contains at least 144 bytes
+...
+1117 | ) -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::paged::stack::CanonicalPagedError<<D as dataset_view::FallibleDatasetView>::Error>`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::CanonicalPagedError<<D as dataset_view::FallibleDatasetView>::Error>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/rdf-core/src/ir/paged/stack.rs:1184:52
+     |
+1026 |     Invalid(RdfDiagnostic),
+     |     ---------------------- the largest variant contains at least 144 bytes
+...
+1030 |     Pack(PackError),
+     |     --------------- the variant `Pack` contains at least 144 bytes
+...
+1184 | fn checkpoint<D: FallibleDatasetView>(view: &D) -> Result<(), CanonicalPagedError<D::Error>> {
+     |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `ir::paged::stack::CanonicalPagedError<<D as dataset_view::FallibleDatasetView>::Error>`, for example by boxing large elements or replacing it with `Box<ir::paged::stack::CanonicalPagedError<<D as dataset_view::FallibleDatasetView>::Error>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+  --> crates/rdf-core/src/ir/paged/translation.rs:78:5
+   |
+78 |     pub fn build(page: &RdfDataset, dict: &mut GlobalDictionary) -> Result<Self, StorageError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove `must_use`
+  --> crates/rdf-core/src/ir/paged/translation.rs:77:5
+   |
+77 |     #[must_use]
+   |     ^^^^^^^^^^^
+   = note: alternatively, you may add an explicit reason to the `must_use` attribute
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+   --> crates/rdf-core/src/ir/paged/mod.rs:769:5
+    |
+769 |     pub fn compact(&self) -> Result<Self, purrdf_lex::allocation::StorageError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove `must_use`
+   --> crates/rdf-core/src/ir/paged/mod.rs:768:5
+    |
+768 |     #[must_use]
+    |     ^^^^^^^^^^^
+    = note: alternatively, you may add an explicit reason to the `must_use` attribute
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+  --> crates/rdf-core/src/ir/segmented/build.rs:88:5
+   |
+88 |     pub fn new(limits: SegmentedBuildLimits) -> Result<Self, SegmentedError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove `must_use`
+  --> crates/rdf-core/src/ir/segmented/build.rs:87:5
+   |
+87 |     #[must_use]
+   |     ^^^^^^^^^^^
+   = note: alternatively, you may add an explicit reason to the `must_use` attribute
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/rdf-core/src/ir/segmented/mod.rs:165:24
+    |
+165 |     fn from_rdf(error: crate::RdfDiagnostic, invalid: &'static str) -> Self {
+    |                        ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+165 |     fn from_rdf(error: &crate::RdfDiagnostic, invalid: &'static str) -> Self {
+    |                        +
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/certify.rs:106:45
+    |
+106 | fn reconstruct<D: DatasetView>(view: &D) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/certify.rs:114:6
+    |
+114 | ) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/certify.rs:154:55
+    |
+154 | pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/certify.rs:164:6
+    |
+164 | ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/certify.rs:189:38
+    |
+189 | pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/pack/container.rs:305:5
+    |
+305 |     CanonRefused(CanonError),
+    |     ------------------------ the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::pack::container::PackError`, for example by boxing large elements or replacing it with `Box<ir::pack::container::PackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/certify.rs:234:37
+    |
+234 | pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/pack/container.rs:305:5
+    |
+305 |     CanonRefused(CanonError),
+    |     ------------------------ the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::pack::container::PackError`, for example by boxing large elements or replacing it with `Box<ir::pack::container::PackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/certify.rs:269:37
+    |
+269 | pub fn pack_digest(bytes: &[u8]) -> Result<[u8; 32], PackError> {
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/pack/container.rs:305:5
+    |
+305 |     CanonRefused(CanonError),
+    |     ------------------------ the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::pack::container::PackError`, for example by boxing large elements or replacing it with `Box<ir::pack::container::PackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/container.rs:449:49
+    |
+305 |     CanonRefused(CanonError),
+    |     ------------------------ the largest variant contains at least 144 bytes
+...
+449 |     pub fn build_bytes(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pack::container::PackError`, for example by boxing large elements or replacing it with `Box<ir::pack::container::PackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/container.rs:496:66
+    |
+305 |     CanonRefused(CanonError),
+    |     ------------------------ the largest variant contains at least 144 bytes
+...
+496 |     pub fn build_view_bytes<D: FallibleDatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
+    |                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pack::container::PackError`, for example by boxing large elements or replacing it with `Box<ir::pack::container::PackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/container.rs:512:50
+    |
+305 |     CanonRefused(CanonError),
+    |     ------------------------ the largest variant contains at least 144 bytes
+...
+512 |     pub fn from_dataset(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pack::container::PackError`, for example by boxing large elements or replacing it with `Box<ir::pack::container::PackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/container.rs:531:45
+    |
+305 |     CanonRefused(CanonError),
+    |     ------------------------ the largest variant contains at least 144 bytes
+...
+531 | fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pack::container::PackError`, for example by boxing large elements or replacing it with `Box<ir::pack::container::PackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/pack/container.rs:666:43
+    |
+305 |     CanonRefused(CanonError),
+    |     ------------------------ the largest variant contains at least 144 bytes
+...
+666 |     pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, PackError> {
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::pack::container::PackError`, for example by boxing large elements or replacing it with `Box<ir::pack::container::PackError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/skolem.rs:200:37
+    |
+ 93 |     Invalid(crate::RdfDiagnostic),
+    |     ----------------------------- the largest variant contains at least 144 bytes
+...
+200 | fn genid_prefix(authority: &str) -> Result<String, SkolemError> {
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::skolem::SkolemError`, for example by boxing large elements or replacing it with `Box<ir::skolem::SkolemError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/skolem.rs:789:60
+    |
+ 93 |     Invalid(crate::RdfDiagnostic),
+    |     ----------------------------- the largest variant contains at least 144 bytes
+...
+789 | pub fn skolemize(dataset: &RdfDataset, authority: &str) -> Result<RdfDataset, SkolemError> {
+    |                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::skolem::SkolemError`, for example by boxing large elements or replacing it with `Box<ir::skolem::SkolemError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/skolem.rs:815:62
+    |
+ 93 |     Invalid(crate::RdfDiagnostic),
+    |     ----------------------------- the largest variant contains at least 144 bytes
+...
+815 | pub fn deskolemize(dataset: &RdfDataset, authority: &str) -> Result<RdfDataset, SkolemError> {
+    |                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `ir::skolem::SkolemError`, for example by boxing large elements or replacing it with `Box<ir::skolem::SkolemError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: unnecessary structure name repetition
+   --> crates/rdf-core/src/ir/term.rs:236:24
+    |
+236 |     const LIMIT: u64 = u32::MAX as u64;
+    |                        ^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+    = note: `-D clippy::use-self` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: unnecessary structure name repetition
+   --> crates/rdf-core/src/ir/term.rs:241:18
+    |
+241 |     const LIMIT: u64 = u64::MAX;
+    |                  ^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+   --> crates/rdf-core/src/ir/term.rs:241:24
+    |
+241 |     const LIMIT: u64 = u64::MAX;
+    |                        ^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: the `Err`-variant returned from this function is very large
+  --> crates/rdf-core/src/ir/validate.rs:57:73
+   |
+57 | pub(crate) fn validate_record(record: &super::mutable::RecordValues) -> Result<(), RdfDiagnostic> {
+   |                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+   |
+   = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/validate.rs:59:17
+    |
+ 59 |       let value = |term: &TermValue| {
+    |  _________________^
+ 60 | |         term.try_fold(
+ 61 | |             |leaf| {
+ 62 | |                 let kind = match leaf {
+...   |
+115 | |         .map(|(kind, _)| kind)
+116 | |     };
+    | |_____^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/validate.rs:61:13
+    |
+ 61 | /             |leaf| {
+ 62 | |                 let kind = match leaf {
+ 63 | |                     TermValue::Iri(iri) => {
+ 64 | |                         super::absolute::check_absolute(iri)
+...   |
+ 99 | |                 Ok::<_, RdfDiagnostic>((kind, 0usize))
+100 | |             },
+    | |_____________^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/validate.rs:101:13
+    |
+101 | /             |(subject, sd), (predicate, pd), (_, od)| {
+102 | |                 require_subject_kind(
+103 | |                     subject,
+104 | |                     || "triple term subject".to_owned(),
+...   |
+112 | |                 Ok((Kind::Triple, depth))
+113 | |             },
+    | |_____________^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:146:56
+    |
+146 | pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:192:6
+    |
+192 | ) -> Result<(), RdfDiagnostic> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:209:72
+    |
+209 | fn require_predicate_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
+    |                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:218:68
+    |
+218 | fn require_graph_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
+    |                                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:244:67
+    |
+244 | fn resident_validation<T>(result: Result<T, NativeBuildError>) -> Result<T, RdfDiagnostic> {
+    |                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:269:6
+    |
+269 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:431:6
+    |
+431 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:448:6
+    |
+448 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/rdf-core/src/ir/validate.rs:499:18
+    |
+499 |       let result = (|| {
+    |  __________________^
+500 | |         for raw in 0..term_count {
+501 | |             let id = TermId::from_index(raw as u32).expect("stored term index is representable");
+502 | |             if matches!(builder.term(id), InternedTerm::Triple { .. }) {
+...   |
+506 | |         Ok(())
+507 | |     })();
+    | |______^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |       Diagnostic(RdfDiagnostic),
+    |       ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:530:6
+    |
+530 | ) -> Result<usize, NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:579:6
+    |
+579 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:600:6
+    |
+600 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:609:6
+    |
+609 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:630:6
+    |
+630 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:638:6
+    |
+638 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:658:6
+    |
+658 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/ir/validate.rs:666:6
+    |
+666 | ) -> Result<(), NativeBuildError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/builder.rs:707:5
+    |
+707 |     Diagnostic(RdfDiagnostic),
+    |     ------------------------- the largest variant contains at least 144 bytes
+    |
+    = help: try reducing the size of `ir::builder::NativeBuildError`, for example by boxing large elements or replacing it with `Box<ir::builder::NativeBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/sssom.rs:625:33
+    |
+625 | pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/sssom.rs:705:36
+    |
+705 | fn parse_header(lines: &[&str]) -> Result<(SssomMeta, Vec<SssomSetComment>), RdfDiagnostic> {
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/sssom.rs:863:6
+    |
+863 | ) -> Result<(SssomColumnLayout, Vec<SssomMapping>), RdfDiagnostic> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/rdf-core/src/sssom.rs:915:6
+    |
+915 | ) -> Result<SssomMapping, RdfDiagnostic> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 144 bytes
+    |
+    = help: try reducing the size of `diagnostic::RdfDiagnostic`, for example by boxing large elements or replacing it with `Box<diagnostic::RdfDiagnostic>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: could not compile `purrdf-core` (lib) due to 180 previous errors
+terminal_status=101

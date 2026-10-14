@@ -1,0 +1,310 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+error[E0308]: mismatched types
+  --> crates/sparql-eval/tests/segmented_query.rs:65:30
+   |
+65 |         .find(|row| row.s == target && row.p == predicate)
+   |                     -----    ^^^^^^ expected `TermId`, found `Option<TermId>`
+   |                     |
+   |                     expected because this is `TermId`
+   |
+   = note: expected struct `TermId`
+                found enum `Option<TermId>`
+help: consider using `Option::expect` to unwrap the `Option<TermId>` value, panicking if the value is an `Option::None`
+   |
+65 |         .find(|row| row.s == target.expect("REASON") && row.p == predicate)
+   |                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+  --> crates/sparql-eval/tests/segmented_query.rs:65:49
+   |
+65 |         .find(|row| row.s == target && row.p == predicate)
+   |                                        -----    ^^^^^^^^^ expected `TermId`, found `Option<TermId>`
+   |                                        |
+   |                                        expected because this is `TermId`
+   |
+   = note: expected struct `TermId`
+                found enum `Option<TermId>`
+help: consider using `Option::expect` to unwrap the `Option<TermId>` value, panicking if the value is an `Option::None`
+   |
+65 |         .find(|row| row.s == target && row.p == predicate.expect("REASON"))
+   |                                                          +++++++++++++++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+  --> crates/sparql-eval/tests/segmented_query.rs:68:25
+   |
+68 |         let s = builder.intern_value(&resident.term_value(row.s)).unwrap();
+   |                         ^^^^^^^^^^^^
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+68 |         let s = builder.intern_iri_value(&resident.term_value(row.s)).unwrap();
+   |                                ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+  --> crates/sparql-eval/tests/segmented_query.rs:69:25
+   |
+69 |         let p = builder.intern_value(&resident.term_value(row.p)).unwrap();
+   |                         ^^^^^^^^^^^^
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+69 |         let p = builder.intern_iri_value(&resident.term_value(row.p)).unwrap();
+   |                                ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+  --> crates/sparql-eval/tests/segmented_query.rs:70:25
+   |
+70 |         let o = builder.intern_value(&resident.term_value(row.o)).unwrap();
+   |                         ^^^^^^^^^^^^
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+70 |         let o = builder.intern_iri_value(&resident.term_value(row.o)).unwrap();
+   |                                ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+  --> crates/sparql-eval/tests/segmented_query.rs:73:31
+   |
+73 |             .map(|id| builder.intern_value(&resident.term_value(id)).unwrap());
+   |                               ^^^^^^^^^^^^
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+73 |             .map(|id| builder.intern_iri_value(&resident.term_value(id)).unwrap());
+   |                                      ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+   --> crates/sparql-eval/tests/segmented_query.rs:100:29
+    |
+100 |             let s = builder.intern_value(&blank).unwrap();
+    |                             ^^^^^^^^^^^^
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use purrdf_core::TermFactory;
+    |
+help: there is a method `intern_iri_value` with a similar name
+    |
+100 |             let s = builder.intern_iri_value(&blank).unwrap();
+    |                                    ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+   --> crates/sparql-eval/tests/segmented_query.rs:102:29
+    |
+102 |             let o = builder.intern_value(&nested).unwrap();
+    |                             ^^^^^^^^^^^^
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use purrdf_core::TermFactory;
+    |
+help: there is a method `intern_iri_value` with a similar name
+    |
+102 |             let o = builder.intern_iri_value(&nested).unwrap();
+    |                                    ++++
+
+error[E0277]: the trait bound `&RetainedSparqlResult: ResultView` is not satisfied
+   --> crates/sparql-eval/tests/segmented_query.rs:170:40
+    |
+170 |                     support::solutions(&actual.result),
+    |                     ------------------ ^^^^^^^^^^^^^^ the trait `ResultView` is not implemented for `&RetainedSparqlResult`
+    |                     |
+    |                     required by a bound introduced by this call
+    |
+note: required by a bound in `solutions`
+   --> crates/sparql-eval/tests/support/mod.rs:266:31
+    |
+266 | pub fn solutions(result: impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+    |                               ^^^^^^^^^^ required by this bound in `solutions`
+help: consider removing the leading `&`-reference
+    |
+170 -                     support::solutions(&actual.result),
+170 +                     support::solutions(actual.result),
+    |
+
+error[E0277]: the trait bound `&SparqlResult: ResultView` is not satisfied
+   --> crates/sparql-eval/tests/segmented_query.rs:171:40
+    |
+171 |                     support::solutions(&expected),
+    |                     ------------------ ^^^^^^^^^ the trait `ResultView` is not implemented for `&SparqlResult`
+    |                     |
+    |                     required by a bound introduced by this call
+    |
+note: required by a bound in `solutions`
+   --> crates/sparql-eval/tests/support/mod.rs:266:31
+    |
+266 | pub fn solutions(result: impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+    |                               ^^^^^^^^^^ required by this bound in `solutions`
+help: consider removing the leading `&`-reference
+    |
+171 -                     support::solutions(&expected),
+171 +                     support::solutions(expected),
+    |
+
+error[E0616]: field `completed` of struct `SegmentedRequest` is private
+   --> crates/sparql-eval/tests/segmented_query.rs:225:73
+    |
+225 |     evidence.with_requests(|requests| assert!(!requests.last().unwrap().completed));
+    |                                                                         ^^^^^^^^^ private field
+    |
+help: a method `completed` also exists, call it with parentheses
+    |
+225 |     evidence.with_requests(|requests| assert!(!requests.last().unwrap().completed()));
+    |                                                                                  ++
+
+error[E0599]: no method named `intern_batch` found for enum `Result<T, E>` in the current scope
+    --> crates/sparql-eval/tests/segmented_query.rs:1126:10
+     |
+1125 | /     persistent
+1126 | |         .intern_batch(&values, |_, id| global.push(id))
+     | |_________-^^^^^^^^^^^^
+     |
+note: the method `intern_batch` exists on the type `SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:132:5
+     |
+ 132 | /     pub fn intern_batch(
+ 133 | |         &mut self,
+ 134 | |         values: &[TermValue],
+ 135 | |         mut visit: impl FnMut(&TermValue, GlobalTermId),
+ 136 | |     ) -> Result<(), SegmentedError> {
+     | |___________________________________^
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1125 |     persistent.expect("REASON")
+     |               +++++++++++++++++
+
+error[E0599]: no method named `push_quad` found for enum `Result<T, E>` in the current scope
+    --> crates/sparql-eval/tests/segmented_query.rs:1134:14
+     |
+1133 | /         persistent
+1134 | |             .push_quad(QuadIds {
+     | |             -^^^^^^^^^ method not found in `Result<SegmentedBuilder, SegmentedError>`
+     | |_____________|
+     |
+     |
+note: the method `push_quad` exists on the type `SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:176:5
+     |
+ 176 |     pub fn push_quad(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1133 |         persistent.expect("REASON")
+     |                   +++++++++++++++++
+
+error[E0599]: no method named `push_reifier` found for enum `Result<T, E>` in the current scope
+    --> crates/sparql-eval/tests/segmented_query.rs:1151:10
+     |
+1150 | /     persistent
+1151 | |         .push_reifier(global[6], global[7], None)
+     | |_________-^^^^^^^^^^^^
+     |
+note: the method `push_reifier` exists on the type `SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:192:5
+     |
+ 192 | /     pub fn push_reifier(
+ 193 | |         &mut self,
+ 194 | |         reifier: GlobalTermId,
+ 195 | |         triple: GlobalTermId,
+ 196 | |         graph: Option<GlobalTermId>,
+ 197 | |     ) -> Result<(), SegmentedError> {
+     | |___________________________________^
+help: there is a method `as_ref` with a similar name, but with different arguments
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:769:5
+     |
+ 769 |     pub const fn as_ref(&self) -> Result<&T, &E> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1150 |     persistent.expect("REASON")
+     |               +++++++++++++++++
+
+error[E0599]: no method named `push_annotation` found for enum `Result<T, E>` in the current scope
+    --> crates/sparql-eval/tests/segmented_query.rs:1157:10
+     |
+1156 | /     persistent
+1157 | |         .push_annotation(QuadIds {
+     | |         -^^^^^^^^^^^^^^^ method not found in `Result<SegmentedBuilder, SegmentedError>`
+     | |_________|
+     |
+     |
+note: the method `push_annotation` exists on the type `SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:225:5
+     |
+ 225 |     pub fn push_annotation(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1156 |     persistent.expect("REASON")
+     |               +++++++++++++++++
+
+error[E0599]: no method named `declare_named_graph` found for enum `Result<T, E>` in the current scope
+    --> crates/sparql-eval/tests/segmented_query.rs:1168:10
+     |
+1167 | /     persistent
+1168 | |         .declare_named_graph(global[5])
+     | |         -^^^^^^^^^^^^^^^^^^^ method not found in `Result<SegmentedBuilder, SegmentedError>`
+     | |_________|
+     |
+     |
+note: the method `declare_named_graph` exists on the type `SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:241:5
+     |
+ 241 |     pub fn declare_named_graph(&mut self, graph: GlobalTermId) -> Result<(), SegmentedError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1167 |     persistent.expect("REASON")
+     |               +++++++++++++++++
+
+error[E0599]: no method named `seal` found for enum `Result<T, E>` in the current scope
+    --> crates/sparql-eval/tests/segmented_query.rs:1172:20
+     |
+1172 |         persistent.seal().expect("persisted fixture"),
+     |                    ^^^^ method not found in `Result<SegmentedBuilder, SegmentedError>`
+     |
+note: the method `seal` exists on the type `SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:253:5
+     |
+ 253 |     pub fn seal(self) -> Result<SegmentedImage, SegmentedError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SegmentedBuilder` value, panicking if the value is a `Result::Err`
+     |
+1172 |         persistent.expect("REASON").seal().expect("persisted fixture"),
+     |                   +++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0308, E0599, E0616.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (test "segmented_query") due to 17 previous errors
+terminal_status=101

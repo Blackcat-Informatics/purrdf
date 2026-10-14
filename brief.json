@@ -1,0 +1,103 @@
+{
+  "issue": 490,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "90": "Storage-backend seam: unseal DatasetView (or add a paged-dataset trait) with a u64 global dictionary path",
+    "457": "Paged tier: an LSM-style stack of sealed delta generations with removals, read as one snapshot",
+    "364": "Post-v3.0: evaluation limits, host-parity additions and SHACL/SPARQL follow-ons from #356",
+    "477": "xsd: one binary arbitrary-precision integer for the whole workspace",
+    "356": "SHACL Processor does not distinguish between built-in and custom functions",
+    "360": "fix(shapes)!: built-in declarations bind natively, and SHACL 1.2 conformance",
+    "463": "geo: deterministic geodesic distance in metres for CRS84 and the native cell grid",
+    "443": "Optimize the exact numeric tower: small-value parity and subquadratic large-value arithmetic",
+    "423": "Arbitrary-precision numeric tower for exact reasoned mathematics",
+    "408": "geo: deterministic geodesic distance in metres for CRS84 (geof:metric*)"
+  },
+  "related": [
+    {
+      "number": 518,
+      "title": "Optimizer: a ShapeProvider extension for exact physical operators (ordered window, bucketed series, host shapes)",
+      "state": "OPEN"
+    },
+    {
+      "number": 512,
+      "title": "text/sparql-eval: dictionary-match shape -- a VALUES block of phrases on one predicate as one automaton, longest-first spans",
+      "state": "OPEN"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 394,
+      "title": "sparql-eval: fallible EXPLAIN entry point for operational (FallibleDatasetView) storage",
+      "state": "CLOSED"
+    },
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 401,
+      "title": "Update transfers preserve RDF 1.2 identity: per-document LOAD blank scoping and typed record transfer",
+      "state": "CLOSED"
+    },
+    {
+      "number": 482,
+      "title": "text: rank inputs past QUERY_TERMS_MAX, DOCUMENTS_MAX and FIELD_LENGTH_MAX exactly instead of refusing them",
+      "state": "CLOSED"
+    },
+    {
+      "number": 454,
+      "title": "rdflib shim: algebra-level reassignment rewrite so every case matches rdflib 7.6",
+      "state": "CLOSED"
+    },
+    {
+      "number": 479,
+      "title": "rules: two rdf:type patterns with disjoint subjects are joined as a cross product (quadratic memory in SPARQL 1.2 RL)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 404,
+      "title": "Additive complete-state dataset digest",
+      "state": "CLOSED"
+    },
+    {
+      "number": 286,
+      "title": "perf: retain shared dataset views through pipeline bundles and GTS ingestion",
+      "state": "CLOSED"
+    },
+    {
+      "number": 295,
+      "title": "fix(shapes): sh:pattern compiles as a Rust regex, not an XSD one",
+      "state": "CLOSED"
+    },
+    {
+      "number": 107,
+      "title": "feat(columnar): first-party bidirectional Parquet codec",
+      "state": "CLOSED"
+    },
+    {
+      "number": 407,
+      "title": "text: analyzer stages for stemming, accent folding, dictionary segmentation, void stripping, token bounds, phonetic codes and substring matching",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 24,
+    "performance": 2,
+    "semantic-identity-loss": 1
+  },
+  "coverage": [
+    "issue #490 + 0 comment(s) via github",
+    "link crawl: 10 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Typed', 'capacity', 'errors']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

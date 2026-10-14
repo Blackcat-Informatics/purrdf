@@ -1,0 +1,18 @@
++ cd bindings/python
++ uv run --locked maturin develop
+⚠️  Warning: `build-backend` in pyproject.toml is not set to `maturin`, packaging tools such as pip will not use maturin to build this project.
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.13 at /home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python/.venv/bin/python
+🔗 Found pyo3 bindings with abi3-py3.13 support
+📡 Using build options bindings from pyproject.toml
+Checked 3 packages in 1ms
+Resolved 104 packages in 532ms
+Checked 104 packages in 0.73ms
+   Compiling pyo3-ffi v0.29.0
+   Compiling pyo3 v0.29.0
+   Compiling purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 46.42s
+📦 Built wheel for abi3 Python ≥ 3.13 to /tmp/.tmpbGHXKe/purrdf-3.0.1-cp313-abi3-linux_x86_64.whl
+✏️ Setting installed package as editable
+🛠 Installed purrdf-3.0.1
+terminal_status=0

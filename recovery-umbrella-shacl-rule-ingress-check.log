@@ -1,0 +1,62 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0277]: the trait bound `ShapesError: From<IriReadError>` is not satisfied
+   --> crates/shapes/src/srl/eval.rs:931:17
+    |
+931 | /                 ::purrdf_rdf::DatasetMut::insert(dataset, quad.clone())
+932 | |                     .map_err(crate::error::ShapesError::from)?;
+    | |_____________________________________________________________^ unsatisfied trait bound
+    |
+help: the trait `From<IriReadError>` is not implemented for `ShapesError`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = help: `ShapesError` implements trait `From<T>`:
+              From<&str>
+              From<DatasetImportError<!>>
+              From<RdfDiagnostic>
+              From<ShapesImportError>
+              From<purrdf_lex::allocation::StorageError>
+              From<std::string::String>
+
+error[E0277]: the trait bound `ShapesError: From<IriReadError>` is not satisfied
+   --> crates/shapes/src/srl/eval.rs:932:22
+    |
+932 |                     .map_err(crate::error::ShapesError::from)?;
+    |                      ^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `From<IriReadError>` is not implemented for `ShapesError`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = help: `ShapesError` implements trait `From<T>`:
+              From<&str>
+              From<DatasetImportError<!>>
+              From<RdfDiagnostic>
+              From<ShapesImportError>
+              From<purrdf_lex::allocation::StorageError>
+              From<std::string::String>
+
+error[E0277]: the trait bound `ShapesError: From<IriReadError>` is not satisfied
+   --> crates/shapes/src/srl/eval.rs:932:30
+    |
+932 |                     .map_err(crate::error::ShapesError::from)?;
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `From<IriReadError>` is not implemented for `ShapesError`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = help: `ShapesError` implements trait `From<T>`:
+              From<&str>
+              From<DatasetImportError<!>>
+              From<RdfDiagnostic>
+              From<ShapesImportError>
+              From<purrdf_lex::allocation::StorageError>
+              From<std::string::String>
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 3 previous errors
+terminal_status=101

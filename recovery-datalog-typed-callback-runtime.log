@@ -1,0 +1,15 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error[E0425]: cannot find value `NoGuards` in this scope
+    --> crates/datalog/src/schedule.rs:1865:18
+     |
+1865 |                 &NoGuards,
+     |                  ^^^^^^^^ not found in this scope
+     |
+help: consider importing this unit struct
+     |
+ 838 +     use crate::guard::NoGuards;
+     |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error
+terminal_status=101

@@ -1,0 +1,2241 @@
+python3 scripts/check-simd-asm.py --doc --config x86_64-v4 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump
+== x86_64-v4: 2 Cargo jobs
+== x86_64-v4 graph 0: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/61e9467b2fcde5bb79a47d3975c3822396c1bf16ad2a9d3ce95a7fab08a8c86c/cargo.graph-0.stderr.log
+== x86_64-v4 graph 1: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/61e9467b2fcde5bb79a47d3975c3822396c1bf16ad2a9d3ce95a7fab08a8c86c/cargo.graph-1.stderr.log
+== x86_64-v4: {"analysis_seconds": 32.31581089899987, "build_seconds": 722.314440484, "fresh_artifacts": 65, "lock_seconds": 0.00022769800000332907, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 754.774080398}
+x86_64-v4            purrdf_core  <purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}
+                     v0 f0 r0  [purrdf_core-dbaec6abe162cd34.s]  
+                        pushq %rbp
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        subq $680, %rsp
+                        movl %r9d, 12(%rsp)
+                        movq %r8, %r14
+                        movq %rcx, %r12
+                        movq %rdx, %r15
+                        movq %rdi, %rbx
+                        movq (%rsi), %r13
+                        movq (%rcx), %rdx
+                        movq _RNvMs1_NtNtCsgG1S2JanL2L_11purrdf_core2ir6globalNtB5_16GlobalDictionary10term_value@GOTPCREL(%rip), %rbp
+                        leaq 440(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *%rbp
+                        movq 8(%r12), %rdx
+                        leaq 520(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *%rbp
+                        movq 16(%r12), %rdx
+                        leaq 600(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *_RNvMs1_NtNtCsgG1S2JanL2L_11purrdf_core2ir6globalNtB5_16GlobalDictionary10term_value@GOTPCREL(%rip)
+                        movq 24(%r12), %rdx
+                        testq %rdx, %rdx
+                        je .LBB1570_3
+                        leaq 96(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *_RNvMs1_NtNtCsgG1S2JanL2L_11purrdf_core2ir6globalNtB5_16GlobalDictionary10term_value@GOTPCREL(%rip)
+                        movq 96(%rsp), %rax
+                        vmovups 104(%rsp), %ymm0
+                        vmovups %ymm0, 16(%rsp)
+                        vmovups 136(%rsp), %ymm0
+                        vmovups %ymm0, 48(%rsp)
+                        movq 168(%rsp), %rcx
+                        movq %rcx, 80(%rsp)
+                        jmp .LBB1570_4
+                        movq $-1, %rax
+                        movq %r14, 416(%rsp)
+                        movq %r13, 424(%rsp)
+                        movl 12(%rsp), %ecx
+                        movb %cl, 432(%rsp)
+                        vmovups 440(%rsp), %ymm0
+                        vmovups 472(%rsp), %ymm1
+                        vmovups 488(%rsp), %ymm2
+                        vmovups %ymm0, 96(%rsp)
+                        vmovups %ymm1, 128(%rsp)
+                        vmovups %ymm2, 144(%rsp)
+                        vmovups 520(%rsp), %ymm0
+                        vmovups 552(%rsp), %ymm1
+                        vmovups 568(%rsp), %ymm2
+                        vmovups %ymm0, 176(%rsp)
+                        vmovups %ymm1, 208(%rsp)
+                        vmovups %ymm2, 224(%rsp)
+                        vmovups 600(%rsp), %ymm0
+                        vmovups 632(%rsp), %ymm1
+                        vmovups 648(%rsp), %ymm2
+                        vmovups %ymm0, 256(%rsp)
+                        vmovups %ymm1, 288(%rsp)
+                        vmovups %ymm2, 304(%rsp)
+                        movq %rax, 336(%rsp)
+                        vmovups 16(%rsp), %ymm0
+                        vmovups 48(%rsp), %ymm1
+                        vmovups %ymm0, 344(%rsp)
+                        vmovups %ymm1, 376(%rsp)
+                        movq 80(%rsp), %rax
+                        movq %rax, 408(%rsp)
+                        vzeroupper 
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+                        movl $344, %edi
+                        movl $8, %esi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+                        testq %rax, %rax
+                        je .LBB1570_5
+                        movq %rax, %r14
+                        leaq 96(%rsp), %rsi
+                        movl $344, %edx
+                        movq %rax, %rdi
+                        callq *memcpy@GOTPCREL(%rip)
+                        movq %r14, 8(%rbx)
+                        movabsq $-9223372036854775803, %rax
+                        movq %rax, (%rbx)
+                        addq $680, %rsp
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        popq %rbp
+                        retq 
+                        movl $8, %edi
+                        movl $344, %esi
+                        callq *_RNvNtCs1ymALInp1dT_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip)
+                        ud2 
+                        movq %rax, %rbx
+                        leaq 600(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir4term9TermValueEBH_
+                        jmp .LBB1570_10
+                        movq %rax, %rbx
+                        leaq 520(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir4term9TermValueEBH_
+                        jmp .LBB1570_8
+                        movq %rax, %rbx
+                        leaq 440(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir4term9TermValueEBH_
+                        jmp .LBB1570_12
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+                        movq %rax, %rbx
+                        leaq 96(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged16PagedQuadOverlapEBH_
+                        movq %rbx, %rdi
+                        callq _Unwind_Resume@PLT
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+x86_64-v4            purrdf_core  <purrdf_core::ir::paged::PagedDataset>::from_provider
+                     v0 f0 r0  [purrdf_core-dbaec6abe162cd34.s]  vxorps×1
+                        pushq %rbp
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        subq $1848, %rsp
+                        movq %rdx, %r13
+                        movq %rsi, %r12
+                        movq %rdi, 16(%rsp)
+                        movq %rsi, 456(%rsp)
+                        movq %rdx, 464(%rsp)
+                        movq 16(%rdx), %rax
+                        movq 32(%rdx), %r15
+                        decq %rax
+                        andq $-16, %rax
+                        leaq (%rsi,%rax), %r14
+                        addq $16, %r14
+                        movq %r14, %rdi
+                        callq *%r15
+                        movq %rax, %rbp
+                        movq 24(%r13), %rax
+                        movq %r14, %rdi
+                        movq %rax, 448(%rsp)
+                        callq *%rax
+                        movq $0, 472(%rsp)
+                        movq $1, 480(%rsp)
+                        vxorps %xmm0, %xmm0, %xmm0
+                        vmovups %xmm0, 488(%rsp)
+                        movq $8, 504(%rsp)
+                        movq $0, 512(%rsp)
+                        vmovups .Lanon.cfade0e47e95f4782483ddba2ac72c6f.65(%rip), %ymm0
+                        vmovups %ymm0, 520(%rsp)
+                        movl $3, 584(%rsp)
+                        imulq $448, %rax, %rbx
+                        movabsq $20587884010836553, %rcx
+                        cmpq %rcx, %rax
+                        jbe .LBB2071_5
+                        xorl %r14d, %r14d
+                        movq %r14, %rdi
+                        movq %rbx, %rsi
+                        vzeroupper 
+                        callq *_RNvNtCs1ymALInp1dT_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+                        jmp .LBB2071_140
+                        movq %r15, 440(%rsp)
+                        movq %rax, 152(%rsp)
+                        movq %r14, 224(%rsp)
+                        testq %rbx, %rbx
+                        je .LBB2071_8
+                        vzeroupper 
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+                        movl $8, %r14d
+                        movl $8, %esi
+                        movq %rbx, %rdi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+                        testq %rax, %rax
+                        je .LBB2071_4
+                        movq %rax, %r15
+                        movq 152(%rsp), %rcx
+                        movq %rcx, %rax
+                        vmovups .Lanon.cfade0e47e95f4782483ddba2ac72c6f.65(%rip), %ymm0
+                        jmp .LBB2071_9
+                        movl $8, %r15d
+                        xorl %eax, %eax
+                        movq 152(%rsp), %rcx
+                        movabsq $9223372036854775793, %rbx
+                        movq %rax, 248(%rsp)
+                        movq %r15, 256(%rsp)
+                        vmovups %ymm0, 304(%rsp)
+                        movq $0, 264(%rsp)
+                        vmovups %ymm0, 336(%rsp)
+                        vmovups %ymm0, 368(%rsp)
+                        testq %rcx, %rcx
+                        movq %r13, 424(%rsp)
+                        je .LBB2071_69
+                        movq 48(%r13), %rax
+                        xorl %edx, %edx
+                        leaq 592(%rsp), %rdi
+                        xorl %ecx, %ecx
+                        movq $0, 200(%rsp)
+                        movq %r12, 32(%rsp)
+                        movq %rbp, 416(%rsp)
+                        movq %rbx, 192(%rsp)
+                        movq %rax, 408(%rsp)
+                        movq %rcx, 432(%rsp)
+                        movq %rdx, 232(%rsp)
+                        movq 224(%rsp), %rsi
+                        movq %rdx, 8(%rsp)
+                        vzeroupper 
+                        callq *%rax
+                        leaq 600(%rsp), %rcx
+                        vmovups (%rcx), %xmm0
+                        movq 592(%rsp), %rax
+                        vmovaps %xmm0, 1040(%rsp)
+                        movq 16(%rcx), %rcx
+                        movq %rcx, 1056(%rsp)
+                        cmpq $-1, %rax
+                        jne .LBB2071_114
+                        vmovaps 1040(%rsp), %xmm0
+                        vmovaps %xmm0, 272(%rsp)
+                        movq 1056(%rsp), %rax
+                        movq %rax, 288(%rsp)
+                        movq 280(%rsp), %rbx
+                        cmpq %rbp, %rbx
+                        jne .LBB2071_115
+                        movq 272(%rsp), %rax
+                        movq %rax, 168(%rsp)
+                        movq %rax, 24(%rsp)
+                        leaq 16(%rax), %rsi
+                        leaq 1448(%rsp), %rdi
+                        movq %rsi, 72(%rsp)
+                        leaq 472(%rsp), %rdx
+                        callq _RNvMNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build
+                        movq %r15, 208(%rsp)
+                        movq 1448(%rsp), %rbx
+                        cmpq $-1, %rbx
+                        je .LBB2071_118
+                        movq 1456(%rsp), %rax
+                        movq %rax, (%rsp)
+                        vmovups 1471(%rsp), %xmm0
+                        vmovaps %xmm0, 128(%rsp)
+                        movzbl 1487(%rsp), %ebp
+                        movq 1488(%rsp), %r15
+                        movzbl 1496(%rsp), %r12d
+                        leaq 1464(%rsp), %r13
+                        movq 33(%r13), %rax
+                        movq 40(%r13), %rcx
+                        leaq 1056(%rsp), %r14
+                        movq %rax, 33(%r14)
+                        movq %rcx, 40(%r14)
+                        movl $336, %edx
+                        leaq 1104(%rsp), %rdi
+                        leaq 1512(%rsp), %rsi
+                        callq *memcpy@GOTPCREL(%rip)
+                        movl (%r13), %eax
+                        movl 3(%r13), %ecx
+                        movl %ecx, 3(%r14)
+                        movl %eax, (%r14)
+                        movq %rbx, 1040(%rsp)
+                        movq (%rsp), %rax
+                        movq %rax, 1048(%rsp)
+                        vmovaps 128(%rsp), %xmm0
+                        vmovups %xmm0, 1063(%rsp)
+                        movb %bpl, 1079(%rsp)
+                        movq %r15, 1080(%rsp)
+                        movb %r12b, 1088(%rsp)
+                        movq 24(%rsp), %rax
+                        movzwl 440(%rax), %ecx
+                        movq %rcx, 160(%rsp)
+                        movzbl 442(%rax), %ecx
+                        movl %ecx, 244(%rsp)
+                        movl 436(%rax), %ecx
+                        movq %rcx, 216(%rsp)
+                        movq 80(%rax), %rcx
+                        movq 1408(%rsp), %r15
+                        movq 1416(%rsp), %rsi
+                        testq %rcx, %rcx
+                        movq %rsi, (%rsp)
+                        movq %rcx, 296(%rsp)
+                        je .LBB2071_28
+                        movq 24(%rsp), %rax
+                        movq 72(%rax), %r12
+                        shlq $4, %rcx
+                        addq %r12, %rcx
+                        movq %rcx, 128(%rsp)
+                        movl (%r12), %edi
+                        decl %edi
+                        cmpq %rdi, %rsi
+                        jbe .LBB2071_139
+                        movl 4(%r12), %eax
+                        decl %eax
+                        cmpq %rax, %rsi
+                        jbe .LBB2071_129
+                        movl 8(%r12), %edx
+                        decl %edx
+                        cmpq %rdx, %rsi
+                        jbe .LBB2071_130
+                        movl 12(%r12), %ecx
+                        movq (%r15,%rdi,8), %r13
+                        movq (%r15,%rax,8), %rbx
+                        movq (%r15,%rdx,8), %rbp
+                        testl %ecx, %ecx
+                        je .LBB2071_24
+                        decl %ecx
+                        cmpq %rcx, %rsi
+                        jbe .LBB2071_138
+                        movq (%r15,%rcx,8), %r14
+                        jmp .LBB2071_25
+                        xorl %r14d, %r14d
+                        movq %r13, 592(%rsp)
+                        movq %rbx, 600(%rsp)
+                        movq %rbp, 608(%rsp)
+                        movq %r14, 616(%rsp)
+                        leaq 304(%rsp), %rdi
+                        leaq 592(%rsp), %rsi
+                        movq 8(%rsp), %rdx
+                        callq _RNvMs1_NtCs9OlUndfSYSR_9hashbrown3mapINtB5_7HashMapTNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCs579XeHONISZ_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateE6insertBU_
+                        cmpq $1, %rax
+                        je .LBB2071_77
+                        addq $16, %r12
+                        cmpq 128(%rsp), %r12
+                        movq (%rsp), %rsi
+                        jne .LBB2071_18
+                        movq 24(%rsp), %rbx
+                        cmpq $0, 96(%rbx)
+                        movq 216(%rsp), %r14
+                        movq 72(%rsp), %r12
+                        je .LBB2071_31
+                        movl $50, %edx
+                        movq %r12, %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.353(%rip), %rsi
+                        callq *_RNvMse_NtNtCsgG1S2JanL2L_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)
+                        testl %eax, %eax
+                        je .LBB2071_127
+                        movl $50, %edx
+                        movq %r12, %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.353(%rip), %rsi
+                        callq *_RNvMse_NtNtCsgG1S2JanL2L_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)
+                        movl %eax, %r9d
+                        movq 8(%rsp), %rax
+                        incq %rax
+                        movq %rax, 144(%rsp)
+                        movl 244(%rsp), %ecx
+                        shll $16, %ecx
+                        movq 160(%rsp), %rax
+                        orl %ecx, %eax
+                        shlq $32, %rax
+                        orq %rax, %r14
+                        movq %r14, 216(%rsp)
+                        movq %rax, 160(%rsp)
+                        xorl %ebx, %ebx
+                        movq %r15, 128(%rsp)
+                        testq %rbx, %rbx
+                        movq (%rsp), %rsi
+                        je .LBB2071_37
+                        cmpq 72(%rsp), %rbx
+                        je .LBB2071_37
+                        movl (%rbx), %edi
+                        testl %edi, %edi
+                        je .LBB2071_37
+                        movq 160(%rsp), %r8
+                        jmp .LBB2071_41
+                        testl %r9d, %r9d
+                        movq 24(%rsp), %rcx
+                        je .LBB2071_50
+                        movq 96(%rcx), %rax
+                        testq %rax, %rax
+                        je .LBB2071_50
+                        movq 88(%rcx), %rbx
+                        movl (%rbx), %edi
+                        testl %edi, %edi
+                        je .LBB2071_50
+                        leaq (%rax,%rax,2), %rax
+                        leaq (%rbx,%rax,4), %rax
+                        movq %rax, 72(%rsp)
+                        movl %r9d, %r8d
+                        xorl %r9d, %r9d
+                        decl %edi
+                        cmpq %rdi, %rsi
+                        jbe .LBB2071_139
+                        leal -1(%r8), %ecx
+                        cmpq %rcx, %rsi
+                        jbe .LBB2071_138
+                        movq 4(%rbx), %rax
+                        movl $4294967295, %edx
+                        addl %eax, %edx
+                        cmpq %rdx, %rsi
+                        jbe .LBB2071_130
+                        movq (%r15,%rdi,8), %rbp
+                        movq (%r15,%rcx,8), %r12
+                        movq (%r15,%rdx,8), %r13
+                        shrq $32, %rax
+                        movq %r8, 160(%rsp)
+                        je .LBB2071_47
+                        movl $4294967295, %ecx
+                        addl %ecx, %eax
+                        cmpq %rax, %rsi
+                        jbe .LBB2071_129
+                        movl %r9d, %r15d
+                        movq 128(%rsp), %rcx
+                        movq (%rcx,%rax,8), %r14
+                        jmp .LBB2071_48
+                        movl %r9d, %r15d
+                        xorl %r14d, %r14d
+                        movq %rbp, 592(%rsp)
+                        movq %r12, 600(%rsp)
+                        movq %r13, 608(%rsp)
+                        movq %r14, 616(%rsp)
+                        leaq 336(%rsp), %rdi
+                        leaq 592(%rsp), %rsi
+                        movq 8(%rsp), %rdx
+                        callq _RNvMs1_NtCs9OlUndfSYSR_9hashbrown3mapINtB5_7HashMapTNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCs579XeHONISZ_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateE6insertBU_
+                        addq $12, %rbx
+                        cmpq $1, %rax
+                        movl %r15d, %r9d
+                        movq 128(%rsp), %r15
+                        jne .LBB2071_33
+                        jmp .LBB2071_79
+                        movq 112(%rcx), %rax
+                        testq %rax, %rax
+                        je .LBB2071_62
+                        movq %rax, %rcx
+                        movq 24(%rsp), %rax
+                        movq 104(%rax), %r12
+                        shlq $4, %rcx
+                        addq %r12, %rcx
+                        movq %rcx, 128(%rsp)
+                        movl (%r12), %edi
+                        decl %edi
+                        cmpq %rdi, %rsi
+                        jbe .LBB2071_139
+                        movl 4(%r12), %eax
+                        decl %eax
+                        cmpq %rax, %rsi
+                        jbe .LBB2071_129
+                        movl 8(%r12), %edx
+                        decl %edx
+                        cmpq %rdx, %rsi
+                        jbe .LBB2071_130
+                        movl 12(%r12), %ecx
+                        movq (%r15,%rdi,8), %r13
+                        movq (%r15,%rax,8), %rbp
+                        movq (%r15,%rdx,8), %rbx
+                        testl %ecx, %ecx
+                        je .LBB2071_58
+                        decl %ecx
+                        cmpq %rcx, %rsi
+                        jbe .LBB2071_138
+                        movq (%r15,%rcx,8), %r14
+                        jmp .LBB2071_59
+                        xorl %r14d, %r14d
+                        movq %r13, 592(%rsp)
+                        movq %rbp, 600(%rsp)
+                        movq %rbx, 608(%rsp)
+                        movq %r14, 616(%rsp)
+                        leaq 368(%rsp), %rdi
+                        leaq 592(%rsp), %rsi
+                        movq 8(%rsp), %rdx
+                        callq _RNvMs1_NtCs9OlUndfSYSR_9hashbrown3mapINtB5_7HashMapTNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCs579XeHONISZ_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateE6insertBU_
+                        cmpq $1, %rax
+                        je .LBB2071_80
+                        addq $16, %r12
+                        cmpq 128(%rsp), %r12
+                        movq (%rsp), %rsi
+                        jne .LBB2071_52
+                        movq 216(%rsp), %r14
+                        movq %r14, %r13
+                        movabsq $-281474976710656, %rax
+                        andq %rax, %r13
+                        movq 432(%rsp), %rcx
+                        btq $48, %rcx
+                        movabsq $281474976710656, %rax
+                        cmovbq %rax, %r13
+                        movq %r14, %rdx
+                        movabsq $280375465082880, %rax
+                        andq %rax, %rdx
+                        btq $40, %rcx
+                        movabsq $1099511627776, %rax
+                        cmovbq %rax, %rdx
+                        movq %rdx, (%rsp)
+                        movq %r14, %rdx
+                        movabsq $1095216660480, %rax
+                        andq %rax, %rdx
+                        btq $32, %rcx
+                        movabsq $4294967296, %rax
+                        cmovbq %rax, %rdx
+                        movq %rdx, 128(%rsp)
+                        movl %r14d, %ebp
+                        andl $-16777216, %ebp
+                        testl $16777216, %ecx
+                        movl $16777216, %eax
+                        cmovneq %rax, %rbp
+                        movl %r14d, %ebx
+                        andl $16711680, %ebx
+                        testl $65536, %ecx
+                        movl $65536, %eax
+                        cmovneq %rax, %rbx
+                        movl %r14d, %r12d
+                        andl $65280, %r12d
+                        testl $256, %ecx
+                        movl $256, %eax
+                        cmovneq %rax, %r12
+                        testb $1, %cl
+                        movzbl %r14b, %ecx
+                        movl $1, %eax
+                        cmovneq %rax, %rcx
+                        movq %rcx, 72(%rsp)
+                        movq 296(%rsp), %rax
+                        addq %rax, 200(%rsp)
+                        jb .LBB2071_128
+                        movl $400, %edx
+                        leaq 592(%rsp), %rdi
+                        leaq 1040(%rsp), %rsi
+                        callq *memcpy@GOTPCREL(%rip)
+                        movq 288(%rsp), %rax
+                        movq 8(%rsp), %rdx
+                        movq %rdx, 992(%rsp)
+                        movl $3, 1008(%rsp)
+                        movq %r14, %rcx
+                        shrq $48, %rcx
+                        movb %cl, 1038(%rsp)
+                        movq %r14, %rcx
+                        shrq $32, %rcx
+                        movw %cx, 1036(%rsp)
+                        movl %r14d, 1032(%rsp)
+                        movq 296(%rsp), %rcx
+                        movq %rcx, 1016(%rsp)
+                        movq %rax, 1024(%rsp)
+                        cmpq 248(%rsp), %rdx
+                        movq 208(%rsp), %r15
+                        jne .LBB2071_66
+                        leaq 248(%rsp), %rdi
+                        callq *_RNvMs7_NtCs1ymALInp1dT_5alloc7raw_vecINtB5_6RawVecNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotE8grow_oneBS_@GOTPCREL(%rip)
+                        movq 256(%rsp), %r15
+                        imulq $448, 8(%rsp), %rdi
+                        addq %r15, %rdi
+                        movl $448, %edx
+                        leaq 592(%rsp), %rsi
+                        callq *memcpy@GOTPCREL(%rip)
+                        movq 144(%rsp), %rax
+                        movq %rax, 264(%rsp)
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        jne .LBB2071_68
+                        leaq 168(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        addq (%rsp), %r13
+                        addq 128(%rsp), %r13
+                        orq %rbp, %r13
+                        orq %rbx, %r13
+                        orq %r12, %r13
+                        orq 72(%rsp), %r13
+                        movq 144(%rsp), %rax
+                        movq %rax, %rdx
+                        movq %r13, %rcx
+                        cmpq 152(%rsp), %rax
+                        movq 32(%rsp), %r12
+                        movq 416(%rsp), %rbp
+                        movabsq $9223372036854775793, %rbx
+                        movq 408(%rsp), %rax
+                        leaq 592(%rsp), %rdi
+                        jne .LBB2071_11
+                        jmp .LBB2071_70
+                        movq $0, 144(%rsp)
+                        movq $0, 200(%rsp)
+                        xorl %r13d, %r13d
+                        movq %rbx, %r14
+                        movq %rbp, %rbx
+                        movb $1, %bpl
+                        movq 224(%rsp), %rdi
+                        vzeroupper 
+                        callq *440(%rsp)
+                        cmpq %rbx, %rax
+                        jne .LBB2071_78
+                        movq 224(%rsp), %rdi
+                        callq *448(%rsp)
+                        movq 152(%rsp), %rcx
+                        cmpq %rcx, %rax
+                        jne .LBB2071_87
+                        xorl %ebp, %ebp
+                        leaq 248(%rsp), %rdi
+                        callq _RNvMs_NtCs1ymALInp1dT_5alloc3vecINtB4_3VecNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotE16into_boxed_sliceBK_
+                        movq %rax, %r15
+                        movq %rdx, %r14
+                        leaq 592(%rsp), %rdi
+                        movq %rax, %rsi
+                        callq _RNvMs_NtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged11graph_indexNtB4_14GraphPageIndex6derive
+                        vmovups 472(%rsp), %ymm0
+                        vmovups 504(%rsp), %ymm1
+                        vmovups 536(%rsp), %ymm2
+                        vmovups 560(%rsp), %ymm3
+                        movq 16(%rsp), %rcx
+                        vmovups %ymm3, 88(%rcx)
+                        vmovups %ymm2, 64(%rcx)
+                        vmovups %ymm1, 32(%rcx)
+                        vmovups %ymm0, (%rcx)
+                        vmovups 592(%rsp), %ymm0
+                        vmovups 624(%rsp), %ymm1
+                        vmovups 656(%rsp), %ymm2
+                        vmovups 688(%rsp), %ymm3
+                        vmovups %ymm0, 152(%rcx)
+                        vmovups %ymm1, 184(%rcx)
+                        vmovups %ymm2, 216(%rcx)
+                        vmovups %ymm3, 248(%rcx)
+                        vmovups 720(%rsp), %ymm0
+                        vmovups %ymm0, 280(%rcx)
+                        vmovups 752(%rsp), %ymm0
+                        vmovups %ymm0, 312(%rcx)
+                        movq %r15, 120(%rcx)
+                        movq %r14, 128(%rcx)
+                        movq %r12, 136(%rcx)
+                        movq 424(%rsp), %rax
+                        movq %rax, 144(%rcx)
+                        movq %rbx, 344(%rcx)
+                        movq 200(%rsp), %rax
+                        movq %rax, 352(%rcx)
+                        movq %r13, %rax
+                        shrq $48, %rax
+                        movb %al, 366(%rcx)
+                        movq %r13, %rax
+                        shrq $32, %rax
+                        movw %ax, 364(%rcx)
+                        movl %r13d, 360(%rcx)
+                        movq 368(%rsp), %rdi
+                        movq 376(%rsp), %rsi
+                        vzeroupper 
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        movq 336(%rsp), %rdi
+                        movq 344(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        movq 304(%rsp), %rdi
+                        movq 312(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        jmp .LBB2071_113
+                        movq %rdx, %r8
+                        movq %r13, 80(%rsp)
+                        movq %rbx, 88(%rsp)
+                        movq %rbp, 96(%rsp)
+                        movq %r14, 104(%rsp)
+                        movq %rdx, 112(%rsp)
+                        movb $0, 120(%rsp)
+                        leaq 592(%rsp), %rdi
+                        leaq 232(%rsp), %rsi
+                        leaq 472(%rsp), %rdx
+                        leaq 80(%rsp), %rcx
+                        xorl %r9d, %r9d
+                        callq _RNCNvMs3_NtNtCsgG1S2JanL2L_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+                        jmp .LBB2071_81
+                        addq $18, %r14
+                        jmp .LBB2071_88
+                        movq %rdx, %r8
+                        movq %rbp, 80(%rsp)
+                        movq %r12, 88(%rsp)
+                        movq %r13, 96(%rsp)
+                        movq %r14, 104(%rsp)
+                        movq %rdx, 112(%rsp)
+                        movb $1, 120(%rsp)
+                        leaq 592(%rsp), %rdi
+                        leaq 232(%rsp), %rsi
+                        leaq 472(%rsp), %rdx
+                        leaq 80(%rsp), %rcx
+                        movl $1, %r9d
+                        callq _RNCNvMs3_NtNtCsgG1S2JanL2L_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+                        jmp .LBB2071_81
+                        movq %rdx, %r8
+                        movq %r13, 80(%rsp)
+                        movq %rbp, 88(%rsp)
+                        movq %rbx, 96(%rsp)
+                        movq %r14, 104(%rsp)
+                        movq %rdx, 112(%rsp)
+                        movb $2, 120(%rsp)
+                        leaq 592(%rsp), %rdi
+                        leaq 232(%rsp), %rsi
+                        leaq 472(%rsp), %rdx
+                        leaq 80(%rsp), %rcx
+                        movl $2, %r9d
+                        callq _RNCNvMs3_NtNtCsgG1S2JanL2L_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+                        vmovups 592(%rsp), %ymm0
+                        vmovups 616(%rsp), %ymm1
+                        movq 16(%rsp), %rax
+                        vmovups %ymm1, 32(%rax)
+                        vmovups %ymm0, 8(%rax)
+                        movq $-1, (%rax)
+                        movq 32(%rsp), %r12
+                        movq (%rsp), %rsi
+                        shlq $3, %rsi
+                        movl $8, %edx
+                        movq %r15, %rdi
+                        vzeroupper 
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 1432(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_85
+                        movq 1424(%rsp), %rdi
+                        shlq $4, %rsi
+                        movl $8, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        leaq 1040(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged7summary11PageSummaryEBJ_
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movq 208(%rsp), %r15
+                        jne .LBB2071_89
+                        leaq 168(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        jmp .LBB2071_89
+                        addq $19, %r14
+                        movq %rcx, %rbx
+                        movq 16(%rsp), %rcx
+                        movq %r14, 8(%rcx)
+                        movq %rbx, 16(%rcx)
+                        movq %rax, 24(%rcx)
+                        movq $-1, (%rcx)
+                        movq 144(%rsp), %rax
+                        movq %rax, 8(%rsp)
+                        movq 376(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_92
+                        leaq (,%rsi,8), %rax
+                        leaq (%rax,%rax,4), %rax
+                        andq $-16, %rax
+                        addq %rax, %rsi
+                        addq $65, %rsi
+                        je .LBB2071_92
+                        movq 368(%rsp), %rdi
+                        subq %rax, %rdi
+                        addq $-48, %rdi
+                        movl $16, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 344(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_95
+                        leaq (,%rsi,8), %rax
+                        leaq (%rax,%rax,4), %rax
+                        andq $-16, %rax
+                        addq %rax, %rsi
+                        addq $65, %rsi
+                        je .LBB2071_95
+                        movq 336(%rsp), %rdi
+                        subq %rax, %rdi
+                        addq $-48, %rdi
+                        movl $16, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq %r15, %r13
+                        movq 312(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_98
+                        leaq (,%rsi,8), %rax
+                        leaq (%rax,%rax,4), %rax
+                        andq $-16, %rax
+                        addq %rax, %rsi
+                        addq $65, %rsi
+                        je .LBB2071_98
+                        movq 304(%rsp), %rdi
+                        subq %rax, %rdi
+                        addq $-48, %rdi
+                        movl $16, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 8(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_102
+                        movl $1, %r15d
+                        subq %rax, %r15
+                        movq %r13, %r14
+                        movq %r14, %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEBH_
+                        incq %r15
+                        addq $448, %r14
+                        cmpq $1, %r15
+                        jne .LBB2071_100
+                        movq 248(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_104
+                        imulq $448, %rax, %rsi
+                        movl $8, %edx
+                        movq %r13, %rdi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 472(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_106
+                        movq 480(%rsp), %rdi
+                        movl $1, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 496(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_108
+                        movq 504(%rsp), %rdi
+                        imulq $56, %rax, %rsi
+                        movl $8, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 528(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_110
+                        movq 520(%rsp), %rdi
+                        leaq (,%rax,8), %rcx
+                        andq $-16, %rcx
+                        leaq (%rcx,%rax), %rsi
+                        addq $33, %rsi
+                        subq %rcx, %rdi
+                        addq $-16, %rdi
+                        movl $16, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        leaq 552(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtCs7G9rs9RTlYG_3std4sync9once_lock8OnceLockINtNtNtNtBI_11collections4hash3map7HashMapyINtNtCs1ymALInp1dT_5alloc3vec3VecNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global12GlobalTermIdENtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEEB2I_
+                        lock decq	(%r12)
+                        jne .LBB2071_113
+                        leaq 456(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcDNtNtCs579XeHONISZ_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCsgG1S2JanL2L_11purrdf_core@GOTPCREL(%rip)
+                        movq 16(%rsp), %rax
+                        addq $1848, %rsp
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        popq %rbp
+                        retq 
+                        movq 640(%rsp), %rcx
+                        movq 16(%rsp), %rdx
+                        movq %rcx, 56(%rdx)
+                        vmovups 624(%rsp), %xmm0
+                        vmovups %xmm0, 40(%rdx)
+                        movq 1056(%rsp), %rcx
+                        movq %rcx, 32(%rdx)
+                        vmovaps 1040(%rsp), %xmm0
+                        vmovups %xmm0, 16(%rdx)
+                        movq %rax, 8(%rdx)
+                        movq $-1, (%rdx)
+                        jmp .LBB2071_89
+                        movq %rbp, 56(%rsp)
+                        movq %rbx, 80(%rsp)
+                        leaq 80(%rsp), %rax
+                        movq %rax, 1040(%rsp)
+                        movq _RNvXs_NtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8providerNtB4_14PageGenerationNtNtCs579XeHONISZ_4core3fmt7Display3fmt@GOTPCREL(%rip), %rax
+                        movq %rax, 1048(%rsp)
+                        leaq 56(%rsp), %rcx
+                        movq %rcx, 1056(%rsp)
+                        movq %rax, 1064(%rsp)
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.3659(%rip), %rsi
+                        leaq 592(%rsp), %rdi
+                        leaq 1040(%rsp), %rdx
+                        callq *_RNvNvNtCs1ymALInp1dT_5alloc3fmt6format12format_inner@GOTPCREL(%rip)
+                        movq 8(%rsp), %rax
+                        movq %rax, 640(%rsp)
+                        movb $1, 616(%rsp)
+                        movq %rbp, 624(%rsp)
+                        movq %rbx, 632(%rsp)
+                        movzbl 616(%rsp), %eax
+                        movq 16(%rsp), %rcx
+                        movb %al, 32(%rcx)
+                        movl 617(%rsp), %eax
+                        movl %eax, 33(%rcx)
+                        movzwl 621(%rsp), %eax
+                        movw %ax, 37(%rcx)
+                        movzbl 623(%rsp), %eax
+                        movb %al, 39(%rcx)
+                        movq 624(%rsp), %rax
+                        movq %rax, 40(%rcx)
+                        movq 632(%rsp), %rax
+                        movq %rax, 48(%rcx)
+                        movq 640(%rsp), %rax
+                        vmovups 592(%rsp), %xmm0
+                        movq %rax, 56(%rcx)
+                        vmovups %xmm0, 8(%rcx)
+                        movq 608(%rsp), %rax
+                        movq %rax, 24(%rcx)
+                        movzbl 616(%rsp), %eax
+                        movb %al, 32(%rcx)
+                        movl 617(%rsp), %eax
+                        movl %eax, 33(%rcx)
+                        movzwl 621(%rsp), %eax
+                        movw %ax, 37(%rcx)
+                        movzbl 623(%rsp), %eax
+                        movb %al, 39(%rcx)
+                        movq $-1, (%rcx)
+                        movq 272(%rsp), %rax
+                        lock decq	(%rax)
+                        jne .LBB2071_89
+                        movb $1, %bpl
+                        leaq 272(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        jmp .LBB2071_89
+                        movzbl 1456(%rsp), %eax
+                        movq 1464(%rsp), %r14
+                        movq 1472(%rsp), %r15
+                        movzbl 1488(%rsp), %ecx
+                        movb %cl, 64(%rsp)
+                        movq 1480(%rsp), %rcx
+                        movq %rcx, 56(%rsp)
+                        cmpb $1, %al
+                        jne .LBB2071_124
+                        movq 56(%rsp), %rdx
+                        movq $0, 80(%rsp)
+                        movq $1, 88(%rsp)
+                        movq $0, 96(%rsp)
+                        movq $1610612768, 608(%rsp)
+                        leaq 80(%rsp), %rax
+                        movq %rax, 592(%rsp)
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.3177(%rip), %rax
+                        movq %rax, 600(%rsp)
+                        leaq 592(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *_RNvMsa_NtCs579XeHONISZ_4core3fmtNtB5_9Formatter9write_str@GOTPCREL(%rip)
+                        movq %r12, %rbp
+                        testb %al, %al
+                        jne .LBB2071_131
+                        movl 80(%rsp), %eax
+                        movl 83(%rsp), %ecx
+                        movl %ecx, 51(%rsp)
+                        movl %eax, 48(%rsp)
+                        movq 87(%rsp), %r13
+                        movq 95(%rsp), %r12
+                        movzbl 103(%rsp), %ebx
+                        addq $21, 192(%rsp)
+                        testq %r14, %r14
+                        je .LBB2071_123
+                        movl $1, %edx
+                        movq %r15, %rdi
+                        movq %r14, %rsi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 8(%rsp), %rcx
+                        movq %r13, %r14
+                        movq %r12, %r15
+                        movq %rbp, %r12
+                        movq 192(%rsp), %r8
+                        jmp .LBB2071_125
+                        movzbl 1489(%rsp), %eax
+                        movl 1457(%rsp), %ecx
+                        movl 1460(%rsp), %edx
+                        movl %edx, 51(%rsp)
+                        movl %ecx, 48(%rsp)
+                        movzbl 56(%rsp), %ebx
+                        movq 57(%rsp), %rcx
+                        movabsq $9223372036854775793, %r8
+                        addq $15, %r8
+                        movl 48(%rsp), %edx
+                        movl 51(%rsp), %esi
+                        movl %edx, 184(%rsp)
+                        movl %esi, 187(%rsp)
+                        movl 184(%rsp), %edx
+                        movl 187(%rsp), %esi
+                        movl %edx, 176(%rsp)
+                        movl %esi, 179(%rsp)
+                        movl 176(%rsp), %edx
+                        movl 179(%rsp), %esi
+                        movq 16(%rsp), %rdi
+                        movl %esi, 19(%rdi)
+                        movl %edx, 16(%rdi)
+                        movq %r8, 8(%rdi)
+                        movq %r14, 23(%rdi)
+                        movq %r15, 31(%rdi)
+                        movb %bl, 39(%rdi)
+                        movq %rcx, 40(%rdi)
+                        movb %al, 48(%rdi)
+                        movq $-1, (%rdi)
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movq 208(%rsp), %r15
+                        jne .LBB2071_89
+                        leaq 168(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        jmp .LBB2071_89
+                        movq 96(%rbx), %rax
+                        movq %rax, 80(%rsp)
+                        leaq 80(%rsp), %rax
+                        movq %rax, 592(%rsp)
+                        movq _RNvXsi_NtNtNtCs579XeHONISZ_4core3fmt3num3impjNtB9_7Display3fmt@GOTPCREL(%rip), %rax
+                        movq %rax, 600(%rsp)
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.4446(%rip), %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.4447(%rip), %rdx
+                        leaq 592(%rsp), %rsi
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking9panic_fmt@GOTPCREL(%rip)
+                        jmp .LBB2071_140
+                        movabsq $9223372036854775793, %rcx
+                        addq $17, %rcx
+                        movq 16(%rsp), %rax
+                        movq %rcx, 8(%rax)
+                        movq $-1, (%rax)
+                        testq %rsi, %rsi
+                        movq 32(%rsp), %r12
+                        jne .LBB2071_82
+                        jmp .LBB2071_83
+                        movq %rdx, %rdi
+                        jmp .LBB2071_139
+                        movq %rax, %rdi
+                        jmp .LBB2071_139
+                        movq %rcx, %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.556(%rip), %rdx
+                        movq (%rsp), %rsi
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking18panic_bounds_check@GOTPCREL(%rip)
+                        jmp .LBB2071_140
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.6357(%rip), %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.3153(%rip), %rcx
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.6359(%rip), %r8
+                        leaq 47(%rsp), %rdx
+                        movl $55, %esi
+                        movq %rbp, %r12
+                        callq *_RNvNtCs579XeHONISZ_4core6result13unwrap_failed@GOTPCREL(%rip)
+                        ud2 
+                        movq %rax, %rbx
+                        movq 272(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        jne .LBB2071_175
+                        leaq 272(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        movq %r15, %rdi
+                        movq %r14, %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtCs1ymALInp1dT_5alloc5boxed3BoxSNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEEB1h_
+                        xorl %ebp, %ebp
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        movb $1, %bpl
+                        movq 32(%rsp), %r12
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        leaq 592(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEBH_
+                        jmp .LBB2071_173
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+                        jmp .LBB2071_153
+                        movq %rax, %rbx
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        je .LBB2071_174
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        movb $1, %bpl
+                        jmp .LBB2071_175
+                        jmp .LBB2071_172
+                        jmp .LBB2071_172
+                        movq %rax, %rbx
+                        jmp .LBB2071_179
+                        jmp .LBB2071_172
+                        movq %rax, %rbx
+                        movq 80(%rsp), %rsi
+                        testq %rsi, %rsi
+                        jne .LBB2071_161
+                        testq %r14, %r14
+                        jne .LBB2071_162
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        je .LBB2071_174
+                        jmp .LBB2071_175
+                        movq 88(%rsp), %rdi
+                        movl $1, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        testq %r14, %r14
+                        je .LBB2071_160
+                        movl $1, %edx
+                        movq %r15, %rdi
+                        movq %r14, %rsi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        je .LBB2071_174
+                        jmp .LBB2071_175
+                        jmp .LBB2071_172
+                        movq %rax, %rbx
+                        testq %r15, %r15
+                        je .LBB2071_168
+                        negq %r15
+                        addq $448, %r14
+                        movq %r14, %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEBH_
+                        addq $448, %r14
+                        decq %r15
+                        jne .LBB2071_166
+                        movq 248(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_178
+                        imulq $448, %rax, %rsi
+                        movl $8, %edx
+                        movq %r13, %rdi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        jmp .LBB2071_178
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+                        movq %rax, %rbx
+                        leaq 1040(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged11translation15PageTranslationEBJ_
+                        movq 32(%rsp), %r12
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        jne .LBB2071_175
+                        leaq 168(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        movq 368(%rsp), %rdi
+                        movq 376(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        movq 336(%rsp), %rdi
+                        movq 344(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        movq 304(%rsp), %rdi
+                        movq 312(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        testb %bpl, %bpl
+                        je .LBB2071_178
+                        leaq 248(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtCs1ymALInp1dT_5alloc3vec3VecNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEEB1e_
+                        jmp .LBB2071_178
+                        movq %rax, %rbx
+                        leaq 472(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global16GlobalDictionaryEBH_
+                        lock decq	(%r12)
+                        jne .LBB2071_181
+                        leaq 456(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcDNtNtCs579XeHONISZ_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCsgG1S2JanL2L_11purrdf_core@GOTPCREL(%rip)
+                        movq %rbx, %rdi
+                        callq _Unwind_Resume@PLT
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+x86_64-v4            purrdf_core  <purrdf_core::ir::paged::PagedDataset>::from_provider::{closure#2}
+                     v0 f0 r0  [purrdf_core-dbaec6abe162cd34.s]  
+                        pushq %rbp
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        subq $680, %rsp
+                        movl %r9d, 12(%rsp)
+                        movq %r8, %r14
+                        movq %rcx, %r12
+                        movq %rdx, %r15
+                        movq %rdi, %rbx
+                        movq (%rsi), %r13
+                        movq (%rcx), %rdx
+                        movq _RNvMs1_NtNtCsgG1S2JanL2L_11purrdf_core2ir6globalNtB5_16GlobalDictionary10term_value@GOTPCREL(%rip), %rbp
+                        leaq 440(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *%rbp
+                        movq 8(%r12), %rdx
+                        leaq 520(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *%rbp
+                        movq 16(%r12), %rdx
+                        leaq 600(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *_RNvMs1_NtNtCsgG1S2JanL2L_11purrdf_core2ir6globalNtB5_16GlobalDictionary10term_value@GOTPCREL(%rip)
+                        movq 24(%r12), %rdx
+                        testq %rdx, %rdx
+                        je .LBB1570_3
+                        leaq 96(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *_RNvMs1_NtNtCsgG1S2JanL2L_11purrdf_core2ir6globalNtB5_16GlobalDictionary10term_value@GOTPCREL(%rip)
+                        movq 96(%rsp), %rax
+                        vmovups 104(%rsp), %ymm0
+                        vmovups %ymm0, 16(%rsp)
+                        vmovups 136(%rsp), %ymm0
+                        vmovups %ymm0, 48(%rsp)
+                        movq 168(%rsp), %rcx
+                        movq %rcx, 80(%rsp)
+                        jmp .LBB1570_4
+                        movq $-1, %rax
+                        movq %r14, 416(%rsp)
+                        movq %r13, 424(%rsp)
+                        movl 12(%rsp), %ecx
+                        movb %cl, 432(%rsp)
+                        vmovups 440(%rsp), %ymm0
+                        vmovups 472(%rsp), %ymm1
+                        vmovups 488(%rsp), %ymm2
+                        vmovups %ymm0, 96(%rsp)
+                        vmovups %ymm1, 128(%rsp)
+                        vmovups %ymm2, 144(%rsp)
+                        vmovups 520(%rsp), %ymm0
+                        vmovups 552(%rsp), %ymm1
+                        vmovups 568(%rsp), %ymm2
+                        vmovups %ymm0, 176(%rsp)
+                        vmovups %ymm1, 208(%rsp)
+                        vmovups %ymm2, 224(%rsp)
+                        vmovups 600(%rsp), %ymm0
+                        vmovups 632(%rsp), %ymm1
+                        vmovups 648(%rsp), %ymm2
+                        vmovups %ymm0, 256(%rsp)
+                        vmovups %ymm1, 288(%rsp)
+                        vmovups %ymm2, 304(%rsp)
+                        movq %rax, 336(%rsp)
+                        vmovups 16(%rsp), %ymm0
+                        vmovups 48(%rsp), %ymm1
+                        vmovups %ymm0, 344(%rsp)
+                        vmovups %ymm1, 376(%rsp)
+                        movq 80(%rsp), %rax
+                        movq %rax, 408(%rsp)
+                        vzeroupper 
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+                        movl $344, %edi
+                        movl $8, %esi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+                        testq %rax, %rax
+                        je .LBB1570_5
+                        movq %rax, %r14
+                        leaq 96(%rsp), %rsi
+                        movl $344, %edx
+                        movq %rax, %rdi
+                        callq *memcpy@GOTPCREL(%rip)
+                        movq %r14, 8(%rbx)
+                        movabsq $-9223372036854775803, %rax
+                        movq %rax, (%rbx)
+                        addq $680, %rsp
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        popq %rbp
+                        retq 
+                        movl $8, %edi
+                        movl $344, %esi
+                        callq *_RNvNtCs1ymALInp1dT_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip)
+                        ud2 
+                        movq %rax, %rbx
+                        leaq 600(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir4term9TermValueEBH_
+                        jmp .LBB1570_10
+                        movq %rax, %rbx
+                        leaq 520(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir4term9TermValueEBH_
+                        jmp .LBB1570_8
+                        movq %rax, %rbx
+                        leaq 440(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir4term9TermValueEBH_
+                        jmp .LBB1570_12
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+                        movq %rax, %rbx
+                        leaq 96(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged16PagedQuadOverlapEBH_
+                        movq %rbx, %rdi
+                        callq _Unwind_Resume@PLT
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+x86_64-v4            purrdf_core  <purrdf_core::ir::paged::PagedDataset>::from_provider
+                     v0 f0 r0  [purrdf_core-dbaec6abe162cd34.s]  vxorps×1
+                        pushq %rbp
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        subq $1848, %rsp
+                        movq %rdx, %r13
+                        movq %rsi, %r12
+                        movq %rdi, 16(%rsp)
+                        movq %rsi, 456(%rsp)
+                        movq %rdx, 464(%rsp)
+                        movq 16(%rdx), %rax
+                        movq 32(%rdx), %r15
+                        decq %rax
+                        andq $-16, %rax
+                        leaq (%rsi,%rax), %r14
+                        addq $16, %r14
+                        movq %r14, %rdi
+                        callq *%r15
+                        movq %rax, %rbp
+                        movq 24(%r13), %rax
+                        movq %r14, %rdi
+                        movq %rax, 448(%rsp)
+                        callq *%rax
+                        movq $0, 472(%rsp)
+                        movq $1, 480(%rsp)
+                        vxorps %xmm0, %xmm0, %xmm0
+                        vmovups %xmm0, 488(%rsp)
+                        movq $8, 504(%rsp)
+                        movq $0, 512(%rsp)
+                        vmovups .Lanon.cfade0e47e95f4782483ddba2ac72c6f.65(%rip), %ymm0
+                        vmovups %ymm0, 520(%rsp)
+                        movl $3, 584(%rsp)
+                        imulq $448, %rax, %rbx
+                        movabsq $20587884010836553, %rcx
+                        cmpq %rcx, %rax
+                        jbe .LBB2071_5
+                        xorl %r14d, %r14d
+                        movq %r14, %rdi
+                        movq %rbx, %rsi
+                        vzeroupper 
+                        callq *_RNvNtCs1ymALInp1dT_5alloc7raw_vec12handle_error@GOTPCREL(%rip)
+                        jmp .LBB2071_140
+                        movq %r15, 440(%rsp)
+                        movq %rax, 152(%rsp)
+                        movq %r14, 224(%rsp)
+                        testq %rbx, %rbx
+                        je .LBB2071_8
+                        vzeroupper 
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc35___rust_no_alloc_shim_is_unstable_v2@GOTPCREL(%rip)
+                        movl $8, %r14d
+                        movl $8, %esi
+                        movq %rbx, %rdi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc12___rust_alloc@GOTPCREL(%rip)
+                        testq %rax, %rax
+                        je .LBB2071_4
+                        movq %rax, %r15
+                        movq 152(%rsp), %rcx
+                        movq %rcx, %rax
+                        vmovups .Lanon.cfade0e47e95f4782483ddba2ac72c6f.65(%rip), %ymm0
+                        jmp .LBB2071_9
+                        movl $8, %r15d
+                        xorl %eax, %eax
+                        movq 152(%rsp), %rcx
+                        movabsq $9223372036854775793, %rbx
+                        movq %rax, 248(%rsp)
+                        movq %r15, 256(%rsp)
+                        vmovups %ymm0, 304(%rsp)
+                        movq $0, 264(%rsp)
+                        vmovups %ymm0, 336(%rsp)
+                        vmovups %ymm0, 368(%rsp)
+                        testq %rcx, %rcx
+                        movq %r13, 424(%rsp)
+                        je .LBB2071_69
+                        movq 48(%r13), %rax
+                        xorl %edx, %edx
+                        leaq 592(%rsp), %rdi
+                        xorl %ecx, %ecx
+                        movq $0, 200(%rsp)
+                        movq %r12, 32(%rsp)
+                        movq %rbp, 416(%rsp)
+                        movq %rbx, 192(%rsp)
+                        movq %rax, 408(%rsp)
+                        movq %rcx, 432(%rsp)
+                        movq %rdx, 232(%rsp)
+                        movq 224(%rsp), %rsi
+                        movq %rdx, 8(%rsp)
+                        vzeroupper 
+                        callq *%rax
+                        leaq 600(%rsp), %rcx
+                        vmovups (%rcx), %xmm0
+                        movq 592(%rsp), %rax
+                        vmovaps %xmm0, 1040(%rsp)
+                        movq 16(%rcx), %rcx
+                        movq %rcx, 1056(%rsp)
+                        cmpq $-1, %rax
+                        jne .LBB2071_114
+                        vmovaps 1040(%rsp), %xmm0
+                        vmovaps %xmm0, 272(%rsp)
+                        movq 1056(%rsp), %rax
+                        movq %rax, 288(%rsp)
+                        movq 280(%rsp), %rbx
+                        cmpq %rbp, %rbx
+                        jne .LBB2071_115
+                        movq 272(%rsp), %rax
+                        movq %rax, 168(%rsp)
+                        movq %rax, 24(%rsp)
+                        leaq 16(%rax), %rsi
+                        leaq 1448(%rsp), %rdi
+                        movq %rsi, 72(%rsp)
+                        leaq 472(%rsp), %rdx
+                        callq _RNvMNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged11translationNtB2_15PageTranslation9try_build
+                        movq %r15, 208(%rsp)
+                        movq 1448(%rsp), %rbx
+                        cmpq $-1, %rbx
+                        je .LBB2071_118
+                        movq 1456(%rsp), %rax
+                        movq %rax, (%rsp)
+                        vmovups 1471(%rsp), %xmm0
+                        vmovaps %xmm0, 128(%rsp)
+                        movzbl 1487(%rsp), %ebp
+                        movq 1488(%rsp), %r15
+                        movzbl 1496(%rsp), %r12d
+                        leaq 1464(%rsp), %r13
+                        movq 33(%r13), %rax
+                        movq 40(%r13), %rcx
+                        leaq 1056(%rsp), %r14
+                        movq %rax, 33(%r14)
+                        movq %rcx, 40(%r14)
+                        movl $336, %edx
+                        leaq 1104(%rsp), %rdi
+                        leaq 1512(%rsp), %rsi
+                        callq *memcpy@GOTPCREL(%rip)
+                        movl (%r13), %eax
+                        movl 3(%r13), %ecx
+                        movl %ecx, 3(%r14)
+                        movl %eax, (%r14)
+                        movq %rbx, 1040(%rsp)
+                        movq (%rsp), %rax
+                        movq %rax, 1048(%rsp)
+                        vmovaps 128(%rsp), %xmm0
+                        vmovups %xmm0, 1063(%rsp)
+                        movb %bpl, 1079(%rsp)
+                        movq %r15, 1080(%rsp)
+                        movb %r12b, 1088(%rsp)
+                        movq 24(%rsp), %rax
+                        movzwl 440(%rax), %ecx
+                        movq %rcx, 160(%rsp)
+                        movzbl 442(%rax), %ecx
+                        movl %ecx, 244(%rsp)
+                        movl 436(%rax), %ecx
+                        movq %rcx, 216(%rsp)
+                        movq 80(%rax), %rcx
+                        movq 1408(%rsp), %r15
+                        movq 1416(%rsp), %rsi
+                        testq %rcx, %rcx
+                        movq %rsi, (%rsp)
+                        movq %rcx, 296(%rsp)
+                        je .LBB2071_28
+                        movq 24(%rsp), %rax
+                        movq 72(%rax), %r12
+                        shlq $4, %rcx
+                        addq %r12, %rcx
+                        movq %rcx, 128(%rsp)
+                        movl (%r12), %edi
+                        decl %edi
+                        cmpq %rdi, %rsi
+                        jbe .LBB2071_139
+                        movl 4(%r12), %eax
+                        decl %eax
+                        cmpq %rax, %rsi
+                        jbe .LBB2071_129
+                        movl 8(%r12), %edx
+                        decl %edx
+                        cmpq %rdx, %rsi
+                        jbe .LBB2071_130
+                        movl 12(%r12), %ecx
+                        movq (%r15,%rdi,8), %r13
+                        movq (%r15,%rax,8), %rbx
+                        movq (%r15,%rdx,8), %rbp
+                        testl %ecx, %ecx
+                        je .LBB2071_24
+                        decl %ecx
+                        cmpq %rcx, %rsi
+                        jbe .LBB2071_138
+                        movq (%r15,%rcx,8), %r14
+                        jmp .LBB2071_25
+                        xorl %r14d, %r14d
+                        movq %r13, 592(%rsp)
+                        movq %rbx, 600(%rsp)
+                        movq %rbp, 608(%rsp)
+                        movq %r14, 616(%rsp)
+                        leaq 304(%rsp), %rdi
+                        leaq 592(%rsp), %rsi
+                        movq 8(%rsp), %rdx
+                        callq _RNvMs1_NtCs9OlUndfSYSR_9hashbrown3mapINtB5_7HashMapTNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCs579XeHONISZ_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateE6insertBU_
+                        cmpq $1, %rax
+                        je .LBB2071_77
+                        addq $16, %r12
+                        cmpq 128(%rsp), %r12
+                        movq (%rsp), %rsi
+                        jne .LBB2071_18
+                        movq 24(%rsp), %rbx
+                        cmpq $0, 96(%rbx)
+                        movq 216(%rsp), %r14
+                        movq 72(%rsp), %r12
+                        je .LBB2071_31
+                        movl $50, %edx
+                        movq %r12, %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.353(%rip), %rsi
+                        callq *_RNvMse_NtNtCsgG1S2JanL2L_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)
+                        testl %eax, %eax
+                        je .LBB2071_127
+                        movl $50, %edx
+                        movq %r12, %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.353(%rip), %rsi
+                        callq *_RNvMse_NtNtCsgG1S2JanL2L_11purrdf_core2ir7datasetNtB5_10RdfDataset14term_id_by_iri@GOTPCREL(%rip)
+                        movl %eax, %r9d
+                        movq 8(%rsp), %rax
+                        incq %rax
+                        movq %rax, 144(%rsp)
+                        movl 244(%rsp), %ecx
+                        shll $16, %ecx
+                        movq 160(%rsp), %rax
+                        orl %ecx, %eax
+                        shlq $32, %rax
+                        orq %rax, %r14
+                        movq %r14, 216(%rsp)
+                        movq %rax, 160(%rsp)
+                        xorl %ebx, %ebx
+                        movq %r15, 128(%rsp)
+                        testq %rbx, %rbx
+                        movq (%rsp), %rsi
+                        je .LBB2071_37
+                        cmpq 72(%rsp), %rbx
+                        je .LBB2071_37
+                        movl (%rbx), %edi
+                        testl %edi, %edi
+                        je .LBB2071_37
+                        movq 160(%rsp), %r8
+                        jmp .LBB2071_41
+                        testl %r9d, %r9d
+                        movq 24(%rsp), %rcx
+                        je .LBB2071_50
+                        movq 96(%rcx), %rax
+                        testq %rax, %rax
+                        je .LBB2071_50
+                        movq 88(%rcx), %rbx
+                        movl (%rbx), %edi
+                        testl %edi, %edi
+                        je .LBB2071_50
+                        leaq (%rax,%rax,2), %rax
+                        leaq (%rbx,%rax,4), %rax
+                        movq %rax, 72(%rsp)
+                        movl %r9d, %r8d
+                        xorl %r9d, %r9d
+                        decl %edi
+                        cmpq %rdi, %rsi
+                        jbe .LBB2071_139
+                        leal -1(%r8), %ecx
+                        cmpq %rcx, %rsi
+                        jbe .LBB2071_138
+                        movq 4(%rbx), %rax
+                        movl $4294967295, %edx
+                        addl %eax, %edx
+                        cmpq %rdx, %rsi
+                        jbe .LBB2071_130
+                        movq (%r15,%rdi,8), %rbp
+                        movq (%r15,%rcx,8), %r12
+                        movq (%r15,%rdx,8), %r13
+                        shrq $32, %rax
+                        movq %r8, 160(%rsp)
+                        je .LBB2071_47
+                        movl $4294967295, %ecx
+                        addl %ecx, %eax
+                        cmpq %rax, %rsi
+                        jbe .LBB2071_129
+                        movl %r9d, %r15d
+                        movq 128(%rsp), %rcx
+                        movq (%rcx,%rax,8), %r14
+                        jmp .LBB2071_48
+                        movl %r9d, %r15d
+                        xorl %r14d, %r14d
+                        movq %rbp, 592(%rsp)
+                        movq %r12, 600(%rsp)
+                        movq %r13, 608(%rsp)
+                        movq %r14, 616(%rsp)
+                        leaq 336(%rsp), %rdi
+                        leaq 592(%rsp), %rsi
+                        movq 8(%rsp), %rdx
+                        callq _RNvMs1_NtCs9OlUndfSYSR_9hashbrown3mapINtB5_7HashMapTNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCs579XeHONISZ_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateE6insertBU_
+                        addq $12, %rbx
+                        cmpq $1, %rax
+                        movl %r15d, %r9d
+                        movq 128(%rsp), %r15
+                        jne .LBB2071_33
+                        jmp .LBB2071_79
+                        movq 112(%rcx), %rax
+                        testq %rax, %rax
+                        je .LBB2071_62
+                        movq %rax, %rcx
+                        movq 24(%rsp), %rax
+                        movq 104(%rax), %r12
+                        shlq $4, %rcx
+                        addq %r12, %rcx
+                        movq %rcx, 128(%rsp)
+                        movl (%r12), %edi
+                        decl %edi
+                        cmpq %rdi, %rsi
+                        jbe .LBB2071_139
+                        movl 4(%r12), %eax
+                        decl %eax
+                        cmpq %rax, %rsi
+                        jbe .LBB2071_129
+                        movl 8(%r12), %edx
+                        decl %edx
+                        cmpq %rdx, %rsi
+                        jbe .LBB2071_130
+                        movl 12(%r12), %ecx
+                        movq (%r15,%rdi,8), %r13
+                        movq (%r15,%rax,8), %rbp
+                        movq (%r15,%rdx,8), %rbx
+                        testl %ecx, %ecx
+                        je .LBB2071_58
+                        decl %ecx
+                        cmpq %rcx, %rsi
+                        jbe .LBB2071_138
+                        movq (%r15,%rcx,8), %r14
+                        jmp .LBB2071_59
+                        xorl %r14d, %r14d
+                        movq %r13, 592(%rsp)
+                        movq %rbp, 600(%rsp)
+                        movq %rbx, 608(%rsp)
+                        movq %r14, 616(%rsp)
+                        leaq 368(%rsp), %rdi
+                        leaq 592(%rsp), %rsi
+                        movq 8(%rsp), %rdx
+                        callq _RNvMs1_NtCs9OlUndfSYSR_9hashbrown3mapINtB5_7HashMapTNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global12GlobalTermIdBO_BO_INtNtCs579XeHONISZ_4core6option6OptionBO_EENtNtNtBS_5paged8provider6PageIdNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateE6insertBU_
+                        cmpq $1, %rax
+                        je .LBB2071_80
+                        addq $16, %r12
+                        cmpq 128(%rsp), %r12
+                        movq (%rsp), %rsi
+                        jne .LBB2071_52
+                        movq 216(%rsp), %r14
+                        movq %r14, %r13
+                        movabsq $-281474976710656, %rax
+                        andq %rax, %r13
+                        movq 432(%rsp), %rcx
+                        btq $48, %rcx
+                        movabsq $281474976710656, %rax
+                        cmovbq %rax, %r13
+                        movq %r14, %rdx
+                        movabsq $280375465082880, %rax
+                        andq %rax, %rdx
+                        btq $40, %rcx
+                        movabsq $1099511627776, %rax
+                        cmovbq %rax, %rdx
+                        movq %rdx, (%rsp)
+                        movq %r14, %rdx
+                        movabsq $1095216660480, %rax
+                        andq %rax, %rdx
+                        btq $32, %rcx
+                        movabsq $4294967296, %rax
+                        cmovbq %rax, %rdx
+                        movq %rdx, 128(%rsp)
+                        movl %r14d, %ebp
+                        andl $-16777216, %ebp
+                        testl $16777216, %ecx
+                        movl $16777216, %eax
+                        cmovneq %rax, %rbp
+                        movl %r14d, %ebx
+                        andl $16711680, %ebx
+                        testl $65536, %ecx
+                        movl $65536, %eax
+                        cmovneq %rax, %rbx
+                        movl %r14d, %r12d
+                        andl $65280, %r12d
+                        testl $256, %ecx
+                        movl $256, %eax
+                        cmovneq %rax, %r12
+                        testb $1, %cl
+                        movzbl %r14b, %ecx
+                        movl $1, %eax
+                        cmovneq %rax, %rcx
+                        movq %rcx, 72(%rsp)
+                        movq 296(%rsp), %rax
+                        addq %rax, 200(%rsp)
+                        jb .LBB2071_128
+                        movl $400, %edx
+                        leaq 592(%rsp), %rdi
+                        leaq 1040(%rsp), %rsi
+                        callq *memcpy@GOTPCREL(%rip)
+                        movq 288(%rsp), %rax
+                        movq 8(%rsp), %rdx
+                        movq %rdx, 992(%rsp)
+                        movl $3, 1008(%rsp)
+                        movq %r14, %rcx
+                        shrq $48, %rcx
+                        movb %cl, 1038(%rsp)
+                        movq %r14, %rcx
+                        shrq $32, %rcx
+                        movw %cx, 1036(%rsp)
+                        movl %r14d, 1032(%rsp)
+                        movq 296(%rsp), %rcx
+                        movq %rcx, 1016(%rsp)
+                        movq %rax, 1024(%rsp)
+                        cmpq 248(%rsp), %rdx
+                        movq 208(%rsp), %r15
+                        jne .LBB2071_66
+                        leaq 248(%rsp), %rdi
+                        callq *_RNvMs7_NtCs1ymALInp1dT_5alloc7raw_vecINtB5_6RawVecNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotE8grow_oneBS_@GOTPCREL(%rip)
+                        movq 256(%rsp), %r15
+                        imulq $448, 8(%rsp), %rdi
+                        addq %r15, %rdi
+                        movl $448, %edx
+                        leaq 592(%rsp), %rsi
+                        callq *memcpy@GOTPCREL(%rip)
+                        movq 144(%rsp), %rax
+                        movq %rax, 264(%rsp)
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        jne .LBB2071_68
+                        leaq 168(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        addq (%rsp), %r13
+                        addq 128(%rsp), %r13
+                        orq %rbp, %r13
+                        orq %rbx, %r13
+                        orq %r12, %r13
+                        orq 72(%rsp), %r13
+                        movq 144(%rsp), %rax
+                        movq %rax, %rdx
+                        movq %r13, %rcx
+                        cmpq 152(%rsp), %rax
+                        movq 32(%rsp), %r12
+                        movq 416(%rsp), %rbp
+                        movabsq $9223372036854775793, %rbx
+                        movq 408(%rsp), %rax
+                        leaq 592(%rsp), %rdi
+                        jne .LBB2071_11
+                        jmp .LBB2071_70
+                        movq $0, 144(%rsp)
+                        movq $0, 200(%rsp)
+                        xorl %r13d, %r13d
+                        movq %rbx, %r14
+                        movq %rbp, %rbx
+                        movb $1, %bpl
+                        movq 224(%rsp), %rdi
+                        vzeroupper 
+                        callq *440(%rsp)
+                        cmpq %rbx, %rax
+                        jne .LBB2071_78
+                        movq 224(%rsp), %rdi
+                        callq *448(%rsp)
+                        movq 152(%rsp), %rcx
+                        cmpq %rcx, %rax
+                        jne .LBB2071_87
+                        xorl %ebp, %ebp
+                        leaq 248(%rsp), %rdi
+                        callq _RNvMs_NtCs1ymALInp1dT_5alloc3vecINtB4_3VecNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotE16into_boxed_sliceBK_
+                        movq %rax, %r15
+                        movq %rdx, %r14
+                        leaq 592(%rsp), %rdi
+                        movq %rax, %rsi
+                        callq _RNvMs_NtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged11graph_indexNtB4_14GraphPageIndex6derive
+                        vmovups 472(%rsp), %ymm0
+                        vmovups 504(%rsp), %ymm1
+                        vmovups 536(%rsp), %ymm2
+                        vmovups 560(%rsp), %ymm3
+                        movq 16(%rsp), %rcx
+                        vmovups %ymm3, 88(%rcx)
+                        vmovups %ymm2, 64(%rcx)
+                        vmovups %ymm1, 32(%rcx)
+                        vmovups %ymm0, (%rcx)
+                        vmovups 592(%rsp), %ymm0
+                        vmovups 624(%rsp), %ymm1
+                        vmovups 656(%rsp), %ymm2
+                        vmovups 688(%rsp), %ymm3
+                        vmovups %ymm0, 152(%rcx)
+                        vmovups %ymm1, 184(%rcx)
+                        vmovups %ymm2, 216(%rcx)
+                        vmovups %ymm3, 248(%rcx)
+                        vmovups 720(%rsp), %ymm0
+                        vmovups %ymm0, 280(%rcx)
+                        vmovups 752(%rsp), %ymm0
+                        vmovups %ymm0, 312(%rcx)
+                        movq %r15, 120(%rcx)
+                        movq %r14, 128(%rcx)
+                        movq %r12, 136(%rcx)
+                        movq 424(%rsp), %rax
+                        movq %rax, 144(%rcx)
+                        movq %rbx, 344(%rcx)
+                        movq 200(%rsp), %rax
+                        movq %rax, 352(%rcx)
+                        movq %r13, %rax
+                        shrq $48, %rax
+                        movb %al, 366(%rcx)
+                        movq %r13, %rax
+                        shrq $32, %rax
+                        movw %ax, 364(%rcx)
+                        movl %r13d, 360(%rcx)
+                        movq 368(%rsp), %rdi
+                        movq 376(%rsp), %rsi
+                        vzeroupper 
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        movq 336(%rsp), %rdi
+                        movq 344(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        movq 304(%rsp), %rdi
+                        movq 312(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        jmp .LBB2071_113
+                        movq %rdx, %r8
+                        movq %r13, 80(%rsp)
+                        movq %rbx, 88(%rsp)
+                        movq %rbp, 96(%rsp)
+                        movq %r14, 104(%rsp)
+                        movq %rdx, 112(%rsp)
+                        movb $0, 120(%rsp)
+                        leaq 592(%rsp), %rdi
+                        leaq 232(%rsp), %rsi
+                        leaq 472(%rsp), %rdx
+                        leaq 80(%rsp), %rcx
+                        xorl %r9d, %r9d
+                        callq _RNCNvMs3_NtNtCsgG1S2JanL2L_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+                        jmp .LBB2071_81
+                        addq $18, %r14
+                        jmp .LBB2071_88
+                        movq %rdx, %r8
+                        movq %rbp, 80(%rsp)
+                        movq %r12, 88(%rsp)
+                        movq %r13, 96(%rsp)
+                        movq %r14, 104(%rsp)
+                        movq %rdx, 112(%rsp)
+                        movb $1, 120(%rsp)
+                        leaq 592(%rsp), %rdi
+                        leaq 232(%rsp), %rsi
+                        leaq 472(%rsp), %rdx
+                        leaq 80(%rsp), %rcx
+                        movl $1, %r9d
+                        callq _RNCNvMs3_NtNtCsgG1S2JanL2L_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+                        jmp .LBB2071_81
+                        movq %rdx, %r8
+                        movq %r13, 80(%rsp)
+                        movq %rbp, 88(%rsp)
+                        movq %rbx, 96(%rsp)
+                        movq %r14, 104(%rsp)
+                        movq %rdx, 112(%rsp)
+                        movb $2, 120(%rsp)
+                        leaq 592(%rsp), %rdi
+                        leaq 232(%rsp), %rsi
+                        leaq 472(%rsp), %rdx
+                        leaq 80(%rsp), %rcx
+                        movl $2, %r9d
+                        callq _RNCNvMs3_NtNtCsgG1S2JanL2L_11purrdf_core2ir5pagedNtB7_12PagedDataset13from_providers0_0Bb_
+                        vmovups 592(%rsp), %ymm0
+                        vmovups 616(%rsp), %ymm1
+                        movq 16(%rsp), %rax
+                        vmovups %ymm1, 32(%rax)
+                        vmovups %ymm0, 8(%rax)
+                        movq $-1, (%rax)
+                        movq 32(%rsp), %r12
+                        movq (%rsp), %rsi
+                        shlq $3, %rsi
+                        movl $8, %edx
+                        movq %r15, %rdi
+                        vzeroupper 
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 1432(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_85
+                        movq 1424(%rsp), %rdi
+                        shlq $4, %rsi
+                        movl $8, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        leaq 1040(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged7summary11PageSummaryEBJ_
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movq 208(%rsp), %r15
+                        jne .LBB2071_89
+                        leaq 168(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        jmp .LBB2071_89
+                        addq $19, %r14
+                        movq %rcx, %rbx
+                        movq 16(%rsp), %rcx
+                        movq %r14, 8(%rcx)
+                        movq %rbx, 16(%rcx)
+                        movq %rax, 24(%rcx)
+                        movq $-1, (%rcx)
+                        movq 144(%rsp), %rax
+                        movq %rax, 8(%rsp)
+                        movq 376(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_92
+                        leaq (,%rsi,8), %rax
+                        leaq (%rax,%rax,4), %rax
+                        andq $-16, %rax
+                        addq %rax, %rsi
+                        addq $65, %rsi
+                        je .LBB2071_92
+                        movq 368(%rsp), %rdi
+                        subq %rax, %rdi
+                        addq $-48, %rdi
+                        movl $16, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 344(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_95
+                        leaq (,%rsi,8), %rax
+                        leaq (%rax,%rax,4), %rax
+                        andq $-16, %rax
+                        addq %rax, %rsi
+                        addq $65, %rsi
+                        je .LBB2071_95
+                        movq 336(%rsp), %rdi
+                        subq %rax, %rdi
+                        addq $-48, %rdi
+                        movl $16, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq %r15, %r13
+                        movq 312(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_98
+                        leaq (,%rsi,8), %rax
+                        leaq (%rax,%rax,4), %rax
+                        andq $-16, %rax
+                        addq %rax, %rsi
+                        addq $65, %rsi
+                        je .LBB2071_98
+                        movq 304(%rsp), %rdi
+                        subq %rax, %rdi
+                        addq $-48, %rdi
+                        movl $16, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 8(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_102
+                        movl $1, %r15d
+                        subq %rax, %r15
+                        movq %r13, %r14
+                        movq %r14, %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEBH_
+                        incq %r15
+                        addq $448, %r14
+                        cmpq $1, %r15
+                        jne .LBB2071_100
+                        movq 248(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_104
+                        imulq $448, %rax, %rsi
+                        movl $8, %edx
+                        movq %r13, %rdi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 472(%rsp), %rsi
+                        testq %rsi, %rsi
+                        je .LBB2071_106
+                        movq 480(%rsp), %rdi
+                        movl $1, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 496(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_108
+                        movq 504(%rsp), %rdi
+                        imulq $56, %rax, %rsi
+                        movl $8, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 528(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_110
+                        movq 520(%rsp), %rdi
+                        leaq (,%rax,8), %rcx
+                        andq $-16, %rcx
+                        leaq (%rcx,%rax), %rsi
+                        addq $33, %rsi
+                        subq %rcx, %rdi
+                        addq $-16, %rdi
+                        movl $16, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        leaq 552(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtCs7G9rs9RTlYG_3std4sync9once_lock8OnceLockINtNtNtNtBI_11collections4hash3map7HashMapyINtNtCs1ymALInp1dT_5alloc3vec3VecNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global12GlobalTermIdENtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEEB2I_
+                        lock decq	(%r12)
+                        jne .LBB2071_113
+                        leaq 456(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcDNtNtCs579XeHONISZ_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCsgG1S2JanL2L_11purrdf_core@GOTPCREL(%rip)
+                        movq 16(%rsp), %rax
+                        addq $1848, %rsp
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        popq %rbp
+                        retq 
+                        movq 640(%rsp), %rcx
+                        movq 16(%rsp), %rdx
+                        movq %rcx, 56(%rdx)
+                        vmovups 624(%rsp), %xmm0
+                        vmovups %xmm0, 40(%rdx)
+                        movq 1056(%rsp), %rcx
+                        movq %rcx, 32(%rdx)
+                        vmovaps 1040(%rsp), %xmm0
+                        vmovups %xmm0, 16(%rdx)
+                        movq %rax, 8(%rdx)
+                        movq $-1, (%rdx)
+                        jmp .LBB2071_89
+                        movq %rbp, 56(%rsp)
+                        movq %rbx, 80(%rsp)
+                        leaq 80(%rsp), %rax
+                        movq %rax, 1040(%rsp)
+                        movq _RNvXs_NtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8providerNtB4_14PageGenerationNtNtCs579XeHONISZ_4core3fmt7Display3fmt@GOTPCREL(%rip), %rax
+                        movq %rax, 1048(%rsp)
+                        leaq 56(%rsp), %rcx
+                        movq %rcx, 1056(%rsp)
+                        movq %rax, 1064(%rsp)
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.3659(%rip), %rsi
+                        leaq 592(%rsp), %rdi
+                        leaq 1040(%rsp), %rdx
+                        callq *_RNvNvNtCs1ymALInp1dT_5alloc3fmt6format12format_inner@GOTPCREL(%rip)
+                        movq 8(%rsp), %rax
+                        movq %rax, 640(%rsp)
+                        movb $1, 616(%rsp)
+                        movq %rbp, 624(%rsp)
+                        movq %rbx, 632(%rsp)
+                        movzbl 616(%rsp), %eax
+                        movq 16(%rsp), %rcx
+                        movb %al, 32(%rcx)
+                        movl 617(%rsp), %eax
+                        movl %eax, 33(%rcx)
+                        movzwl 621(%rsp), %eax
+                        movw %ax, 37(%rcx)
+                        movzbl 623(%rsp), %eax
+                        movb %al, 39(%rcx)
+                        movq 624(%rsp), %rax
+                        movq %rax, 40(%rcx)
+                        movq 632(%rsp), %rax
+                        movq %rax, 48(%rcx)
+                        movq 640(%rsp), %rax
+                        vmovups 592(%rsp), %xmm0
+                        movq %rax, 56(%rcx)
+                        vmovups %xmm0, 8(%rcx)
+                        movq 608(%rsp), %rax
+                        movq %rax, 24(%rcx)
+                        movzbl 616(%rsp), %eax
+                        movb %al, 32(%rcx)
+                        movl 617(%rsp), %eax
+                        movl %eax, 33(%rcx)
+                        movzwl 621(%rsp), %eax
+                        movw %ax, 37(%rcx)
+                        movzbl 623(%rsp), %eax
+                        movb %al, 39(%rcx)
+                        movq $-1, (%rcx)
+                        movq 272(%rsp), %rax
+                        lock decq	(%rax)
+                        jne .LBB2071_89
+                        movb $1, %bpl
+                        leaq 272(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        jmp .LBB2071_89
+                        movzbl 1456(%rsp), %eax
+                        movq 1464(%rsp), %r14
+                        movq 1472(%rsp), %r15
+                        movzbl 1488(%rsp), %ecx
+                        movb %cl, 64(%rsp)
+                        movq 1480(%rsp), %rcx
+                        movq %rcx, 56(%rsp)
+                        cmpb $1, %al
+                        jne .LBB2071_124
+                        movq 56(%rsp), %rdx
+                        movq $0, 80(%rsp)
+                        movq $1, 88(%rsp)
+                        movq $0, 96(%rsp)
+                        movq $1610612768, 608(%rsp)
+                        leaq 80(%rsp), %rax
+                        movq %rax, 592(%rsp)
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.3177(%rip), %rax
+                        movq %rax, 600(%rsp)
+                        leaq 592(%rsp), %rdi
+                        movq %r15, %rsi
+                        callq *_RNvMsa_NtCs579XeHONISZ_4core3fmtNtB5_9Formatter9write_str@GOTPCREL(%rip)
+                        movq %r12, %rbp
+                        testb %al, %al
+                        jne .LBB2071_131
+                        movl 80(%rsp), %eax
+                        movl 83(%rsp), %ecx
+                        movl %ecx, 51(%rsp)
+                        movl %eax, 48(%rsp)
+                        movq 87(%rsp), %r13
+                        movq 95(%rsp), %r12
+                        movzbl 103(%rsp), %ebx
+                        addq $21, 192(%rsp)
+                        testq %r14, %r14
+                        je .LBB2071_123
+                        movl $1, %edx
+                        movq %r15, %rdi
+                        movq %r14, %rsi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 8(%rsp), %rcx
+                        movq %r13, %r14
+                        movq %r12, %r15
+                        movq %rbp, %r12
+                        movq 192(%rsp), %r8
+                        jmp .LBB2071_125
+                        movzbl 1489(%rsp), %eax
+                        movl 1457(%rsp), %ecx
+                        movl 1460(%rsp), %edx
+                        movl %edx, 51(%rsp)
+                        movl %ecx, 48(%rsp)
+                        movzbl 56(%rsp), %ebx
+                        movq 57(%rsp), %rcx
+                        movabsq $9223372036854775793, %r8
+                        addq $15, %r8
+                        movl 48(%rsp), %edx
+                        movl 51(%rsp), %esi
+                        movl %edx, 184(%rsp)
+                        movl %esi, 187(%rsp)
+                        movl 184(%rsp), %edx
+                        movl 187(%rsp), %esi
+                        movl %edx, 176(%rsp)
+                        movl %esi, 179(%rsp)
+                        movl 176(%rsp), %edx
+                        movl 179(%rsp), %esi
+                        movq 16(%rsp), %rdi
+                        movl %esi, 19(%rdi)
+                        movl %edx, 16(%rdi)
+                        movq %r8, 8(%rdi)
+                        movq %r14, 23(%rdi)
+                        movq %r15, 31(%rdi)
+                        movb %bl, 39(%rdi)
+                        movq %rcx, 40(%rdi)
+                        movb %al, 48(%rdi)
+                        movq $-1, (%rdi)
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movq 208(%rsp), %r15
+                        jne .LBB2071_89
+                        leaq 168(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        jmp .LBB2071_89
+                        movq 96(%rbx), %rax
+                        movq %rax, 80(%rsp)
+                        leaq 80(%rsp), %rax
+                        movq %rax, 592(%rsp)
+                        movq _RNvXsi_NtNtNtCs579XeHONISZ_4core3fmt3num3impjNtB9_7Display3fmt@GOTPCREL(%rip), %rax
+                        movq %rax, 600(%rsp)
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.4446(%rip), %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.4447(%rip), %rdx
+                        leaq 592(%rsp), %rsi
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking9panic_fmt@GOTPCREL(%rip)
+                        jmp .LBB2071_140
+                        movabsq $9223372036854775793, %rcx
+                        addq $17, %rcx
+                        movq 16(%rsp), %rax
+                        movq %rcx, 8(%rax)
+                        movq $-1, (%rax)
+                        testq %rsi, %rsi
+                        movq 32(%rsp), %r12
+                        jne .LBB2071_82
+                        jmp .LBB2071_83
+                        movq %rdx, %rdi
+                        jmp .LBB2071_139
+                        movq %rax, %rdi
+                        jmp .LBB2071_139
+                        movq %rcx, %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.556(%rip), %rdx
+                        movq (%rsp), %rsi
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking18panic_bounds_check@GOTPCREL(%rip)
+                        jmp .LBB2071_140
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.6357(%rip), %rdi
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.3153(%rip), %rcx
+                        leaq .Lanon.cfade0e47e95f4782483ddba2ac72c6f.6359(%rip), %r8
+                        leaq 47(%rsp), %rdx
+                        movl $55, %esi
+                        movq %rbp, %r12
+                        callq *_RNvNtCs579XeHONISZ_4core6result13unwrap_failed@GOTPCREL(%rip)
+                        ud2 
+                        movq %rax, %rbx
+                        movq 272(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        jne .LBB2071_175
+                        leaq 272(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        movq %r15, %rdi
+                        movq %r14, %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtCs1ymALInp1dT_5alloc5boxed3BoxSNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEEB1h_
+                        xorl %ebp, %ebp
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        movb $1, %bpl
+                        movq 32(%rsp), %r12
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        leaq 592(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEBH_
+                        jmp .LBB2071_173
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+                        jmp .LBB2071_153
+                        movq %rax, %rbx
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        je .LBB2071_174
+                        jmp .LBB2071_175
+                        movq %rax, %rbx
+                        movb $1, %bpl
+                        jmp .LBB2071_175
+                        jmp .LBB2071_172
+                        jmp .LBB2071_172
+                        movq %rax, %rbx
+                        jmp .LBB2071_179
+                        jmp .LBB2071_172
+                        movq %rax, %rbx
+                        movq 80(%rsp), %rsi
+                        testq %rsi, %rsi
+                        jne .LBB2071_161
+                        testq %r14, %r14
+                        jne .LBB2071_162
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        je .LBB2071_174
+                        jmp .LBB2071_175
+                        movq 88(%rsp), %rdi
+                        movl $1, %edx
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        testq %r14, %r14
+                        je .LBB2071_160
+                        movl $1, %edx
+                        movq %r15, %rdi
+                        movq %r14, %rsi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        je .LBB2071_174
+                        jmp .LBB2071_175
+                        jmp .LBB2071_172
+                        movq %rax, %rbx
+                        testq %r15, %r15
+                        je .LBB2071_168
+                        negq %r15
+                        addq $448, %r14
+                        movq %r14, %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEBH_
+                        addq $448, %r14
+                        decq %r15
+                        jne .LBB2071_166
+                        movq 248(%rsp), %rax
+                        testq %rax, %rax
+                        je .LBB2071_178
+                        imulq $448, %rax, %rsi
+                        movl $8, %edx
+                        movq %r13, %rdi
+                        callq *_RNvCs5mwlMkDx0gn_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+                        jmp .LBB2071_178
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)
+                        movq %rax, %rbx
+                        leaq 1040(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged11translation15PageTranslationEBJ_
+                        movq 32(%rsp), %r12
+                        movq 24(%rsp), %rax
+                        lock decq	(%rax)
+                        movb $1, %bpl
+                        jne .LBB2071_175
+                        leaq 168(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7dataset10RdfDatasetE9drop_slowBR_@GOTPCREL(%rip)
+                        movq 368(%rsp), %rdi
+                        movq 376(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        movq 336(%rsp), %rdi
+                        movq 344(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        movq 304(%rsp), %rdi
+                        movq 312(%rsp), %rsi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtNtNtCs7G9rs9RTlYG_3std11collections4hash3map7HashMapNtNtNtCsgG1S2JanL2L_11purrdf_core2ir7mutable7QuadKeyjNtNtCslKDNeAYBAj7_11purrdf_hash5fixed10FixedStateEEB1C_
+                        testb %bpl, %bpl
+                        je .LBB2071_178
+                        leaq 248(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueINtNtCs1ymALInp1dT_5alloc3vec3VecNtNtNtCsgG1S2JanL2L_11purrdf_core2ir5paged8PageSlotEEB1e_
+                        jmp .LBB2071_178
+                        movq %rax, %rbx
+                        leaq 472(%rsp), %rdi
+                        callq _RINvNtCs579XeHONISZ_4core3ptr9drop_glueNtNtNtCsgG1S2JanL2L_11purrdf_core2ir6global16GlobalDictionaryEBH_
+                        lock decq	(%r12)
+                        jne .LBB2071_181
+                        leaq 456(%rsp), %rdi
+                        callq *_RNvMsn_NtNtCs1ymALInp1dT_5alloc3rcs3arcINtB5_3ArcDNtNtCs579XeHONISZ_4core3any3AnyNtNtBQ_6marker4SyncNtB1j_4SendEL_E9drop_slowCsgG1S2JanL2L_11purrdf_core@GOTPCREL(%rip)
+                        movq %rbx, %rdi
+                        callq _Unwind_Resume@PLT
+                        callq *_RNvNtCs579XeHONISZ_4core9panicking16panic_in_cleanup@GOTPCREL(%rip)

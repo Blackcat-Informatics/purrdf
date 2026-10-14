@@ -1,0 +1,2704 @@
+== x86_64-v3: 4 Cargo jobs
+== x86_64: 4 Cargo jobs
+== x86_64 graph 0: /opt/.cargo/slots/9a6dfb9549214eab/0/cargo.graph-0.stderr.log
+== x86_64-v3 graph 0: /opt/.cargo/slots/631cf07fa621effe/0/cargo.graph-0.stderr.log
+== x86_64-v3 graph 1: /opt/.cargo/slots/631cf07fa621effe/0/cargo.graph-1.stderr.log
+== x86_64-v3: {"analysis_seconds": 23.650216242938768, "build_seconds": 1898.185092907981, "fresh_artifacts": 65, "lock_seconds": 0.0019071930437348783, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 1922.0674364980077}
+== x86_64-v4: 4 Cargo jobs
+== x86_64-v4 graph 0: /opt/.cargo/slots/d2cedbd3348b4266/0/cargo.graph-0.stderr.log
+== x86_64 graph 1: /opt/.cargo/slots/9a6dfb9549214eab/0/cargo.graph-1.stderr.log
+== x86_64: {"analysis_seconds": 34.36552132398356, "build_seconds": 2245.886170811951, "fresh_artifacts": 65, "lock_seconds": 0.0015301950043067336, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 2280.616195737035}
+== aarch64: 4 Cargo jobs
+== aarch64 graph 0: /opt/.cargo/slots/d6ea236a5f10bb8c/0/cargo.graph-0.stderr.log
+== x86_64-v4 graph 1: /opt/.cargo/slots/d2cedbd3348b4266/0/cargo.graph-1.stderr.log
+== x86_64-v4: {"analysis_seconds": 64.86256977298763, "build_seconds": 1725.5238306749961, "fresh_artifacts": 65, "lock_seconds": 0.002763647004030645, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 1792.3338882679818}
+== aarch64-neoverse-v1: 4 Cargo jobs
+== aarch64-neoverse-v1 graph 0: /opt/.cargo/slots/cdb7870cdb7ee2c7/0/cargo.graph-0.stderr.log
+== aarch64 graph 1: /opt/.cargo/slots/d6ea236a5f10bb8c/0/cargo.graph-1.stderr.log
+== aarch64: {"analysis_seconds": 55.177559996023774, "build_seconds": 2568.271758871968, "fresh_artifacts": 65, "lock_seconds": 0.018846235005185008, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 2624.753757231054}
+== wasm32: 4 Cargo jobs
+== wasm32 graph 0: /opt/.cargo/slots/5badbf07c01323a2/0/cargo.graph-0.stderr.log
+== aarch64-neoverse-v1 graph 1: /opt/.cargo/slots/cdb7870cdb7ee2c7/0/cargo.graph-1.stderr.log
+== aarch64-neoverse-v1: {"analysis_seconds": 36.28568437101785, "build_seconds": 1557.478198383993, "fresh_artifacts": 65, "lock_seconds": 0.014445706969127059, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 1594.538348157017}
+== wasm32-simd128: 4 Cargo jobs
+== wasm32-simd128 graph 0: /opt/.cargo/slots/66a24e35a825ba8d/0/cargo.graph-0.stderr.log
+== wasm32 graph 1: /opt/.cargo/slots/5badbf07c01323a2/0/cargo.graph-1.stderr.log
+== wasm32: {"analysis_seconds": 33.203418065968435, "build_seconds": 854.3682764980476, "fresh_artifacts": 66, "lock_seconds": 0.00363322498742491, "parsed_units": 137, "reused_units": 0, "rustc_invocations": 71, "seconds": 887.9301764369593}
+== wasm32-simd128 graph 1: /opt/.cargo/slots/66a24e35a825ba8d/0/cargo.graph-1.stderr.log
+== wasm32-simd128: {"analysis_seconds": 31.786018699931446, "build_seconds": 1060.5726453759708, "fresh_artifacts": 66, "lock_seconds": 0.00254207500256598, "parsed_units": 137, "reused_units": 0, "rustc_invocations": 71, "seconds": 1092.617264446977}
+x86_64               purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v25 f0 r0  [purrdf_datalog-cdd10d24d0a52cdb.s]  paddd×4, pand×8, pcmpeqd×4, pshufd×9, pxor×2
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        movq %rdx, %rbx
+                        movq %rsi, %r14
+                        movq %rdi, %r15
+                        movq 16(%rdi), %rax
+                        testq %rax, %rax
+                        je .LBB597_10
+                        movq 8(%r15), %r12
+                        imulq $120, %rax, %r13
+                        addq %r12, %r13
+                        jmp .LBB597_2
+                        cmpq %rbx, (%rax,%rcx,8)
+                        je .LBB597_7
+                        addq $120, %r12
+                        cmpq %r13, %r12
+                        je .LBB597_10
+                        movq 8(%r12), %rdi
+                        movq 16(%r12), %rsi
+                        movq %r14, %rdx
+                        callq _RNvMs4_NtCs1vDWXTOfSvf_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        movq 40(%r12), %r8
+                        cmpq %rax, %rdx
+                        jb .LBB597_20
+                        cmpq %r8, %rdx
+                        ja .LBB597_20
+                        subq %rax, %rdx
+                        je .LBB597_9
+                        shlq $3, %rax
+                        addq 32(%r12), %rax
+                        xorl %ecx, %ecx
+                        cmpq $1, %rdx
+                        je .LBB597_6
+                        movq %rcx, %rsi
+                        movq %rdx, %rdi
+                        shrq %rdi
+                        addq %rdi, %rcx
+                        cmpq %rbx, (%rax,%rcx,8)
+                        cmovaq %rsi, %rcx
+                        subq %rdi, %rdx
+                        cmpq $1, %rdx
+                        ja .LBB597_8
+                        jmp .LBB597_6
+                        movq 40(%r15), %rax
+                        movq 64(%r15), %rcx
+                        cmpq %rcx, %rax
+                        cmovbq %rax, %rcx
+                        xorl %eax, %eax
+                        testq %rcx, %rcx
+                        je .LBB597_19
+                        movq 32(%r15), %rdx
+                        movq 56(%r15), %rsi
+                        cmpq $4, %rcx
+                        jae .LBB597_14
+                        xorl %edi, %edi
+                        jmp .LBB597_13
+                        movb $1, %al
+                        jmp .LBB597_19
+                        movabsq $1152921504606846976, %rdi
+                        addq $-4, %rdi
+                        andq %rcx, %rdi
+                        movq %r14, %xmm0
+                        pshufd $68, %xmm0, %xmm0
+                        movq %rbx, %xmm1
+                        pshufd $68, %xmm1, %xmm2
+                        leaq (,%rcx,8), %rax
+                        andq $-32, %rax
+                        pxor %xmm1, %xmm1
+                        xorl %r8d, %r8d
+                        movdqa .LCPI597_0(%rip), %xmm4
+                        pxor %xmm3, %xmm3
+                        movdqu (%rdx,%r8), %xmm5
+                        movdqu 16(%rdx,%r8), %xmm6
+                        pcmpeqd %xmm0, %xmm5
+                        pshufd $177, %xmm5, %xmm7
+                        pand %xmm5, %xmm7
+                        pcmpeqd %xmm0, %xmm6
+                        pshufd $177, %xmm6, %xmm5
+                        pand %xmm6, %xmm5
+                        movdqu (%rsi,%r8), %xmm6
+                        movdqu 16(%rsi,%r8), %xmm8
+                        pcmpeqd %xmm2, %xmm6
+                        pshufd $177, %xmm6, %xmm9
+                        pand %xmm6, %xmm9
+                        pand %xmm7, %xmm9
+                        pcmpeqd %xmm2, %xmm8
+                        pshufd $177, %xmm8, %xmm6
+                        pand %xmm8, %xmm6
+                        pand %xmm5, %xmm6
+                        pshufd $232, %xmm9, %xmm5
+                        pand %xmm4, %xmm5
+                        paddd %xmm5, %xmm3
+                        pshufd $232, %xmm6, %xmm5
+                        pand %xmm4, %xmm5
+                        paddd %xmm5, %xmm1
+                        addq $32, %r8
+                        cmpq %r8, %rax
+                        jne .LBB597_15
+                        paddd %xmm3, %xmm1
+                        pshufd $85, %xmm1, %xmm0
+                        paddd %xmm1, %xmm0
+                        movd %xmm0, %eax
+                        jmp .LBB597_17
+                        leaq .Lanon.96118a1ca06315d8cb20a0398371c026.310(%rip), %rcx
+                        movq %rax, %rdi
+                        movq %rdx, %rsi
+                        movq %r8, %rdx
+                        callq *_RNvNtNtCs4gxzCnT9o6Y_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+                        movq (%rdx,%rdi,8), %r8
+                        movq (%rsi,%rdi,8), %r9
+                        incq %rdi
+                        xorq %r14, %r8
+                        xorq %rbx, %r9
+                        xorl %r10d, %r10d
+                        orq %r8, %r9
+                        sete %r10b
+                        addl %r10d, %eax
+                        cmpq %rdi, %rcx
+                        jne .LBB597_13
+                        testl %eax, %eax
+                        setne %al
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        retq 
+x86_64               purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v25 f0 r0  [purrdf_datalog-cdd10d24d0a52cdb.s]  paddd×4, pand×8, pcmpeqd×4, pshufd×9, pxor×2
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        movq %rdx, %rbx
+                        movq %rsi, %r14
+                        movq %rdi, %r15
+                        movq 16(%rdi), %rax
+                        testq %rax, %rax
+                        je .LBB597_10
+                        movq 8(%r15), %r12
+                        imulq $120, %rax, %r13
+                        addq %r12, %r13
+                        jmp .LBB597_2
+                        cmpq %rbx, (%rax,%rcx,8)
+                        je .LBB597_7
+                        addq $120, %r12
+                        cmpq %r13, %r12
+                        je .LBB597_10
+                        movq 8(%r12), %rdi
+                        movq 16(%r12), %rsi
+                        movq %r14, %rdx
+                        callq _RNvMs4_NtCs1vDWXTOfSvf_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        movq 40(%r12), %r8
+                        cmpq %rax, %rdx
+                        jb .LBB597_20
+                        cmpq %r8, %rdx
+                        ja .LBB597_20
+                        subq %rax, %rdx
+                        je .LBB597_9
+                        shlq $3, %rax
+                        addq 32(%r12), %rax
+                        xorl %ecx, %ecx
+                        cmpq $1, %rdx
+                        je .LBB597_6
+                        movq %rcx, %rsi
+                        movq %rdx, %rdi
+                        shrq %rdi
+                        addq %rdi, %rcx
+                        cmpq %rbx, (%rax,%rcx,8)
+                        cmovaq %rsi, %rcx
+                        subq %rdi, %rdx
+                        cmpq $1, %rdx
+                        ja .LBB597_8
+                        jmp .LBB597_6
+                        movq 40(%r15), %rax
+                        movq 64(%r15), %rcx
+                        cmpq %rcx, %rax
+                        cmovbq %rax, %rcx
+                        xorl %eax, %eax
+                        testq %rcx, %rcx
+                        je .LBB597_19
+                        movq 32(%r15), %rdx
+                        movq 56(%r15), %rsi
+                        cmpq $4, %rcx
+                        jae .LBB597_14
+                        xorl %edi, %edi
+                        jmp .LBB597_13
+                        movb $1, %al
+                        jmp .LBB597_19
+                        movabsq $1152921504606846976, %rdi
+                        addq $-4, %rdi
+                        andq %rcx, %rdi
+                        movq %r14, %xmm0
+                        pshufd $68, %xmm0, %xmm0
+                        movq %rbx, %xmm1
+                        pshufd $68, %xmm1, %xmm2
+                        leaq (,%rcx,8), %rax
+                        andq $-32, %rax
+                        pxor %xmm1, %xmm1
+                        xorl %r8d, %r8d
+                        movdqa .LCPI597_0(%rip), %xmm4
+                        pxor %xmm3, %xmm3
+                        movdqu (%rdx,%r8), %xmm5
+                        movdqu 16(%rdx,%r8), %xmm6
+                        pcmpeqd %xmm0, %xmm5
+                        pshufd $177, %xmm5, %xmm7
+                        pand %xmm5, %xmm7
+                        pcmpeqd %xmm0, %xmm6
+                        pshufd $177, %xmm6, %xmm5
+                        pand %xmm6, %xmm5
+                        movdqu (%rsi,%r8), %xmm6
+                        movdqu 16(%rsi,%r8), %xmm8
+                        pcmpeqd %xmm2, %xmm6
+                        pshufd $177, %xmm6, %xmm9
+                        pand %xmm6, %xmm9
+                        pand %xmm7, %xmm9
+                        pcmpeqd %xmm2, %xmm8
+                        pshufd $177, %xmm8, %xmm6
+                        pand %xmm8, %xmm6
+                        pand %xmm5, %xmm6
+                        pshufd $232, %xmm9, %xmm5
+                        pand %xmm4, %xmm5
+                        paddd %xmm5, %xmm3
+                        pshufd $232, %xmm6, %xmm5
+                        pand %xmm4, %xmm5
+                        paddd %xmm5, %xmm1
+                        addq $32, %r8
+                        cmpq %r8, %rax
+                        jne .LBB597_15
+                        paddd %xmm3, %xmm1
+                        pshufd $85, %xmm1, %xmm0
+                        paddd %xmm1, %xmm0
+                        movd %xmm0, %eax
+                        jmp .LBB597_17
+                        leaq .Lanon.96118a1ca06315d8cb20a0398371c026.310(%rip), %rcx
+                        movq %rax, %rdi
+                        movq %rdx, %rsi
+                        movq %r8, %rdx
+                        callq *_RNvNtNtCs4gxzCnT9o6Y_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+                        movq (%rdx,%rdi,8), %r8
+                        movq (%rsi,%rdi,8), %r9
+                        incq %rdi
+                        xorq %r14, %r8
+                        xorq %rbx, %r9
+                        xorl %r10d, %r10d
+                        orq %r8, %r9
+                        sete %r10b
+                        addl %r10d, %eax
+                        cmpq %rdi, %rcx
+                        jne .LBB597_13
+                        testl %eax, %eax
+                        setne %al
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        retq 
+x86_64-v3            purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v41 f0 r0  [purrdf_datalog-5f482f9ff8656367.s]  vextracti128×5, vpackssdw×5, vpaddd×7, vpand×5, vpcmpeqq×10, vpshufd×4, vpsubd×5, vpxor×4
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        movq %rdx, %rbx
+                        movq %rsi, %r14
+                        movq %rdi, %r15
+                        movq 16(%rdi), %rax
+                        testq %rax, %rax
+                        je .LBB597_10
+                        movq 8(%r15), %r12
+                        imulq $120, %rax, %r13
+                        addq %r12, %r13
+                        jmp .LBB597_2
+                        cmpq %rbx, (%rax,%rcx,8)
+                        je .LBB597_7
+                        addq $120, %r12
+                        cmpq %r13, %r12
+                        je .LBB597_10
+                        movq 8(%r12), %rdi
+                        movq 16(%r12), %rsi
+                        movq %r14, %rdx
+                        callq _RNvMs4_NtCs1vDWXTOfSvf_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        movq 40(%r12), %r8
+                        cmpq %rax, %rdx
+                        jb .LBB597_26
+                        cmpq %r8, %rdx
+                        ja .LBB597_26
+                        subq %rax, %rdx
+                        je .LBB597_9
+                        shlq $3, %rax
+                        addq 32(%r12), %rax
+                        xorl %ecx, %ecx
+                        cmpq $1, %rdx
+                        je .LBB597_6
+                        movq %rcx, %rsi
+                        movq %rdx, %rdi
+                        shrq %rdi
+                        addq %rdi, %rcx
+                        cmpq %rbx, (%rax,%rcx,8)
+                        cmovaq %rsi, %rcx
+                        subq %rdi, %rdx
+                        cmpq $1, %rdx
+                        ja .LBB597_8
+                        jmp .LBB597_6
+                        movq 40(%r15), %rax
+                        movq 64(%r15), %rcx
+                        cmpq %rcx, %rax
+                        cmovbq %rax, %rcx
+                        xorl %eax, %eax
+                        testq %rcx, %rcx
+                        je .LBB597_25
+                        movq 32(%r15), %rdx
+                        movq 56(%r15), %rsi
+                        cmpq $4, %rcx
+                        jae .LBB597_14
+                        xorl %edi, %edi
+                        jmp .LBB597_13
+                        movb $1, %al
+                        jmp .LBB597_25
+                        movabsq $1152921504606846976, %r8
+                        vmovq %r14, %xmm0
+                        vmovq %rbx, %xmm1
+                        cmpq $16, %rcx
+                        jae .LBB597_16
+                        xorl %edi, %edi
+                        xorl %eax, %eax
+                        jmp .LBB597_20
+                        leaq -16(%r8), %rdi
+                        andq %rcx, %rdi
+                        vpbroadcastq %xmm0, %ymm2
+                        vpbroadcastq %xmm1, %ymm3
+                        leaq (,%rcx,8), %rax
+                        andq $-128, %rax
+                        vpxor %xmm4, %xmm4, %xmm4
+                        xorl %r9d, %r9d
+                        vpxor %xmm5, %xmm5, %xmm5
+                        vpxor %xmm6, %xmm6, %xmm6
+                        vpxor %xmm7, %xmm7, %xmm7
+                        vpcmpeqq (%rdx,%r9), %ymm2, %ymm8
+                        vpcmpeqq 32(%rdx,%r9), %ymm2, %ymm9
+                        vpcmpeqq 64(%rdx,%r9), %ymm2, %ymm10
+                        vpcmpeqq 96(%rdx,%r9), %ymm2, %ymm11
+                        vpcmpeqq (%rsi,%r9), %ymm3, %ymm12
+                        vpand %ymm12, %ymm8, %ymm8
+                        vpcmpeqq 32(%rsi,%r9), %ymm3, %ymm12
+                        vpand %ymm12, %ymm9, %ymm9
+                        vpcmpeqq 64(%rsi,%r9), %ymm3, %ymm12
+                        vpcmpeqq 96(%rsi,%r9), %ymm3, %ymm13
+                        vpand %ymm12, %ymm10, %ymm10
+                        vpand %ymm13, %ymm11, %ymm11
+                        vextracti128 $1, %ymm8, %xmm12
+                        vpackssdw %xmm12, %xmm8, %xmm8
+                        vpsubd %xmm8, %xmm4, %xmm4
+                        vextracti128 $1, %ymm9, %xmm8
+                        vpackssdw %xmm8, %xmm9, %xmm8
+                        vpsubd %xmm8, %xmm5, %xmm5
+                        vextracti128 $1, %ymm10, %xmm8
+                        vpackssdw %xmm8, %xmm10, %xmm8
+                        vpsubd %xmm8, %xmm6, %xmm6
+                        vextracti128 $1, %ymm11, %xmm8
+                        vpackssdw %xmm8, %xmm11, %xmm8
+                        vpsubd %xmm8, %xmm7, %xmm7
+                        subq $-128, %r9
+                        cmpq %r9, %rax
+                        jne .LBB597_17
+                        vpaddd %xmm4, %xmm5, %xmm2
+                        vpaddd %xmm6, %xmm7, %xmm3
+                        vpaddd %xmm2, %xmm3, %xmm2
+                        vpshufd $238, %xmm2, %xmm3
+                        vpaddd %xmm3, %xmm2, %xmm2
+                        vpshufd $85, %xmm2, %xmm3
+                        vpaddd %xmm3, %xmm2, %xmm2
+                        vmovd %xmm2, %eax
+                        cmpq %rdi, %rcx
+                        je .LBB597_24
+                        testb $12, %cl
+                        je .LBB597_13
+                        movq %rdi, %r9
+                        addq $-4, %r8
+                        movq %r8, %rdi
+                        andq %rcx, %rdi
+                        vmovd %eax, %xmm2
+                        vpbroadcastq %xmm0, %ymm0
+                        vpbroadcastq %xmm1, %ymm1
+                        vpcmpeqq (%rdx,%r9,8), %ymm0, %ymm3
+                        vpcmpeqq (%rsi,%r9,8), %ymm1, %ymm4
+                        vpand %ymm4, %ymm3, %ymm3
+                        vextracti128 $1, %ymm3, %xmm4
+                        vpackssdw %xmm4, %xmm3, %xmm3
+                        vpsubd %xmm3, %xmm2, %xmm2
+                        addq $4, %r9
+                        cmpq %r9, %rdi
+                        jne .LBB597_21
+                        vpshufd $238, %xmm2, %xmm0
+                        vpaddd %xmm0, %xmm2, %xmm0
+                        vpshufd $85, %xmm0, %xmm1
+                        vpaddd %xmm1, %xmm0, %xmm0
+                        vmovd %xmm0, %eax
+                        jmp .LBB597_23
+                        leaq .Lanon.96118a1ca06315d8cb20a0398371c026.310(%rip), %rcx
+                        movq %rax, %rdi
+                        movq %rdx, %rsi
+                        movq %r8, %rdx
+                        callq *_RNvNtNtCs4gxzCnT9o6Y_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+                        movq (%rdx,%rdi,8), %r8
+                        movq (%rsi,%rdi,8), %r9
+                        incq %rdi
+                        xorq %r14, %r8
+                        xorq %rbx, %r9
+                        xorl %r10d, %r10d
+                        orq %r8, %r9
+                        sete %r10b
+                        addl %r10d, %eax
+                        cmpq %rdi, %rcx
+                        jne .LBB597_13
+                        testl %eax, %eax
+                        setne %al
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        vzeroupper 
+                        retq 
+x86_64-v3            purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v41 f0 r0  [purrdf_datalog-5f482f9ff8656367.s]  vextracti128×5, vpackssdw×5, vpaddd×7, vpand×5, vpcmpeqq×10, vpshufd×4, vpsubd×5, vpxor×4
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        movq %rdx, %rbx
+                        movq %rsi, %r14
+                        movq %rdi, %r15
+                        movq 16(%rdi), %rax
+                        testq %rax, %rax
+                        je .LBB597_10
+                        movq 8(%r15), %r12
+                        imulq $120, %rax, %r13
+                        addq %r12, %r13
+                        jmp .LBB597_2
+                        cmpq %rbx, (%rax,%rcx,8)
+                        je .LBB597_7
+                        addq $120, %r12
+                        cmpq %r13, %r12
+                        je .LBB597_10
+                        movq 8(%r12), %rdi
+                        movq 16(%r12), %rsi
+                        movq %r14, %rdx
+                        callq _RNvMs4_NtCs1vDWXTOfSvf_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        movq 40(%r12), %r8
+                        cmpq %rax, %rdx
+                        jb .LBB597_26
+                        cmpq %r8, %rdx
+                        ja .LBB597_26
+                        subq %rax, %rdx
+                        je .LBB597_9
+                        shlq $3, %rax
+                        addq 32(%r12), %rax
+                        xorl %ecx, %ecx
+                        cmpq $1, %rdx
+                        je .LBB597_6
+                        movq %rcx, %rsi
+                        movq %rdx, %rdi
+                        shrq %rdi
+                        addq %rdi, %rcx
+                        cmpq %rbx, (%rax,%rcx,8)
+                        cmovaq %rsi, %rcx
+                        subq %rdi, %rdx
+                        cmpq $1, %rdx
+                        ja .LBB597_8
+                        jmp .LBB597_6
+                        movq 40(%r15), %rax
+                        movq 64(%r15), %rcx
+                        cmpq %rcx, %rax
+                        cmovbq %rax, %rcx
+                        xorl %eax, %eax
+                        testq %rcx, %rcx
+                        je .LBB597_25
+                        movq 32(%r15), %rdx
+                        movq 56(%r15), %rsi
+                        cmpq $4, %rcx
+                        jae .LBB597_14
+                        xorl %edi, %edi
+                        jmp .LBB597_13
+                        movb $1, %al
+                        jmp .LBB597_25
+                        movabsq $1152921504606846976, %r8
+                        vmovq %r14, %xmm0
+                        vmovq %rbx, %xmm1
+                        cmpq $16, %rcx
+                        jae .LBB597_16
+                        xorl %edi, %edi
+                        xorl %eax, %eax
+                        jmp .LBB597_20
+                        leaq -16(%r8), %rdi
+                        andq %rcx, %rdi
+                        vpbroadcastq %xmm0, %ymm2
+                        vpbroadcastq %xmm1, %ymm3
+                        leaq (,%rcx,8), %rax
+                        andq $-128, %rax
+                        vpxor %xmm4, %xmm4, %xmm4
+                        xorl %r9d, %r9d
+                        vpxor %xmm5, %xmm5, %xmm5
+                        vpxor %xmm6, %xmm6, %xmm6
+                        vpxor %xmm7, %xmm7, %xmm7
+                        vpcmpeqq (%rdx,%r9), %ymm2, %ymm8
+                        vpcmpeqq 32(%rdx,%r9), %ymm2, %ymm9
+                        vpcmpeqq 64(%rdx,%r9), %ymm2, %ymm10
+                        vpcmpeqq 96(%rdx,%r9), %ymm2, %ymm11
+                        vpcmpeqq (%rsi,%r9), %ymm3, %ymm12
+                        vpand %ymm12, %ymm8, %ymm8
+                        vpcmpeqq 32(%rsi,%r9), %ymm3, %ymm12
+                        vpand %ymm12, %ymm9, %ymm9
+                        vpcmpeqq 64(%rsi,%r9), %ymm3, %ymm12
+                        vpcmpeqq 96(%rsi,%r9), %ymm3, %ymm13
+                        vpand %ymm12, %ymm10, %ymm10
+                        vpand %ymm13, %ymm11, %ymm11
+                        vextracti128 $1, %ymm8, %xmm12
+                        vpackssdw %xmm12, %xmm8, %xmm8
+                        vpsubd %xmm8, %xmm4, %xmm4
+                        vextracti128 $1, %ymm9, %xmm8
+                        vpackssdw %xmm8, %xmm9, %xmm8
+                        vpsubd %xmm8, %xmm5, %xmm5
+                        vextracti128 $1, %ymm10, %xmm8
+                        vpackssdw %xmm8, %xmm10, %xmm8
+                        vpsubd %xmm8, %xmm6, %xmm6
+                        vextracti128 $1, %ymm11, %xmm8
+                        vpackssdw %xmm8, %xmm11, %xmm8
+                        vpsubd %xmm8, %xmm7, %xmm7
+                        subq $-128, %r9
+                        cmpq %r9, %rax
+                        jne .LBB597_17
+                        vpaddd %xmm4, %xmm5, %xmm2
+                        vpaddd %xmm6, %xmm7, %xmm3
+                        vpaddd %xmm2, %xmm3, %xmm2
+                        vpshufd $238, %xmm2, %xmm3
+                        vpaddd %xmm3, %xmm2, %xmm2
+                        vpshufd $85, %xmm2, %xmm3
+                        vpaddd %xmm3, %xmm2, %xmm2
+                        vmovd %xmm2, %eax
+                        cmpq %rdi, %rcx
+                        je .LBB597_24
+                        testb $12, %cl
+                        je .LBB597_13
+                        movq %rdi, %r9
+                        addq $-4, %r8
+                        movq %r8, %rdi
+                        andq %rcx, %rdi
+                        vmovd %eax, %xmm2
+                        vpbroadcastq %xmm0, %ymm0
+                        vpbroadcastq %xmm1, %ymm1
+                        vpcmpeqq (%rdx,%r9,8), %ymm0, %ymm3
+                        vpcmpeqq (%rsi,%r9,8), %ymm1, %ymm4
+                        vpand %ymm4, %ymm3, %ymm3
+                        vextracti128 $1, %ymm3, %xmm4
+                        vpackssdw %xmm4, %xmm3, %xmm3
+                        vpsubd %xmm3, %xmm2, %xmm2
+                        addq $4, %r9
+                        cmpq %r9, %rdi
+                        jne .LBB597_21
+                        vpshufd $238, %xmm2, %xmm0
+                        vpaddd %xmm0, %xmm2, %xmm0
+                        vpshufd $85, %xmm0, %xmm1
+                        vpaddd %xmm1, %xmm0, %xmm0
+                        vmovd %xmm0, %eax
+                        jmp .LBB597_23
+                        leaq .Lanon.96118a1ca06315d8cb20a0398371c026.310(%rip), %rcx
+                        movq %rax, %rdi
+                        movq %rdx, %rsi
+                        movq %r8, %rdx
+                        callq *_RNvNtNtCs4gxzCnT9o6Y_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+                        movq (%rdx,%rdi,8), %r8
+                        movq (%rsi,%rdi,8), %r9
+                        incq %rdi
+                        xorq %r14, %r8
+                        xorq %rbx, %r9
+                        xorl %r10d, %r10d
+                        orq %r8, %r9
+                        sete %r10b
+                        addl %r10d, %eax
+                        cmpq %rdi, %rcx
+                        jne .LBB597_13
+                        testl %eax, %eax
+                        setne %al
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        vzeroupper 
+                        retq 
+x86_64-v4            purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v26 f0 r0  [purrdf_datalog-51c3c361141c4b38.s]  vpaddd×7, vpcmpeqq×10, vpshufd×4, vpsubd×5, vpxor×4
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        movq %rdx, %rbx
+                        movq %rsi, %r14
+                        movq %rdi, %r15
+                        movq 16(%rdi), %rax
+                        testq %rax, %rax
+                        je .LBB597_10
+                        movq 8(%r15), %r12
+                        imulq $120, %rax, %r13
+                        addq %r12, %r13
+                        jmp .LBB597_2
+                        cmpq %rbx, (%rax,%rcx,8)
+                        je .LBB597_7
+                        addq $120, %r12
+                        cmpq %r13, %r12
+                        je .LBB597_10
+                        movq 8(%r12), %rdi
+                        movq 16(%r12), %rsi
+                        movq %r14, %rdx
+                        callq _RNvMs4_NtCs1vDWXTOfSvf_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        movq 40(%r12), %r8
+                        cmpq %rax, %rdx
+                        jb .LBB597_26
+                        cmpq %r8, %rdx
+                        ja .LBB597_26
+                        subq %rax, %rdx
+                        je .LBB597_9
+                        shlq $3, %rax
+                        addq 32(%r12), %rax
+                        xorl %ecx, %ecx
+                        cmpq $1, %rdx
+                        je .LBB597_6
+                        movq %rcx, %rsi
+                        movq %rdx, %rdi
+                        shrq %rdi
+                        addq %rdi, %rcx
+                        cmpq %rbx, (%rax,%rcx,8)
+                        cmovaq %rsi, %rcx
+                        subq %rdi, %rdx
+                        cmpq $1, %rdx
+                        ja .LBB597_8
+                        jmp .LBB597_6
+                        movq 40(%r15), %rax
+                        movq 64(%r15), %rcx
+                        cmpq %rcx, %rax
+                        cmovbq %rax, %rcx
+                        xorl %eax, %eax
+                        testq %rcx, %rcx
+                        je .LBB597_25
+                        movq 32(%r15), %rdx
+                        movq 56(%r15), %rsi
+                        cmpq $4, %rcx
+                        jae .LBB597_14
+                        xorl %edi, %edi
+                        jmp .LBB597_13
+                        movb $1, %al
+                        jmp .LBB597_25
+                        movabsq $1152921504606846976, %r8
+                        vpbroadcastq %r14, %ymm0
+                        vpbroadcastq %rbx, %ymm1
+                        cmpq $16, %rcx
+                        jae .LBB597_16
+                        xorl %edi, %edi
+                        xorl %eax, %eax
+                        jmp .LBB597_20
+                        leaq -16(%r8), %rdi
+                        andq %rcx, %rdi
+                        leaq (,%rcx,8), %rax
+                        andq $-128, %rax
+                        vpxor %xmm2, %xmm2, %xmm2
+                        xorl %r9d, %r9d
+                        vpxor %xmm3, %xmm3, %xmm3
+                        vpxor %xmm4, %xmm4, %xmm4
+                        vpxor %xmm5, %xmm5, %xmm5
+                        vpcmpeqq (%rdx,%r9), %ymm0, %k1
+                        vpcmpeqq 32(%rdx,%r9), %ymm0, %k2
+                        vpcmpeqq 64(%rdx,%r9), %ymm0, %k3
+                        vpcmpeqq 96(%rdx,%r9), %ymm0, %k4
+                        vpcmpeqq (%rsi,%r9), %ymm1, %k0 {%k1}
+                        vpcmpeqq 32(%rsi,%r9), %ymm1, %k1 {%k2}
+                        vpcmpeqq 64(%rsi,%r9), %ymm1, %k2 {%k3}
+                        vpcmpeqq 96(%rsi,%r9), %ymm1, %k3 {%k4}
+                        vpmovm2d %k0, %xmm6
+                        vpsubd %xmm6, %xmm2, %xmm2
+                        vpmovm2d %k1, %xmm6
+                        vpsubd %xmm6, %xmm3, %xmm3
+                        vpmovm2d %k2, %xmm6
+                        vpsubd %xmm6, %xmm4, %xmm4
+                        vpmovm2d %k3, %xmm6
+                        vpsubd %xmm6, %xmm5, %xmm5
+                        subq $-128, %r9
+                        cmpq %r9, %rax
+                        jne .LBB597_17
+                        vpaddd %xmm2, %xmm3, %xmm2
+                        vpaddd %xmm4, %xmm5, %xmm3
+                        vpaddd %xmm2, %xmm3, %xmm2
+                        vpshufd $238, %xmm2, %xmm3
+                        vpaddd %xmm3, %xmm2, %xmm2
+                        vpshufd $85, %xmm2, %xmm3
+                        vpaddd %xmm3, %xmm2, %xmm2
+                        vmovd %xmm2, %eax
+                        cmpq %rdi, %rcx
+                        je .LBB597_24
+                        testb $12, %cl
+                        je .LBB597_13
+                        movq %rdi, %r9
+                        addq $-4, %r8
+                        movq %r8, %rdi
+                        andq %rcx, %rdi
+                        vmovd %eax, %xmm2
+                        vpcmpeqq (%rdx,%r9,8), %ymm0, %k1
+                        vpcmpeqq (%rsi,%r9,8), %ymm1, %k0 {%k1}
+                        vpmovm2d %k0, %xmm3
+                        vpsubd %xmm3, %xmm2, %xmm2
+                        addq $4, %r9
+                        cmpq %r9, %rdi
+                        jne .LBB597_21
+                        vpshufd $238, %xmm2, %xmm0
+                        vpaddd %xmm0, %xmm2, %xmm0
+                        vpshufd $85, %xmm0, %xmm1
+                        vpaddd %xmm1, %xmm0, %xmm0
+                        vmovd %xmm0, %eax
+                        jmp .LBB597_23
+                        leaq .Lanon.96118a1ca06315d8cb20a0398371c026.310(%rip), %rcx
+                        movq %rax, %rdi
+                        movq %rdx, %rsi
+                        movq %r8, %rdx
+                        callq *_RNvNtNtCs4gxzCnT9o6Y_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+                        movq (%rdx,%rdi,8), %r8
+                        movq (%rsi,%rdi,8), %r9
+                        incq %rdi
+                        xorq %r14, %r8
+                        xorq %rbx, %r9
+                        xorl %r10d, %r10d
+                        orq %r8, %r9
+                        sete %r10b
+                        addl %r10d, %eax
+                        cmpq %rdi, %rcx
+                        jne .LBB597_13
+                        testl %eax, %eax
+                        setne %al
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        vzeroupper 
+                        retq 
+x86_64-v4            purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v26 f0 r0  [purrdf_datalog-51c3c361141c4b38.s]  vpaddd×7, vpcmpeqq×10, vpshufd×4, vpsubd×5, vpxor×4
+                        pushq %r15
+                        pushq %r14
+                        pushq %r13
+                        pushq %r12
+                        pushq %rbx
+                        movq %rdx, %rbx
+                        movq %rsi, %r14
+                        movq %rdi, %r15
+                        movq 16(%rdi), %rax
+                        testq %rax, %rax
+                        je .LBB597_10
+                        movq 8(%r15), %r12
+                        imulq $120, %rax, %r13
+                        addq %r12, %r13
+                        jmp .LBB597_2
+                        cmpq %rbx, (%rax,%rcx,8)
+                        je .LBB597_7
+                        addq $120, %r12
+                        cmpq %r13, %r12
+                        je .LBB597_10
+                        movq 8(%r12), %rdi
+                        movq 16(%r12), %rsi
+                        movq %r14, %rdx
+                        callq _RNvMs4_NtCs1vDWXTOfSvf_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        movq 40(%r12), %r8
+                        cmpq %rax, %rdx
+                        jb .LBB597_26
+                        cmpq %r8, %rdx
+                        ja .LBB597_26
+                        subq %rax, %rdx
+                        je .LBB597_9
+                        shlq $3, %rax
+                        addq 32(%r12), %rax
+                        xorl %ecx, %ecx
+                        cmpq $1, %rdx
+                        je .LBB597_6
+                        movq %rcx, %rsi
+                        movq %rdx, %rdi
+                        shrq %rdi
+                        addq %rdi, %rcx
+                        cmpq %rbx, (%rax,%rcx,8)
+                        cmovaq %rsi, %rcx
+                        subq %rdi, %rdx
+                        cmpq $1, %rdx
+                        ja .LBB597_8
+                        jmp .LBB597_6
+                        movq 40(%r15), %rax
+                        movq 64(%r15), %rcx
+                        cmpq %rcx, %rax
+                        cmovbq %rax, %rcx
+                        xorl %eax, %eax
+                        testq %rcx, %rcx
+                        je .LBB597_25
+                        movq 32(%r15), %rdx
+                        movq 56(%r15), %rsi
+                        cmpq $4, %rcx
+                        jae .LBB597_14
+                        xorl %edi, %edi
+                        jmp .LBB597_13
+                        movb $1, %al
+                        jmp .LBB597_25
+                        movabsq $1152921504606846976, %r8
+                        vpbroadcastq %r14, %ymm0
+                        vpbroadcastq %rbx, %ymm1
+                        cmpq $16, %rcx
+                        jae .LBB597_16
+                        xorl %edi, %edi
+                        xorl %eax, %eax
+                        jmp .LBB597_20
+                        leaq -16(%r8), %rdi
+                        andq %rcx, %rdi
+                        leaq (,%rcx,8), %rax
+                        andq $-128, %rax
+                        vpxor %xmm2, %xmm2, %xmm2
+                        xorl %r9d, %r9d
+                        vpxor %xmm3, %xmm3, %xmm3
+                        vpxor %xmm4, %xmm4, %xmm4
+                        vpxor %xmm5, %xmm5, %xmm5
+                        vpcmpeqq (%rdx,%r9), %ymm0, %k1
+                        vpcmpeqq 32(%rdx,%r9), %ymm0, %k2
+                        vpcmpeqq 64(%rdx,%r9), %ymm0, %k3
+                        vpcmpeqq 96(%rdx,%r9), %ymm0, %k4
+                        vpcmpeqq (%rsi,%r9), %ymm1, %k0 {%k1}
+                        vpcmpeqq 32(%rsi,%r9), %ymm1, %k1 {%k2}
+                        vpcmpeqq 64(%rsi,%r9), %ymm1, %k2 {%k3}
+                        vpcmpeqq 96(%rsi,%r9), %ymm1, %k3 {%k4}
+                        vpmovm2d %k0, %xmm6
+                        vpsubd %xmm6, %xmm2, %xmm2
+                        vpmovm2d %k1, %xmm6
+                        vpsubd %xmm6, %xmm3, %xmm3
+                        vpmovm2d %k2, %xmm6
+                        vpsubd %xmm6, %xmm4, %xmm4
+                        vpmovm2d %k3, %xmm6
+                        vpsubd %xmm6, %xmm5, %xmm5
+                        subq $-128, %r9
+                        cmpq %r9, %rax
+                        jne .LBB597_17
+                        vpaddd %xmm2, %xmm3, %xmm2
+                        vpaddd %xmm4, %xmm5, %xmm3
+                        vpaddd %xmm2, %xmm3, %xmm2
+                        vpshufd $238, %xmm2, %xmm3
+                        vpaddd %xmm3, %xmm2, %xmm2
+                        vpshufd $85, %xmm2, %xmm3
+                        vpaddd %xmm3, %xmm2, %xmm2
+                        vmovd %xmm2, %eax
+                        cmpq %rdi, %rcx
+                        je .LBB597_24
+                        testb $12, %cl
+                        je .LBB597_13
+                        movq %rdi, %r9
+                        addq $-4, %r8
+                        movq %r8, %rdi
+                        andq %rcx, %rdi
+                        vmovd %eax, %xmm2
+                        vpcmpeqq (%rdx,%r9,8), %ymm0, %k1
+                        vpcmpeqq (%rsi,%r9,8), %ymm1, %k0 {%k1}
+                        vpmovm2d %k0, %xmm3
+                        vpsubd %xmm3, %xmm2, %xmm2
+                        addq $4, %r9
+                        cmpq %r9, %rdi
+                        jne .LBB597_21
+                        vpshufd $238, %xmm2, %xmm0
+                        vpaddd %xmm0, %xmm2, %xmm0
+                        vpshufd $85, %xmm0, %xmm1
+                        vpaddd %xmm1, %xmm0, %xmm0
+                        vmovd %xmm0, %eax
+                        jmp .LBB597_23
+                        leaq .Lanon.96118a1ca06315d8cb20a0398371c026.310(%rip), %rcx
+                        movq %rax, %rdi
+                        movq %rdx, %rsi
+                        movq %r8, %rdx
+                        callq *_RNvNtNtCs4gxzCnT9o6Y_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+                        movq (%rdx,%rdi,8), %r8
+                        movq (%rsi,%rdi,8), %r9
+                        incq %rdi
+                        xorq %r14, %r8
+                        xorq %rbx, %r9
+                        xorl %r10d, %r10d
+                        orq %r8, %r9
+                        sete %r10b
+                        addl %r10d, %eax
+                        cmpq %rdi, %rcx
+                        jne .LBB597_13
+                        testl %eax, %eax
+                        setne %al
+                        popq %rbx
+                        popq %r12
+                        popq %r13
+                        popq %r14
+                        popq %r15
+                        vzeroupper 
+                        retq 
+aarch64              purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v45 f0 r0  [purrdf_datalog-40b5863875f1f398.s]  add×15, addv×2, and×9, cmeq×20, sub×8, uzp1×10
+                        stp x29, x30, [sp, #-64]!
+                        str x23, [sp, #16]
+                        stp x22, x21, [sp, #32]
+                        stp x20, x19, [sp, #48]
+                        mov x29, sp
+                        ldr x8, [x0, #16]
+                        mov x19, x2
+                        mov x21, x0
+                        mov x20, x1
+                        cbz x8, .LBB597_11
+                        mov w9, #120
+                        ldr x22, [x21, #8]
+                        madd x23, x8, x9, x22
+                        b .LBB597_5
+                        mov x10, xzr
+                        ldr x8, [x8, x10, lsl #3]
+                        cmp x8, x19
+                        b.eq .LBB597_15
+                        add x22, x22, #120
+                        cmp x22, x23
+                        b.eq .LBB597_11
+                        ldp x0, x1, [x22, #8]
+                        mov x2, x20
+                        bl _RNvMs4_NtCsior4BH6hwUd_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        ldr x2, [x22, #40]
+                        cmp x1, x0
+                        b.lo .LBB597_28
+                        cmp x1, x2
+                        b.hi .LBB597_28
+                        subs x9, x1, x0
+                        b.eq .LBB597_4
+                        ldr x8, [x22, #32]
+                        cmp x9, #1
+                        add x8, x8, x0, lsl #3
+                        b.eq .LBB597_2
+                        mov x10, xzr
+                        lsr x11, x9, #1
+                        add x12, x11, x10
+                        sub x9, x9, x11
+                        ldr x13, [x8, x12, lsl #3]
+                        cmp x13, x19
+                        csel x10, x10, x12, hi
+                        cmp x9, #1
+                        b.hi .LBB597_10
+                        b .LBB597_3
+                        ldr x8, [x21, #40]
+                        ldr x9, [x21, #64]
+                        cmp x8, x9
+                        csel x8, x8, x9, lo
+                        cbz x8, .LBB597_14
+                        ldr x9, [x21, #32]
+                        ldr x10, [x21, #56]
+                        cmp x8, #3
+                        b.hi .LBB597_16
+                        mov w13, wzr
+                        mov x11, xzr
+                        b .LBB597_25
+                        mov w0, wzr
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        mov w0, #1
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        dup v0.2d, x20
+                        dup v1.2d, x19
+                        cmp x8, #16
+                        b.hs .LBB597_18
+                        mov x11, xzr
+                        mov w13, wzr
+                        b .LBB597_22
+                        movi v2.2d, #0000000000000000
+                        movi v3.2d, #0000000000000000
+                        and x12, x8, #0xc
+                        movi v4.2d, #0000000000000000
+                        movi v5.2d, #0000000000000000
+                        and x11, x8, #0xffffffffffffff0
+                        add x13, x9, #64
+                        add x14, x10, #64
+                        and x15, x8, #0xffffffffffffff0
+                        ldp q6, q7, [x13, #-64]
+                        subs x15, x15, #16
+                        ldp q16, q17, [x13, #-32]
+                        ldp q18, q19, [x13]
+                        ldp q20, q21, [x13, #32]
+                        cmeq v7.2d, v7.2d, v0.2d
+                        ldp q22, q23, [x14, #-64]
+                        cmeq v6.2d, v6.2d, v0.2d
+                        ldp q24, q25, [x14, #-32]
+                        cmeq v17.2d, v17.2d, v0.2d
+                        ldp q26, q27, [x14]
+                        cmeq v16.2d, v16.2d, v0.2d
+                        ldp q28, q29, [x14, #32]
+                        cmeq v19.2d, v19.2d, v0.2d
+                        cmeq v18.2d, v18.2d, v0.2d
+                        cmeq v21.2d, v21.2d, v0.2d
+                        cmeq v20.2d, v20.2d, v0.2d
+                        cmeq v23.2d, v23.2d, v1.2d
+                        cmeq v22.2d, v22.2d, v1.2d
+                        cmeq v25.2d, v25.2d, v1.2d
+                        cmeq v24.2d, v24.2d, v1.2d
+                        cmeq v27.2d, v27.2d, v1.2d
+                        cmeq v26.2d, v26.2d, v1.2d
+                        cmeq v29.2d, v29.2d, v1.2d
+                        cmeq v28.2d, v28.2d, v1.2d
+                        uzp1 v6.4s, v6.4s, v7.4s
+                        uzp1 v7.4s, v16.4s, v17.4s
+                        uzp1 v16.4s, v18.4s, v19.4s
+                        uzp1 v17.4s, v20.4s, v21.4s
+                        uzp1 v18.4s, v22.4s, v23.4s
+                        uzp1 v19.4s, v24.4s, v25.4s
+                        uzp1 v20.4s, v26.4s, v27.4s
+                        uzp1 v21.4s, v28.4s, v29.4s
+                        add x13, x13, #128
+                        add x14, x14, #128
+                        and v6.16b, v6.16b, v18.16b
+                        and v7.16b, v7.16b, v19.16b
+                        and v16.16b, v16.16b, v20.16b
+                        and v17.16b, v17.16b, v21.16b
+                        sub v2.4s, v2.4s, v6.4s
+                        sub v3.4s, v3.4s, v7.4s
+                        sub v4.4s, v4.4s, v16.4s
+                        sub v5.4s, v5.4s, v17.4s
+                        b.ne .LBB597_19
+                        add v2.4s, v3.4s, v2.4s
+                        add v3.4s, v5.4s, v4.4s
+                        cmp x8, x11
+                        add v2.4s, v3.4s, v2.4s
+                        addv s2, v2.4s
+                        fmov w13, s2
+                        b.eq .LBB597_27
+                        cbz x12, .LBB597_25
+                        movi v2.2d, #0000000000000000
+                        lsl x14, x11, #3
+                        mov x12, x11
+                        and x11, x8, #0xffffffffffffffc
+                        sub x12, x12, x11
+                        mov v2.s[0], w13
+                        add x13, x10, x14
+                        add x14, x9, x14
+                        ldp q4, q3, [x14], #32
+                        ldp q5, q6, [x13], #32
+                        adds x12, x12, #4
+                        cmeq v3.2d, v3.2d, v0.2d
+                        cmeq v4.2d, v4.2d, v0.2d
+                        cmeq v6.2d, v6.2d, v1.2d
+                        cmeq v5.2d, v5.2d, v1.2d
+                        uzp1 v3.4s, v4.4s, v3.4s
+                        uzp1 v4.4s, v5.4s, v6.4s
+                        and v3.16b, v3.16b, v4.16b
+                        sub v2.4s, v2.4s, v3.4s
+                        b.ne .LBB597_23
+                        addv s0, v2.4s
+                        cmp x8, x11
+                        fmov w13, s0
+                        b.eq .LBB597_27
+                        lsl x12, x11, #3
+                        sub x8, x8, x11
+                        add x10, x10, x12
+                        add x9, x9, x12
+                        ldr x11, [x9], #8
+                        ldr x12, [x10], #8
+                        cmp x11, x20
+                        ccmp x12, x19, #0, eq
+                        cinc w13, w13, eq
+                        subs x8, x8, #1
+                        b.ne .LBB597_26
+                        cmp w13, #0
+                        cset w0, ne
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        adrp x3, .Lanon.571aeabceafb6ca46a56d24cd02b013a.308
+                        add x3, x3, :lo12:.Lanon.571aeabceafb6ca46a56d24cd02b013a.308
+                        bl _RNvNtNtCs5GM3FX5Rw6v_4core5slice5index16slice_index_fail
+aarch64              purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v45 f0 r0  [purrdf_datalog-40b5863875f1f398.s]  add×15, addv×2, and×9, cmeq×20, sub×8, uzp1×10
+                        stp x29, x30, [sp, #-64]!
+                        str x23, [sp, #16]
+                        stp x22, x21, [sp, #32]
+                        stp x20, x19, [sp, #48]
+                        mov x29, sp
+                        ldr x8, [x0, #16]
+                        mov x19, x2
+                        mov x21, x0
+                        mov x20, x1
+                        cbz x8, .LBB597_11
+                        mov w9, #120
+                        ldr x22, [x21, #8]
+                        madd x23, x8, x9, x22
+                        b .LBB597_5
+                        mov x10, xzr
+                        ldr x8, [x8, x10, lsl #3]
+                        cmp x8, x19
+                        b.eq .LBB597_15
+                        add x22, x22, #120
+                        cmp x22, x23
+                        b.eq .LBB597_11
+                        ldp x0, x1, [x22, #8]
+                        mov x2, x20
+                        bl _RNvMs4_NtCsior4BH6hwUd_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        ldr x2, [x22, #40]
+                        cmp x1, x0
+                        b.lo .LBB597_28
+                        cmp x1, x2
+                        b.hi .LBB597_28
+                        subs x9, x1, x0
+                        b.eq .LBB597_4
+                        ldr x8, [x22, #32]
+                        cmp x9, #1
+                        add x8, x8, x0, lsl #3
+                        b.eq .LBB597_2
+                        mov x10, xzr
+                        lsr x11, x9, #1
+                        add x12, x11, x10
+                        sub x9, x9, x11
+                        ldr x13, [x8, x12, lsl #3]
+                        cmp x13, x19
+                        csel x10, x10, x12, hi
+                        cmp x9, #1
+                        b.hi .LBB597_10
+                        b .LBB597_3
+                        ldr x8, [x21, #40]
+                        ldr x9, [x21, #64]
+                        cmp x8, x9
+                        csel x8, x8, x9, lo
+                        cbz x8, .LBB597_14
+                        ldr x9, [x21, #32]
+                        ldr x10, [x21, #56]
+                        cmp x8, #3
+                        b.hi .LBB597_16
+                        mov w13, wzr
+                        mov x11, xzr
+                        b .LBB597_25
+                        mov w0, wzr
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        mov w0, #1
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        dup v0.2d, x20
+                        dup v1.2d, x19
+                        cmp x8, #16
+                        b.hs .LBB597_18
+                        mov x11, xzr
+                        mov w13, wzr
+                        b .LBB597_22
+                        movi v2.2d, #0000000000000000
+                        movi v3.2d, #0000000000000000
+                        and x12, x8, #0xc
+                        movi v4.2d, #0000000000000000
+                        movi v5.2d, #0000000000000000
+                        and x11, x8, #0xffffffffffffff0
+                        add x13, x9, #64
+                        add x14, x10, #64
+                        and x15, x8, #0xffffffffffffff0
+                        ldp q6, q7, [x13, #-64]
+                        subs x15, x15, #16
+                        ldp q16, q17, [x13, #-32]
+                        ldp q18, q19, [x13]
+                        ldp q20, q21, [x13, #32]
+                        cmeq v7.2d, v7.2d, v0.2d
+                        ldp q22, q23, [x14, #-64]
+                        cmeq v6.2d, v6.2d, v0.2d
+                        ldp q24, q25, [x14, #-32]
+                        cmeq v17.2d, v17.2d, v0.2d
+                        ldp q26, q27, [x14]
+                        cmeq v16.2d, v16.2d, v0.2d
+                        ldp q28, q29, [x14, #32]
+                        cmeq v19.2d, v19.2d, v0.2d
+                        cmeq v18.2d, v18.2d, v0.2d
+                        cmeq v21.2d, v21.2d, v0.2d
+                        cmeq v20.2d, v20.2d, v0.2d
+                        cmeq v23.2d, v23.2d, v1.2d
+                        cmeq v22.2d, v22.2d, v1.2d
+                        cmeq v25.2d, v25.2d, v1.2d
+                        cmeq v24.2d, v24.2d, v1.2d
+                        cmeq v27.2d, v27.2d, v1.2d
+                        cmeq v26.2d, v26.2d, v1.2d
+                        cmeq v29.2d, v29.2d, v1.2d
+                        cmeq v28.2d, v28.2d, v1.2d
+                        uzp1 v6.4s, v6.4s, v7.4s
+                        uzp1 v7.4s, v16.4s, v17.4s
+                        uzp1 v16.4s, v18.4s, v19.4s
+                        uzp1 v17.4s, v20.4s, v21.4s
+                        uzp1 v18.4s, v22.4s, v23.4s
+                        uzp1 v19.4s, v24.4s, v25.4s
+                        uzp1 v20.4s, v26.4s, v27.4s
+                        uzp1 v21.4s, v28.4s, v29.4s
+                        add x13, x13, #128
+                        add x14, x14, #128
+                        and v6.16b, v6.16b, v18.16b
+                        and v7.16b, v7.16b, v19.16b
+                        and v16.16b, v16.16b, v20.16b
+                        and v17.16b, v17.16b, v21.16b
+                        sub v2.4s, v2.4s, v6.4s
+                        sub v3.4s, v3.4s, v7.4s
+                        sub v4.4s, v4.4s, v16.4s
+                        sub v5.4s, v5.4s, v17.4s
+                        b.ne .LBB597_19
+                        add v2.4s, v3.4s, v2.4s
+                        add v3.4s, v5.4s, v4.4s
+                        cmp x8, x11
+                        add v2.4s, v3.4s, v2.4s
+                        addv s2, v2.4s
+                        fmov w13, s2
+                        b.eq .LBB597_27
+                        cbz x12, .LBB597_25
+                        movi v2.2d, #0000000000000000
+                        lsl x14, x11, #3
+                        mov x12, x11
+                        and x11, x8, #0xffffffffffffffc
+                        sub x12, x12, x11
+                        mov v2.s[0], w13
+                        add x13, x10, x14
+                        add x14, x9, x14
+                        ldp q4, q3, [x14], #32
+                        ldp q5, q6, [x13], #32
+                        adds x12, x12, #4
+                        cmeq v3.2d, v3.2d, v0.2d
+                        cmeq v4.2d, v4.2d, v0.2d
+                        cmeq v6.2d, v6.2d, v1.2d
+                        cmeq v5.2d, v5.2d, v1.2d
+                        uzp1 v3.4s, v4.4s, v3.4s
+                        uzp1 v4.4s, v5.4s, v6.4s
+                        and v3.16b, v3.16b, v4.16b
+                        sub v2.4s, v2.4s, v3.4s
+                        b.ne .LBB597_23
+                        addv s0, v2.4s
+                        cmp x8, x11
+                        fmov w13, s0
+                        b.eq .LBB597_27
+                        lsl x12, x11, #3
+                        sub x8, x8, x11
+                        add x10, x10, x12
+                        add x9, x9, x12
+                        ldr x11, [x9], #8
+                        ldr x12, [x10], #8
+                        cmp x11, x20
+                        ccmp x12, x19, #0, eq
+                        cinc w13, w13, eq
+                        subs x8, x8, #1
+                        b.ne .LBB597_26
+                        cmp w13, #0
+                        cset w0, ne
+                        ldp x20, x19, [sp, #48]
+                        ldr x23, [sp, #16]
+                        ldp x22, x21, [sp, #32]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        adrp x3, .Lanon.571aeabceafb6ca46a56d24cd02b013a.308
+                        add x3, x3, :lo12:.Lanon.571aeabceafb6ca46a56d24cd02b013a.308
+                        bl _RNvNtNtCs5GM3FX5Rw6v_4core5slice5index16slice_index_fail
+aarch64-neoverse-v1  purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v22 f0 r0  [purrdf_datalog-eb64608c9cec2234.s]  add×17, addp×1, and×2, cmeq×2, cmpeq×8, mul×1, sub×5, uaddv×1, xtn×1
+                        stp x29, x30, [sp, #-64]!
+                        str x23, [sp, #16]
+                        stp x22, x21, [sp, #32]
+                        stp x20, x19, [sp, #48]
+                        mov x29, sp
+                        ldr x8, [x0, #16]
+                        mov x19, x2
+                        mov x20, x1
+                        mov x21, x0
+                        cbz x8, .LBB596_10
+                        ldr x22, [x21, #8]
+                        mov w9, #120
+                        madd x23, x8, x9, x22
+                        b .LBB596_5
+                        mov x10, xzr
+                        ldr x8, [x8, x10, lsl #3]
+                        cmp x8, x19
+                        b.eq .LBB596_14
+                        add x22, x22, #120
+                        cmp x22, x23
+                        b.eq .LBB596_10
+                        ldp x0, x1, [x22, #8]
+                        mov x2, x20
+                        bl _RNvMs4_NtCsior4BH6hwUd_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        ldr x2, [x22, #40]
+                        cmp x1, x0
+                        ccmp x1, x2, #2, hs
+                        b.hi .LBB596_27
+                        subs x9, x1, x0
+                        b.eq .LBB596_4
+                        ldr x8, [x22, #32]
+                        cmp x9, #1
+                        add x8, x8, x0, lsl #3
+                        b.eq .LBB596_2
+                        mov x10, xzr
+                        lsr x11, x9, #1
+                        add x12, x11, x10
+                        sub x9, x9, x11
+                        ldr x13, [x8, x12, lsl #3]
+                        cmp x13, x19
+                        csel x10, x10, x12, hi
+                        cmp x9, #1
+                        b.hi .LBB596_9
+                        b .LBB596_3
+                        ldr x8, [x21, #40]
+                        ldr x9, [x21, #64]
+                        cmp x8, x9
+                        csel x8, x8, x9, lo
+                        cbz x8, .LBB596_13
+                        ldr x9, [x21, #32]
+                        ldr x10, [x21, #56]
+                        cmp x8, #1
+                        b.ne .LBB596_15
+                        mov w12, wzr
+                        mov x11, xzr
+                        b .LBB596_24
+                        mov w0, wzr
+                        ldp x20, x19, [sp, #48]
+                        ldp x22, x21, [sp, #32]
+                        ldr x23, [sp, #16]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        mov w0, #1
+                        ldp x20, x19, [sp, #48]
+                        ldp x22, x21, [sp, #32]
+                        ldr x23, [sp, #16]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        cnth x12
+                        cmp x8, x12
+                        b.hs .LBB596_17
+                        mov x11, xzr
+                        mov w12, wzr
+                        b .LBB596_21
+                        rdvl x11, #1
+                        movi v2.2d, #0000000000000000
+                        mov z3.d, #1
+                        movi v4.2d, #0000000000000000
+                        movi v5.2d, #0000000000000000
+                        movi v6.2d, #0000000000000000
+                        mov z0.d, x20
+                        mov x15, x9
+                        mov x16, x10
+                        lsr x11, x11, #4
+                        mov z1.d, x19
+                        lsl x11, x11, #3
+                        ptrue p0.d
+                        rdvl x14, #4
+                        udiv x13, x8, x11
+                        mul x11, x13, x11
+                        sub x13, x8, x11
+                        mov x17, x11
+                        ldr z7, [x15]
+                        ldr z16, [x15, #1, mul vl]
+                        cmpeq p1.d, p0/z, z7.d, z0.d
+                        ldr z17, [x15, #2, mul vl]
+                        ldr z18, [x15, #3, mul vl]
+                        cmpeq p2.d, p0/z, z16.d, z0.d
+                        cmpeq p3.d, p0/z, z17.d, z0.d
+                        cmpeq p4.d, p0/z, z18.d, z0.d
+                        ldr z7, [x16]
+                        ldr z16, [x16, #1, mul vl]
+                        ldr z17, [x16, #2, mul vl]
+                        ldr z18, [x16, #3, mul vl]
+                        add x16, x16, x14
+                        add x15, x15, x14
+                        cmpeq p5.d, p1/z, z7.d, z1.d
+                        cmpeq p1.d, p2/z, z16.d, z1.d
+                        cmpeq p2.d, p3/z, z17.d, z1.d
+                        cmpeq p3.d, p4/z, z18.d, z1.d
+                        subs x17, x17, x12
+                        add z2.d, p5/m, z2.d, z3.d
+                        add z4.d, p1/m, z4.d, z3.d
+                        add z5.d, p2/m, z5.d, z3.d
+                        add z6.d, p3/m, z6.d, z3.d
+                        b.ne .LBB596_18
+                        add z0.d, z4.d, z2.d
+                        add z1.d, z6.d, z5.d
+                        add z0.d, z1.d, z0.d
+                        uaddv d0, p0, z0.d
+                        fmov w12, s0
+                        cbz x13, .LBB596_26
+                        cmp x13, #1
+                        b.eq .LBB596_24
+                        movi v0.2d, #0000000000000000
+                        dup v1.2d, x20
+                        mov x14, x11
+                        and x11, x8, #0xffffffffffffffe
+                        add x13, x10, x14, lsl #3
+                        dup v2.2d, x19
+                        mov v0.s[0], w12
+                        sub x12, x14, x11
+                        add x14, x9, x14, lsl #3
+                        ldr q3, [x14], #16
+                        ldr q4, [x13], #16
+                        adds x12, x12, #2
+                        cmeq v3.2d, v3.2d, v1.2d
+                        cmeq v4.2d, v4.2d, v2.2d
+                        and v3.16b, v3.16b, v4.16b
+                        xtn v3.2s, v3.2d
+                        sub v0.2s, v0.2s, v3.2s
+                        b.ne .LBB596_22
+                        addp v0.2s, v0.2s, v0.2s
+                        cmp x8, x11
+                        fmov w12, s0
+                        b.eq .LBB596_26
+                        add x10, x10, x11, lsl #3
+                        add x9, x9, x11, lsl #3
+                        sub x8, x8, x11
+                        ldr x11, [x9], #8
+                        cmp x11, x20
+                        ldr x11, [x10], #8
+                        ccmp x11, x19, #0, eq
+                        cinc w12, w12, eq
+                        subs x8, x8, #1
+                        b.ne .LBB596_25
+                        cmp w12, #0
+                        cset w0, ne
+                        ldp x20, x19, [sp, #48]
+                        ldp x22, x21, [sp, #32]
+                        ldr x23, [sp, #16]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        adrp x3, .Lanon.571aeabceafb6ca46a56d24cd02b013a.308
+                        add x3, x3, :lo12:.Lanon.571aeabceafb6ca46a56d24cd02b013a.308
+                        bl _RNvNtNtCs5GM3FX5Rw6v_4core5slice5index16slice_index_fail
+aarch64-neoverse-v1  purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v22 f0 r0  [purrdf_datalog-eb64608c9cec2234.s]  add×17, addp×1, and×2, cmeq×2, cmpeq×8, mul×1, sub×5, uaddv×1, xtn×1
+                        stp x29, x30, [sp, #-64]!
+                        str x23, [sp, #16]
+                        stp x22, x21, [sp, #32]
+                        stp x20, x19, [sp, #48]
+                        mov x29, sp
+                        ldr x8, [x0, #16]
+                        mov x19, x2
+                        mov x20, x1
+                        mov x21, x0
+                        cbz x8, .LBB596_10
+                        ldr x22, [x21, #8]
+                        mov w9, #120
+                        madd x23, x8, x9, x22
+                        b .LBB596_5
+                        mov x10, xzr
+                        ldr x8, [x8, x10, lsl #3]
+                        cmp x8, x19
+                        b.eq .LBB596_14
+                        add x22, x22, #120
+                        cmp x22, x23
+                        b.eq .LBB596_10
+                        ldp x0, x1, [x22, #8]
+                        mov x2, x20
+                        bl _RNvMs4_NtCsior4BH6hwUd_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        ldr x2, [x22, #40]
+                        cmp x1, x0
+                        ccmp x1, x2, #2, hs
+                        b.hi .LBB596_27
+                        subs x9, x1, x0
+                        b.eq .LBB596_4
+                        ldr x8, [x22, #32]
+                        cmp x9, #1
+                        add x8, x8, x0, lsl #3
+                        b.eq .LBB596_2
+                        mov x10, xzr
+                        lsr x11, x9, #1
+                        add x12, x11, x10
+                        sub x9, x9, x11
+                        ldr x13, [x8, x12, lsl #3]
+                        cmp x13, x19
+                        csel x10, x10, x12, hi
+                        cmp x9, #1
+                        b.hi .LBB596_9
+                        b .LBB596_3
+                        ldr x8, [x21, #40]
+                        ldr x9, [x21, #64]
+                        cmp x8, x9
+                        csel x8, x8, x9, lo
+                        cbz x8, .LBB596_13
+                        ldr x9, [x21, #32]
+                        ldr x10, [x21, #56]
+                        cmp x8, #1
+                        b.ne .LBB596_15
+                        mov w12, wzr
+                        mov x11, xzr
+                        b .LBB596_24
+                        mov w0, wzr
+                        ldp x20, x19, [sp, #48]
+                        ldp x22, x21, [sp, #32]
+                        ldr x23, [sp, #16]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        mov w0, #1
+                        ldp x20, x19, [sp, #48]
+                        ldp x22, x21, [sp, #32]
+                        ldr x23, [sp, #16]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        cnth x12
+                        cmp x8, x12
+                        b.hs .LBB596_17
+                        mov x11, xzr
+                        mov w12, wzr
+                        b .LBB596_21
+                        rdvl x11, #1
+                        movi v2.2d, #0000000000000000
+                        mov z3.d, #1
+                        movi v4.2d, #0000000000000000
+                        movi v5.2d, #0000000000000000
+                        movi v6.2d, #0000000000000000
+                        mov z0.d, x20
+                        mov x15, x9
+                        mov x16, x10
+                        lsr x11, x11, #4
+                        mov z1.d, x19
+                        lsl x11, x11, #3
+                        ptrue p0.d
+                        rdvl x14, #4
+                        udiv x13, x8, x11
+                        mul x11, x13, x11
+                        sub x13, x8, x11
+                        mov x17, x11
+                        ldr z7, [x15]
+                        ldr z16, [x15, #1, mul vl]
+                        cmpeq p1.d, p0/z, z7.d, z0.d
+                        ldr z17, [x15, #2, mul vl]
+                        ldr z18, [x15, #3, mul vl]
+                        cmpeq p2.d, p0/z, z16.d, z0.d
+                        cmpeq p3.d, p0/z, z17.d, z0.d
+                        cmpeq p4.d, p0/z, z18.d, z0.d
+                        ldr z7, [x16]
+                        ldr z16, [x16, #1, mul vl]
+                        ldr z17, [x16, #2, mul vl]
+                        ldr z18, [x16, #3, mul vl]
+                        add x16, x16, x14
+                        add x15, x15, x14
+                        cmpeq p5.d, p1/z, z7.d, z1.d
+                        cmpeq p1.d, p2/z, z16.d, z1.d
+                        cmpeq p2.d, p3/z, z17.d, z1.d
+                        cmpeq p3.d, p4/z, z18.d, z1.d
+                        subs x17, x17, x12
+                        add z2.d, p5/m, z2.d, z3.d
+                        add z4.d, p1/m, z4.d, z3.d
+                        add z5.d, p2/m, z5.d, z3.d
+                        add z6.d, p3/m, z6.d, z3.d
+                        b.ne .LBB596_18
+                        add z0.d, z4.d, z2.d
+                        add z1.d, z6.d, z5.d
+                        add z0.d, z1.d, z0.d
+                        uaddv d0, p0, z0.d
+                        fmov w12, s0
+                        cbz x13, .LBB596_26
+                        cmp x13, #1
+                        b.eq .LBB596_24
+                        movi v0.2d, #0000000000000000
+                        dup v1.2d, x20
+                        mov x14, x11
+                        and x11, x8, #0xffffffffffffffe
+                        add x13, x10, x14, lsl #3
+                        dup v2.2d, x19
+                        mov v0.s[0], w12
+                        sub x12, x14, x11
+                        add x14, x9, x14, lsl #3
+                        ldr q3, [x14], #16
+                        ldr q4, [x13], #16
+                        adds x12, x12, #2
+                        cmeq v3.2d, v3.2d, v1.2d
+                        cmeq v4.2d, v4.2d, v2.2d
+                        and v3.16b, v3.16b, v4.16b
+                        xtn v3.2s, v3.2d
+                        sub v0.2s, v0.2s, v3.2s
+                        b.ne .LBB596_22
+                        addp v0.2s, v0.2s, v0.2s
+                        cmp x8, x11
+                        fmov w12, s0
+                        b.eq .LBB596_26
+                        add x10, x10, x11, lsl #3
+                        add x9, x9, x11, lsl #3
+                        sub x8, x8, x11
+                        ldr x11, [x9], #8
+                        cmp x11, x20
+                        ldr x11, [x10], #8
+                        ccmp x11, x19, #0, eq
+                        cinc w12, w12, eq
+                        subs x8, x8, #1
+                        b.ne .LBB596_25
+                        cmp w12, #0
+                        cset w0, ne
+                        ldp x20, x19, [sp, #48]
+                        ldp x22, x21, [sp, #32]
+                        ldr x23, [sp, #16]
+                        ldp x29, x30, [sp], #64
+                        ret 
+                        adrp x3, .Lanon.571aeabceafb6ca46a56d24cd02b013a.308
+                        add x3, x3, :lo12:.Lanon.571aeabceafb6ca46a56d24cd02b013a.308
+                        bl _RNvNtNtCs5GM3FX5Rw6v_4core5slice5index16slice_index_fail
+wasm32               purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v0 f0 r0  [purrdf_datalog-a785923b6df02f98.s]  
+                        global.get __stack_pointer
+                        i32.const 16
+                        i32.sub 
+                        local.tee 3
+                        global.set __stack_pointer
+                        block 
+                        block 
+                        local.get 0
+                        i32.load 16
+                        local.tee 4
+                        i32.eqz 
+                        br_if 0
+                        local.get 0
+                        i32.load 12
+                        local.tee 5
+                        local.get 4
+                        i32.const 60
+                        i32.mul 
+                        i32.add 
+                        local.set 6
+                        loop 
+                        local.get 3
+                        i32.const 8
+                        i32.add 
+                        local.get 5
+                        i32.const 4
+                        i32.add 
+                        i32.load 0
+                        local.get 5
+                        i32.const 8
+                        i32.add 
+                        i32.load 0
+                        local.get 1
+                        call _RNvMs4_NtCs5XcZHhzvQnQ_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        local.get 5
+                        i32.load 20
+                        local.set 4
+                        block 
+                        block 
+                        block 
+                        local.get 3
+                        i32.load 12
+                        local.tee 7
+                        local.get 3
+                        i32.load 8
+                        local.tee 8
+                        i32.lt_u 
+                        br_if 0
+                        local.get 7
+                        local.get 4
+                        i32.gt_u 
+                        br_if 0
+                        local.get 5
+                        i32.load 16
+                        local.get 8
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        local.set 9
+                        i32.const 0
+                        local.set 4
+                        block 
+                        local.get 7
+                        local.get 8
+                        i32.sub 
+                        local.tee 7
+                        br_table {3, 2, 0}
+                        end_block 
+                        i32.const 0
+                        local.set 4
+                        loop 
+                        local.get 4
+                        local.get 7
+                        i32.const 1
+                        i32.shr_u 
+                        local.tee 8
+                        local.get 4
+                        i32.add 
+                        local.tee 10
+                        local.get 9
+                        local.get 10
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.gt_u 
+                        i32.select 
+                        local.set 4
+                        local.get 7
+                        local.get 8
+                        i32.sub 
+                        local.tee 7
+                        i32.const 1
+                        i32.gt_u 
+                        br_if 0
+                        br 2
+                        end_loop 
+                        end_block 
+                        local.get 8
+                        local.get 7
+                        local.get 4
+                        i32.const .Lanon.e42b24defc9dfd1d2e3b29a2943b85cf.306
+                        call _RNvNtNtCsjZK7kNTPklg_4core5slice5index16slice_index_fail
+                        unreachable 
+                        end_block 
+                        local.get 9
+                        local.get 4
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.ne 
+                        br_if 0
+                        i32.const 1
+                        local.set 4
+                        br 3
+                        end_block 
+                        local.get 5
+                        i32.const 60
+                        i32.add 
+                        local.tee 5
+                        local.get 6
+                        i32.ne 
+                        br_if 0
+                        end_loop 
+                        end_block 
+                        block 
+                        local.get 0
+                        i32.load 28
+                        local.tee 4
+                        local.get 0
+                        i32.load 40
+                        local.tee 7
+                        local.get 4
+                        local.get 7
+                        i32.lt_u 
+                        i32.select 
+                        local.tee 4
+                        br_if 0
+                        i32.const 0
+                        local.set 4
+                        br 1
+                        end_block 
+                        local.get 0
+                        i32.load 36
+                        local.set 5
+                        local.get 0
+                        i32.load 24
+                        local.set 6
+                        i32.const 0
+                        local.set 8
+                        i32.const 0
+                        local.set 10
+                        block 
+                        block 
+                        local.get 4
+                        i32.const 1
+                        i32.eq 
+                        br_if 0
+                        local.get 4
+                        i32.const 1
+                        i32.and 
+                        local.set 0
+                        local.get 4
+                        i32.const 268435454
+                        i32.and 
+                        local.set 9
+                        i32.const 0
+                        local.set 8
+                        local.get 6
+                        local.set 4
+                        local.get 5
+                        local.set 7
+                        i32.const 0
+                        local.set 10
+                        loop 
+                        local.get 8
+                        local.get 4
+                        i64.load 0
+                        local.get 1
+                        i64.eq 
+                        local.get 7
+                        i64.load 0
+                        local.get 2
+                        i64.eq 
+                        i32.and 
+                        i32.add 
+                        local.get 4
+                        i32.const 8
+                        i32.add 
+                        i64.load 0
+                        local.get 1
+                        i64.eq 
+                        local.get 7
+                        i32.const 8
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.eq 
+                        i32.and 
+                        i32.add 
+                        local.set 8
+                        local.get 4
+                        i32.const 16
+                        i32.add 
+                        local.set 4
+                        local.get 7
+                        i32.const 16
+                        i32.add 
+                        local.set 7
+                        local.get 9
+                        local.get 10
+                        i32.const 2
+                        i32.add 
+                        local.tee 10
+                        i32.ne 
+                        br_if 0
+                        end_loop 
+                        local.get 0
+                        i32.eqz 
+                        br_if 1
+                        end_block 
+                        local.get 8
+                        local.get 6
+                        local.get 10
+                        i32.const 3
+                        i32.shl 
+                        local.tee 4
+                        i32.add 
+                        i64.load 0
+                        local.get 1
+                        i64.eq 
+                        local.get 5
+                        local.get 4
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.eq 
+                        i32.and 
+                        i32.add 
+                        local.set 8
+                        end_block 
+                        local.get 8
+                        i32.const 0
+                        i32.ne 
+                        local.set 4
+                        end_block 
+                        local.get 3
+                        i32.const 16
+                        i32.add 
+                        global.set __stack_pointer
+                        local.get 4
+wasm32               purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v0 f0 r0  [purrdf_datalog-a785923b6df02f98.s]  
+                        global.get __stack_pointer
+                        i32.const 16
+                        i32.sub 
+                        local.tee 3
+                        global.set __stack_pointer
+                        block 
+                        block 
+                        local.get 0
+                        i32.load 16
+                        local.tee 4
+                        i32.eqz 
+                        br_if 0
+                        local.get 0
+                        i32.load 12
+                        local.tee 5
+                        local.get 4
+                        i32.const 60
+                        i32.mul 
+                        i32.add 
+                        local.set 6
+                        loop 
+                        local.get 3
+                        i32.const 8
+                        i32.add 
+                        local.get 5
+                        i32.const 4
+                        i32.add 
+                        i32.load 0
+                        local.get 5
+                        i32.const 8
+                        i32.add 
+                        i32.load 0
+                        local.get 1
+                        call _RNvMs4_NtCs5XcZHhzvQnQ_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        local.get 5
+                        i32.load 20
+                        local.set 4
+                        block 
+                        block 
+                        block 
+                        local.get 3
+                        i32.load 12
+                        local.tee 7
+                        local.get 3
+                        i32.load 8
+                        local.tee 8
+                        i32.lt_u 
+                        br_if 0
+                        local.get 7
+                        local.get 4
+                        i32.gt_u 
+                        br_if 0
+                        local.get 5
+                        i32.load 16
+                        local.get 8
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        local.set 9
+                        i32.const 0
+                        local.set 4
+                        block 
+                        local.get 7
+                        local.get 8
+                        i32.sub 
+                        local.tee 7
+                        br_table {3, 2, 0}
+                        end_block 
+                        i32.const 0
+                        local.set 4
+                        loop 
+                        local.get 4
+                        local.get 7
+                        i32.const 1
+                        i32.shr_u 
+                        local.tee 8
+                        local.get 4
+                        i32.add 
+                        local.tee 10
+                        local.get 9
+                        local.get 10
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.gt_u 
+                        i32.select 
+                        local.set 4
+                        local.get 7
+                        local.get 8
+                        i32.sub 
+                        local.tee 7
+                        i32.const 1
+                        i32.gt_u 
+                        br_if 0
+                        br 2
+                        end_loop 
+                        end_block 
+                        local.get 8
+                        local.get 7
+                        local.get 4
+                        i32.const .Lanon.e42b24defc9dfd1d2e3b29a2943b85cf.306
+                        call _RNvNtNtCsjZK7kNTPklg_4core5slice5index16slice_index_fail
+                        unreachable 
+                        end_block 
+                        local.get 9
+                        local.get 4
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.ne 
+                        br_if 0
+                        i32.const 1
+                        local.set 4
+                        br 3
+                        end_block 
+                        local.get 5
+                        i32.const 60
+                        i32.add 
+                        local.tee 5
+                        local.get 6
+                        i32.ne 
+                        br_if 0
+                        end_loop 
+                        end_block 
+                        block 
+                        local.get 0
+                        i32.load 28
+                        local.tee 4
+                        local.get 0
+                        i32.load 40
+                        local.tee 7
+                        local.get 4
+                        local.get 7
+                        i32.lt_u 
+                        i32.select 
+                        local.tee 4
+                        br_if 0
+                        i32.const 0
+                        local.set 4
+                        br 1
+                        end_block 
+                        local.get 0
+                        i32.load 36
+                        local.set 5
+                        local.get 0
+                        i32.load 24
+                        local.set 6
+                        i32.const 0
+                        local.set 8
+                        i32.const 0
+                        local.set 10
+                        block 
+                        block 
+                        local.get 4
+                        i32.const 1
+                        i32.eq 
+                        br_if 0
+                        local.get 4
+                        i32.const 1
+                        i32.and 
+                        local.set 0
+                        local.get 4
+                        i32.const 268435454
+                        i32.and 
+                        local.set 9
+                        i32.const 0
+                        local.set 8
+                        local.get 6
+                        local.set 4
+                        local.get 5
+                        local.set 7
+                        i32.const 0
+                        local.set 10
+                        loop 
+                        local.get 8
+                        local.get 4
+                        i64.load 0
+                        local.get 1
+                        i64.eq 
+                        local.get 7
+                        i64.load 0
+                        local.get 2
+                        i64.eq 
+                        i32.and 
+                        i32.add 
+                        local.get 4
+                        i32.const 8
+                        i32.add 
+                        i64.load 0
+                        local.get 1
+                        i64.eq 
+                        local.get 7
+                        i32.const 8
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.eq 
+                        i32.and 
+                        i32.add 
+                        local.set 8
+                        local.get 4
+                        i32.const 16
+                        i32.add 
+                        local.set 4
+                        local.get 7
+                        i32.const 16
+                        i32.add 
+                        local.set 7
+                        local.get 9
+                        local.get 10
+                        i32.const 2
+                        i32.add 
+                        local.tee 10
+                        i32.ne 
+                        br_if 0
+                        end_loop 
+                        local.get 0
+                        i32.eqz 
+                        br_if 1
+                        end_block 
+                        local.get 8
+                        local.get 6
+                        local.get 10
+                        i32.const 3
+                        i32.shl 
+                        local.tee 4
+                        i32.add 
+                        i64.load 0
+                        local.get 1
+                        i64.eq 
+                        local.get 5
+                        local.get 4
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.eq 
+                        i32.and 
+                        i32.add 
+                        local.set 8
+                        end_block 
+                        local.get 8
+                        i32.const 0
+                        i32.ne 
+                        local.set 4
+                        end_block 
+                        local.get 3
+                        i32.const 16
+                        i32.add 
+                        global.set __stack_pointer
+                        local.get 4
+wasm32-simd128       purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v8 f0 r0  [purrdf_datalog-b2a3c551ad7e1b0a.s]  i32x4.add×2, i64x2.eq×2, i8x16.shuffle×2, v128.and×2
+                        global.get __stack_pointer
+                        i32.const 16
+                        i32.sub 
+                        local.tee 3
+                        global.set __stack_pointer
+                        block 
+                        block 
+                        local.get 0
+                        i32.load 16
+                        local.tee 4
+                        i32.eqz 
+                        br_if 0
+                        local.get 0
+                        i32.load 12
+                        local.tee 5
+                        local.get 4
+                        i32.const 60
+                        i32.mul 
+                        i32.add 
+                        local.set 6
+                        loop 
+                        local.get 3
+                        i32.const 8
+                        i32.add 
+                        local.get 5
+                        i32.const 4
+                        i32.add 
+                        i32.load 0
+                        local.get 5
+                        i32.const 8
+                        i32.add 
+                        i32.load 0
+                        local.get 1
+                        call _RNvMs4_NtCs5XcZHhzvQnQ_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        local.get 5
+                        i32.load 20
+                        local.set 4
+                        block 
+                        block 
+                        block 
+                        local.get 3
+                        i32.load 12
+                        local.tee 7
+                        local.get 3
+                        i32.load 8
+                        local.tee 8
+                        i32.lt_u 
+                        br_if 0
+                        local.get 7
+                        local.get 4
+                        i32.gt_u 
+                        br_if 0
+                        local.get 5
+                        i32.load 16
+                        local.get 8
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        local.set 9
+                        i32.const 0
+                        local.set 4
+                        block 
+                        local.get 7
+                        local.get 8
+                        i32.sub 
+                        local.tee 7
+                        br_table {3, 2, 0}
+                        end_block 
+                        i32.const 0
+                        local.set 4
+                        loop 
+                        local.get 4
+                        local.get 7
+                        i32.const 1
+                        i32.shr_u 
+                        local.tee 8
+                        local.get 4
+                        i32.add 
+                        local.tee 10
+                        local.get 9
+                        local.get 10
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.gt_u 
+                        i32.select 
+                        local.set 4
+                        local.get 7
+                        local.get 8
+                        i32.sub 
+                        local.tee 7
+                        i32.const 1
+                        i32.gt_u 
+                        br_if 0
+                        br 2
+                        end_loop 
+                        end_block 
+                        local.get 8
+                        local.get 7
+                        local.get 4
+                        i32.const .Lanon.e42b24defc9dfd1d2e3b29a2943b85cf.304
+                        call _RNvNtNtCsjZK7kNTPklg_4core5slice5index16slice_index_fail
+                        unreachable 
+                        end_block 
+                        local.get 9
+                        local.get 4
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.ne 
+                        br_if 0
+                        i32.const 1
+                        local.set 4
+                        br 3
+                        end_block 
+                        local.get 5
+                        i32.const 60
+                        i32.add 
+                        local.tee 5
+                        local.get 6
+                        i32.ne 
+                        br_if 0
+                        end_loop 
+                        end_block 
+                        block 
+                        local.get 0
+                        i32.load 28
+                        local.tee 4
+                        local.get 0
+                        i32.load 40
+                        local.tee 7
+                        local.get 4
+                        local.get 7
+                        i32.lt_u 
+                        i32.select 
+                        local.tee 10
+                        br_if 0
+                        i32.const 0
+                        local.set 4
+                        br 1
+                        end_block 
+                        local.get 0
+                        i32.load 36
+                        local.set 5
+                        local.get 0
+                        i32.load 24
+                        local.set 6
+                        i32.const 0
+                        local.set 8
+                        i32.const 0
+                        local.set 9
+                        block 
+                        block 
+                        local.get 10
+                        i32.const 1
+                        i32.eq 
+                        br_if 0
+                        local.get 2
+                        i64x2.splat 
+                        local.set 11
+                        local.get 1
+                        i64x2.splat 
+                        local.set 12
+                        v128.const 0, 0, 0, 0
+                        local.set 13
+                        local.get 6
+                        local.set 4
+                        local.get 5
+                        local.set 7
+                        local.get 10
+                        i32.const 268435454
+                        i32.and 
+                        local.tee 9
+                        local.set 8
+                        loop 
+                        local.get 13
+                        local.get 4
+                        v128.load 0:p2align=3
+                        local.get 12
+                        i64x2.eq 
+                        local.get 7
+                        v128.load 0:p2align=3
+                        local.get 11
+                        i64x2.eq 
+                        v128.and 
+                        v128.const 1, 1
+                        v128.and 
+                        local.get 13
+                        i8x16.shuffle 0, 1, 2, 3, 8, 9, 10, 11, 0, 1, 2, 3, 0, 1, 2, 3
+                        i32x4.add 
+                        local.set 13
+                        local.get 4
+                        i32.const 16
+                        i32.add 
+                        local.set 4
+                        local.get 7
+                        i32.const 16
+                        i32.add 
+                        local.set 7
+                        local.get 8
+                        i32.const -2
+                        i32.add 
+                        local.tee 8
+                        br_if 0
+                        end_loop 
+                        local.get 13
+                        local.get 13
+                        local.get 13
+                        i8x16.shuffle 4, 5, 6, 7, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3
+                        i32x4.add 
+                        i32x4.extract_lane 0
+                        local.set 8
+                        local.get 10
+                        local.get 9
+                        i32.eq 
+                        br_if 1
+                        end_block 
+                        local.get 10
+                        local.get 9
+                        i32.sub 
+                        local.set 10
+                        local.get 6
+                        local.get 9
+                        i32.const 3
+                        i32.shl 
+                        local.tee 7
+                        i32.add 
+                        local.set 4
+                        local.get 5
+                        local.get 7
+                        i32.add 
+                        local.set 7
+                        loop 
+                        local.get 8
+                        local.get 4
+                        i64.load 0
+                        local.get 1
+                        i64.eq 
+                        local.get 7
+                        i64.load 0
+                        local.get 2
+                        i64.eq 
+                        i32.and 
+                        i32.add 
+                        local.set 8
+                        local.get 4
+                        i32.const 8
+                        i32.add 
+                        local.set 4
+                        local.get 7
+                        i32.const 8
+                        i32.add 
+                        local.set 7
+                        local.get 10
+                        i32.const -1
+                        i32.add 
+                        local.tee 10
+                        br_if 0
+                        end_loop 
+                        end_block 
+                        local.get 8
+                        i32.const 0
+                        i32.ne 
+                        local.set 4
+                        end_block 
+                        local.get 3
+                        i32.const 16
+                        i32.add 
+                        global.set __stack_pointer
+                        local.get 4
+wasm32-simd128       purrdf_datalog  <purrdf_datalog::store::Relation>::contains
+                     v8 f0 r0  [purrdf_datalog-b2a3c551ad7e1b0a.s]  i32x4.add×2, i64x2.eq×2, i8x16.shuffle×2, v128.and×2
+                        global.get __stack_pointer
+                        i32.const 16
+                        i32.sub 
+                        local.tee 3
+                        global.set __stack_pointer
+                        block 
+                        block 
+                        local.get 0
+                        i32.load 16
+                        local.tee 4
+                        i32.eqz 
+                        br_if 0
+                        local.get 0
+                        i32.load 12
+                        local.tee 5
+                        local.get 4
+                        i32.const 60
+                        i32.mul 
+                        i32.add 
+                        local.set 6
+                        loop 
+                        local.get 3
+                        i32.const 8
+                        i32.add 
+                        local.get 5
+                        i32.const 4
+                        i32.add 
+                        i32.load 0
+                        local.get 5
+                        i32.const 8
+                        i32.add 
+                        i32.load 0
+                        local.get 1
+                        call _RNvMs4_NtCs5XcZHhzvQnQ_14purrdf_datalog5storeNtB5_5Batch11subject_runB7_
+                        local.get 5
+                        i32.load 20
+                        local.set 4
+                        block 
+                        block 
+                        block 
+                        local.get 3
+                        i32.load 12
+                        local.tee 7
+                        local.get 3
+                        i32.load 8
+                        local.tee 8
+                        i32.lt_u 
+                        br_if 0
+                        local.get 7
+                        local.get 4
+                        i32.gt_u 
+                        br_if 0
+                        local.get 5
+                        i32.load 16
+                        local.get 8
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        local.set 9
+                        i32.const 0
+                        local.set 4
+                        block 
+                        local.get 7
+                        local.get 8
+                        i32.sub 
+                        local.tee 7
+                        br_table {3, 2, 0}
+                        end_block 
+                        i32.const 0
+                        local.set 4
+                        loop 
+                        local.get 4
+                        local.get 7
+                        i32.const 1
+                        i32.shr_u 
+                        local.tee 8
+                        local.get 4
+                        i32.add 
+                        local.tee 10
+                        local.get 9
+                        local.get 10
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.gt_u 
+                        i32.select 
+                        local.set 4
+                        local.get 7
+                        local.get 8
+                        i32.sub 
+                        local.tee 7
+                        i32.const 1
+                        i32.gt_u 
+                        br_if 0
+                        br 2
+                        end_loop 
+                        end_block 
+                        local.get 8
+                        local.get 7
+                        local.get 4
+                        i32.const .Lanon.e42b24defc9dfd1d2e3b29a2943b85cf.304
+                        call _RNvNtNtCsjZK7kNTPklg_4core5slice5index16slice_index_fail
+                        unreachable 
+                        end_block 
+                        local.get 9
+                        local.get 4
+                        i32.const 3
+                        i32.shl 
+                        i32.add 
+                        i64.load 0
+                        local.get 2
+                        i64.ne 
+                        br_if 0
+                        i32.const 1
+                        local.set 4
+                        br 3
+                        end_block 
+                        local.get 5
+                        i32.const 60
+                        i32.add 
+                        local.tee 5
+                        local.get 6
+                        i32.ne 
+                        br_if 0
+                        end_loop 
+                        end_block 
+                        block 
+                        local.get 0
+                        i32.load 28
+                        local.tee 4
+                        local.get 0
+                        i32.load 40
+                        local.tee 7
+                        local.get 4
+                        local.get 7
+                        i32.lt_u 
+                        i32.select 
+                        local.tee 10
+                        br_if 0
+                        i32.const 0
+                        local.set 4
+                        br 1
+                        end_block 
+                        local.get 0
+                        i32.load 36
+                        local.set 5
+                        local.get 0
+                        i32.load 24
+                        local.set 6
+                        i32.const 0
+                        local.set 8
+                        i32.const 0
+                        local.set 9
+                        block 
+                        block 
+                        local.get 10
+                        i32.const 1
+                        i32.eq 
+                        br_if 0
+                        local.get 2
+                        i64x2.splat 
+                        local.set 11
+                        local.get 1
+                        i64x2.splat 
+                        local.set 12
+                        v128.const 0, 0, 0, 0
+                        local.set 13
+                        local.get 6
+                        local.set 4
+                        local.get 5
+                        local.set 7
+                        local.get 10
+                        i32.const 268435454
+                        i32.and 
+                        local.tee 9
+                        local.set 8
+                        loop 
+                        local.get 13
+                        local.get 4
+                        v128.load 0:p2align=3
+                        local.get 12
+                        i64x2.eq 
+                        local.get 7
+                        v128.load 0:p2align=3
+                        local.get 11
+                        i64x2.eq 
+                        v128.and 
+                        v128.const 1, 1
+                        v128.and 
+                        local.get 13
+                        i8x16.shuffle 0, 1, 2, 3, 8, 9, 10, 11, 0, 1, 2, 3, 0, 1, 2, 3
+                        i32x4.add 
+                        local.set 13
+                        local.get 4
+                        i32.const 16
+                        i32.add 
+                        local.set 4
+                        local.get 7
+                        i32.const 16
+                        i32.add 
+                        local.set 7
+                        local.get 8
+                        i32.const -2
+                        i32.add 
+                        local.tee 8
+                        br_if 0
+                        end_loop 
+                        local.get 13
+                        local.get 13
+                        local.get 13
+                        i8x16.shuffle 4, 5, 6, 7, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3
+                        i32x4.add 
+                        i32x4.extract_lane 0
+                        local.set 8
+                        local.get 10
+                        local.get 9
+                        i32.eq 
+                        br_if 1
+                        end_block 
+                        local.get 10
+                        local.get 9
+                        i32.sub 
+                        local.set 10
+                        local.get 6
+                        local.get 9
+                        i32.const 3
+                        i32.shl 
+                        local.tee 7
+                        i32.add 
+                        local.set 4
+                        local.get 5
+                        local.get 7
+                        i32.add 
+                        local.set 7
+                        loop 
+                        local.get 8
+                        local.get 4
+                        i64.load 0
+                        local.get 1
+                        i64.eq 
+                        local.get 7
+                        i64.load 0
+                        local.get 2
+                        i64.eq 
+                        i32.and 
+                        i32.add 
+                        local.set 8
+                        local.get 4
+                        i32.const 8
+                        i32.add 
+                        local.set 4
+                        local.get 7
+                        i32.const 8
+                        i32.add 
+                        local.set 7
+                        local.get 10
+                        i32.const -1
+                        i32.add 
+                        local.tee 10
+                        br_if 0
+                        end_loop 
+                        end_block 
+                        local.get 8
+                        i32.const 0
+                        i32.ne 
+                        local.set 4
+                        end_block 
+                        local.get 3
+                        i32.const 16
+                        i32.add 
+                        global.set __stack_pointer
+                        local.get 4

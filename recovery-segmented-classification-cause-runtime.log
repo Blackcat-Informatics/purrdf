@@ -1,0 +1,25 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 2.89s
+     Running tests/segmented_stack.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 1 test
+test effective_annotation_classification_uses_original_chronology_and_first_occurrence ... FAILED
+
+failures:
+
+---- effective_annotation_classification_uses_original_chronology_and_first_occurrence stdout ----
+
+thread 'effective_annotation_classification_uses_original_chronology_and_first_occurrence' (1259966) panicked at crates/rdf-core/tests/segmented_stack.rs:246:9:
+assertion `left == right` failed: original operational cause: Some(PinnedBlocks)
+  left: (0, 0, 0)
+ right: (0, 1, 1)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    effective_annotation_classification_uses_original_chronology_and_first_occurrence
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-core --test segmented_stack`
+terminal_status=101

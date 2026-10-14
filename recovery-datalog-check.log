@@ -1,0 +1,784 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking either v1.16.0
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking crossbeam-epoch v0.9.18
+    Checking crossbeam-deque v0.8.6
+    Checking rayon v1.12.0
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error: expected one of `->`, `where`, or `{`, found `?`
+   --> crates/datalog/src/resolve_fol.rs:736:57
+    |
+736 | fn is_ground(dag: &mut TermDag, s: &Subst, atom: NodeId)? -> Result<bool, StorageError> {
+    |                                                         ^ expected one of `->`, `where`, or `{`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1103:39
+     |
+1103 |                     RowId::from_index(since + offset),
+     |                     ----------------- ^^^^^^^^^^^^^^ expected `u64`, found `usize`
+     |                     |
+     |                     arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:81:12
+     |
+  81 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+1103 |                     RowId::from_index((since + offset).try_into().unwrap()),
+     |                                       +              +++++++++++++++++++++
+
+error[E0271]: expected `Map<Enumerate<Iter<'_, (u32, Id<Term>, Id<Term>)>>, {closure@store.rs:1100:18}>` to be an iterator that yields `(Id<Row>, [Id<Term>; 4])`, but it yields `(Result<Id<Row>, CapacityError>, [Id<Term>; 4])`
+    --> crates/datalog/src/store.rs:1095:46
+     |
+1095 |     pub fn rows_from(&self, since: usize) -> impl Iterator<Item = (RowId, [TermId; 4])> + '_ {
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `(Id<Row>, [Id<Term>; 4])`, found `(Result<Id<Row>, _>, [Id<Term>; 4])`
+     |
+     = note: expected tuple `(Id<_>, _)`
+                found tuple `(Result<Id<_>, CapacityError>, _)`
+
+error[E0308]: mismatched types
+  --> crates/datalog/src/evidence.rs:57:18
+   |
+57 |             .get(row.index())
+   |              --- ^^^^^^^^^^^ expected `usize`, found `u64`
+   |              |
+   |              arguments to this method are incorrect
+   |
+note: method defined here
+  --> crates/rdf-core/src/evidence/column.rs:74:12
+   |
+74 |     pub fn get(&self, index: usize) -> Result<EvidenceId, EvidenceColumnError> {
+   |            ^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+   |
+57 |             .get(row.index().try_into().unwrap())
+   |                             ++++++++++++++++++++
+
+error[E0308]: mismatched types
+  --> crates/datalog/src/evidence.rs:72:18
+   |
+72 |             .get(row.index())
+   |              --- ^^^^^^^^^^^ expected `usize`, found `u64`
+   |              |
+   |              arguments to this method are incorrect
+   |
+note: method defined here
+  --> crates/rdf-core/src/evidence/column.rs:74:12
+   |
+74 |     pub fn get(&self, index: usize) -> Result<EvidenceId, EvidenceColumnError> {
+   |            ^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+   |
+72 |             .get(row.index().try_into().unwrap())
+   |                             ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/evidence.rs:75:48
+    |
+ 75 |         self.workspace.set_row(&mut self.rows, row.index(), id)?;
+    |                        -------                 ^^^^^^^^^^^ expected `usize`, found `u64`
+    |                        |
+    |                        arguments to this method are incorrect
+    |
+note: method defined here
+   --> crates/rdf-core/src/evidence/workspace.rs:124:12
+    |
+124 |     pub fn set_row(
+    |            ^^^^^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+ 75 |         self.workspace.set_row(&mut self.rows, row.index().try_into().unwrap(), id)?;
+    |                                                           ++++++++++++++++++++
+
+error[E0308]: mismatched types
+  --> crates/datalog/src/evidence.rs:91:22
+   |
+91 |                 .get(source.index())
+   |                  --- ^^^^^^^^^^^^^^ expected `usize`, found `u64`
+   |                  |
+   |                  arguments to this method are incorrect
+   |
+note: method defined here
+  --> crates/rdf-core/src/evidence/column.rs:74:12
+   |
+74 |     pub fn get(&self, index: usize) -> Result<EvidenceId, EvidenceColumnError> {
+   |            ^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+   |
+91 |                 .get(source.index().try_into().unwrap())
+   |                                    ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/evidence.rs:109:27
+    |
+109 |         if row.index() != self.rows.len() {
+    |            -----------    ^^^^^^^^^^^^^^^ expected `u64`, found `usize`
+    |            |
+    |            expected because this is `u64`
+    |
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+    |
+109 |         if row.index() != self.rows.len().try_into().unwrap() {
+    |                                          ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/evidence.rs:132:18
+    |
+132 |             .get(row.index())
+    |              --- ^^^^^^^^^^^ expected `usize`, found `u64`
+    |              |
+    |              arguments to this method are incorrect
+    |
+note: method defined here
+   --> crates/rdf-core/src/evidence/column.rs:74:12
+    |
+ 74 |     pub fn get(&self, index: usize) -> Result<EvidenceId, EvidenceColumnError> {
+    |            ^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+132 |             .get(row.index().try_into().unwrap())
+    |                             ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/evidence.rs:141:38
+    |
+141 |             .set_row(&mut self.rows, row.index(), combined)?;
+    |              -------                 ^^^^^^^^^^^ expected `usize`, found `u64`
+    |              |
+    |              arguments to this method are incorrect
+    |
+note: method defined here
+   --> crates/rdf-core/src/evidence/workspace.rs:124:12
+    |
+124 |     pub fn set_row(
+    |            ^^^^^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+141 |             .set_row(&mut self.rows, row.index().try_into().unwrap(), combined)?;
+    |                                                 ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/proof.rs:571:21
+     |
+ 571 |             .remove(&root.index())
+     |              ------ ^^^^^^^^^^^^^ expected `&usize`, found `&u64`
+     |              |
+     |              arguments to this method are incorrect
+     |
+     = note: expected reference `&usize`
+                found reference `&u64`
+note: method defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/btree/map.rs:1131:12
+     |
+1131 |     pub fn remove<Q: ?Sized>(&mut self, key: &Q) -> Option<V>
+     |            ^^^^^^
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:589:28
+    |
+589 |         if root.index() >= self.terms.len() {
+    |            ------------    ^^^^^^^^^^^^^^^^ expected `u64`, found `usize`
+    |            |
+    |            expected because this is `u64`
+    |
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+    |
+589 |         if root.index() >= self.terms.len().try_into().unwrap() {
+    |                                            ++++++++++++++++++++
+
+error[E0277]: the type `[ProofTerm]` cannot be indexed by `u64`
+   --> crates/datalog/src/proof.rs:598:69
+    |
+598 |             if let ProofTerm::ByRule { premises, .. } = &self.terms[index] {
+    |                                                                     ^^^^^ slice indices are of type `usize` or ranges of `usize`
+    |
+    = help: the trait `SliceIndex<[ProofTerm]>` is not implemented for `u64`
+help: `usize` implements trait `SliceIndex<T>`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/bstr/traits.rs:197:1
+    |
+197 | unsafe impl SliceIndex<ByteStr> for usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<ByteStr>`
+    |
+   ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/index.rs:179:1
+    |
+179 | const unsafe impl<T> SliceIndex<[T]> for usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<[T]>`
+    = note: required for `Vec<ProofTerm>` to implement `std::ops::Index<u64>`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:609:12
+    |
+595 |             if !reachable.insert(index) {
+    |                 ---------        ----- this argument has type `u64`...
+    |                 |
+    |                 ... which causes `reachable` to have type `BTreeSet<u64>`
+...
+609 |         Ok(reachable)
+    |         -- ^^^^^^^^^ expected `BTreeSet<usize>`, found `BTreeSet<u64>`
+    |         |
+    |         arguments to this enum variant are incorrect
+    |
+    = note: expected struct `BTreeSet<usize>`
+               found struct `BTreeSet<u64>`
+help: the type constructed contains `BTreeSet<u64>` due to the type of the argument passed
+   --> crates/datalog/src/proof.rs:609:9
+    |
+609 |         Ok(reachable)
+    |         ^^^---------^
+    |            |
+    |            this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+    |
+562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+595 |             if !reachable.insert(index.try_into().unwrap()) {
+    |                                       ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:687:35
+    |
+687 |             let fact = proven.get(&premise.index()).ok_or_else(|| {
+    |                               --- ^^^^^^^^^^^^^^^^ expected `&usize`, found `&u64`
+    |                               |
+    |                               arguments to this method are incorrect
+    |
+    = note: expected reference `&usize`
+               found reference `&u64`
+note: method defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/btree/map.rs:719:12
+    |
+719 |     pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
+    |            ^^^
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:785:45
+    |
+785 |                         let back = position[&premise.index()];
+    |                                             ^^^^^^^^^^^^^^^^ expected `&usize`, found `&u64`
+    |
+    = note: expected reference `&usize`
+               found reference `&u64`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:829:42
+    |
+829 |         let mut stack = vec![Step::Visit(root.index())];
+    |                              ----------- ^^^^^^^^^^^^ expected `usize`, found `u64`
+    |                              |
+    |                              arguments to this enum variant are incorrect
+    |
+note: tuple variant defined here
+   --> crates/datalog/src/proof.rs:820:13
+    |
+820 |             Visit(usize),
+    |             ^^^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+829 |         let mut stack = vec![Step::Visit(root.index().try_into().unwrap())];
+    |                                                      ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:840:52
+    |
+840 | ...                   stack.push(Step::Visit(premise.index()));
+    |                                  ----------- ^^^^^^^^^^^^^^^ expected `usize`, found `u64`
+    |                                  |
+    |                                  arguments to this enum variant are incorrect
+    |
+note: tuple variant defined here
+   --> crates/datalog/src/proof.rs:820:13
+    |
+820 |             Visit(usize),
+    |             ^^^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+840 |                             stack.push(Step::Visit(premise.index().try_into().unwrap()));
+    |                                                                   ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/schedule.rs:365:47
+    |
+365 |             debug_assert_eq!(row.index() + 1, assumed.len(), "assumed tracks store rows");
+    |                                               ^^^^^^^^^^^^^ expected `u64`, found `usize`
+    |
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+    |
+365 |             debug_assert_eq!(row.index() + 1, assumed.len().try_into().unwrap(), "assumed tracks store rows");
+    |                                                            ++++++++++++++++++++
+
+error[E0277]: the type `[bool]` cannot be indexed by `u64`
+   --> crates/datalog/src/schedule.rs:418:25
+    |
+418 |             assumed.get(row.index()).copied().unwrap_or(false) && !confirmed.contains_key(fact)
+    |                     --- ^^^^^^^^^^^ slice indices are of type `usize` or ranges of `usize`
+    |                     |
+    |                     required by a bound introduced by this call
+    |
+    = help: the trait `SliceIndex<[bool]>` is not implemented for `u64`
+help: `usize` implements trait `SliceIndex<T>`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/bstr/traits.rs:197:1
+    |
+197 | unsafe impl SliceIndex<ByteStr> for usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<ByteStr>`
+    |
+   ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/index.rs:179:1
+    |
+179 | const unsafe impl<T> SliceIndex<[T]> for usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<[T]>`
+note: required by a bound in `core::slice::<impl [T]>::get`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/mod.rs:576:12
+    |
+574 |     pub const fn get<I>(&self, index: I) -> Option<&I::Output>
+    |                  --- required by a bound in this associated function
+575 |     where
+576 |         I: [const] SliceIndex<Self>,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `core::slice::<impl [T]>::get`
+
+error[E0277]: the type `[u32]` cannot be indexed by `u64`
+   --> crates/datalog/src/schedule.rs:535:32
+    |
+535 |         depth.push(state.depth[row.index()]);
+    |                                ^^^^^^^^^^^ slice indices are of type `usize` or ranges of `usize`
+    |
+    = help: the trait `SliceIndex<[u32]>` is not implemented for `u64`
+help: `usize` implements trait `SliceIndex<T>`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/bstr/traits.rs:197:1
+    |
+197 | unsafe impl SliceIndex<ByteStr> for usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<ByteStr>`
+    |
+   ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/index.rs:179:1
+    |
+179 | const unsafe impl<T> SliceIndex<[T]> for usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<[T]>`
+    = note: required for `Vec<u32>` to implement `std::ops::Index<u64>`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/seminaive/evidence.rs:245:30
+    |
+245 |             if row.index() < original_rows {
+    |                -----------   ^^^^^^^^^^^^^ expected `u64`, found `usize`
+    |                |
+    |                expected because this is `u64`
+    |
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+    |
+245 |             if row.index() < original_rows.try_into().unwrap() {
+    |                                           ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/seminaive/evidence.rs:288:18
+    |
+288 |             .get(row.index())
+    |              --- ^^^^^^^^^^^ expected `usize`, found `u64`
+    |              |
+    |              arguments to this method are incorrect
+    |
+note: method defined here
+   --> crates/rdf-core/src/evidence/column.rs:74:12
+    |
+ 74 |     pub fn get(&self, index: usize) -> Result<EvidenceId, EvidenceColumnError> {
+    |            ^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+288 |             .get(row.index().try_into().unwrap())
+    |                             ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:1377:20
+     |
+1377 |         self.lo <= index && index < self.hi
+     |         -------    ^^^^^ expected `usize`, found `u64`
+     |         |
+     |         expected because this is `usize`
+     |
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+     |
+1377 |         self.lo <= index.try_into().unwrap() && index < self.hi
+     |                         ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:1377:37
+     |
+1377 |         self.lo <= index && index < self.hi
+     |                             -----   ^^^^^^^ expected `u64`, found `usize`
+     |                             |
+     |                             expected because this is `u64`
+     |
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+1377 |         self.lo <= index && index < self.hi.try_into().unwrap()
+     |                                            ++++++++++++++++++++
+
+error[E0277]: the type `[u32]` cannot be indexed by `u64`
+    --> crates/datalog/src/seminaive.rs:3243:28
+     |
+3243 |         let height = depth[source.row.index()];
+     |                            ^^^^^^^^^^^^^^^^^^ slice indices are of type `usize` or ranges of `usize`
+     |
+     = help: the trait `SliceIndex<[u32]>` is not implemented for `u64`
+help: `usize` implements trait `SliceIndex<T>`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/bstr/traits.rs:197:1
+     |
+ 197 | unsafe impl SliceIndex<ByteStr> for usize {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<ByteStr>`
+     |
+    ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/index.rs:179:1
+     |
+ 179 | const unsafe impl<T> SliceIndex<[T]> for usize {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<[T]>`
+     = note: required for `[u32]` to implement `std::ops::Index<u64>`
+
+error[E0277]: the type `[bool]` cannot be indexed by `u64`
+    --> crates/datalog/src/seminaive.rs:3594:33
+     |
+3594 |         if snapshot.assumed.get(row.index()).copied().unwrap_or(false) {
+     |                             --- ^^^^^^^^^^^ slice indices are of type `usize` or ranges of `usize`
+     |                             |
+     |                             required by a bound introduced by this call
+     |
+     = help: the trait `SliceIndex<[bool]>` is not implemented for `u64`
+help: `usize` implements trait `SliceIndex<T>`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/bstr/traits.rs:197:1
+     |
+ 197 | unsafe impl SliceIndex<ByteStr> for usize {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<ByteStr>`
+     |
+    ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/index.rs:179:1
+     |
+ 179 | const unsafe impl<T> SliceIndex<[T]> for usize {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SliceIndex<[T]>`
+note: required by a bound in `core::slice::<impl [T]>::get`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/mod.rs:576:12
+     |
+ 574 |     pub const fn get<I>(&self, index: I) -> Option<&I::Output>
+     |                  --- required by a bound in this associated function
+ 575 |     where
+ 576 |         I: [const] SliceIndex<Self>,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `core::slice::<impl [T]>::get`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:4269:39
+     |
+4269 |         debug_assert_eq!(row.index(), state.depth.len(), "depth tracks store rows");
+     |                                       ^^^^^^^^^^^^^^^^^ expected `u64`, found `usize`
+     |
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+4269 |         debug_assert_eq!(row.index(), state.depth.len().try_into().unwrap(), "depth tracks store rows");
+     |                                                        ++++++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+   --> crates/datalog/src/store.rs:730:17
+    |
+730 |         if self.contains(s_id, o_id) {
+    |                 ^^^^^^^^
+    |
+note: expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+   --> crates/datalog/src/store.rs:730:26
+    |
+730 |         if self.contains(s_id, o_id) {
+    |                          ^^^^
+    = note: expected struct `Id<_>`
+                 found enum `Result<Id<_>, StorageError>`
+note: expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+   --> crates/datalog/src/store.rs:730:32
+    |
+730 |         if self.contains(s_id, o_id) {
+    |                                ^^^^
+    = note: expected struct `Id<_>`
+                 found enum `Result<Id<_>, StorageError>`
+note: method defined here
+   --> crates/datalog/src/store.rs:744:8
+    |
+744 |     fn contains(&self, subject: TermId, object: TermId) -> bool {
+    |        ^^^^^^^^        ---------------  --------------
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+730 |         if self.contains(s_id.expect("REASON"), o_id) {
+    |                              +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+730 |         if self.contains(s_id, o_id.expect("REASON")) {
+    |                                    +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+   --> crates/datalog/src/store.rs:733:19
+    |
+733 |         self.tail.push(s_id, o_id, row_id);
+    |                   ^^^^
+    |
+note: expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+   --> crates/datalog/src/store.rs:733:24
+    |
+733 |         self.tail.push(s_id, o_id, row_id);
+    |                        ^^^^
+    = note: expected struct `Id<_>`
+                 found enum `Result<Id<_>, StorageError>`
+note: expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+   --> crates/datalog/src/store.rs:733:30
+    |
+733 |         self.tail.push(s_id, o_id, row_id);
+    |                              ^^^^
+    = note: expected struct `Id<_>`
+                 found enum `Result<Id<_>, StorageError>`
+note: method defined here
+   --> crates/datalog/src/store.rs:613:8
+    |
+613 |     fn push(&mut self, subject: TermId, object: TermId, row: RowId) {
+    |        ^^^^            ---------------  --------------
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+733 |         self.tail.push(s_id.expect("REASON"), o_id, row_id);
+    |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+733 |         self.tail.push(s_id, o_id.expect("REASON"), row_id);
+    |                                  +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/store.rs:739:15
+    |
+739 |         Some((s_id, o_id))
+    |               ^^^^ expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+    |
+    = note: expected struct `Id<_>`
+                 found enum `Result<Id<_>, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+739 |         Some((s_id.expect("REASON"), o_id))
+    |                   +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/store.rs:739:21
+    |
+739 |         Some((s_id, o_id))
+    |                     ^^^^ expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+    |
+    = note: expected struct `Id<_>`
+                 found enum `Result<Id<_>, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+    |
+739 |         Some((s_id, o_id.expect("REASON")))
+    |                         +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/store.rs:891:53
+    |
+891 |             .is_some_and(|newest| newest.index() >= index)
+    |                                   --------------    ^^^^^ expected `u64`, found `usize`
+    |                                   |
+    |                                   expected because this is `u64`
+    |
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+    |
+891 |             .is_some_and(|newest| newest.index() >= index.try_into().unwrap())
+    |                                                          ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1078:40
+     |
+1078 |         let row_id = RowId::from_index(self.row_count);
+     |                      ----------------- ^^^^^^^^^^^^^^ expected `u64`, found `usize`
+     |                      |
+     |                      arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:81:12
+     |
+  81 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+1078 |         let row_id = RowId::from_index(self.row_count.try_into().unwrap());
+     |                                                      ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1080:58
+     |
+1080 |             .insert(&mut self.interner, subject, object, row_id)
+     |              ------                                      ^^^^^^ expected `Id<Row>`, found `Result<Id<Row>, CapacityError>`
+     |              |
+     |              arguments to this method are incorrect
+     |
+     = note: expected struct `Id<_>`
+                  found enum `Result<Id<_>, CapacityError>`
+note: method defined here
+    --> crates/datalog/src/store.rs:721:8
+     |
+ 721 |     fn insert(
+     |        ^^^^^^
+...
+ 726 |         row_id: RowId,
+     |         -------------
+help: consider using `Result::expect` to unwrap the `Result<Id<Row>, CapacityError>` value, panicking if the value is a `Result::Err`
+     |
+1080 |             .insert(&mut self.interner, subject, object, row_id.expect("REASON"))
+     |                                                                +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1079:9
+     |
+1076 |       ) -> Option<(TermId, TermId, RowId)> {
+     |            ------------------------------- expected `Option<(Id<id::Term>, Id<id::Term>, Id<Row>)>` because of return type
+...
+1079 | /         self.relations[slot]
+1080 | |             .insert(&mut self.interner, subject, object, row_id)
+1081 | |             .map(|(s_id, o_id)| {
+1082 | |                 self.row_count += 1;
+...    |
+1088 | |                 (s_id, o_id, row_id)
+1089 | |             })
+     | |______________^ expected `Option<(Id<Term>, Id<Term>, Id<Row>)>`, found `Option<(Id<Term>, Id<Term>, _)>`
+     |
+     = note: expected enum `Option<(Id<_>, Id<_>, Id<_>)>`
+                found enum `Option<(Id<_>, Id<_>, Result<Id<_>, CapacityError>)>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1116:48
+     |
+1116 |         if let Some(&slot) = self.by_key.get(&(predicate_id, graph_id)) {
+     |                                                ^^^^^^^^^^^^ expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+     |
+     = note: expected struct `Id<_>`
+                  found enum `Result<Id<_>, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1116 |         if let Some(&slot) = self.by_key.get(&(predicate_id.expect("REASON"), graph_id)) {
+     |                                                            +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1116:62
+     |
+1116 |         if let Some(&slot) = self.by_key.get(&(predicate_id, graph_id)) {
+     |                                                              ^^^^^^^^ expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+     |
+     = note: expected struct `Id<_>`
+                  found enum `Result<Id<_>, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1116 |         if let Some(&slot) = self.by_key.get(&(predicate_id, graph_id.expect("REASON"))) {
+     |                                                                      +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1135:25
+     |
+1135 |         self.keys.push((predicate_id, graph_id));
+     |                         ^^^^^^^^^^^^ expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+     |
+     = note: expected struct `Id<_>`
+                  found enum `Result<Id<_>, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1135 |         self.keys.push((predicate_id.expect("REASON"), graph_id));
+     |                                     +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1135:39
+     |
+1135 |         self.keys.push((predicate_id, graph_id));
+     |                                       ^^^^^^^^ expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+     |
+     = note: expected struct `Id<_>`
+                  found enum `Result<Id<_>, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1135 |         self.keys.push((predicate_id, graph_id.expect("REASON")));
+     |                                               +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1136:29
+     |
+1136 |         self.by_key.insert((predicate_id, graph_id), slot);
+     |                             ^^^^^^^^^^^^ expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+     |
+     = note: expected struct `Id<_>`
+                  found enum `Result<Id<_>, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1136 |         self.by_key.insert((predicate_id.expect("REASON"), graph_id), slot);
+     |                                         +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1136:43
+     |
+1136 |         self.by_key.insert((predicate_id, graph_id), slot);
+     |                                           ^^^^^^^^ expected `Id<Term>`, found `Result<Id<Term>, StorageError>`
+     |
+     = note: expected struct `Id<_>`
+                  found enum `Result<Id<_>, StorageError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<id::Term>, StorageError>` value, panicking if the value is a `Result::Err`
+     |
+1136 |         self.by_key.insert((predicate_id, graph_id.expect("REASON")), slot);
+     |                                                   +++++++++++++++++
+
+error[E0277]: expected an `FnOnce(usize)` closure, found `fn(u64) -> Result<Id<Partition>, CapacityError> {Id::<Partition>::from_index}`
+    --> crates/datalog/src/store.rs:1191:18
+     |
+1191 |             .map(PartitionId::from_index)
+     |              --- ^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(usize)` closure, found `fn(u64) -> Result<Id<Partition>, CapacityError> {Id::<Partition>::from_index}`
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = help: the trait `FnOnce(usize)` is not implemented for fn item `fn(u64) -> Result<Id<Partition>, CapacityError> {Id::<Partition>::from_index}`
+     = note: expected a closure with signature `fn(usize)`
+                found a closure with signature `fn(u64)`
+note: required by a bound in `Option::<T>::map`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162:12
+     |
+1160 |     pub const fn map<U, F>(self, f: F) -> Option<U>
+     |                  --- required by a bound in this associated function
+1161 |     where
+1162 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Option::<T>::map`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1230:41
+     |
+1230 |             id: PartitionId::from_index(slot),
+     |                 ----------------------- ^^^^ expected `u64`, found `usize`
+     |                 |
+     |                 arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:81:12
+     |
+  81 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+1230 |             id: PartitionId::from_index(slot.try_into().unwrap()),
+     |                                             ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1230:17
+     |
+1230 |             id: PartitionId::from_index(slot),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Id<Partition>`, found `Result<Id<Partition>, CapacityError>`
+     |
+     = note: expected struct `Id<_>`
+                  found enum `Result<Id<_>, CapacityError>`
+help: consider using `Result::expect` to unwrap the `Result<Id<Partition>, CapacityError>` value, panicking if the value is a `Result::Err`
+     |
+1230 |             id: PartitionId::from_index(slot).expect("REASON"),
+     |                                              +++++++++++++++++
+
+error: unused import: `TermIdentity`
+   --> crates/datalog/src/store.rs:102:58
+    |
+102 | use crate::dictionary::{DictionaryError, TermDictionary, TermIdentity};
+    |                                                          ^^^^^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+Some errors have detailed explanations: E0271, E0277, E0308.
+For more information about an error, try `rustc --explain E0271`.
+error: could not compile `purrdf-datalog` (lib) due to 46 previous errors
+terminal_status=101

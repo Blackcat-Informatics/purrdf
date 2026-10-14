@@ -1,0 +1,56 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 01s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 3 tests
+test query_scope::counters::tests::operational_failure_cannot_publish_partial_counts_or_an_unknown_row ... ok
+test query_scope::counters::tests::satisfied_candidates_need_no_temporary_decision_capacity ... ok
+test query_scope::counters::tests::unknown_time_is_counted_separately_even_when_place_rejects ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1342 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.12s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test distance::tests::resolve_refuses_every_mxcsr_departure_and_answers_the_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1344 filtered out; finished in 0.00s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Finished `test` profile [optimized] target(s) in 2m 19s
+     Running tests/float_environment.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-hnsw/cbcc222ffd61c87a/out/float_environment-cbcc222ffd61c87a)
+
+running 5 tests
+test every_norm_entry_point_needs_the_exact_handle_a_flushing_thread_cannot_obtain ... ok
+test every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain ... ok
+test every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the_default ... ok
+test every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_default ... ok
+test a_worker_thread_is_checked_where_it_computes_not_where_the_index_was_built ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/float_environment_rayon.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-hnsw/cc6037a7d8a0a3b8/out/float_environment_rayon-cc6037a7d8a0a3b8)
+
+running 1 test
+test a_flushing_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_thread_bits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+ Documenting purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+ Documenting purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 26.12s
+   Generated /opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/doc/purrdf_retrieval/index.html and 1 other file
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.15s
+     Running `/opt/.cargo/target/490-typed-capacity-errors-instead-of-u32-32e51468/debug/helper-census --index`
+OK: 82 ledger jobs hold (82 enforced, 22 reasoned variants, 0 copies still open in unenforced jobs); 118 [[distinct]] rows each equal one group; no #[path] include leaves its crate (2260 files)
+terminal_status=0

@@ -1,0 +1,73 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 19s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 21 tests
+test ir::builder::native_graph_birth_tests::blank_term_refusal_does_not_reserve_its_scope ... ok
+test ir::builder::native_graph_birth_tests::checked_owned_document_refusal_rolls_back_prefix_and_retains_malformed_cause ... ok
+test ir::builder::native_graph_birth_tests::compound_literal_refusal_rolls_back_children_and_sorted_scopes ... ok
+test ir::builder::native_graph_birth_tests::content_id_side_table_refusal_does_not_publish_an_unindexed_term ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_checks_logical_sum_before_host_width_and_skips_only_hints ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_public_rows_and_duplicate_full_import_preserve_original_state ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_public_text_miss_is_atomic_and_duplicate_survives ... ok
+test ir::builder::native_graph_birth_tests::merge_scope_capacity_is_minted_only_for_actual_blank_ingress ... ok
+test ir::builder::native_graph_birth_tests::named_graph_growth_refusal_keeps_prior_declarations_and_duplicate_hits ... ok
+test ir::builder::native_graph_birth_tests::native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes ... ok
+test ir::builder::native_graph_birth_tests::native_graph_refuses_before_the_first_arena_allocation ... ok
+test ir::builder::native_graph_birth_tests::checked_owned_document_growth_sweep_uses_original_admission ... ok
+test ir::builder::native_graph_birth_tests::native_structural_failure_releases_builder_and_retains_only_the_diagnostic ... ok
+test ir::builder::native_graph_birth_tests::escaped_owned_blank_hits_need_no_growth_and_match_materialized_hashes ... ok
+test ir::builder::native_graph_birth_tests::owned_overlay_refusal_restores_children_and_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::owned_quad_refusal_restores_terms_rows_scopes_and_location_payloads ... ok
+test ir::builder::native_graph_birth_tests::refused_literal_does_not_poison_later_healthy_freeze ... ok
+test ir::builder::native_graph_birth_tests::reifier_row_refusal_does_not_publish_its_implicit_predicate ... ok
+test ir::builder::native_graph_birth_tests::content_id_rollback_preserves_retained_charge_and_prior_lookup ... ok
+test ir::builder::native_graph_birth_tests::validated_append_keeps_original_account_exact_across_refusal_and_repetition ... ok
+test ir::builder::native_graph_birth_tests::push_dataset_refusal_rolls_back_all_streams_and_merge_scope ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 1318 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 0.27s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 15 tests
+test describe::tests::full_description_table_replacement_preserves_original_capacity_and_grant ... ok
+test evidence::column::tests::default_rows_and_reordered_bags_need_no_capacity ... ok
+test evidence::answer::tests::exact_witness_questions_stop_without_any_metadata_capacity_or_false_classification ... ok
+test evidence::standpoint::tests::malformed_and_cyclic_orders_fail_without_publishing_or_retaining_capacity ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_checks_logical_sum_before_host_width_and_skips_only_hints ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_public_text_miss_is_atomic_and_duplicate_survives ... ok
+test ir::builder::native_graph_birth_tests::local_capacity_public_rows_and_duplicate_full_import_preserve_original_state ... ok
+test ir::ingest::tests::event_scope_capacity_preserves_original_count_and_prior_state ... ok
+test ir::builder::native_graph_birth_tests::merge_scope_capacity_is_minted_only_for_actual_blank_ingress ... ok
+test provenance::tests::provenance_capacity_refusal_preserves_all_public_interner_streams ... ok
+test ir::dataset::tests::lazy_permutation_capacity_refuses_before_allocation_and_retries ... ok
+test provenance::tests::provenance_zero_based_capacity_includes_last_u32_slot ... ok
+test ir::mutable::tests::delta_capacity_public_insert_rolls_back_only_attempted_terms ... ok
+test query_scope::counters::tests::satisfied_candidates_need_no_temporary_decision_capacity ... ok
+test small::tests::capacity_overflow_panics ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1324 filtered out; finished in 0.00s
+
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 58.08s
+terminal_status=0

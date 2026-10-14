@@ -1,0 +1,298 @@
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error: redundant clone
+   --> crates/shapes/tests/function_body_relation.rs:982:20
+    |
+982 |             refused.to_string().contains(REL_MISSING),
+    |                    ^^^^^^^^^^^^ help: remove this
+    |
+note: cloned value is neither consumed nor mutated
+   --> crates/shapes/tests/function_body_relation.rs:982:13
+    |
+982 |             refused.to_string().contains(REL_MISSING),
+    |             ^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+    = note: `-D clippy::redundant-clone` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: implicitly cloning a `String` by calling `to_string` on its dereferenced type
+   --> crates/shapes/tests/function_body_relation.rs:982:13
+    |
+982 |             refused.to_string().contains(REL_MISSING),
+    |             ^^^^^^^^^^^^^^^^^^^ help: consider using: `refused.clone()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#implicit_clone
+    = note: `-D clippy::implicit-clone` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::implicit_clone)]`
+
+error: could not compile `purrdf-shapes` (test "function_body_relation") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-wasm)
+error[E0599]: no method named `root` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/validate/tests/complete_shacl.rs:46:32
+    |
+ 46 |         Some(report.to_graph().root().to_string().as_str())
+    |                                ^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `root` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:748:5
+    |
+748 |     pub const fn root(&self) -> &Term {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+ 46 |         Some(report.to_graph().expect("REASON").root().to_string().as_str())
+    |                               +++++++++++++++++
+
+error[E0599]: no method named `dataset` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/validate/tests/complete_shacl.rs:493:25
+    |
+493 |     let dataset = graph.dataset();
+    |                         ^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `dataset` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:742:5
+    |
+742 |     pub const fn dataset(&self) -> &Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+493 |     let dataset = graph.expect("REASON").dataset();
+    |                        +++++++++++++++++
+
+error[E0599]: no method named `blank_labels` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/validate/tests/complete_shacl.rs:578:24
+    |
+578 |     let source = graph.blank_labels().source_of(&label).unwrap();
+    |                        ^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `blank_labels` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:754:5
+    |
+754 |     pub const fn blank_labels(&self) -> &CompleteBlankLabels {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+578 |     let source = graph.expect("REASON").blank_labels().source_of(&label).unwrap();
+    |                       +++++++++++++++++
+
+error[E0599]: no method named `source_context` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/validate/tests/complete_shacl.rs:579:39
+    |
+579 |     assert_eq!(source.source(), graph.source_context().data());
+    |                                       ^^^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_shapes::report::CompleteReportGraph, purrdf_shapes::ShapesError>`
+    |
+note: the method `source_context` exists on the type `purrdf_shapes::report::CompleteReportGraph`
+   --> crates/shapes/src/report.rs:760:5
+    |
+760 |     pub const fn source_context(&self) -> &Arc<ReportSourceContext> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `purrdf_shapes::report::CompleteReportGraph` value, panicking if the value is a `Result::Err`
+    |
+579 |     assert_eq!(source.source(), graph.expect("REASON").source_context().data());
+    |                                      +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-validate` (test "complete_shacl") due to 4 previous errors
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+error[E0308]: mismatched types
+   --> crates/cli/src/ingest.rs:180:29
+    |
+180 |         return Ok((Arc::new(RdfDataset::union(&borrowed)), ledger));
+    |                    -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RdfDataset`, found `Result<RdfDataset, RdfDiagnostic>`
+    |                    |
+    |                    arguments to this function are incorrect
+    |
+    = note: expected struct `RdfDataset`
+                 found enum `std::result::Result<RdfDataset, purrdf_rdf::RdfDiagnostic>`
+note: associated function defined here
+   --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/sync.rs:444:12
+    |
+444 |     pub fn new(data: T) -> Arc<T> {
+    |            ^^^
+help: use the `?` operator to extract the `std::result::Result<purrdf_rdf::RdfDataset, purrdf_rdf::RdfDiagnostic>` value, propagating a `Result::Err` value to the caller
+    |
+180 |         return Ok((Arc::new(RdfDataset::union(&borrowed)?), ledger));
+    |                                                         +
+
+error[E0277]: expected an `FnOnce(purrdf_validate::ShapesError)` closure, found `fn(std::string::String) -> error::CliError {error::CliError::Runtime}`
+   --> crates/cli/src/shapes_tools.rs:230:57
+    |
+230 |     let inferred = inference.inferred_dataset().map_err(CliError::Runtime)?;
+    |                                                 ------- ^^^^^^^^^^^^^^^^^ expected an `FnOnce(purrdf_validate::ShapesError)` closure, found `fn(std::string::String) -> error::CliError {error::CliError::Runtime}`
+    |                                                 |
+    |                                                 required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(purrdf_validate::ShapesError)` is not implemented for fn item `fn(std::string::String) -> error::CliError {error::CliError::Runtime}`
+    = note: expected a closure with signature `fn(purrdf_validate::ShapesError)`
+               found a closure with signature `fn(std::string::String)`
+note: required by a bound in `std::result::Result::<T, E>::map_err`
+   --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+    |
+961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+    |                  ------- required by a bound in this associated function
+962 |     where
+963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_validate::ShapesError>` is not satisfied
+   --> crates/cli/src/validate.rs:535:54
+    |
+535 |             .map_err(|error| CliError::Runtime(error.into()));
+    |                                                      ^^^^ the trait `std::convert::From<purrdf_validate::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<clap::Id>
+              std::convert::From<clap::builder::Str>
+              std::convert::From<purrdf::shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_validate::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_validate::ShapesError>` is not satisfied
+   --> crates/cli/src/validate.rs:544:46
+    |
+544 |     .map_err(|error| CliError::Runtime(error.into()))?;
+    |                                              ^^^^ the trait `std::convert::From<purrdf_validate::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<clap::Id>
+              std::convert::From<clap::builder::Str>
+              std::convert::From<purrdf::shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_validate::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `std::string::String: std::convert::From<purrdf_validate::ShapesError>` is not satisfied
+   --> crates/cli/src/validate.rs:723:50
+    |
+723 |         .map_err(|error| CliError::Runtime(error.into()))?;
+    |                                                  ^^^^ the trait `std::convert::From<purrdf_validate::ShapesError>` is not implemented for `std::string::String`
+    |
+    = help: `std::string::String` implements trait `std::convert::From<T>`:
+              std::convert::From<&mut str>
+              std::convert::From<&std::string::String>
+              std::convert::From<&str>
+              std::convert::From<char>
+              std::convert::From<clap::Id>
+              std::convert::From<clap::builder::Str>
+              std::convert::From<purrdf::shapes::rules::RulesError>
+              std::convert::From<std::borrow::Cow<'_, str>>
+              std::convert::From<std::boxed::Box<str>>
+    = note: required for `purrdf_validate::ShapesError` to implement `std::convert::Into<std::string::String>`
+
+error[E0277]: the trait bound `Result<Arc<RdfDataset>, ShapesError>: DatasetView` is not satisfied
+   --> crates/cli/src/validate.rs:863:9
+    |
+862 |     let ledger = sink::write_rdf(
+    |                  --------------- required by a bound introduced by this call
+863 |         &graph,
+    |         ^^^^^^ unsatisfied trait bound
+    |
+    = help: the trait `purrdf_rdf::DatasetView` is not implemented for `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_validate::ShapesError>`
+    = help: the following other types implement trait `purrdf_rdf::DatasetView`:
+              purrdf::shapes::data_view::ShaclDatasetView
+              purrdf_core::SegmentedSession
+              purrdf_core::SegmentedStackQuery<'_>
+              purrdf_core::evidence::LedgerDataset<'a, S, L>
+              purrdf_rdf::CompositeDatasetView
+              purrdf_rdf::DeltaDatasetView
+              purrdf_rdf::PackView<'_>
+              purrdf_rdf::PagedDataset
+            and 4 others
+note: required by a bound in `sink::write_rdf`
+   --> crates/cli/src/sink.rs:311:28
+    |
+311 | pub(crate) fn write_rdf<D: DatasetView>(
+    |                            ^^^^^^^^^^^ required by this bound in `write_rdf`
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-cli/427998085385f6f8/out/purrdf_cli-427998085385f6f8.long-type-2627750861708494010.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0004]: non-exhaustive patterns: `purrdf_validate::ShapesError::Storage(_)` not covered
+   --> crates/cli/src/shapes_source.rs:217:23
+    |
+217 |     let error = match error {
+    |                       ^^^^^ pattern `purrdf_validate::ShapesError::Storage(_)` not covered
+    |
+note: `purrdf_validate::ShapesError` defined here
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+ 50 |     /// Logical capacity or physical storage refused an operation.
+ 51 |     Storage(purrdf_lex::allocation::StorageError),
+    |     ------- not covered
+    = note: the matched value is of type `purrdf_validate::ShapesError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+234 ~         },
+235 +         purrdf_validate::ShapesError::Storage(_) => todo!()
+    |
+
+Some errors have detailed explanations: E0004, E0277, E0308.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `purrdf-cli` (lib) due to 7 previous errors
+error[E0004]: non-exhaustive patterns: `purrdf::status::PurrdfStatus::StorageError` not covered
+    --> crates/rdf-capi/tests/abi.rs:2860:15
+     |
+2860 |         match status {
+     |               ^^^^^^ pattern `purrdf::status::PurrdfStatus::StorageError` not covered
+     |
+note: `purrdf::status::PurrdfStatus` defined here
+    --> crates/rdf-capi/src/status.rs:20:1
+     |
+  20 | pub enum PurrdfStatus {
+     | ^^^^^^^^^^^^^^^^^^^^^
+...
+  70 |     StorageError = 15,
+     |     ------------ not covered
+     = note: the matched value is of type `purrdf::status::PurrdfStatus`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+     |
+2876 ~             PurrdfStatus::Panic => 100,
+2877 ~             purrdf::status::PurrdfStatus::StorageError => todo!(),
+     |
+
+For more information about this error, try `rustc --explain E0004`.
+error: could not compile `purrdf-capi` (test "abi") due to 1 previous error
+error[E0277]: the trait bound `Result<Arc<RdfDataset>, ShapesError>: DatasetView` is not satisfied
+   --> crates/cli/src/validate.rs:863:9
+    |
+862 |     let ledger = sink::write_rdf(
+    |                  --------------- required by a bound introduced by this call
+863 |         &graph,
+    |         ^^^^^^ unsatisfied trait bound
+    |
+    = help: the trait `purrdf_rdf::DatasetView` is not implemented for `std::result::Result<std::sync::Arc<purrdf_rdf::RdfDataset>, purrdf_validate::ShapesError>`
+    = help: the following other types implement trait `purrdf_rdf::DatasetView`:
+              purrdf::shapes::data_view::ShaclDatasetView
+              purrdf_core::SegmentedSession
+              purrdf_core::SegmentedStackQuery<'_>
+              purrdf_core::evidence::LedgerDataset<'a, S, L>
+              purrdf_rdf::CompositeDatasetView
+              purrdf_rdf::DeltaDatasetView
+              purrdf_rdf::PackView<'_>
+              purrdf_rdf::PagedDataset
+            and 4 others
+note: required by a bound in `sink::write_rdf`
+   --> crates/cli/src/sink.rs:311:28
+    |
+311 | pub(crate) fn write_rdf<D: DatasetView>(
+    |                            ^^^^^^^^^^^ required by this bound in `write_rdf`
+    = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-cli/27ef6c3dc7f51ac4/out/purrdf_cli-27ef6c3dc7f51ac4.long-type-12973783246425201999.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error: could not compile `purrdf-cli` (lib test) due to 7 previous errors
+terminal_status=101

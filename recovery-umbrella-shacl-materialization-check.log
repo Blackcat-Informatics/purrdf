@@ -1,0 +1,178 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0308]: mismatched types
+    --> crates/shapes/src/sparql.rs:1952:9
+     |
+1952 |         run_bound_view(dataset, handle, bnode_mint_prefix, invocation, visit)
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<_, String>`, found `Result<R, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<R, ShapesError>`
+note: return type inferred to be `std::result::Result<_, std::string::String>` here
+    --> crates/shapes/src/sparql.rs:1951:9
+     |
+1951 |         bind(handle)?;
+     |         ^^^^^^^^^^^^^
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+1952 |         Ok(run_bound_view(dataset, handle, bnode_mint_prefix, invocation, visit)?)
+     |         +++                                                                     ++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/sparql.rs:2060:5
+     |
+2059 | ) -> Result<bool, String> {
+     |      -------------------- expected `std::result::Result<bool, std::string::String>` because of return type
+2060 |     run_bound_view(dataset, handle, None, invocation, project_boolean)
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<bool, String>`, found `Result<bool, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+2060 |     Ok(run_bound_view(dataset, handle, None, invocation, project_boolean)?)
+     |     +++                                                                  ++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/sparql.rs:2081:5
+     |
+2080 |   ) -> Result<purrdf_sparql_eval::RetainedGraph, String> {
+     |        ------------------------------------------------- expected `std::result::Result<RetainedGraph, std::string::String>` because of return type
+2081 | /     run_bound_view(
+2082 | |         dataset,
+2083 | |         handle,
+2084 | |         bnode_mint_prefix,
+2085 | |         invocation,
+2086 | |         project_graph,
+2087 | |     )
+     | |_____^ expected `Result<RetainedGraph, String>`, found `Result<RetainedGraph, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+2081 ~     Ok(run_bound_view(
+2082 |         dataset,
+ ...
+2086 |         project_graph,
+2087 ~     )?)
+     |
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/sparql.rs:2607:5
+     |
+2606 |   ) -> Result<R, String> {
+     |        ----------------- expected `std::result::Result<R, std::string::String>` because of return type
+2607 | /     run_query_view(
+2608 | |         dataset,
+2609 | |         select,
+2610 | |         substitutions,
+...    |
+2614 | |         |outcome| project_solutions(outcome, project),
+2615 | |     )
+     | |_____^ expected `Result<R, String>`, found `Result<R, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+2607 ~     Ok(run_query_view(
+2608 |         dataset,
+ ...
+2614 |         |outcome| project_solutions(outcome, project),
+2615 ~     )?)
+     |
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/sparql.rs:2661:5
+     |
+2660 |   ) -> Result<R, String> {
+     |        ----------------- expected `std::result::Result<R, std::string::String>` because of return type
+2661 | /     run_query_view(
+2662 | |         dataset,
+2663 | |         select,
+2664 | |         substitutions,
+...    |
+2668 | |         |outcome| project_solutions(outcome, project),
+2669 | |     )
+     | |_____^ expected `Result<R, String>`, found `Result<R, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+2661 ~     Ok(run_query_view(
+2662 |         dataset,
+ ...
+2668 |         |outcome| project_solutions(outcome, project),
+2669 ~     )?)
+     |
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/sparql.rs:2690:5
+     |
+2689 |   ) -> Result<bool, String> {
+     |        -------------------- expected `std::result::Result<bool, std::string::String>` because of return type
+2690 | /     run_query_view(
+2691 | |         dataset,
+2692 | |         ask,
+2693 | |         substitutions,
+...    |
+2697 | |         project_boolean,
+2698 | |     )
+     | |_____^ expected `Result<bool, String>`, found `Result<bool, ShapesError>`
+     |
+     = note: expected enum `Result<_, std::string::String>`
+                found enum `Result<_, ShapesError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+2690 ~     Ok(run_query_view(
+2691 |         dataset,
+ ...
+2697 |         project_boolean,
+2698 ~     )?)
+     |
+
+error[E0004]: non-exhaustive patterns: `_` not covered
+   --> crates/shapes/src/error.rs:207:15
+    |
+207 |         match error {
+    |               ^^^^^ pattern `_` not covered
+    |
+note: `DatasetImportError<!>` defined here
+   --> crates/rdf-core/src/ir/import.rs:137:1
+    |
+137 | pub enum DatasetImportError<E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the matched value is of type `DatasetImportError<!>`
+    = note: `DatasetImportError<!>` is marked as non-exhaustive, so a wildcard `_` is necessary to match exhaustively
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+210 ~             DatasetImportError::Storage(error) => Self::Storage(error),
+211 ~             _ => todo!(),
+    |
+
+error[E0004]: non-exhaustive patterns: `RulesError::Shapes(_)` not covered
+   --> crates/shapes/src/srl/document.rs:591:28
+    |
+591 |     .map_err(|error| match error {
+    |                            ^^^^^ pattern `RulesError::Shapes(_)` not covered
+    |
+note: `RulesError` defined here
+   --> crates/shapes/src/rules.rs:682:10
+    |
+682 | pub enum RulesError {
+    |          ^^^^^^^^^^
+683 |     /// A typed shapes or data materialization refusal.
+684 |     Shapes(crate::error::ShapesError),
+    |     ------ not covered
+    = note: the matched value is of type `RulesError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+596 ~         crate::rules::RulesError::Failed(message) => SrlError::Evaluation { message },
+597 ~         RulesError::Shapes(_) => todo!(),
+    |
+
+Some errors have detailed explanations: E0004, E0308.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `purrdf-shapes` (lib) due to 8 previous errors
+terminal_status=101

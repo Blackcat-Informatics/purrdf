@@ -1,0 +1,212 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+error[E0308]: arguments to this method are incorrect
+    --> crates/entail/src/combined.rs:368:15
+     |
+ 368 |             b.push_quad(s_id, p_id, o_id, None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/combined.rs:368:25
+     |
+ 368 |             b.push_quad(s_id, p_id, o_id, None);
+     |                         ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/combined.rs:368:31
+     |
+ 368 |             b.push_quad(s_id, p_id, o_id, None);
+     |                               ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/combined.rs:368:37
+     |
+ 368 |             b.push_quad(s_id, p_id, o_id, None);
+     |                                     ^^^^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 368 |             b.push_quad(s_id.expect("REASON"), p_id, o_id, None);
+     |                             +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 368 |             b.push_quad(s_id, p_id.expect("REASON"), o_id, None);
+     |                                   +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 368 |             b.push_quad(s_id, p_id, o_id.expect("REASON"), None);
+     |                                         +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/entail/src/entails/mod.rs:900:17
+     |
+ 900 |         builder.push_quad(s, p, o, None);
+     |                 ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/entails/mod.rs:900:27
+     |
+ 900 |         builder.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/entails/mod.rs:900:30
+     |
+ 900 |         builder.push_quad(s, p, o, None);
+     |                              ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/entails/mod.rs:900:33
+     |
+ 900 |         builder.push_quad(s, p, o, None);
+     |                                 ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 900 |         builder.push_quad(s.expect("REASON"), p, o, None);
+     |                            +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 900 |         builder.push_quad(s, p.expect("REASON"), o, None);
+     |                               +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 900 |         builder.push_quad(s, p, o.expect("REASON"), None);
+     |                                  +++++++++++++++++
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/entail/src/reasoner/module.rs:381:11
+     |
+ 381 |         b.push_quad(s, p, o, None);
+     |           ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/reasoner/module.rs:381:21
+     |
+ 381 |         b.push_quad(s, p, o, None);
+     |                     ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/reasoner/module.rs:381:24
+     |
+ 381 |         b.push_quad(s, p, o, None);
+     |                        ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/reasoner/module.rs:381:27
+     |
+ 381 |         b.push_quad(s, p, o, None);
+     |                           ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: use the `?` operator to extract the `Result<TermId, EntailError>` value, propagating a `Result::Err` value to the caller
+     |
+ 381 |         b.push_quad(s?, p, o, None);
+     |                      +
+help: use the `?` operator to extract the `Result<TermId, EntailError>` value, propagating a `Result::Err` value to the caller
+     |
+ 381 |         b.push_quad(s, p?, o, None);
+     |                         +
+help: use the `?` operator to extract the `Result<TermId, EntailError>` value, propagating a `Result::Err` value to the caller
+     |
+ 381 |         b.push_quad(s, p, o?, None);
+     |                            +
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/entail/src/rif/eval.rs:258:15
+     |
+ 258 |             b.push_quad(s, p, o, None);
+     |               ^^^^^^^^^
+     |
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/rif/eval.rs:258:25
+     |
+ 258 |             b.push_quad(s, p, o, None);
+     |                         ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/rif/eval.rs:258:28
+     |
+ 258 |             b.push_quad(s, p, o, None);
+     |                            ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: expected `TermId`, found `Result<TermId, EntailError>`
+    --> crates/entail/src/rif/eval.rs:258:31
+     |
+ 258 |             b.push_quad(s, p, o, None);
+     |                               ^
+     = note: expected struct `TermId`
+                  found enum `Result<TermId, EntailError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/builder.rs:1995:12
+     |
+1995 |     pub fn push_quad(
+     |            ^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 258 |             b.push_quad(s.expect("REASON"), p, o, None);
+     |                          +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 258 |             b.push_quad(s, p.expect("REASON"), o, None);
+     |                             +++++++++++++++++
+help: consider using `Result::expect` to unwrap the `Result<TermId, EntailError>` value, panicking if the value is a `Result::Err`
+     |
+ 258 |             b.push_quad(s, p, o.expect("REASON"), None);
+     |                                +++++++++++++++++
+
+error[E0004]: non-exhaustive patterns: `EntailError::Storage(_)` not covered
+   --> crates/entail/src/entails/mod.rs:542:11
+    |
+542 |     match error {
+    |           ^^^^^ pattern `EntailError::Storage(_)` not covered
+    |
+note: `EntailError` defined here
+   --> crates/entail/src/lib.rs:347:10
+    |
+347 | pub enum EntailError {
+    |          ^^^^^^^^^^^
+348 |     /// Logical capacity or physical storage refused construction.
+349 |     Storage(purrdf_lex::allocation::StorageError),
+    |     ------- not covered
+    = note: the matched value is of type `EntailError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+566 ~         | EntailError::Unsatisfiable) => other,
+567 ~         EntailError::Storage(_) => todo!(),
+    |
+
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+Some errors have detailed explanations: E0004, E0308.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `purrdf-entail` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+terminal_status=101

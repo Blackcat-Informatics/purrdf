@@ -1,0 +1,9 @@
+Preserve native storage diagnostics across language hosts
+
+Retain native diagnostic records through Python and synchronous/asynchronous
+WASM error boundaries. Preserve embedded CDT blank scopes and admit a document's
+required blank scope before inserting any prefix row.
+
+Validate affected strict checks, actual native scope boundaries, rebuilt Python
+regressions and current optimized WASM host controls. This is a bounded checkpoint;
+full delivery qualification remains open.

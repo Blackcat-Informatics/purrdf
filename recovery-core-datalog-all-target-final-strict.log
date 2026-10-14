@@ -1,0 +1,756 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error: unused `std::result::Result` that must be used
+  --> crates/datalog/tests/factor_allocation.rs:37:17
+   |
+37 | /                 input.insert(
+38 | |                     &format!("<https://example.org/s{i:05}>"),
+39 | |                     &format!("<https://example.org/{predicate}>"),
+40 | |                     "<https://example.org/value>",
+41 | |                     RelationStore::DEFAULT_GRAPH,
+42 | |                 );
+   | |_________________^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+   = note: `-D unused-must-use` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+   |
+37 |                 let _ = input.insert(
+   |                 +++++++
+
+error: could not compile `purrdf-datalog` (test "factor_allocation") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+   --> crates/rdf-core/tests/semver_additive.rs:258:35
+    |
+258 |     let compacted: PagedDataset = dataset.compact();
+    |                    ------------   ^^^^^^^^^^^^^^^^^ expected `PagedDataset`, found `Result<PagedDataset, StorageError>`
+    |                    |
+    |                    expected due to this
+    |
+    = note: expected struct `PagedDataset`
+                 found enum `std::result::Result<PagedDataset, purrdf_lex::allocation::StorageError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::PagedDataset, purrdf_lex::allocation::StorageError>` value, panicking if the value is a `Result::Err`
+    |
+258 |     let compacted: PagedDataset = dataset.compact().expect("REASON");
+    |                                                    +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-core` (test "semver_additive") due to 1 previous error
+error[E0599]: no method named `intern_batch` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/examples/segmented_fixture.rs:85:17
+     |
+  85 |         builder.intern_batch(&values, |_, id| ids.push(id))?;
+     |                 ^^^^^^^^^^^^
+     |
+note: the method `intern_batch` exists on the type `purrdf_core::SegmentedBuilder`
+    --> crates/rdf-core/src/ir/segmented/build.rs:132:5
+     |
+ 132 | /     pub fn intern_batch(
+ 133 | |         &mut self,
+ 134 | |         values: &[TermValue],
+ 135 | |         mut visit: impl FnMut(&TermValue, GlobalTermId),
+ 136 | |     ) -> Result<(), SegmentedError> {
+     | |___________________________________^
+help: there is a method `iter_mut` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1124:5
+     |
+1124 |     pub const fn iter_mut(&mut self) -> IterMut<'_, T> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `purrdf_core::SegmentedBuilder` value, propagating a `Result::Err` value to the caller
+     |
+  85 |         builder?.intern_batch(&values, |_, id| ids.push(id))?;
+     |                +
+
+error[E0599]: no method named `push_quad` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/examples/segmented_fixture.rs:87:21
+    |
+ 87 |             builder.push_quad(QuadIds {
+    |             --------^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    |
+note: the method `push_quad` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:176:5
+    |
+176 |     pub fn push_quad(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `purrdf_core::SegmentedBuilder` value, propagating a `Result::Err` value to the caller
+    |
+ 87 |             builder?.push_quad(QuadIds {
+    |                    +
+
+error[E0599]: no method named `push_quad` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/examples/segmented_fixture.rs:96:25
+    |
+ 96 |                 builder.push_quad(QuadIds {
+    |                 --------^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    |
+note: the method `push_quad` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:176:5
+    |
+176 |     pub fn push_quad(&mut self, quad: QuadIds<GlobalTermId>) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `purrdf_core::SegmentedBuilder` value, propagating a `Result::Err` value to the caller
+    |
+ 96 |                 builder?.push_quad(QuadIds {
+    |                        +
+
+error[E0599]: no method named `declare_named_graph` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/examples/segmented_fixture.rs:104:17
+    |
+104 |         builder.declare_named_graph(ids[3])?;
+    |                 ^^^^^^^^^^^^^^^^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    |
+note: the method `declare_named_graph` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:241:5
+    |
+241 |     pub fn declare_named_graph(&mut self, graph: GlobalTermId) -> Result<(), SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `purrdf_core::SegmentedBuilder` value, propagating a `Result::Err` value to the caller
+    |
+104 |         builder?.declare_named_graph(ids[3])?;
+    |                +
+
+error[E0599]: no method named `seal` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/rdf-core/examples/segmented_fixture.rs:105:29
+    |
+105 |         let image = builder.seal()?;
+    |                             ^^^^ method not found in `std::result::Result<purrdf_core::SegmentedBuilder, purrdf_core::SegmentedError>`
+    |
+note: the method `seal` exists on the type `purrdf_core::SegmentedBuilder`
+   --> crates/rdf-core/src/ir/segmented/build.rs:253:5
+    |
+253 |     pub fn seal(self) -> Result<SegmentedImage, SegmentedError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use the `?` operator to extract the `purrdf_core::SegmentedBuilder` value, propagating a `Result::Err` value to the caller
+    |
+105 |         let image = builder?.seal()?;
+    |                            +
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (example "segmented_fixture") due to 5 previous errors
+error[E0599]: no method named `unwrap` found for unit type `()` in the current scope
+   --> crates/rdf-core/tests/shared_views.rs:875:10
+    |
+871 | /         assert_eq!(
+872 | |             mutable.declare_named_graph(iri(&format!("declared/{n}"))),
+873 | |             Ok(true)
+874 | |         )
+875 | |         .unwrap();
+    | |         -^^^^^^ method not found in `()`
+    | |_________|
+    |
+
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/shared_views.rs:1200:68
+     |
+1200 |     purrdf_core::ir::import::DatasetImporter::new(&mut b, &source).append();
+     |                                                                    ^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, std::sync::Arc<purrdf_core::RdfDataset>>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/4cb5d2e0e22fc86f/out/shared_views-4cb5d2e0e22fc86f.long-type-6135414357619690207.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, std::sync::Arc<purrdf_core::RdfDataset>>` value, panicking if the value is a `Result::Err`
+     |
+1200 |     purrdf_core::ir::import::DatasetImporter::new(&mut b, &source).expect("REASON").append();
+     |                                                                   +++++++++++++++++
+
+error[E0599]: no method named `append` found for enum `std::result::Result<T, E>` in the current scope
+    --> crates/rdf-core/tests/shared_views.rs:1454:72
+     |
+1454 |     purrdf_core::ir::import::DatasetImporter::new(&mut altered, &flat).append();
+     |                                                                        ^^^^^^
+     |
+note: the method `append` exists on the type `purrdf_core::ir::import::DatasetImporter<'_, '_, std::sync::Arc<purrdf_core::RdfDataset>>`
+    --> crates/rdf-core/src/ir/import.rs:357:5
+     |
+ 357 | /     pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
+ 358 | |     where
+ 359 | |         D: DatasetView<ReadError = Infallible>,
+     | |_______________________________________________^
+help: there is a method `and` with a similar name, but with different arguments
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1439:5
+     |
+1439 | /     pub const fn and<U>(self, res: Result<U, E>) -> Result<U, E>
+1440 | |     where
+1441 | |         T: [const] Destruct,
+1442 | |         E: [const] Destruct,
+1443 | |         U: [const] Destruct,
+     | |____________________________^
+     = note: the full name for the type has been written to '/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/4cb5d2e0e22fc86f/out/shared_views-4cb5d2e0e22fc86f.long-type-971007020960103525.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider using `Result::expect` to unwrap the `purrdf_core::ir::import::DatasetImporter<'_, '_, std::sync::Arc<purrdf_core::RdfDataset>>` value, panicking if the value is a `Result::Err`
+     |
+1454 |     purrdf_core::ir::import::DatasetImporter::new(&mut altered, &flat).expect("REASON").append();
+     |                                                                       +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:1471:38
+     |
+1471 |         let projected = canonicalize(&flat.project_named_graph(graph)).nquads;
+     |                         ------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |                         |
+     |                         arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&std::result::Result<RdfDataset, purrdf_core::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:1532:29
+     |
+1532 |     assert_eq!(canonicalize(&flat.project_named_graph(absent)).nquads, "");
+     |                ------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&RdfDataset`, found `&Result<RdfDataset, RdfDiagnostic>`
+     |                |
+     |                arguments to this function are incorrect
+     |
+     = note: expected reference `&RdfDataset`
+                found reference `&std::result::Result<RdfDataset, purrdf_core::RdfDiagnostic>`
+note: function defined here
+    --> crates/rdf-core/src/ir/canon.rs:460:8
+     |
+ 460 | pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
+     |        ^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2637:13
+     |
+2637 |             view.graph_digest(graph).unwrap(),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2637 |             Ok(view.graph_digest(graph).unwrap()),
+     |             +++                                 +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2644:9
+     |
+2644 |         view.graph_digest(CABSENT).unwrap()
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2644 |         Ok(view.graph_digest(CABSENT).unwrap())
+     |         +++                                   +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2647:38
+     |
+2647 |     assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap(), "root");
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2647 |     assert_eq!(flat.pipeline_root(), Ok(view.pipeline_root().unwrap()), "root");
+     |                                      +++                             +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2654:5
+     |
+2654 |     assert_ne!(flat.digest(), flat.pipeline_root());
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |     |
+     |     expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |     expected because this is `purrdf_core::ContentDigest`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2654 |     assert_ne!(flat.digest(), flat.pipeline_root()).expect("REASON");
+     |                                                    +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2677:24
+     |
+2677 |     assert_eq!(pinned, view.graph_digest(CG1).unwrap());
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2677 |     assert_eq!(pinned, Ok(view.graph_digest(CG1).unwrap()));
+     |                        +++                               +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2678:38
+     |
+2678 |     flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
+     |          ----------                  ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |          |
+     |          arguments to this method are incorrect
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2678 |     flat.pin_handle(CG1, Note("g1"), pinned.expect("REASON")).unwrap();
+     |                                            +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2679:38
+     |
+2679 |     view.pin_handle(CG1, Note("g1"), pinned).unwrap();
+     |          ----------                  ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |          |
+     |          arguments to this method are incorrect
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1599:12
+     |
+1599 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2679 |     view.pin_handle(CG1, Note("g1"), pinned.expect("REASON")).unwrap();
+     |                                            +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2687:58
+     |
+2687 |     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
+     |                                                          ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2687 |     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned.expect("REASON"));
+     |                                                                +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2688:58
+     |
+2688 |     assert_eq!(view.handle(CG1).unwrap().content_digest, pinned);
+     |                                                          ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2688 |     assert_eq!(view.handle(CG1).unwrap().content_digest, pinned.expect("REASON"));
+     |                                                                +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2696:9
+     |
+2696 |         pinned,
+     |         ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2696 |         pinned.expect("REASON"),
+     |               +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2701:40
+     |
+2701 |     assert_eq!(flat.graph_digest(CG3), view.graph_digest(CG3).unwrap());
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2701 |     assert_eq!(flat.graph_digest(CG3), Ok(view.graph_digest(CG3).unwrap()));
+     |                                        +++                               +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2704:38
+     |
+2704 |     assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2704 |     assert_eq!(flat.pipeline_root(), Ok(view.pipeline_root().unwrap()));
+     |                                      +++                             +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2719:24
+     |
+2719 |     assert_eq!(before, view.graph_digest(CG2).unwrap());
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2719 |     assert_eq!(before, Ok(view.graph_digest(CG2).unwrap()));
+     |                        +++                               +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2735:40
+     |
+2735 |     assert_eq!(flat.graph_digest(CG2), view.graph_digest(CG2).unwrap());
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2735 |     assert_eq!(flat.graph_digest(CG2), Ok(view.graph_digest(CG2).unwrap()));
+     |                                        +++                               +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2744:9
+     |
+2744 |         before,
+     |         ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2744 |         before.expect("REASON"),
+     |               +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2811:38
+     |
+2811 |     assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+2811 |     assert_eq!(flat.pipeline_root(), Ok(view.pipeline_root().unwrap()));
+     |                                      +++                             +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2884:29
+     |
+2884 |     assert_eq!(root_before, flat.pipeline_root());
+     |                             ^^^^^^^^^^^^^^^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2884 |     assert_eq!(root_before, flat.pipeline_root().expect("REASON"));
+     |                                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:2900:28
+     |
+2900 |     assert_eq!(root_after, flat.pipeline_root(), "on both carriers alike");
+     |                            ^^^^^^^^^^^^^^^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+2900 |     assert_eq!(root_after, flat.pipeline_root().expect("REASON"), "on both carriers alike");
+     |                                                +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3027:38
+     |
+3027 |     flat.pin_handle(CG1, Note("g1"), d1).unwrap();
+     |          ----------                  ^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |          |
+     |          arguments to this method are incorrect
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3027 |     flat.pin_handle(CG1, Note("g1"), d1.expect("REASON")).unwrap();
+     |                                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3028:38
+     |
+3028 |     flat.pin_handle(CG2, Note("g2"), d2).unwrap();
+     |          ----------                  ^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |          |
+     |          arguments to this method are incorrect
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3028 |     flat.pin_handle(CG2, Note("g2"), d2.expect("REASON")).unwrap();
+     |                                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3085:47
+     |
+3085 |     assert_eq!(view.pipeline_root().unwrap(), flat_root);
+     |                                               ^^^^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3085 |     assert_eq!(view.pipeline_root().unwrap(), flat_root.expect("REASON"));
+     |                                                        +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3113:59
+     |
+3113 |     assert_eq!(grown.handle(CG1).unwrap().content_digest, d1);
+     |                                                           ^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3113 |     assert_eq!(grown.handle(CG1).unwrap().content_digest, d1.expect("REASON"));
+     |                                                             +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3114:59
+     |
+3114 |     assert_eq!(grown.handle(CG2).unwrap().content_digest, d2);
+     |                                                           ^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3114 |     assert_eq!(grown.handle(CG2).unwrap().content_digest, d2.expect("REASON"));
+     |                                                             +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3132:38
+     |
+3132 |     assert_eq!(back.pipeline_root(), grown.pipeline_root().unwrap());
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+3132 |     assert_eq!(back.pipeline_root(), Ok(grown.pipeline_root().unwrap()));
+     |                                      +++                              +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3134:46
+     |
+3134 |         assert_eq!(back.graph_digest(graph), entry.content_digest);
+     |                                              ^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+3134 |         assert_eq!(back.graph_digest(graph), Ok(entry.content_digest));
+     |                                              +++                    +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3169:50
+     |
+3169 |     assert_eq!(carrier.pipeline_root().unwrap(), flat.pipeline_root());
+     |                                                  ^^^^^^^^^^^^^^^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3169 |     assert_eq!(carrier.pipeline_root().unwrap(), flat.pipeline_root().expect("REASON"));
+     |                                                                      +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3416:24
+     |
+3416 |     assert_eq!(pinned, view.graph_digest(CG1).unwrap());
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+3416 |     assert_eq!(pinned, Ok(view.graph_digest(CG1).unwrap()));
+     |                        +++                               +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3417:38
+     |
+3417 |     flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
+     |          ----------                  ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |          |
+     |          arguments to this method are incorrect
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:988:12
+     |
+ 988 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3417 |     flat.pin_handle(CG1, Note("g1"), pinned.expect("REASON")).unwrap();
+     |                                            +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3418:38
+     |
+3418 |     view.pin_handle(CG1, Note("g1"), pinned).unwrap();
+     |          ----------                  ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |          |
+     |          arguments to this method are incorrect
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+note: method defined here
+    --> crates/rdf-core/src/ir/pipeline_bundle.rs:1599:12
+     |
+1599 |     pub fn pin_handle(
+     |            ^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3418 |     view.pin_handle(CG1, Note("g1"), pinned.expect("REASON")).unwrap();
+     |                                            +++++++++++++++++
+
+error[E0277]: a value of type `std::vec::Vec<purrdf_core::ContentDigest>` cannot be built from an iterator over elements of type `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>`
+    --> crates/rdf-core/tests/shared_views.rs:3422:88
+     |
+3422 |     let leaf_digests: Vec<ContentDigest> = leaves.iter().map(|g| flat.graph_digest(g)).collect();
+     |                                                                                        ^^^^^^^ value of type `std::vec::Vec<purrdf_core::ContentDigest>` cannot be built from `std::iter::Iterator<Item=std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>>`
+     |
+help: the trait `FromIterator<std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>>` is not implemented for `std::vec::Vec<purrdf_core::ContentDigest>`
+      but trait `FromIterator<ContentDigest>` is implemented for it
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `purrdf_core::ContentDigest`, found `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>`
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3462:46
+     |
+3462 |         assert_eq!(flat.graph_digest(graph), *before, "flat <{graph}>");
+     |                                              ^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+3462 |         assert_eq!(flat.graph_digest(graph), Ok(*before), "flat <{graph}>");
+     |                                              +++       +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3465:58
+     |
+3465 |     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
+     |                                                          ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3465 |     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned.expect("REASON"));
+     |                                                                +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3466:58
+     |
+3466 |     assert_eq!(view.handle(CG1).unwrap().content_digest, pinned);
+     |                                                          ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3466 |     assert_eq!(view.handle(CG1).unwrap().content_digest, pinned.expect("REASON"));
+     |                                                                +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3490:9
+     |
+3490 |         pinned,
+     |         ^^^^^^ expected `ContentDigest`, found `Result<ContentDigest, _>`
+     |
+     = note: expected struct `ContentDigest`
+                  found enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<purrdf_core::ContentDigest, purrdf_core::PipelineBundleError>` value, panicking if the value is a `Result::Err`
+     |
+3490 |         pinned.expect("REASON"),
+     |               +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3493:40
+     |
+3493 |     assert_eq!(flat.graph_digest(CG3), view.graph_digest(CG3).unwrap());
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+3493 |     assert_eq!(flat.graph_digest(CG3), Ok(view.graph_digest(CG3).unwrap()));
+     |                                        +++                               +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/tests/shared_views.rs:3496:38
+     |
+3496 |     assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<ContentDigest, _>`, found `ContentDigest`
+     |
+     = note: expected enum `std::result::Result<ContentDigest, purrdf_core::PipelineBundleError>`
+              found struct `ContentDigest`
+help: try wrapping the expression in `Ok`
+     |
+3496 |     assert_eq!(flat.pipeline_root(), Ok(view.pipeline_root().unwrap()));
+     |                                      +++                             +
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (test "shared_views") due to 41 previous errors
+terminal_status=101

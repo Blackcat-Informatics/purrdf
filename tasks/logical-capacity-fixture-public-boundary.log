@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.46s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::builder::native_graph_birth_tests::local_capacity_public_rows_and_duplicate_full_import_preserve_original_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1344 filtered out; finished in 0.01s
+

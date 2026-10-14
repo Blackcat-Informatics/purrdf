@@ -1,0 +1,67 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/src/rules.rs:918:65
+    |
+915 | ) -> Result<Inference, String> {
+    |      ------------------------- expected `std::string::String` because of this
+...
+918 |             let projected = crate::engine::project_dataset(data)?;
+    |                             ------------------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+    |                             |
+    |                             this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+    |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Box<str>>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+
+error[E0277]: `?` couldn't convert the error to `std::string::String`
+   --> crates/shapes/src/rules.rs:953:57
+    |
+952 | pub fn entail_dataset(data: &RdfDataset, shapes: &Shapes) -> Result<Arc<RdfDataset>, String> {
+    |                                                              ------------------------------- expected `std::string::String` because of this
+953 |     let projected = crate::engine::project_dataset(data)?;
+    |                     ------------------------------------^ the trait `From<ShapesError>` is not implemented for `std::string::String`
+    |                     |
+    |                     this can't be annotated with `?` because it has type `Result<_, ShapesError>`
+    |
+note: `ShapesError` needs to implement `Into<std::string::String>`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = help: `std::string::String` implements trait `From<T>`:
+              From<&mut str>
+              From<&std::string::String>
+              From<&str>
+              From<Box<str>>
+              From<Cow<'_, str>>
+              From<RulesError>
+              From<char>
+
+error[E0308]: mismatched types
+   --> crates/shapes/src/srl/document.rs:594:87
+    |
+594 |         crate::engine::project_dataset(base).map_err(|message| SrlError::Evaluation { message })?;
+    |                                                                                       ^^^^^^^ expected `String`, found `ShapesError`
+    |
+help: try using a conversion method
+    |
+594 |         crate::engine::project_dataset(base).map_err(|message| SrlError::Evaluation { message: message.to_string() })?;
+    |                                                                                       ++++++++        ++++++++++++
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 3 previous errors
+terminal_status=101

@@ -1,0 +1,169 @@
++ cargo check --locked -j 8 -p purrdf-wasm -p purrdf-python --lib
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/bindings/python)
+error[E0308]: mismatched types
+   --> crates/rdf-wasm/src/dataset.rs:206:9
+    |
+205 |       fn parse(json: Option<String>) -> Result<Self, JsValue> {
+    |                                         --------------------- expected `std::result::Result<VisualOptions, wasm_bindgen::JsValue>` because of return type
+206 | /         json.filter(|value| !value.trim().is_empty()).map_or_else(
+207 | |             || Ok(Self::default()),
+208 | |             |value| {
+209 | |                 let document = json::read(&value)
+...   |
+212 | |             },
+213 | |         )
+    | |_________^ expected `Result<VisualOptions, JsValue>`, found `Result<VisualOptions, JsError>`
+    |
+    = note: expected enum `Result<_, wasm_bindgen::JsValue>`
+               found enum `Result<_, wasm_bindgen::JsError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+206 ~         Ok(json.filter(|value| !value.trim().is_empty()).map_or_else(
+207 |             || Ok(Self::default()),
+...
+212 |             },
+213 ~         )?)
+    |
+
+error[E0277]: `?` couldn't convert the error: `wasm_bindgen::JsValue: std::error::Error` is not satisfied
+   --> crates/rdf-wasm/src/dataset.rs:499:42
+    |
+498 |         let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
+    |                       ------------------------------------------------------------ this has type `Result<_, RdfDiagnostic>`
+499 |             .map_err(|e| diag_to_err(&e))?;
+    |              ----------------------------^ the trait `std::error::Error` is not implemented for `wasm_bindgen::JsValue`
+    |              |
+    |              this has type `Result<_, wasm_bindgen::JsValue>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: required for `wasm_bindgen::JsError` to implement `From<wasm_bindgen::JsValue>`
+
+error[E0308]: mismatched types
+   --> crates/rdf-wasm/src/dataset.rs:500:9
+    |
+496 |     pub fn parse(input: &str, format: &str, base: Option<String>) -> Result<Self, JsError> {
+    |                                                                      --------------------- expected `std::result::Result<dataset::Dataset, wasm_bindgen::JsError>` because of return type
+...
+500 |         Self::from_frozen(dataset.into())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<Dataset, JsError>`, found `Result<Dataset, JsValue>`
+    |
+    = note: expected enum `Result<_, wasm_bindgen::JsError>`
+               found enum `Result<_, wasm_bindgen::JsValue>`
+
+error[E0308]: mismatched types
+   --> crates/rdf-wasm/src/dataset.rs:601:24
+    |
+601 |               return Err(JsError::new(&format!(
+    |  ____________________---_^
+    | |                    |
+    | |                    arguments to this enum variant are incorrect
+602 | |                 "the sink's write threw: {}",
+603 | |                 thrown.as_string().unwrap_or_else(|| format!("{thrown:?}"))
+604 | |             )));
+    | |______________^ expected `JsValue`, found `JsError`
+    |
+help: the type constructed contains `wasm_bindgen::JsError` due to the type of the argument passed
+   --> crates/rdf-wasm/src/dataset.rs:601:20
+    |
+601 |                return Err(JsError::new(&format!(
+    |   ____________________^   -
+    |  |________________________|
+602 | ||                 "the sink's write threw: {}",
+603 | ||                 thrown.as_string().unwrap_or_else(|| format!("{thrown:?}"))
+604 | ||             )));
+    | ||______________-^
+    | |_______________|
+    |                 this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: call `Into::into` on this expression to convert `wasm_bindgen::JsError` into `wasm_bindgen::JsValue`
+    |
+604 |             )).into());
+    |               +++++++
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-wasm` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unnecessary qualification
+   --> bindings/python/src/py_store/quad_store.rs:934:30
+    |
+934 |                 .map_err(|e| super::presentation::value_error(format!("dump error: {e}"), &e))
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+934 -                 .map_err(|e| super::presentation::value_error(format!("dump error: {e}"), &e))
+934 +                 .map_err(|e| presentation::value_error(format!("dump error: {e}"), &e))
+    |
+
+error: unnecessary qualification
+   --> bindings/python/src/py_store/store.rs:100:21
+    |
+100 |                     super::presentation::value_error(format!("load error: {e}"), &e)
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+100 -                     super::presentation::value_error(format!("load error: {e}"), &e)
+100 +                     presentation::value_error(format!("load error: {e}"), &e)
+    |
+
+error: unnecessary qualification
+   --> bindings/python/src/py_store/store.rs:442:30
+    |
+442 |                 .map_err(|e| super::presentation::value_error(format!("dump error: {e}"), &e))?;
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+442 -                 .map_err(|e| super::presentation::value_error(format!("dump error: {e}"), &e))?;
+442 +                 .map_err(|e| presentation::value_error(format!("dump error: {e}"), &e))?;
+    |
+
+error: unnecessary qualification
+   --> bindings/python/src/py_store/store.rs:457:26
+    |
+457 |             .map_err(|e| super::presentation::value_error(format!("dump error: {e}"), &e))
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+457 -             .map_err(|e| super::presentation::value_error(format!("dump error: {e}"), &e))
+457 +             .map_err(|e| presentation::value_error(format!("dump error: {e}"), &e))
+    |
+
+error: could not compile `purrdf-python` (lib) due to 4 previous errors
+terminal_status=101

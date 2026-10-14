@@ -1,0 +1,25 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/rdf-core/src/ir/builder.rs:2371:5
+     |
+2371 | /     pub fn push_quad_with_handle(
+2372 | |         &mut self,
+2373 | |         s: TermId,
+2374 | |         p: TermId,
+2375 | |         o: TermId,
+2376 | |         g: Option<TermId>,
+2377 | |     ) -> Result<QuadHandle, StorageError> {
+     | |_________________________________________^
+     |
+help: remove `must_use`
+    --> crates/rdf-core/src/ir/builder.rs:2368:5
+     |
+2368 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+     = note: `-D clippy::double-must-use` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::double_must_use)]`
+
+error: could not compile `purrdf-core` (lib) due to 1 previous error
+terminal_status=101

@@ -1,0 +1,38 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 10.50s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 42.55s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 2 tests
+test ir::segmented::stack::tests::declaration_carrier_rejects_implicit_row_graph_presence ... ok
+test ir::segmented::stack::tests::snapshots_pin_original_metadata_and_atomic_replacement_releases_old_owners ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1329 filtered out; finished in 0.00s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+error[E0599]: no method named `intern_value` found for struct `RdfDatasetBuilder` in the current scope
+  --> crates/rdf-core/tests/segmented_stack.rs:58:27
+   |
+58 |         let id = removals.intern_value(value).unwrap();
+   |                           ^^^^^^^^^^^^
+   |
+  ::: crates/rdf-core/src/backend.rs:31:8
+   |
+31 |     fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
+   |        ------------ the method is available for `RdfDatasetBuilder` here
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+58 |         let id = removals.intern_iri_value(value).unwrap();
+   |                                  ++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (test "segmented_stack") due to 1 previous error
+
+terminal_status=101

@@ -1,0 +1,15 @@
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/helper-census)
+    Finished `test` profile [optimized] target(s) in 32.97s
+     Running unittests src/main.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/helper-census/2fb2e3fd4c1dbfce/out/helper_census-2fb2e3fd4c1dbfce)
+
+running 7 tests
+test capacity::tests::physical_and_fixed_invariants_and_typed_propagation_are_not_capacity_panics ... ok
+test capacity::tests::original_producer_shapes_and_csr_are_refused_without_message_matching ... ok
+test capacity::tests::checked_index_proofs_do_not_certify_shadowing_bindings ... ok
+test capacity::tests::shipping_function_and_impl_declarations_preserve_cfg_reachability ... ok
+test capacity::tests::typed_aliases_locals_error_branches_and_macros_are_seen ... ok
+test capacity::tests::dominating_slot_proof_is_operand_and_order_sensitive ... ok
+test capacity::tests::shipping_reachability_and_gate_projection_are_enforced ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 72 filtered out; finished in 0.00s
+

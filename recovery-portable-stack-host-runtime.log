@@ -1,0 +1,88 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 20.48s
+     Running tests/segmented_stack.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 14 tests
+test removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view ... ok
+test empty_certified_streams_do_not_probe_dictionary_for_bound_head_row ... ok
+test admitted_identity_walk_releases_spill_and_preserves_hash_law ... ok
+test final_query_readiness_checks_untouched_evicted_descriptors ... ok
+test memoized_term_hits_allocate_nothing_and_failed_import_latches ... ok
+test resident_head_copy_refuses_under_the_shared_operation_grant ... ok
+test query_ids_touch_only_values_and_preserve_source_scopes ... ok
+test persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last ... ok
+test fallible_evidence_pins_complete_publication_and_immutable_request_prefix ... ok
+test chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs ... ok
+test effective_annotation_classification_uses_original_chronology_and_first_occurrence ... ok
+test tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation ... ok
+test thousand_distinct_sources_open_only_headers_under_one_request_budget ... ok
+test generated_chronological_publications_match_eager_typed_seals ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 12s
+     Running tests/host_identity.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-sparql-eval/77965b875fd28fec/out/host_identity-77965b875fd28fec)
+
+running 3 tests
+test host_deletion_discards_partial_output_and_preserves_first_typed_cause ... ok
+test original_host_ids_join_and_expand_triples_without_native_interning ... ok
+test certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failure ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 33.73s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::builder::native_graph_birth_tests::local_capacity_public_rows_and_duplicate_full_import_preserve_original_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1339 filtered out; finished in 0.00s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 27.43s
+     Running tests/segmented_stack.rs (/opt/.cargo/63/2c12af8b7e2e0c/wasm32-unknown-unknown/debug/build/purrdf-core/88eff25baed8444c/out/segmented_stack-88eff25baed8444c.wasm)
+
+running 14 tests
+test generated_chronological_publications_match_eager_typed_seals ... ok
+test empty_certified_streams_do_not_probe_dictionary_for_bound_head_row ... ok
+test persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last ... ok
+test chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs ... ok
+test effective_annotation_classification_uses_original_chronology_and_first_occurrence ... ok
+test removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view ... ok
+test fallible_evidence_pins_complete_publication_and_immutable_request_prefix ... ok
+test thousand_distinct_sources_open_only_headers_under_one_request_budget ... ok
+test tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation ... ok
+test query_ids_touch_only_values_and_preserve_source_scopes ... ok
+test memoized_term_hits_allocate_nothing_and_failed_import_latches ... ok
+test admitted_identity_walk_releases_spill_and_preserves_hash_law ... ok
+test final_query_readiness_checks_untouched_evicted_descriptors ... ok
+test resident_head_copy_refuses_under_the_shared_operation_grant ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+   Compiling either v1.16.0
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling rayon v1.12.0
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 01s
+     Running tests/host_identity.rs (/opt/.cargo/63/2c12af8b7e2e0c/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/cfe43c99924f835c/out/host_identity-cfe43c99924f835c.wasm)
+
+running 3 tests
+test original_host_ids_join_and_expand_triples_without_native_interning ... ok
+test host_deletion_discards_partial_output_and_preserves_first_typed_cause ... ok
+test certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failure ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+terminal_status=0

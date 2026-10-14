@@ -1,0 +1,19 @@
+Propagate typed capacity failures through workspace consumers
+
+Preserve full-width capacity counts in an inline representation, retain diagnostic
+presentation and storage causes in one accounted owner, and use resident-width
+CSR offsets for combined page postings. Adapt the actual production, fixture and
+benchmark callers to the fallible APIs without changing their workloads.
+
+Register the sparse-stack and host-identity controls on the existing portable
+harness and share the original Datalog host fixture with rules_runtime.
+
+Validation: workspace all-target Clippy with warnings denied; exact count/cause,
+diagnostic ownership and CSR controls; CLI and DL certificate controls; stack
+and SPARQL host controls on native/Node-WASM; Datalog rules_runtime 6/6 on both.
+
+This is a verified implementation checkpoint, not issue completion. Full make
+check, installed host qualification and the enforced capacity-panic census remain
+open. The census is currently constrained by the repository tooling freeze.
+
+Refs #490, #495

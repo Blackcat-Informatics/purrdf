@@ -1,0 +1,3 @@
+Running as unit: run-p3557707-i32893453.scope; invocation ID: fb0639ab4f57420094862f4ff6ccfe8d
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 50s

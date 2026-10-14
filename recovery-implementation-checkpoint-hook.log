@@ -1,0 +1,12 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against dd79ef77e942 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/sparql-eval/src/geo/relation.rs'.
+[paudley/490-typed-capacity-errors-instead-of-u32 80ec82890] Make native capacity refusal typed and compose sparse dataset views
+ 528 files changed, 30888 insertions(+), 16024 deletions(-)
+ create mode 100644 crates/datalog/src/dictionary.rs
+ create mode 100644 crates/datalog/tests/object_permutation_allocation.rs
+ create mode 100644 crates/rdf-core/src/ir/segmented/query.rs
+ create mode 100644 crates/rdf-core/src/ir/segmented/query/view.rs
+ create mode 100644 crates/rdf-core/src/ir/segmented/stack.rs
+ create mode 100644 crates/rdf-core/tests/segmented_stack.rs
+ create mode 100644 crates/sparql-eval/tests/host_identity.rs
+terminal_status=0

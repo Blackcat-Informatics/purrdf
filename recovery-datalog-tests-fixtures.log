@@ -1,0 +1,1020 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1358:24
+     |
+1358 |                 proofs.roots().len(),
+     |                        ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1358 |                 proofs.expect("REASON").roots().len(),
+     |                       +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1365:43
+     |
+1365 |             for (derived, root) in proofs.roots() {
+     |                                           ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1365 |             for (derived, root) in proofs.expect("REASON").roots() {
+     |                                          +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1367:22
+     |
+1366 |                   let checked = proofs
+     |  _______________________________-
+1367 | |                     .arena()
+     | |                     -^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     | |_____________________|
+     |
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1366 |                 let checked = proofs.expect("REASON")
+     |                                     +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1376:25
+     |
+1376 |                 !proofs.roots().is_empty(),
+     |                         ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1376 |                 !proofs.expect("REASON").roots().is_empty(),
+     |                        +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1437:27
+     |
+1437 |         assert_eq!(proofs.roots().len(), n, "one derived fact per node");
+     |                           ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1437 |         assert_eq!(proofs.expect("REASON").roots().len(), n, "one derived fact per node");
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1441:39
+     |
+1441 |         for (derived, root) in proofs.roots() {
+     |                                       ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1441 |         for (derived, root) in proofs.expect("REASON").roots() {
+     |                                      +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1443:24
+     |
+1443 |                 proofs.arena().check(*root, &ctx).as_ref(),
+     |                        ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1443 |                 proofs.expect("REASON").arena().check(*root, &ctx).as_ref(),
+     |                       +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1714:40
+     |
+1714 |                 let mut arena = proofs.arena().clone();
+     |                                        ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1714 |                 let mut arena = proofs.expect("REASON").arena().clone();
+     |                                       +++++++++++++++++
+
+error[E0599]: no method named `root_for` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1720:30
+     |
+1719 | /                         proofs
+1720 | |                             .root_for(source)
+     | |                             -^^^^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     | |_____________________________|
+     |
+     |
+note: the method `root_for` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1039:5
+     |
+1039 |     pub fn root_for(&self, fact: &Fact) -> Option<ProofId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1719 |                         proofs.expect("REASON")
+     |                               +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1864:27
+     |
+1864 |         assert_ne!(proofs.roots(), []);
+     |                           ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1864 |         assert_ne!(proofs.expect("REASON").roots(), []);
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1865:39
+     |
+1865 |         for (derived, root) in proofs.roots() {
+     |                                       ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1865 |         for (derived, root) in proofs.expect("REASON").roots() {
+     |                                      +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:1866:31
+     |
+1866 |             assert_eq!(proofs.arena().check(*root, &ctx).as_ref(), Ok(derived));
+     |                               ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+1866 |             assert_eq!(proofs.expect("REASON").arena().check(*root, &ctx).as_ref(), Ok(derived));
+     |                              +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2162:27
+     |
+2162 |         assert_eq!(proofs.roots().len(), 1);
+     |                           ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2162 |         assert_eq!(proofs.expect("REASON").roots().len(), 1);
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2163:39
+     |
+2163 |         for (derived, root) in proofs.roots() {
+     |                                       ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2163 |         for (derived, root) in proofs.expect("REASON").roots() {
+     |                                      +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2164:31
+     |
+2164 |             assert_eq!(proofs.arena().check(*root, &ctx).as_ref(), Ok(derived));
+     |                               ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2164 |             assert_eq!(proofs.expect("REASON").arena().check(*root, &ctx).as_ref(), Ok(derived));
+     |                              +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2198:27
+     |
+2198 |         assert_eq!(proofs.roots().len(), 1);
+     |                           ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2198 |         assert_eq!(proofs.expect("REASON").roots().len(), 1);
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2199:39
+     |
+2199 |         let (derived, root) = &proofs.roots()[0];
+     |                                       ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2199 |         let (derived, root) = &proofs.expect("REASON").roots()[0];
+     |                                      +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2201:27
+     |
+2201 |         assert_eq!(proofs.arena().check(*root, &ctx).as_ref(), Ok(derived));
+     |                           ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2201 |         assert_eq!(proofs.expect("REASON").arena().check(*root, &ctx).as_ref(), Ok(derived));
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2219:24
+     |
+2219 |         assert!(proofs.arena().check(*root, &other_ctx).is_err());
+     |                        ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2219 |         assert!(proofs.expect("REASON").arena().check(*root, &other_ctx).is_err());
+     |                       +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2262:40
+     |
+2262 |         let facts: Vec<&Fact> = proofs.roots().iter().map(|(fact, _)| fact).collect();
+     |                                        ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2262 |         let facts: Vec<&Fact> = proofs.expect("REASON").roots().iter().map(|(fact, _)| fact).collect();
+     |                                       +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2266:36
+     |
+2266 |         for (fact, root) in proofs.roots() {
+     |                                    ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2266 |         for (fact, root) in proofs.expect("REASON").roots() {
+     |                                   +++++++++++++++++
+
+error[E0599]: no method named `root_for` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2267:31
+     |
+2267 |             assert_eq!(proofs.root_for(fact), Some(*root));
+     |                               ^^^^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `root_for` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1039:5
+     |
+1039 |     pub fn root_for(&self, fact: &Fact) -> Option<ProofId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2267 |             assert_eq!(proofs.expect("REASON").root_for(fact), Some(*root));
+     |                              +++++++++++++++++
+
+error[E0599]: no method named `root_for` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2269:27
+     |
+2269 |         assert_eq!(proofs.root_for(&fact("nope", P, "nope")), None);
+     |                           ^^^^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `root_for` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1039:5
+     |
+1039 |     pub fn root_for(&self, fact: &Fact) -> Option<ProofId> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2269 |         assert_eq!(proofs.expect("REASON").root_for(&fact("nope", P, "nope")), None);
+     |                          +++++++++++++++++
+
+error[E0599]: no method named `roots` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2287:18
+     |
+2286 |               let encodings: Vec<(Fact, Vec<u8>, [u8; 32])> = proofs
+     |  _____________________________________________________________-
+2287 | |                 .roots()
+     | |                 -^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     | |_________________|
+     |
+     |
+note: the method `roots` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1034:5
+     |
+1034 |     pub fn roots(&self) -> &[(Fact, ProofId)] {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2286 |             let encodings: Vec<(Fact, Vec<u8>, [u8; 32])> = proofs.expect("REASON")
+     |                                                                   +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2292:32
+     |
+2292 |                         proofs.arena().encode(*root),
+     |                                ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2292 |                         proofs.expect("REASON").arena().encode(*root),
+     |                               +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2293:32
+     |
+2293 |                         proofs.arena().digest(*root),
+     |                                ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2293 |                         proofs.expect("REASON").arena().digest(*root),
+     |                               +++++++++++++++++
+
+error[E0599]: no method named `arena` found for enum `Result<T, E>` in the current scope
+    --> crates/datalog/src/proof.rs:2297:21
+     |
+2297 |             (proofs.arena().len(), encodings)
+     |                     ^^^^^ method not found in `Result<proof::EvaluationProofs, purrdf_lex::allocation::StorageError>`
+     |
+note: the method `arena` exists on the type `proof::EvaluationProofs`
+    --> crates/datalog/src/proof.rs:1029:5
+     |
+1029 |     pub fn arena(&self) -> &ProofArena {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `proof::EvaluationProofs` value, panicking if the value is a `Result::Err`
+     |
+2297 |             (proofs.expect("REASON").arena().len(), encodings)
+     |                    +++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:1976:13
+     |
+1976 |         let FolControl::Decided(outcome) = control else {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |             |
+     |             expected `Result<FolControl, StorageError>`, found `FolControl`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+1976 |         let Ok(FolControl::Decided(outcome)) = control else {
+     |             +++                            +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2053:13
+     |
+2053 |         let FolControl::Decided(outcome) = control else {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |             |
+     |             expected `Result<FolControl, StorageError>`, found `FolControl`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2053 |         let Ok(FolControl::Decided(outcome)) = control else {
+     |             +++                            +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2118:17
+     |
+2117 |             match resolve_fol(dag, &program, &SortContext::default(), &budget) {
+     |                   ------------------------------------------------------------ this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+2118 |                 FolControl::Decided(outcome) => *outcome,
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2118 |                 Ok(FolControl::Decided(outcome)) => *outcome,
+     |                 +++                            +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2119:17
+     |
+2117 |             match resolve_fol(dag, &program, &SortContext::default(), &budget) {
+     |                   ------------------------------------------------------------ this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+2118 |                 FolControl::Decided(outcome) => *outcome,
+2119 |                 FolControl::Unsupported(reason) => panic!("expected a decision, got {reason:?}"),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2119 |                 Ok(FolControl::Unsupported(reason)) => panic!("expected a decision, got {reason:?}"),
+     |                 +++                               +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2166:13
+     |
+2166 |         let FolControl::Decided(outcome) =
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+2167 |             resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+     |             ----------------------------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2166 |         let Ok(FolControl::Decided(outcome)) =
+     |             +++                            +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2218:13
+     |
+2218 |         let FolControl::Decided(outcome) =
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+2219 |             resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+     |             ----------------------------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2218 |         let Ok(FolControl::Decided(outcome)) =
+     |             +++                            +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2250:13
+     |
+2250 |         let FolControl::Decided(first) =
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+2251 |             resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+     |             ----------------------------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2250 |         let Ok(FolControl::Decided(first)) =
+     |             +++                          +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2255:13
+     |
+2255 |         let FolControl::Decided(second) =
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+2256 |             resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+     |             ----------------------------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2255 |         let Ok(FolControl::Decided(second)) =
+     |             +++                           +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2290:13
+     |
+2289 |         match resolve_fol(&mut dag, &program, &SortContext::default(), &budget) {
+     |               ----------------------------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+2290 |             FolControl::Unsupported(FolUnsupported::Floundering) => {}
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2290 |             Ok(FolControl::Unsupported(FolUnsupported::Floundering)) => {}
+     |             +++                                                    +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2318:13
+     |
+2317 |         match resolve_fol(&mut dag, &program, &SortContext::default(), &budget) {
+     |               ----------------------------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+2318 |             FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide { rule: 0, literals }) => {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2318 |             Ok(FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide { rule: 0, literals })) => {
+     |             +++                                                                                +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2531:13
+     |
+2531 |         let FolControl::Decided(sorted_outcome) = resolve_fol(&mut dag, &sorted, &ctx, &budget)
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |             |
+     |             expected `Result<FolControl, StorageError>`, found `FolControl`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2531 |         let Ok(FolControl::Decided(sorted_outcome)) = resolve_fol(&mut dag, &sorted, &ctx, &budget)
+     |             +++                                   +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2554:13
+     |
+2554 |         let FolControl::Decided(unsorted_outcome) =
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+2555 |             resolve_fol(&mut dag, &unsorted, &SortContext::default(), &budget)
+     |             ------------------------------------------------------------------ this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2554 |         let Ok(FolControl::Decided(unsorted_outcome)) =
+     |             +++                                     +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2605:13
+     |
+2605 |         let FolControl::Decided(outcome) =
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+2606 |             resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+     |             ----------------------------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2605 |         let Ok(FolControl::Decided(outcome)) =
+     |             +++                            +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2799:13
+     |
+2799 |         let FolControl::Decided(outcome) =
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<FolControl, StorageError>`, found `FolControl`
+2800 |             resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+     |             ----------------------------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2799 |         let Ok(FolControl::Decided(outcome)) =
+     |             +++                            +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/resolve_fol.rs:2900:13
+     |
+2900 |         let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &ctx, &budget) else {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ---------------------------------------------- this expression has type `Result<resolve_fol::FolControl, purrdf_lex::allocation::StorageError>`
+     |             |
+     |             expected `Result<FolControl, StorageError>`, found `FolControl`
+     |
+     = note: expected enum `Result<FolControl, purrdf_lex::allocation::StorageError>`
+                found enum `FolControl`
+help: try wrapping the pattern in `Ok`
+     |
+2900 |         let Ok(FolControl::Decided(outcome)) = resolve_fol(&mut dag, &program, &ctx, &budget) else {
+     |             +++                            +
+
+error[E0599]: no method named `clause` found for enum `FolError` in the current scope
+    --> crates/datalog/src/resolve_fol.rs:3051:30
+     |
+1653 | pub enum FolError {
+     | ----------------- method `clause` not found for this enum
+...
+3051 |             assert_eq!(error.clause(), 0);
+     |                              ^^^^^^
+     |
+note: the method `clause` exists on the type `clause::NonDatalogClause`
+    --> crates/datalog/src/clause.rs:587:5
+     |
+ 587 |     pub fn clause(&self) -> usize {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is a variant with a similar name (notice the capitalization)
+     |
+3051 -             assert_eq!(error.clause(), 0);
+3051 +             assert_eq!(error.Clause(), 0);
+     |
+help: there is a method `cause` with a similar name
+     |
+3051 -             assert_eq!(error.clause(), 0);
+3051 +             assert_eq!(error.cause(), 0);
+     |
+
+error[E0599]: no method named `form` found for enum `FolError` in the current scope
+    --> crates/datalog/src/resolve_fol.rs:3052:30
+     |
+1653 | pub enum FolError {
+     | ----------------- method `form` not found for this enum
+...
+3052 |             assert_eq!(error.form(), crate::clause::HeadForm::Existential);
+     |                              ^^^^ method not found in `FolError`
+     |
+note: the method `form` exists on the type `clause::NonDatalogClause`
+    --> crates/datalog/src/clause.rs:592:5
+     |
+ 592 |     pub fn form(&self) -> HeadForm {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `is_guarded` found for enum `FolError` in the current scope
+    --> crates/datalog/src/schedule.rs:2126:25
+     |
+2126 |         assert!(refusal.is_guarded());
+     |                         ^^^^^^^^^^ method not found in `FolError`
+     |
+    ::: crates/datalog/src/resolve_fol.rs:1653:1
+     |
+1653 | pub enum FolError {
+     | ----------------- method `is_guarded` not found for this enum
+     |
+note: the method `is_guarded` exists on the type `clause::NonDatalogClause`
+    --> crates/datalog/src/clause.rs:582:5
+     |
+ 582 |     pub fn is_guarded(&self) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive/factors.rs:2004:17
+     |
+2004 |               let (_, _, row) = rel
+     |  _________________^^^^^^^^^^^___-
+     | |                 |
+     | |                 expected `Option<(Id<Term>, Id<Term>, Id<Row>)>`, found `(_, _, _)`
+2005 | |                 .insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH)
+2006 | |                 .expect("unique source");
+     | |________________________________________- this expression has type `Option<(Id<id::Term>, Id<id::Term>, Id<Row>)>`
+     |
+     = note: expected enum `Option<(Id<id::Term>, Id<id::Term>, Id<Row>)>`
+               found tuple `(_, _, _)`
+help: try wrapping the pattern in `Some`
+     |
+2004 |             let Some((_, _, row)) = rel
+     |                 +++++           +
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:4501:41
+     |
+4501 |             rows.seed(RowId::from_index(index).unwrap(), |memory| {
+     |                       ----------------- ^^^^^ expected `u64`, found `usize`
+     |                       |
+     |                       arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+4501 |             rows.seed(RowId::from_index(index.try_into().unwrap()).unwrap(), |memory| {
+     |                                              ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:6924:41
+     |
+6924 |             let row = RowId::from_index(index).unwrap();
+     |                       ----------------- ^^^^^ expected `u64`, found `usize`
+     |                       |
+     |                       arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+6924 |             let row = RowId::from_index(index.try_into().unwrap()).unwrap();
+     |                                              ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:1762:44
+     |
+1762 |             .map(|index| RowId::from_index(index).unwrap())
+     |                          ----------------- ^^^^^ expected `u64`, found `usize`
+     |                          |
+     |                          arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+1762 |             .map(|index| RowId::from_index(index.try_into().unwrap()).unwrap())
+     |                                                 ++++++++++++++++++++
+
+error[E0277]: a value of type `Vec<(usize, [&str; 4])>` cannot be built from an iterator over elements of type `(u64, [&str; 4])`
+    --> crates/datalog/src/store.rs:1971:18
+     |
+1971 |                 .collect()
+     |                  ^^^^^^^ value of type `Vec<(usize, [&str; 4])>` cannot be built from `std::iter::Iterator<Item=(u64, [&str; 4])>`
+     |
+help: the trait `FromIterator<(u64, [&str; 4])>` is not implemented for `Vec<(usize, [&str; 4])>`
+      but trait `FromIterator<(usize, [&str; 4])>` is implemented for it
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `usize`, found `u64`
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2384:42
+     |
+2384 |             let key = TermId::from_index(key_slot).unwrap();
+     |                       ------------------ ^^^^^^^^ expected `u64`, found `usize`
+     |                       |
+     |                       arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2384 |             let key = TermId::from_index(key_slot.try_into().unwrap()).unwrap();
+     |                                                  ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2425:40
+     |
+2425 |             let s = TermId::from_index(rng.below_usize(24)).unwrap();
+     |                     ------------------ ^^^^^^^^^^^^^^^^^^^ expected `u64`, found `usize`
+     |                     |
+     |                     arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2425 |             let s = TermId::from_index(rng.below_usize(24).try_into().unwrap()).unwrap();
+     |                                                           ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2426:40
+     |
+2426 |             let o = TermId::from_index(rng.below_usize(24)).unwrap();
+     |                     ------------------ ^^^^^^^^^^^^^^^^^^^ expected `u64`, found `usize`
+     |                     |
+     |                     arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2426 |             let o = TermId::from_index(rng.below_usize(24).try_into().unwrap()).unwrap();
+     |                                                           ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2427:39
+     |
+2427 |             let r = RowId::from_index(i).unwrap();
+     |                     ----------------- ^ expected `u64`, found `usize`
+     |                     |
+     |                     arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2427 |             let r = RowId::from_index(i.try_into().unwrap()).unwrap();
+     |                                        ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2485:54
+     |
+2485 |                         (subject, TermId::from_index(100 + i).unwrap())
+     |                                   ------------------ ^^^^^^^ expected `u64`, found `usize`
+     |                                   |
+     |                                   arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2485 |                         (subject, TermId::from_index((100 + i).try_into().unwrap()).unwrap())
+     |                                                      +       +++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2487:45
+     |
+2487 |                         (TermId::from_index(100 + i).unwrap(), object)
+     |                          ------------------ ^^^^^^^ expected `u64`, found `usize`
+     |                          |
+     |                          arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2487 |                         (TermId::from_index((100 + i).try_into().unwrap()).unwrap(), object)
+     |                                             +       +++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2489:63
+     |
+2489 |                     tail.push(row.0, row.1, RowId::from_index(i).unwrap());
+     |                                             ----------------- ^ expected `u64`, found `usize`
+     |                                             |
+     |                                             arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2489 |                     tail.push(row.0, row.1, RowId::from_index(i.try_into().unwrap()).unwrap());
+     |                                                                ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2490:64
+     |
+2490 |                     rows.push((row.0, row.1, RowId::from_index(i).unwrap()));
+     |                                              ----------------- ^ expected `u64`, found `usize`
+     |                                              |
+     |                                              arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2490 |                     rows.push((row.0, row.1, RowId::from_index(i.try_into().unwrap()).unwrap()));
+     |                                                                 ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2504:50
+     |
+2504 |                     (subject, TermId::from_index(100 + i).unwrap())
+     |                               ------------------ ^^^^^^^ expected `u64`, found `usize`
+     |                               |
+     |                               arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2504 |                     (subject, TermId::from_index((100 + i).try_into().unwrap()).unwrap())
+     |                                                  +       +++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2506:41
+     |
+2506 |                     (TermId::from_index(100 + i).unwrap(), object)
+     |                      ------------------ ^^^^^^^ expected `u64`, found `usize`
+     |                      |
+     |                      arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2506 |                     (TermId::from_index((100 + i).try_into().unwrap()).unwrap(), object)
+     |                                         +       +++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2508:51
+     |
+2508 |                 tail.push(s, o, RowId::from_index(i).unwrap());
+     |                                 ----------------- ^ expected `u64`, found `usize`
+     |                                 |
+     |                                 arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/datalog/src/id.rs:82:12
+     |
+  82 |     pub fn from_index(index: u64) -> Result<Self, CapacityError>
+     |            ^^^^^^^^^^ ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+2508 |                 tail.push(s, o, RowId::from_index(i.try_into().unwrap()).unwrap());
+     |                                                    ++++++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib test) due to 61 previous errors
+terminal_status=101

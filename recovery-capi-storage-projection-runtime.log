@@ -1,0 +1,127 @@
++ make capi-header
+python3 scripts/capi-header.py --write crates/rdf-capi/include/purrdf.h
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+   Compiling either v1.16.0
+   Compiling libc v0.2.186
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling getrandom v0.3.4
+   Compiling cmov v0.5.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling ctutils v0.4.2
+   Compiling cpubits v0.1.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/deflate)
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling inout v0.2.2
+   Compiling universal-hash v0.6.1
+   Compiling digest v0.11.3
+   Compiling twox-hash v2.1.2
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling fastrand v2.4.1
+   Compiling regex v1.12.4
+   Compiling sha2 v0.11.0
+   Compiling rayon v1.12.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/stack)
+   Compiling structured-zstd v0.0.49
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling aead v0.6.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/datalog)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shex)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/mime)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/columnar)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/json)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/markdown)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/geo)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/purrdf)
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-capi)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 3m 48s
+    Building pkg-config files
+    Building header file using cbindgen
+  Populating uninstalled header directory
+regenerated crates/rdf-capi/include/purrdf.h from the private cargo-c build
++ make capi-check
+python3 scripts/capi-header.py --self-test
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.002s
+
+OK
+python3 scripts/capi-header.py --check crates/rdf-capi/include/purrdf.h
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-capi)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 8.84s
+    Building pkg-config files
+    Building header file using cbindgen
+  Populating uninstalled header directory
+OK: committed purrdf.h matches the captured private cargo-c artifact
+cargo test -p purrdf-capi --test c_smoke --locked
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-capi)
+    Finished `test` profile [optimized] target(s) in 11.07s
+     Running tests/c_smoke.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-capi/e1a3698344a9c178/out/c_smoke-e1a3698344a9c178)
+
+running 6 tests
+test phases::tests::mixed_harness_frames_preserve_strict_artifact_selection ... ok
+test phases::tests::nul_inventory_preserves_literal_paths_and_refuses_lossy_decoding ... ok
+test phases::tests::rejects_malformed_missing_unrelated_and_ambiguous_artifacts ... ok
+test phases::tests::selects_exact_package_and_retains_freshness_metadata ... ok
+test phases::tests::child_and_validation_failures_are_recorded_and_receipt_failures_are_hard ... ok
+test c_abi_smoke has been running for over 60 seconds
+test c_abi_smoke ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 238.65s
+
++ cargo test --locked -j 8 -p purrdf-capi --lib shapes_capacity_refusal_preserves_native_fields -- --test-threads=4
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-capi)
+    Finished `test` profile [optimized] target(s) in 12.31s
+     Running unittests src/lib.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-capi/3a1d77f2e6e918d3/out/purrdf-3a1d77f2e6e918d3)
+
+running 1 test
+test error::tests::shapes_capacity_refusal_preserves_native_fields ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.00s
+
++ cargo test --locked -j 8 -p purrdf-capi --test abi the_status_enum_is_append_only -- --test-threads=4
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/490-typed-capacity-errors-instead-of-u32/crates/rdf-capi)
+    Finished `test` profile [optimized] target(s) in 2.44s
+     Running tests/abi.rs (/opt/.cargo/63/2c12af8b7e2e0c/debug/build/purrdf-capi/f0adaa7e8991929e/out/abi-f0adaa7e8991929e)
+
+running 1 test
+test the_status_enum_is_append_only ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 55 filtered out; finished in 0.00s
+
+terminal_status=0
