@@ -228,11 +228,13 @@ fn governed_update(dataset: *mut PurrdfDataset, request: &str) -> Result<(), Str
 }
 
 #[test]
-fn a_dataset_starts_at_eighteen_digits_toward_zero() {
+fn a_dataset_starts_exact_for_terminating_and_rounded_for_repeating_quotients() {
     let dataset = dataset();
-    assert_eq!(policy_of(dataset), "18:toward-zero");
+    assert_eq!(policy_of(dataset), "exact-or-18:half-even");
     let third = bound_x(&query_json(dataset, "SELECT (1/3 AS ?x) {}").expect("1/3 answers"));
     assert_eq!(third, "0.333333333333333333");
+    let deep = bound_x(&query_json(dataset, "SELECT (1/1048576 AS ?x) {}").expect("1/1048576"));
+    assert_eq!(deep, "0.00000095367431640625");
     unsafe { purrdf_dataset_free(dataset) };
 }
 
@@ -308,7 +310,7 @@ fn a_null_policy_is_a_null_pointer() {
         unsafe { purrdf_dataset_set_division_policy(dataset, std::ptr::null(), &raw mut error) };
     assert_eq!(status, PurrdfStatus::NullPointer as i32);
     assert_eq!(take_error(error).0, PurrdfStatus::NullPointer as i32);
-    assert_eq!(policy_of(dataset), "18:toward-zero");
+    assert_eq!(policy_of(dataset), "exact-or-18:half-even");
     unsafe { purrdf_dataset_free(dataset) };
 }
 

@@ -638,7 +638,7 @@ fn neighbour_count_with(
             workspace,
         ));
     };
-    if *count < 0 {
+    if count.is_negative() {
         return Err(crate::error::NativeDiagnostic::error(
             crate::error::NativeDiagnosticKind::Function,
             format_args!(
@@ -648,9 +648,8 @@ fn neighbour_count_with(
             workspace,
         ));
     }
-    let count = *count;
     let bound = i128::from(guard.max_neighbours());
-    if count > bound {
+    if count > &purrdf_xsd::exact::Integer::from_i128(bound) {
         return Err(crate::error::NativeDiagnostic::error(
             crate::error::NativeDiagnosticKind::Function,
             format_args!(
@@ -661,13 +660,18 @@ fn neighbour_count_with(
             workspace,
         ));
     }
-    usize::try_from(count).map_err(|_| {
-        crate::error::NativeDiagnostic::error(
-            crate::error::NativeDiagnosticKind::Function,
-            format_args!("the neighbour count {count} does not fit this platform's index range"),
-            workspace,
-        )
-    })
+    count
+        .as_i128()
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!(
+                    "the neighbour count {count} does not fit this platform's index range"
+                ),
+                workspace,
+            )
+        })
 }
 
 /// The value the count position carries in a **membership** answer: the number of rows

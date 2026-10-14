@@ -62,6 +62,78 @@ fn integer_interval(lower: &str, upper: &str) -> DataRange {
 }
 
 #[test]
+fn temporal_identity_borrows_exact_seconds_and_admits_alignment() {
+    let fraction = format!("5{}1", "0".repeat(1024));
+    for (datatype, left, right, shifted) in [
+        (
+            XsdDatatype::Time,
+            "12:34:56.5Z".to_owned(),
+            format!("12:34:56.{fraction}Z"),
+            format!("13:34:56.{fraction}+01:00"),
+        ),
+        (
+            XsdDatatype::DateTime,
+            "2024-01-02T12:34:56.5Z".to_owned(),
+            format!("2024-01-02T12:34:56.{fraction}Z"),
+            format!("2024-01-02T13:34:56.{fraction}+01:00"),
+        ),
+        (
+            XsdDatatype::DayTimeDuration,
+            "PT56.5S".to_owned(),
+            format!("PT56.{fraction}S"),
+            format!("PT56.{fraction}S"),
+        ),
+    ] {
+        let left = purrdf_xsd::parse(&left, datatype).unwrap();
+        let right = purrdf_xsd::parse(&right, datatype).unwrap();
+        let shifted = purrdf_xsd::parse(&shifted, datatype).unwrap();
+
+        let mut owner = Owner::default();
+        let window = CurrentThreadWindow::open();
+        let actual = range::try_same_value(&left, &right, &mut owner).unwrap();
+        let measured = window.close();
+        assert!(!actual, "{datatype:?} fractions differ");
+        assert_eq!(owner.live, 0);
+        assert!(
+            owner.work > 1 && owner.peak > 0 && owner.allocations > 0,
+            "{datatype:?}"
+        );
+        assert!(
+            measured.peak_working_bytes <= i64::try_from(owner.peak).unwrap(),
+            "{datatype:?}: {measured:?} exceeds admitted peak {}",
+            owner.peak,
+        );
+        assert_eq!(actual, range::same_value(&left, &right));
+        assert!(range::try_same_value(&right, &shifted, &mut owner).unwrap());
+        assert_eq!(owner.live, 0);
+
+        let mut work_refused = Owner {
+            work_ceiling: Some(1),
+            ..Owner::default()
+        };
+        let window = CurrentThreadWindow::open();
+        assert_eq!(
+            range::try_same_value(&left, &right, &mut work_refused),
+            Err(StorageError::Refused),
+            "{datatype:?}",
+        );
+        assert_eq!(window.close().allocations, 0, "{datatype:?}");
+        assert_eq!(work_refused.live, 0);
+
+        let mut refused = Owner {
+            ceiling: Some(0),
+            ..Owner::default()
+        };
+        let window = CurrentThreadWindow::open();
+        let result = range::try_same_value(&left, &right, &mut refused);
+        let measured = window.close();
+        assert_eq!(result, Err(StorageError::Refused), "{datatype:?}");
+        assert_eq!(measured.allocations, 0, "{datatype:?}");
+        assert_eq!(refused.live, 0);
+    }
+}
+
+#[test]
 fn long_exact_endpoint_products_are_admitted_and_all_scratch_is_released() {
     // A huge coefficient and a fractional endpoint force the actual limb,
     // comparison, ceil/floor and finite-extent operations, rather than just Vecs.

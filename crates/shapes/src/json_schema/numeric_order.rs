@@ -576,25 +576,35 @@ pub(super) fn frac_part(rel: Option<Rel>, bound: &str) -> FracPart {
             }
         }
         Some(Rel::Gt) => {
-            let mut alternatives = vec![format!("{bound}0*[1-9][0-9]*")];
-            for (k, &byte) in bytes.iter().enumerate() {
+            // Share each equal prefix instead of repeating it in every branch.
+            // Temporal order repeats this comparison for timezone offsets.
+            let mut suffix = "0*[1-9][0-9]*".to_owned();
+            for &byte in bytes.iter().rev() {
                 if let Some(class) = digit_class(digit(byte) + 1, 9) {
-                    alternatives.push(format!("{}{class}[0-9]*", &bound[..k]));
+                    suffix = format!("(?:{class}[0-9]*|{}{suffix})", char::from(byte));
+                } else {
+                    suffix.insert(0, char::from(byte));
                 }
             }
-            alternatives
+            vec![suffix]
         }
         Some(Rel::Lt) => {
-            let mut alternatives = Vec::new();
-            for (k, &byte) in bytes.iter().enumerate() {
-                alternatives.push(bound[..k].to_owned());
+            let mut suffix: Option<String> = None;
+            for &byte in bytes.iter().rev() {
+                let mut alternatives = Vec::new();
                 if digit(byte) > 0
                     && let Some(class) = digit_class(0, digit(byte) - 1)
                 {
-                    alternatives.push(format!("{}{class}[0-9]*", &bound[..k]));
+                    alternatives.push(format!("{class}[0-9]*"));
                 }
+                if let Some(tail) = suffix {
+                    // Ending the equal prefix early is also below the bound:
+                    // the normalized bound has a nonzero final digit.
+                    alternatives.push(format!("{}(?:{tail})?", char::from(byte)));
+                }
+                suffix = (!alternatives.is_empty()).then(|| alternatives.join("|"));
             }
-            alternatives
+            suffix.map_or_else(Vec::new, |suffix| vec![String::new(), suffix])
         }
         Some(Rel::Ge | Rel::Le) => unreachable!("strict or equal only"),
     }

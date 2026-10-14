@@ -31,7 +31,7 @@
 //! [`order_pattern`] states the order on well-formed lexical forms;
 //! [`lexical_patterns`] states well-formedness as the validator parses it —
 //! the fields, the days of each month and the leap years, a year within the
-//! signed 64-bit range and at most 18 fractional second digits — around the
+//! signed 64-bit range and exact fractional seconds of arbitrary length — around the
 //! `whiteSpace` `collapse` trim the three datatypes fix. A value meets a bound
 //! exactly when its lexical form matches all of them.
 
@@ -142,7 +142,7 @@ impl Bound {
             let minute: i128 = fields.next()?.parse().ok()?;
             let seconds = fields.next()?;
             let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
-            local.minute += hour * 60 + minute;
+            local.minute += if kind == Kind::Time { hour % 24 } else { hour } * 60 + minute;
             local.second = whole.parse().ok()?;
             fraction
                 .trim_end_matches('0')
@@ -197,8 +197,7 @@ fn civil_days(date: &str) -> Option<i128> {
 pub(super) fn lexical_patterns(kind: Kind) -> Vec<String> {
     let year = year_lexical();
     let month_day = "(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-9]))";
-    let time =
-        "(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,18})?|24:00:00(?:\\.0{1,18})?)";
+    let time = "(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?|24:00:00(?:\\.0+)?)";
     let zone = "(?:Z|[+\\-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))";
     let body = match kind {
         Kind::DateTime => format!("{year}-{month_day}T{time}"),
@@ -424,9 +423,14 @@ fn minutes(kind: Kind, rel: Option<Rel>, minute: i128) -> Vec<String> {
             push(dates(None, day - 1), hour_minutes(0, last));
             push(dates(None, day), hour_minutes(0, of_day - 1));
         }
-        (Kind::Time, None) => out.extend(hour_minutes(minute, minute)),
-        (Kind::Time, Some(Rel::Gt | Rel::Ge)) => out.extend(hour_minutes(minute + 1, DAY)),
-        (Kind::Time, Some(Rel::Lt | Rel::Le)) => out.extend(hour_minutes(0, minute - 1)),
+        (Kind::Time, None) if (0..DAY).contains(&minute) => {
+            out.extend(hour_minutes(minute, minute));
+        }
+        (Kind::Time, None) => {}
+        (Kind::Time, Some(Rel::Gt | Rel::Ge)) => out.extend(hour_minutes(minute + 1, DAY - 1)),
+        (Kind::Time, Some(Rel::Lt | Rel::Le)) => {
+            out.extend(hour_minutes(0, (minute - 1).min(DAY - 1)));
+        }
         (Kind::Date, None) => {
             if of_day == 0 {
                 out.extend(dates(None, day));
@@ -437,6 +441,16 @@ fn minutes(kind: Kind, rel: Option<Rel>, minute: i128) -> Vec<String> {
             let below = if of_day == 0 { day } else { day + 1 };
             out.extend(dates(Some(Rel::Lt), below));
         }
+    }
+    // XSD time normalizes end-of-day to midnight; dateTime retains its day carry.
+    if kind == Kind::Time
+        && match rel {
+            None => minute == 0,
+            Some(Rel::Gt | Rel::Ge) => 0 > minute,
+            Some(Rel::Lt | Rel::Le) => 0 < minute,
+        }
+    {
+        out.push("24:00".to_owned());
     }
     out
 }
@@ -603,7 +617,8 @@ fn zoned(kind: Kind, rel: Rel, point: &Point) -> Vec<String> {
             Kind::Time => {
                 if (0..DAY).contains(&local) {
                     add(format!("{hour:02}"), start, minute);
-                } else if local == DAY {
+                }
+                if local == 0 {
                     add("24".to_owned(), start, 0);
                 }
             }
@@ -712,7 +727,8 @@ mod tests {
             .map(|pattern| {
                 assert!(
                     purrdf_core::xsd_regex::ecma_262_rust_compatible(pattern),
-                    "{}",
+                    "pattern of {} bytes: {}",
+                    pattern.len(),
                     &pattern[..pattern.len().min(200)]
                 );
                 regex::RegexBuilder::new(pattern)
@@ -820,7 +836,19 @@ mod tests {
         for minute in minutes_around(center) {
             let day = minute.div_euclid(DAY);
             let of_day = minute.rem_euclid(DAY);
-            for seconds in ["00", "00.0", "00.001", "29.5", "30", "30.25", "59.999"] {
+            for seconds in [
+                "00",
+                "00.0",
+                "00.001",
+                "29.5",
+                "30",
+                "30.25",
+                "59.999",
+                "56.123456789012345678900",
+                "56.123456789012345678901",
+                "56.123456789012345678902",
+                "56.1234567890123456789010",
+            ] {
                 for zone in ZONES {
                     values.push(format!(
                         "{}T{:02}:{:02}:{seconds}{zone}",
@@ -864,6 +892,7 @@ mod tests {
             "2020-03-01T00:00:00",
             "2020-03-01T00:00:00Z",
             "2020-03-01T12:34:56.5",
+            "2020-03-01T12:34:56.123456789012345678901",
             "2020-03-01T12:34:56.5-05:30",
             "2020-02-29T23:59:59.999+14:00",
             " 2020-03-01T24:00:00 ",
@@ -926,9 +955,20 @@ mod tests {
         let mut values = Vec::new();
         for minute in (0..=DAY)
             .step_by(29)
-            .chain([0, 1, 719, 720, 721, 1439, 1440])
+            .chain([0, 1, 390, 719, 720, 721, 1439, 1440])
         {
-            for seconds in ["00", "00.000", "00.5", "30.5", "59.9"] {
+            for seconds in [
+                "00",
+                "00.000",
+                "00.5",
+                "00.123456789012345678901",
+                "30.5",
+                "30.123456789012345678900",
+                "30.123456789012345678901",
+                "30.123456789012345678902",
+                "30.1234567890123456789010",
+                "59.9",
+            ] {
                 for zone in ZONES {
                     if minute == DAY {
                         values.push(format!("24:00:00{zone}"));
@@ -949,6 +989,7 @@ mod tests {
             "23:59:59.5-14:00",
             "24:00:00",
             "06:30:30.25+05:45",
+            "06:30:30.123456789012345678901+05:45",
         ] {
             check(Kind::Time, bound, &values);
         }

@@ -101,14 +101,14 @@ every closure. Seams:
 
 gmeow's `reason/refute/datatype.rs` decides facet satisfiability on an exact-ℚ
 tower; `purrdf-xsd::range` is the replacement (three-valued: `Empty` /
-`Inhabited` / `Undecided`, never a guess), with `purrdf-xsd::rational` deciding
+`Inhabited` / `Undecided`, never a guess), with `purrdf-xsd::exact::Rational` deciding
 the rational↔decimal identity exactly (`"0.5"^^xsd:decimal` ≡
 `"1/2"^^owl:rational`; floats stay a disjoint branch). Seams:
 
 * Facet ranges **over** rationals (a `minInclusive "1/3"^^owl:rational` bound)
   remain in `range.rs`'s named `Undecided` residue; extending the decimal
   stratum to rational endpoints is the receiving seam, and
-  `purrdf-xsd::rational` is the value type it extends over.
+  `purrdf-xsd::exact::Rational` is the value type it extends over.
 * gmeow's finite-cardinality table (e.g. `xsd:byte` = 256) is dogfooded from its
   ontology slices with a projection proof; PurRDF derives the same facts in
   code. A port either accepts PurRDF's derivation or keeps the slice-grounding
@@ -136,7 +136,7 @@ until it is ported *into* `purrdf-datalog` (each with its receiving seam):
 |---|---|---|
 | `magic.rs`, `magic_generic.rs` | magic-set rewriting | a plan-pipeline pass over the existing clause IR |
 | `incremental.rs`, `incremental_grounding.rs` | Z-set / Backward-Forward maintenance sessions | the store's provenance counts, carried for exactly this |
-| `builtin_eval.rs` | moded builtins, exact-ℚ arithmetic | the clause IR's builtin slot; `purrdf-xsd::rational` as the value type |
+| `builtin_eval.rs` | moded builtins, exact-ℚ arithmetic | the clause IR's builtin slot; `purrdf-xsd::exact::Rational` as the value type |
 | `nary.rs` (src level) | fixed-arity n-ary EDBs | lowering onto the quad-4 store, as gmeow already lowers n-ary to reified binary |
 | `annotation.rs` | annotation algebra | new; no constraint in the store shape blocks it |
 

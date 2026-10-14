@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+SELECT ?shifted ?seconds
+WHERE {
+  BIND(
+    "2024-01-02T03:04:05.123456789012345678901Z"^^<http://www.w3.org/2001/XMLSchema#dateTime>
+      + "PT0.000000000000000000009S"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>
+    AS ?shifted
+  )
+  BIND(SECONDS(?shifted) AS ?seconds)
+}

@@ -17,15 +17,19 @@ pub(crate) mod exact_path;
 pub use exact_path::CostOp;
 
 /// The cost of one numeric operation over `a` and `b`, for a governor to charge
-/// before the operation runs, computed in constant time from the operands' sizes:
+/// before the operation runs, computed in constant time from bounded words or
+/// the operands' sizes:
 ///
-/// * two `xsd:integer`/`xsd:decimal` operands of which one is
-///   [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`] run on the exact tower,
-///   and cost what [`crate::exact::cost`] states for the operation;
-/// * a division under any [`DivisionPolicy`] other than the default runs on the
-///   tower whatever its operands' size, and costs the same;
+/// * two `xsd:integer`/`xsd:decimal` operands run on the exact tower when one
+///   exceeds the inline representation, or when their inline result cannot be
+///   represented exactly; the cost follows
+///   [`crate::exact::cost`];
+/// * every division of two exact numeric operands runs on the tower under its
+///   caller's [`DivisionPolicy`] and costs the same;
 /// * one such big operand meeting an `xsd:float`/`xsd:double` costs its correctly
 ///   rounded conversion or its exact comparison with the binary value;
+/// * duration and calendar operators charge their exact seconds copy, alignment,
+///   day split or instant difference when those seconds leave inline storage;
 /// * everything else computes in machine words: [`crate::exact::Cost::ZERO`].
 ///
 /// The cost covers the operation, not the rendering of its result: a caller that
@@ -34,25 +38,366 @@ pub use exact_path::CostOp;
 #[must_use]
 #[inline]
 pub fn numeric_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> crate::exact::Cost {
-    let tower_division =
-        matches!(op, CostOp::Div(policy) if policy != DivisionPolicy::xsd_default());
-    // Two machine-word operands under the default division: decided by the variants
-    // alone, so the operators' fast path pays one match here and nothing else.
-    if !tower_division && !is_big(a) && !is_big(b) {
+    if let Some(cost) = duration_arithmetic_cost(a, b, op) {
+        return cost;
+    }
+    if let Some(cost) = calendar_arithmetic_cost(a, b, op) {
+        return cost;
+    }
+    if let (XsdValue::Duration(left), XsdValue::Duration(right)) = (a, b)
+        && matches!(op, CostOp::Add)
+    {
+        let x = left.seconds_ref();
+        let y = right.seconds_ref();
+        let bounded_spill = match (x.to_bounded(), y.to_bounded()) {
+            (Some(x), Some(y)) => align_decimals(&x, &y)
+                .is_none_or(|(x, y, _)| x.checked_add(y).is_none() || x.checked_sub(y).is_none()),
+            _ => true,
+        };
+        if bounded_spill
+            || x.unscaled().as_i128().is_none()
+            || y.unscaled().as_i128().is_none()
+            || x.scale() > 18
+            || y.scale() > 18
+        {
+            // Both duration addition and subtraction perform one aligned
+            // exact-seconds operation; their bounded month step is constant.
+            return x.add_cost(y);
+        }
+    }
+    let tower_division = matches!(op, CostOp::Div(_));
+    let has_big_operand = is_big(a) || is_big(b);
+    // A bounded pair can still overflow into the tower. Classify it before
+    // returning zero, so the caller admits the fallback computation.
+    let bounded_fallback = matches!(op, CostOp::Add | CostOp::Mul)
+        && !has_big_operand
+        && bounded_needs_tower(a, b, op);
+    if !tower_division && !has_big_operand && !bounded_fallback {
         return crate::exact::Cost::ZERO;
     }
-    tower_cost(a, b, op, tower_division)
+    tower_cost(a, b, op, tower_division || bounded_fallback)
 }
 
-/// [`numeric_cost`] once an operand is past the machine words or the division runs on
-/// the tower. Out of line, so the fast path above stays one match.
+/// Price the exact seconds computation performed by the temporal dispatch.
+/// Calendar fields and months remain bounded words; the only tower traffic is
+/// the borrowed seconds, the duration's seconds, and their staged day split.
+fn calendar_arithmetic_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> Option<crate::exact::Cost> {
+    use crate::exact::{
+        Cost,
+        cost::{self, Shape},
+    };
+    if !matches!(op, CostOp::Add) {
+        return None;
+    }
+    let wide = |seconds: &crate::exact::Decimal| {
+        seconds.unscaled().as_i128().is_none() || seconds.scale() > 18
+    };
+    let ((XsdValue::Duration(duration), calendar) | (calendar, XsdValue::Duration(duration))) =
+        (a, b)
+    else {
+        return None;
+    };
+    let seconds = duration.seconds_ref();
+    let base_seconds = match calendar {
+        XsdValue::DateTime(value) => {
+            i128::from(value.hour()) * 3600 + i128::from(value.minute()) * 60
+        }
+        XsdValue::Time(value) => i128::from(value.hour()) * 3600 + i128::from(value.minute()) * 60,
+        _ => 0,
+    };
+    let source = match calendar {
+        XsdValue::DateTime(value) => Some(value.second_ref()),
+        XsdValue::Time(value) if duration.months() == 0 => Some(value.second_ref()),
+        XsdValue::Date(_) | XsdValue::Gregorian(_) => None,
+        _ => return None,
+    };
+    if matches!(calendar, XsdValue::Gregorian(_)) && !seconds.is_integer() {
+        return Some(Cost::ZERO);
+    }
+    let source_wide = source.is_some_and(wide);
+    let bounded_spill = match (
+        source.map(crate::exact::Decimal::to_bounded),
+        seconds.to_bounded(),
+    ) {
+        (Some(Some(source)), Some(delta)) => {
+            let base = Decimal::from_integer(base_seconds);
+            align_decimals(&base, &source)
+                .and_then(|(x, y, scale)| {
+                    x.checked_add(y).map(|sum| Decimal::from_parts(sum, scale))
+                })
+                .and_then(|with_second| align_decimals(&with_second, &delta))
+                .is_none_or(|(x, y, _)| x.checked_add(y).is_none() || x.checked_sub(y).is_none())
+        }
+        (None, Some(delta)) => {
+            let base = Decimal::from_integer(base_seconds);
+            align_decimals(&base, &delta)
+                .is_none_or(|(x, y, _)| x.checked_add(y).is_none() || x.checked_sub(y).is_none())
+        }
+        _ => true,
+    };
+    if !source_wide && !wide(seconds) && !bounded_spill {
+        return Some(Cost::ZERO);
+    }
+    let source_shape = source.map_or(Shape::of_i128(0, 0), crate::exact::Decimal::shape);
+    let seconds_shape = seconds.shape();
+    let base = Shape::of_i128(86_400, 0);
+    let with_second = base.sum(source_shape);
+    let total = with_second.sum(seconds_shape);
+    let arithmetic = cost::decimal_add(base, source_shape)
+        .saturating_add(cost::decimal_add(with_second, seconds_shape));
+    // The day split truncates, subtracts its fraction, divides the whole
+    // seconds by 86,400, then constructs the seconds within the minute.
+    let split = cost::decimal_unary(total)
+        .saturating_add(cost::decimal_add(total, total))
+        .saturating_add(cost::div(total.limbs(), 1))
+        .saturating_add(cost::decimal_add(total, base));
+    Some(arithmetic.saturating_add(split))
+}
+
+/// Subtraction's exact-work charge. Same-sort calendar pairs subtract their
+/// instants; addition of those pairs is a type error and must not be charged
+/// ahead of that diagnostic. Other subtraction pairs share addition's cost.
+#[must_use]
+pub fn temporal_subtract_cost(a: &XsdValue, b: &XsdValue) -> crate::exact::Cost {
+    if matches!(a, XsdValue::Duration(_))
+        && matches!(
+            b,
+            XsdValue::DateTime(_) | XsdValue::Date(_) | XsdValue::Time(_) | XsdValue::Gregorian(_)
+        )
+    {
+        return crate::exact::Cost::ZERO;
+    }
+    instant_difference_cost(a, b).unwrap_or_else(|| numeric_cost(a, b, CostOp::Add))
+}
+
+fn instant_difference_cost(a: &XsdValue, b: &XsdValue) -> Option<crate::exact::Cost> {
+    use crate::exact::{
+        Cost,
+        cost::{self, Shape},
+    };
+    let (left, right) = match (a, b) {
+        (XsdValue::DateTime(left), XsdValue::DateTime(right)) => {
+            if left.timezone_minutes().is_some() != right.timezone_minutes().is_some() {
+                return Some(Cost::ZERO);
+            }
+            (Some(left.second_ref()), Some(right.second_ref()))
+        }
+        (XsdValue::Time(left), XsdValue::Time(right)) => {
+            if left.timezone_minutes().is_some() != right.timezone_minutes().is_some() {
+                return Some(Cost::ZERO);
+            }
+            (Some(left.second_ref()), Some(right.second_ref()))
+        }
+        (XsdValue::Date(_), XsdValue::Date(_)) => (None, None),
+        _ => return None,
+    };
+    let wide = |seconds: &crate::exact::Decimal| {
+        seconds.unscaled().as_i128().is_none() || seconds.scale() > 18
+    };
+    if !left.is_some_and(wide) && !right.is_some_and(wide) {
+        return Some(Cost::ZERO);
+    }
+    let base = Shape::of_i128(i128::MAX, 0);
+    let left = left.map_or(Shape::of_i128(0, 0), crate::exact::Decimal::shape);
+    let right = right.map_or(Shape::of_i128(0, 0), crate::exact::Decimal::shape);
+    let left_total = base.sum(left);
+    let right_total = base.sum(right);
+    Some(
+        cost::decimal_add(base, left)
+            .saturating_add(cost::decimal_add(base, right))
+            .saturating_add(cost::decimal_add(left_total, right_total)),
+    )
+}
+
+/// Exact-work bound for the seconds copy and optional whole-minute shift made
+/// by `fn:adjust-*-to-timezone`. Invalid offsets reach the XSD domain error
+/// before any exact arithmetic; their work charge stays zero.
+#[must_use]
+pub fn timezone_adjust_cost(value: &XsdValue, timezone: Option<i64>) -> crate::exact::Cost {
+    use crate::exact::{
+        Cost,
+        cost::{self, Shape},
+    };
+    if timezone.is_some_and(|seconds| seconds % 60 != 0 || !(-50_400..=50_400).contains(&seconds)) {
+        return Cost::ZERO;
+    }
+    let (seconds, source_timezone) = match value {
+        XsdValue::DateTime(value) => (value.second_ref(), value.timezone_minutes()),
+        XsdValue::Time(value) => (value.second_ref(), value.timezone_minutes()),
+        _ => return Cost::ZERO,
+    };
+    if seconds.unscaled().as_i128().is_some() && seconds.scale() <= 18 {
+        return Cost::ZERO;
+    }
+    let shape = seconds.shape();
+    // Retagging copies the coefficient once; no division or canonical text is
+    // produced until the separate governed rendering step.
+    let copy = Cost::new(
+        shape.limbs().saturating_add(1),
+        shape.limbs().saturating_add(1).saturating_mul(8),
+    );
+    if source_timezone.is_none() || timezone.is_none() {
+        return copy;
+    }
+    let base = Shape::of_i128(86_400, 0);
+    let delta = Shape::of_i128(100_800, 0);
+    let with_second = base.sum(shape);
+    let total = with_second.sum(delta);
+    copy.saturating_add(cost::decimal_add(base, shape))
+        .saturating_add(cost::decimal_add(with_second, delta))
+        .saturating_add(cost::decimal_unary(total))
+        .saturating_add(cost::decimal_add(total, total))
+        .saturating_add(cost::div(total.limbs(), 1))
+        .saturating_add(cost::decimal_add(total, base))
+}
+
+fn duration_arithmetic_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> Option<crate::exact::Cost> {
+    use crate::exact::{
+        Cost, DivisionPolicy,
+        cost::{self, Shape},
+    };
+    match op {
+        CostOp::Mul => {
+            let ((XsdValue::Duration(duration), factor) | (factor, XsdValue::Duration(duration))) =
+                (a, b)
+            else {
+                return None;
+            };
+            let factor_shape = Shape::of_value(factor)?;
+            let factor_small = match factor {
+                XsdValue::Integer { value, .. } => value.as_i128().map(|value| (value, 0)),
+                XsdValue::Decimal(value) => value
+                    .unscaled()
+                    .as_i128()
+                    .map(|coefficient| (coefficient, value.scale())),
+                _ => None,
+            };
+            let seconds = duration.seconds_ref();
+            if let (Some((factor, scale)), Some(coefficient)) =
+                (factor_small, seconds.unscaled().as_i128())
+                && scale.saturating_add(seconds.scale()) <= 18
+                && i128::from(duration.months()).checked_mul(factor).is_some()
+                && coefficient.checked_mul(factor).is_some()
+            {
+                return Some(Cost::ZERO);
+            }
+            let months_shape = Shape::of_i128(i128::from(duration.months()), 0);
+            let month_cost = if duration.months() == 0 {
+                Cost::ZERO
+            } else {
+                cost::decimal_mul(months_shape, factor_shape)
+                    .saturating_add(cost::decimal_unary(months_shape.product(factor_shape)))
+            };
+            let seconds_cost = if seconds.is_zero() {
+                Cost::ZERO
+            } else {
+                cost::decimal_mul(seconds.shape(), factor_shape)
+            };
+            Some(month_cost.saturating_add(seconds_cost))
+        }
+        CostOp::Div(_) => {
+            let XsdValue::Duration(dividend) = a else {
+                return None;
+            };
+            let policy = DivisionPolicy::xsd_default();
+            let left_seconds = dividend.seconds_ref();
+            let (numerator, denominator) = match b {
+                XsdValue::Integer { .. } | XsdValue::Decimal(_) => {
+                    let denominator = Shape::of_value(b)?;
+                    let months = Shape::of_i128(i128::from(dividend.months()), 0);
+                    let month_cost = if dividend.months() == 0 {
+                        Cost::ZERO
+                    } else {
+                        cost::decimal_div(months, denominator, policy).saturating_add(
+                            cost::decimal_unary(months.quotient(denominator, policy)),
+                        )
+                    };
+                    let seconds_cost = if left_seconds.is_zero() {
+                        Cost::ZERO
+                    } else {
+                        cost::decimal_div(left_seconds.shape(), denominator, policy)
+                    };
+                    return Some(month_cost.saturating_add(seconds_cost));
+                }
+                XsdValue::Duration(divisor)
+                    if dividend.months() != 0
+                        && left_seconds.is_zero()
+                        && divisor.months() != 0
+                        && divisor.seconds_ref().is_zero() =>
+                {
+                    (
+                        Shape::of_i128(i128::from(dividend.months()), 0),
+                        Shape::of_i128(i128::from(divisor.months()), 0),
+                    )
+                }
+                XsdValue::Duration(divisor)
+                    if dividend.months() == 0
+                        && divisor.months() == 0
+                        && !divisor.seconds_ref().is_zero() =>
+                {
+                    (left_seconds.shape(), divisor.seconds_ref().shape())
+                }
+                XsdValue::Duration(_) => return Some(Cost::ZERO),
+                _ => return None,
+            };
+            Some(cost::decimal_div(numerator, denominator, policy))
+        }
+        _ => None,
+    }
+}
+
+/// Whether bounded exact arithmetic can leave its machine-word representation.
+/// `CostOp::Add` covers both addition and subtraction, so either overflow is
+/// conservatively charged. A comparison of bounded exact values stays bounded.
+fn bounded_needs_tower(a: &XsdValue, b: &XsdValue, op: CostOp) -> bool {
+    if !a.is_exact_numeric() || !b.is_exact_numeric() {
+        return false;
+    }
+    match (a, b, op) {
+        (XsdValue::Integer { value: x, .. }, XsdValue::Integer { value: y, .. }, CostOp::Add) => {
+            let x = x.as_i128().expect("bounded operands checked");
+            let y = y.as_i128().expect("bounded operands checked");
+            x.checked_add(y).is_none() || x.checked_sub(y).is_none()
+        }
+        (XsdValue::Integer { value: x, .. }, XsdValue::Integer { value: y, .. }, CostOp::Mul) => x
+            .as_i128()
+            .expect("bounded operands checked")
+            .checked_mul(y.as_i128().expect("bounded operands checked"))
+            .is_none(),
+        (_, _, CostOp::Add) => {
+            let x = bounded_decimal(a);
+            let y = bounded_decimal(b);
+            align_decimals(&x, &y)
+                .is_none_or(|(x, y, _)| x.checked_add(y).is_none() || x.checked_sub(y).is_none())
+        }
+        (_, _, CostOp::Mul) => {
+            let x = bounded_decimal(a);
+            let y = bounded_decimal(b);
+            u32::from(x.scale()) + u32::from(y.scale()) > u32::from(MAX_DECIMAL_SCALE)
+                || x.mantissa().checked_mul(y.mantissa()).is_none()
+        }
+        (_, _, CostOp::Compare | CostOp::Div(_)) => false,
+    }
+}
+
+fn bounded_decimal(value: &XsdValue) -> Decimal {
+    match value {
+        XsdValue::Integer { value, .. } => {
+            Decimal::from_integer(value.as_i128().expect("bounded operands checked"))
+        }
+        XsdValue::Decimal(value) => value.to_bounded().expect("bounded operands checked"),
+        _ => unreachable!("bounded exact operands were checked before dispatch"),
+    }
+}
+
+/// [`numeric_cost`] once a big operand, a bounded overflow, or division runs on
+/// the tower. Out of line, so the fast path above stays small.
 #[cold]
 #[inline(never)]
-fn tower_cost(a: &XsdValue, b: &XsdValue, op: CostOp, tower_division: bool) -> crate::exact::Cost {
+fn tower_cost(a: &XsdValue, b: &XsdValue, op: CostOp, force_exact: bool) -> crate::exact::Cost {
     match (exact_path::shape_of(a), exact_path::shape_of(b)) {
-        (Some(x), Some(y)) if exact_path::involves_big(a, b) || tower_division => {
-            let integer =
-                |v: &XsdValue| matches!(v, XsdValue::Integer { .. } | XsdValue::BigInteger { .. });
+        (Some(x), Some(y)) if exact_path::involves_big(a, b) || force_exact => {
+            let integer = |v: &XsdValue| matches!(v, XsdValue::Integer { .. });
             let integers = integer(a) && integer(b) && !matches!(op, CostOp::Div(_));
             exact_path::cost(x, y, integers, op)
         }
@@ -68,81 +413,93 @@ fn tower_cost(a: &XsdValue, b: &XsdValue, op: CostOp, tower_division: bool) -> c
 
 /// The cost of a unary numeric function over `value` — negation, `fn:abs`,
 /// `fn:ceiling`, `fn:floor`, `fn:round` — when it runs on the exact tower (an
-/// [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`] operand); zero otherwise.
+/// exact integer or decimal operand outside the inline representation); zero otherwise.
 #[must_use]
 pub fn numeric_unary_cost(value: &XsdValue) -> crate::exact::Cost {
     match value {
-        XsdValue::BigInteger { value, .. } => value.unary_cost(),
-        XsdValue::BigDecimal(decimal) => decimal.unary_cost(),
+        XsdValue::Duration(duration) => {
+            let seconds = duration.seconds_ref();
+            if seconds.unscaled().as_i128().is_none() || seconds.scale() > 18 {
+                seconds.unary_cost()
+            } else {
+                crate::exact::Cost::ZERO
+            }
+        }
+        XsdValue::Integer { value, .. } if value.as_i128().is_none() => value.unary_cost(),
+        XsdValue::Decimal(decimal)
+            if decimal.unscaled().as_i128().is_none() || decimal.scale() > 18 =>
+        {
+            decimal.unary_cost()
+        }
         _ => crate::exact::Cost::ZERO,
     }
 }
 
 /// The cost of converting `value` to the nearest `xsd:double`/`xsd:float` — a cast,
 /// or a promotion against an IEEE operand — when it is an
-/// [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`]; zero otherwise.
+/// exact integer or decimal outside the inline representation; zero otherwise.
 #[must_use]
 pub fn numeric_to_float_cost(value: &XsdValue) -> crate::exact::Cost {
     match value {
-        XsdValue::BigInteger { value, .. } => value.to_float_cost(),
-        XsdValue::BigDecimal(decimal) => decimal.to_float_cost(),
+        XsdValue::Integer { value, .. } if value.as_i128().is_none() => value.to_float_cost(),
+        XsdValue::Decimal(decimal)
+            if decimal.unscaled().as_i128().is_none() || decimal.scale() > 18 =>
+        {
+            decimal.to_float_cost()
+        }
         _ => crate::exact::Cost::ZERO,
     }
 }
 
 /// The cost of rendering `value`'s canonical lexical form
-/// ([`XsdValue::canonical_lexical`]) when it is an [`XsdValue::BigInteger`] or
-/// [`XsdValue::BigDecimal`]: every byte of the text, the leading zeros of a long
+/// ([`XsdValue::canonical_lexical`]) when its exact payload exceeds the inline
+/// representation: every byte of the text, the leading zeros of a long
 /// fraction included, so a value whose coefficient is short but whose scale is
-/// vast is priced at the text it becomes. Zero for every other value, whose text
-/// is bounded by machine words.
+/// vast is priced at the text it becomes. Wide temporal seconds use the same
+/// decimal groups; duration additionally scans them for day/time components.
+/// Zero for bounded values, whose text is bounded by machine words.
 #[must_use]
 pub fn numeric_render_cost(value: &XsdValue) -> crate::exact::Cost {
     match value {
-        XsdValue::BigInteger { value, .. } => value.render_cost(),
-        XsdValue::BigDecimal(decimal) => decimal.render_cost(),
+        XsdValue::Integer { value, .. } if value.as_i128().is_none() => value.render_cost(),
+        XsdValue::Decimal(decimal) => decimal_render_cost(decimal),
+        XsdValue::DateTime(value) => decimal_render_cost(value.second_ref()),
+        XsdValue::Time(value) => decimal_render_cost(value.second_ref()),
+        XsdValue::Duration(value) => {
+            let base = decimal_render_cost(value.seconds_ref());
+            // One radix conversion plus up to three linear digit visits:
+            // day summary, quotient emission, and fractional suffix.
+            crate::exact::Cost::new(base.work().saturating_mul(4), base.bytes())
+        }
         _ => crate::exact::Cost::ZERO,
     }
 }
 
-/// Whether `value` is past the bounded variants.
-const fn is_big(value: &XsdValue) -> bool {
-    matches!(value, XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_))
+/// The shared bounded-aware work charge for rendering a borrowed exact decimal.
+/// Small values retain the original zero-cost scalar path; a wide coefficient or
+/// scale pays for its canonical digits before rendering begins.
+#[must_use]
+pub fn decimal_render_cost(value: &crate::exact::Decimal) -> crate::exact::Cost {
+    if value.unscaled().as_i128().is_none() || value.scale() > 18 {
+        value.render_cost()
+    } else {
+        crate::exact::Cost::ZERO
+    }
 }
 
-/// The bounded result when it is one, else the exact branch: an operand outside
-/// the bounded variants (which the bounded match refuses as a type mismatch) or a
-/// bounded overflow (`OutOfRange`) recomputes on the tower.
-///
-/// Inlined, so an `Ok` from the bounded operator returns in place in every caller
-/// (per-row folds such as `SUM` call the operators once per row); the tower itself
-/// is behind the `#[cold]`, never-inlined [`exact_path::binop`], so none of its
-/// temporaries land in a caller's frame.
-#[allow(
-    clippy::inline_always,
-    reason = "an `Ok` from the bounded operator must return in place in every caller; per-row folds pay for the call and the result copy otherwise"
-)]
-#[inline(always)]
-fn exact_fallback(
-    bounded: Result<XsdValue, XsdError>,
-    a: &XsdValue,
-    b: &XsdValue,
-    op: exact_path::Op,
-) -> Result<XsdValue, XsdError> {
-    match bounded {
-        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
-            if a.is_exact_numeric() && b.is_exact_numeric() =>
-        {
-            exact_path::binop(a, b, op)
-        }
-        other => other,
+/// Whether an exact numeric value exceeds the machine-word fast path.
+const fn is_big(value: &XsdValue) -> bool {
+    match value {
+        XsdValue::Integer { value, .. } => value.as_i128().is_none(),
+        XsdValue::Decimal(value) => value.unscaled().as_i128().is_none() || value.scale() > 18,
+        _ => false,
     }
 }
 
 /// An exact decimal: `value = mantissa × 10^(-scale)`, `i128`-backed (scale
 /// bounded so the mantissa stays in `i128`).
 #[derive(Debug, Clone, Copy)]
-pub struct Decimal {
+pub(crate) struct Decimal {
     mantissa: i128,
     scale: u8,
 }
@@ -160,15 +517,8 @@ impl Decimal {
     /// The decimal whose value is exactly the integer `value` (scale 0). Every
     /// `i128` is representable, so the conversion never rounds and never fails —
     /// the `xs:integer` to `xs:decimal` cast of XPath F&O 3.1 §19.1.2.3.
-    ///
-    /// ```rust
-    /// use purrdf_xsd::Decimal;
-    ///
-    /// let max = Decimal::from_integer(i128::MAX);
-    /// assert_eq!(max.canonical_lexical(), i128::MAX.to_string());
-    /// ```
     #[must_use]
-    pub const fn from_integer(value: i128) -> Self {
+    pub(crate) const fn from_integer(value: i128) -> Self {
         Self {
             mantissa: value,
             scale: 0,
@@ -185,16 +535,9 @@ impl Decimal {
     /// accommodated, `err:FOCA0001`). The conversion reads the binary value
     /// itself, never a decimal rendering of it: `0.1_f32` is
     /// `0.100000001490116119384765625`, so the result is `0.100000001490116119`.
-    ///
-    /// ```rust
-    /// use purrdf_xsd::Decimal;
-    ///
-    /// let tenth = Decimal::from_f64_closest(f64::from(0.1_f32)).unwrap();
-    /// assert_eq!(tenth.canonical_lexical(), "0.100000001490116119");
-    /// assert!(Decimal::from_f64_closest(f64::NAN).is_none());
-    /// ```
     #[must_use]
-    pub fn from_f64_closest(value: f64) -> Option<Self> {
+    #[cfg(test)]
+    fn from_f64_closest(value: f64) -> Option<Self> {
         if !value.is_finite() {
             return None;
         }
@@ -255,13 +598,13 @@ impl Decimal {
 
     /// The mantissa (signed significant digits).
     #[must_use]
-    pub fn mantissa(&self) -> i128 {
+    pub(crate) fn mantissa(&self) -> i128 {
         self.mantissa
     }
 
     /// The scale (number of fractional digits).
     #[must_use]
-    pub fn scale(&self) -> u8 {
+    pub(crate) fn scale(&self) -> u8 {
         self.scale
     }
 
@@ -276,39 +619,26 @@ impl Decimal {
     /// whenever `|mantissa| > 2^53` and again in the division, which could land
     /// one ulp away from the correctly rounded value.
     #[must_use]
-    pub fn to_f64(&self) -> f64 {
+    #[cfg(test)]
+    fn to_f64(self) -> f64 {
         crate::decimal_float::decimal_to_f64(self.mantissa, self.scale)
-    }
-
-    /// The correctly rounded `f32` value (round-to-nearest, ties-to-even) — the
-    /// `decimal ⊂ float` twin of [`Self::to_f64`] (XPath `xs:float` casting),
-    /// rounded once straight to single precision. Narrowing [`Self::to_f64`]
-    /// would round twice, which differs from the correctly rounded value when the
-    /// first rounding lands exactly on an `f32` halfway point.
-    #[must_use]
-    pub fn to_f32(&self) -> f32 {
-        crate::decimal_float::decimal_to_f32(self.mantissa, self.scale)
     }
 
     /// The integer (truncated-toward-zero) part of the value.
     #[must_use]
-    pub fn whole_part(&self) -> i128 {
+    #[cfg(test)]
+    pub(crate) fn whole_part(&self) -> i128 {
         self.mantissa / 10i128.pow(u32::from(self.scale))
     }
 
     /// The fractional part of the value as a `Decimal` (same scale).
     #[must_use]
-    pub fn frac_part(&self) -> Self {
+    #[cfg(test)]
+    pub(crate) fn frac_part(&self) -> Self {
         Self {
             mantissa: self.mantissa % 10i128.pow(u32::from(self.scale)),
             scale: self.scale,
         }
-    }
-
-    /// True if the value is exactly zero.
-    #[must_use]
-    pub fn is_zero(&self) -> bool {
-        self.mantissa == 0
     }
 
     /// Exact comparison of two decimals (total order — decimals are never NaN).
@@ -330,7 +660,8 @@ impl Decimal {
     ///
     /// There is NO `f64` path and NO `unwrap_or` swallowing a failure.
     #[must_use]
-    pub fn cmp_exact(&self, other: &Self) -> Ordering {
+    #[cfg(test)]
+    pub(crate) fn cmp_exact(&self, other: &Self) -> Ordering {
         // Fast path: identical scale — single cmp, no arithmetic needed.
         if self.scale == other.scale {
             return self.mantissa.cmp(&other.mantissa);
@@ -391,7 +722,8 @@ impl Decimal {
     /// `0` → `"0"`); a non-integer decimal keeps its fractional part with trailing
     /// zeros trimmed (`2.50` → `"2.5"`, `-0.250` → `"-0.25"`).
     #[must_use]
-    pub fn canonical_lexical(&self) -> String {
+    #[cfg(test)]
+    pub(crate) fn canonical_lexical(&self) -> String {
         self.to_string()
     }
 }
@@ -431,32 +763,46 @@ pub fn is_decimal_lexical(lexical: &str) -> bool {
         && frac.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// `xsd:integer`: optional leading `+`/`-`, then one or more ASCII digits.
-/// Returns the raw `i128` value without any subtype range check — for range-checked
-/// integer-family parsing use [`parse_integer_typed`].
-pub fn parse_integer(s: &str) -> Result<i128, XsdError> {
-    let dt = XsdDatatype::Integer;
-    if !is_integer_lexical(s) {
-        return Err(XsdError::invalid(
-            dt,
-            s,
-            "expected an optional sign then digits",
-        ));
-    }
-    s.parse::<i128>().map_err(|_| XsdError::OutOfRange {
-        datatype: dt,
-        lexical: s.to_string(),
-        reason: crate::value::reason::INTEGER_TOO_LARGE,
-    })
+/// `xsd:integer`: optional leading `+`/`-`, then one or more ASCII digits of
+/// any length. A derived integer type uses [`parse_integer_typed`] for its facets.
+///
+/// # Errors
+/// Returns a lexical error for a non-integer spelling.
+pub fn parse_integer(s: &str) -> Result<crate::exact::Integer, XsdError> {
+    parse_integer_typed(s, XsdDatatype::Integer)
 }
 
-/// Parse a lexical integer form for the given `datatype`, hard-failing with
-/// [`XsdError::OutOfRange`] if the value is outside the datatype's inclusive bounds.
+/// Parse an integer-family value exactly, hard-failing with
+/// [`XsdError::OutOfRange`] if it is outside `datatype`'s inclusive bounds.
 ///
 /// This is the unified entry point for all integer-family datatypes; `parse` in
 /// `value.rs` routes every integer-family IRI through here.
-pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128, XsdError> {
-    read_integer_typed(lexical, datatype).map_err(|error| error.owned(datatype, lexical))
+///
+/// # Errors
+/// Returns a lexical error for a non-integer spelling or an out-of-range
+/// error for a derived-type facet violation.
+pub fn parse_integer_typed(
+    lexical: &str,
+    datatype: XsdDatatype,
+) -> Result<crate::exact::Integer, XsdError> {
+    if !is_integer_lexical(lexical) {
+        return Err(XsdError::invalid(
+            datatype,
+            lexical,
+            "expected an optional sign then digits",
+        ));
+    }
+    let value = lexical
+        .parse::<crate::exact::Integer>()
+        .map_err(XsdError::Exact)?;
+    if !datatype.admits_integer(&value) {
+        return Err(XsdError::OutOfRange {
+            datatype,
+            lexical: lexical.to_owned(),
+            reason: crate::value::reason::OUTSIDE_DATATYPE,
+        });
+    }
+    Ok(value)
 }
 
 pub(crate) fn read_integer_typed(
@@ -464,9 +810,7 @@ pub(crate) fn read_integer_typed(
     datatype: XsdDatatype,
 ) -> Result<i128, NumericReadError> {
     if !is_integer_lexical(lexical) {
-        return Err(NumericReadError::Invalid(
-            "expected an optional sign then digits",
-        ));
+        return Err(NumericReadError::Invalid);
     }
     let value = lexical
         .parse::<i128>()
@@ -482,22 +826,28 @@ pub(crate) fn read_integer_typed(
 }
 
 /// `xsd:decimal`: optional sign, digits with an optional single `.` (at least one
-/// digit overall; `.5`, `1.`, `1.5`, `12` all valid).
-pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
-    read_decimal(s).map_err(|error| error.owned(XsdDatatype::Decimal, s))
+/// digit overall; `.5`, `1.`, `1.5`, `12` all valid), at any coefficient size or
+/// fractional scale representable by the exact tower.
+///
+/// # Errors
+/// Returns a lexical or scale error without narrowing to the old decimal type.
+pub fn parse_decimal(s: &str) -> Result<crate::exact::Decimal, XsdError> {
+    s.parse().map_err(XsdError::Exact)
 }
 
 /// A borrowed classification of the bounded numeric readers. Exact fallback
 /// and physical sizing inspect it without first allocating an owned diagnostic.
+#[derive(Debug)]
 pub(crate) enum NumericReadError {
-    Invalid(&'static str),
+    Invalid,
     OutOfRange(&'static str),
 }
 
+#[cfg(test)]
 impl NumericReadError {
     pub(crate) fn owned(self, datatype: XsdDatatype, lexical: &str) -> XsdError {
         match self {
-            Self::Invalid(reason) => XsdError::invalid(datatype, lexical, reason),
+            Self::Invalid => XsdError::invalid(datatype, lexical, "invalid numeric lexical"),
             Self::OutOfRange(reason) => XsdError::OutOfRange {
                 datatype,
                 lexical: lexical.to_owned(),
@@ -512,15 +862,15 @@ pub(crate) fn read_decimal(s: &str) -> Result<Decimal, NumericReadError> {
     let body = s.strip_prefix(['+', '-']).unwrap_or(s);
     let (int_str, frac_str) = body.split_once('.').unwrap_or((body, ""));
     if frac_str.contains('.') {
-        return Err(NumericReadError::Invalid("more than one decimal point"));
+        return Err(NumericReadError::Invalid);
     }
     if int_str.is_empty() && frac_str.is_empty() {
-        return Err(NumericReadError::Invalid("no digits"));
+        return Err(NumericReadError::Invalid);
     }
     if !int_str.bytes().all(|byte| byte.is_ascii_digit())
         || !frac_str.bytes().all(|byte| byte.is_ascii_digit())
     {
-        return Err(NumericReadError::Invalid("non-digit character"));
+        return Err(NumericReadError::Invalid);
     }
     if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
         return Err(NumericReadError::OutOfRange(
@@ -775,24 +1125,9 @@ pub fn prepare_numeric_text(
             .map(PreparedNumericText::Integer)
             .map(Some)
     };
-    let decimal = |value: &crate::exact::Decimal,
-                   admit: &mut dyn FnMut(
-        NumericOperationLayout,
-    ) -> Result<(), crate::bigint::LimbScratchError>| {
-        let layout = value.render_layout()?;
-        admit(NumericOperationLayout::bytes(layout.temporary_bytes(), 0)?)?;
-        value
-            .prepare_text()
-            .map(PreparedNumericText::Decimal)
-            .map(Some)
-    };
     match value {
-        XsdValue::Integer { value, .. } => {
-            integer(&crate::exact::Integer::from_i128(*value), admit)
-        }
-        XsdValue::BigInteger { value, .. } => integer(value, admit),
-        XsdValue::Decimal(value) => decimal(&crate::exact::Decimal::from_bounded(value), admit),
-        XsdValue::BigDecimal(value) => decimal(value, admit),
+        XsdValue::Integer { value, .. } => integer(value, admit),
+        XsdValue::Decimal(value) => prepare_decimal_text(value, admit).map(Some),
         XsdValue::Float(value) => Ok(Some(PreparedNumericText::Ieee(canonical_float_text(
             *value,
         )))),
@@ -801,6 +1136,24 @@ pub fn prepare_numeric_text(
         )))),
         _ => Ok(None),
     }
+}
+
+/// Prepare a borrowed exact decimal through the same native renderer used by
+/// numeric values, without copying its coefficient out of a temporal owner.
+/// # Errors
+/// Returns physical admission or allocation refusal before group conversion.
+pub fn prepare_decimal_text(
+    value: &crate::exact::Decimal,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<PreparedNumericText, crate::bigint::LimbScratchError> {
+    let layout = value.render_layout()?;
+    admit(crate::exact::cost::NumericOperationLayout::bytes(
+        layout.temporary_bytes(),
+        0,
+    )?)?;
+    value.prepare_text().map(PreparedNumericText::Decimal)
 }
 
 /// XSD canonical double in inline caller-borrowable storage. No allocation.
@@ -992,9 +1345,9 @@ pub fn numeric_cmp_admitted(
         // Same exact integer / decimal cases keep full precision.
         // Integer-vs-integer: compare by value, ignore subtype (xsd:int 5 == xsd:long 5).
         (Integer { value: x, .. }, Integer { value: y, .. }) => Some(x.cmp(y)),
-        (Dec(x), Dec(y)) => Some(x.cmp_exact(y)),
-        (Integer { value: x, .. }, Dec(y)) => Some(Decimal::from_parts(*x, 0).cmp_exact(y)),
-        (Dec(x), Integer { value: y, .. }) => Some(x.cmp_exact(&Decimal::from_parts(*y, 0))),
+        (Dec(_) | Integer { .. }, Dec(_)) | (Dec(_), Integer { .. }) => {
+            Some(exact_path::cmp_admitted(a, b, admit)?)
+        }
         // Any `double` operand → compare as f64.
         (Double(_), _) | (_, Double(_)) => {
             match (
@@ -1014,10 +1367,6 @@ pub fn numeric_cmp_admitted(
                 (Some(a), Some(b)) => a.partial_cmp(&b),
                 _ => None,
             }
-        }
-        // An integer or decimal past the bounded variants, against another.
-        _ if a.is_exact_numeric() && b.is_exact_numeric() => {
-            Some(exact_path::cmp_admitted(a, b, admit)?)
         }
         // At least one operand is non-numeric.
         _ => None,
@@ -1129,9 +1478,9 @@ fn numeric_total_cmp_using(
         // ── Pairs the promotion lattice already decides exactly ──────────────
         // Integer-vs-integer ignores the subtype, exactly as `numeric_cmp` does.
         (Integer { value: x, .. }, Integer { value: y, .. }) => Some(x.cmp(y)),
-        (Dec(x), Dec(y)) => Some(x.cmp_exact(y)),
-        (Integer { value: x, .. }, Dec(y)) => Some(Decimal::from_parts(*x, 0).cmp_exact(y)),
-        (Dec(x), Integer { value: y, .. }) => Some(x.cmp_exact(&Decimal::from_parts(*y, 0))),
+        (Dec(_) | Integer { .. }, Dec(_)) | (Dec(_), Integer { .. }) => {
+            Some(exact_path::cmp_admitted(a, b, admit)?)
+        }
         // `f32 → f64` is an exact widening (every `f32` is an `f64`), so every
         // IEEE-vs-IEEE pair is already decided without loss.
         (Float(x), Float(y)) => x.partial_cmp(y),
@@ -1139,52 +1488,43 @@ fn numeric_total_cmp_using(
         (Float(x), Double(y)) => f64::from(*x).partial_cmp(y),
         (Double(x), Float(y)) => x.partial_cmp(&f64::from(*y)),
         // ── The exact-vs-IEEE pairs, the only lossy ones ─────────────────────
-        (Integer { value, .. }, Float(y)) => exact_vs_ieee_using(
-            &Decimal::from_parts(*value, 0),
-            f64::from(*y),
-            storage,
-            admit,
-        )?,
-        (Integer { value, .. }, Double(y)) => {
-            exact_vs_ieee_using(&Decimal::from_parts(*value, 0), *y, storage, admit)?
-        }
-        (Dec(x), Float(y)) => exact_vs_ieee_using(x, f64::from(*y), storage, admit)?,
-        (Dec(x), Double(y)) => exact_vs_ieee_using(x, *y, storage, admit)?,
-        (Float(x), Integer { value, .. }) => exact_vs_ieee_using(
-            &Decimal::from_parts(*value, 0),
-            f64::from(*x),
-            storage,
-            admit,
-        )?
-        .map(Ordering::reverse),
-        (Double(x), Integer { value, .. }) => {
-            exact_vs_ieee_using(&Decimal::from_parts(*value, 0), *x, storage, admit)?
-                .map(Ordering::reverse)
-        }
-        (Float(x), Dec(y)) => {
-            exact_vs_ieee_using(y, f64::from(*x), storage, admit)?.map(Ordering::reverse)
-        }
-        (Double(x), Dec(y)) => exact_vs_ieee_using(y, *x, storage, admit)?.map(Ordering::reverse),
-        // ── An integer or decimal past the bounded variants ──────────────────
-        _ if a.is_exact_numeric() && b.is_exact_numeric() => {
-            Some(exact_path::cmp_admitted(a, b, admit)?)
-        }
+        // Bounded coefficients retain the allocation-free cross-product path;
+        // larger coefficients use the same admitted exact tower.
         (_, Float(y)) if a.is_exact_numeric() => {
-            exact_path::cmp_ieee_admitted_using(a, f64::from(*y), storage, admit)?
+            exact_vs_ieee_numeric_using(a, f64::from(*y), storage, admit)?
         }
         (_, Double(y)) if a.is_exact_numeric() => {
-            exact_path::cmp_ieee_admitted_using(a, *y, storage, admit)?
+            exact_vs_ieee_numeric_using(a, *y, storage, admit)?
         }
         (Float(x), _) if b.is_exact_numeric() => {
-            exact_path::cmp_ieee_admitted_using(b, f64::from(*x), storage, admit)?
-                .map(Ordering::reverse)
+            exact_vs_ieee_numeric_using(b, f64::from(*x), storage, admit)?.map(Ordering::reverse)
         }
         (Double(x), _) if b.is_exact_numeric() => {
-            exact_path::cmp_ieee_admitted_using(b, *x, storage, admit)?.map(Ordering::reverse)
+            exact_vs_ieee_numeric_using(b, *x, storage, admit)?.map(Ordering::reverse)
         }
         // At least one operand is non-numeric.
         _ => None,
     })
+}
+
+fn exact_vs_ieee_numeric_using(
+    exact: &XsdValue,
+    ieee: f64,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
+    let bounded = match exact {
+        XsdValue::Integer { value, .. } => value.as_i128().map(Decimal::from_integer),
+        XsdValue::Decimal(value) => value.to_bounded(),
+        _ => None,
+    };
+    if let Some(bounded) = bounded {
+        exact_vs_ieee_using(&bounded, ieee, storage, admit)
+    } else {
+        exact_path::cmp_ieee_admitted_using(exact, ieee, storage, admit)
+    }
 }
 
 /// `|value| = significand × 2^exponent` with an ODD `significand` — the exact dyadic
@@ -1402,12 +1742,11 @@ fn num_f64(v: &XsdValue) -> Option<f64> {
         // Spec-mandated lossy promotion: integer ⊂ double (SPARQL §17.3 numeric tower).
         // Large i128 values (> 2^53) lose low-order bits; this is required behaviour,
         // not an accident.
-        XsdValue::Integer { value, .. } => *value as f64,
+        XsdValue::Integer { value, .. } => value.to_f64(),
         // decimal ⊂ double: correctly rounded, once (see `Decimal::to_f64`).
         XsdValue::Decimal(d) => d.to_f64(),
         XsdValue::Float(f) => f64::from(*f),
         XsdValue::Double(d) => *d,
-        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => exact_path::to_f64(v),
         _ => return None,
     })
 }
@@ -1417,7 +1756,7 @@ fn num_f32(v: &XsdValue) -> Option<f32> {
     Some(match v {
         // Spec-mandated lossy promotion: integer ⊂ float (SPARQL §17.3 numeric tower).
         // Large i128 values (> 2^24) lose precision; required by IEEE promotion semantics.
-        XsdValue::Integer { value, .. } => *value as f32,
+        XsdValue::Integer { value, .. } => value.to_f32(),
         // decimal ⊂ float: the exact decimal rounded ONCE, straight to single
         // precision (XPath `xs:float` casting). Going through `f64` first would round
         // twice — nothing in the spec asks for that, and it can land one ulp off.
@@ -1426,7 +1765,6 @@ fn num_f32(v: &XsdValue) -> Option<f32> {
         // double → float narrowing: required by the numeric tower when a float operand
         // forces promotion of the other operand down (SPARQL §17.3).
         XsdValue::Double(d) => *d as f32,
-        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => exact_path::to_f32(v),
         _ => return None,
     })
 }
@@ -1466,8 +1804,12 @@ pub fn numeric_to_f64_admitted(
     ) -> Result<(), crate::bigint::LimbScratchError>,
 ) -> Result<Option<f64>, crate::bigint::LimbScratchError> {
     match value {
-        XsdValue::BigInteger { value, .. } => value.try_to_f64_admitted(admit).map(Some),
-        XsdValue::BigDecimal(value) => value.try_to_f64_admitted(admit).map(Some),
+        XsdValue::Integer { value, .. } if value.as_i128().is_none() => {
+            value.try_to_f64_admitted(admit).map(Some)
+        }
+        XsdValue::Decimal(value) if value.unscaled().as_i128().is_none() || value.scale() > 18 => {
+            value.try_to_f64_admitted(admit).map(Some)
+        }
         other => Ok(num_f64(other)),
     }
 }
@@ -1482,8 +1824,12 @@ pub fn numeric_to_f32_admitted(
     ) -> Result<(), crate::bigint::LimbScratchError>,
 ) -> Result<Option<f32>, crate::bigint::LimbScratchError> {
     match value {
-        XsdValue::BigInteger { value, .. } => value.try_to_f32_admitted(admit).map(Some),
-        XsdValue::BigDecimal(value) => value.try_to_f32_admitted(admit).map(Some),
+        XsdValue::Integer { value, .. } if value.as_i128().is_none() => {
+            value.try_to_f32_admitted(admit).map(Some)
+        }
+        XsdValue::Decimal(value) if value.unscaled().as_i128().is_none() || value.scale() > 18 => {
+            value.try_to_f32_admitted(admit).map(Some)
+        }
         other => Ok(num_f32(other)),
     }
 }
@@ -1536,11 +1882,12 @@ pub fn numeric_binary_admitted(
         // fallback. Classify it in machine words without that doomed allocation.
         if let (XsdValue::Integer { value: x, .. }, XsdValue::Integer { value: y, .. }) = (a, b)
             && op != NumericBinaryOperator::Divide
+            && let (Some(x), Some(y)) = (x.as_i128(), y.as_i128())
         {
             let value = match op {
-                NumericBinaryOperator::Add => x.checked_add(*y),
-                NumericBinaryOperator::Subtract => x.checked_sub(*y),
-                NumericBinaryOperator::Multiply => x.checked_mul(*y),
+                NumericBinaryOperator::Add => x.checked_add(y),
+                NumericBinaryOperator::Subtract => x.checked_sub(y),
+                NumericBinaryOperator::Multiply => x.checked_mul(y),
                 NumericBinaryOperator::Divide => unreachable!("division excluded"),
             };
             return if let Some(value) = value {
@@ -1549,26 +1896,15 @@ pub fn numeric_binary_admitted(
                 exact_path::binary_admitted(a, b, op, policy, admit)
             };
         }
-        if op == NumericBinaryOperator::Divide
-            && (policy != DivisionPolicy::xsd_default() || exact_path::involves_big(a, b))
-        {
-            return exact_path::binary_admitted(a, b, op, policy, admit);
-        }
+        return exact_path::binary_admitted(a, b, op, policy, admit);
     }
     let bounded = match op {
         NumericBinaryOperator::Add => numeric_add_bounded(a, b),
         NumericBinaryOperator::Subtract => numeric_sub_bounded(a, b),
         NumericBinaryOperator::Multiply => numeric_mul_bounded(a, b),
-        NumericBinaryOperator::Divide => numeric_div_bounded(a, b),
+        NumericBinaryOperator::Divide => numeric_div_ieee(a, b),
     };
     match bounded {
-        Ok(XsdValue::Decimal(quotient))
-            if exact_pair
-                && op == NumericBinaryOperator::Divide
-                && quotient.scale() != MAX_DECIMAL_SCALE =>
-        {
-            exact_path::binary_admitted(a, b, op, policy, admit)
-        }
         Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. }) if exact_pair => {
             exact_path::binary_admitted(a, b, op, policy, admit)
         }
@@ -1603,14 +1939,14 @@ pub fn numeric_unary_admitted(
         crate::exact::cost::NumericOperationLayout,
     ) -> Result<(), crate::bigint::LimbScratchError>,
 ) -> Result<XsdValue, NumericOperationError> {
-    use crate::exact::{Integer, Rounding, cost::NumericOperationLayout};
+    use crate::exact::{Rounding, cost::NumericOperationLayout};
     let copied = |bytes: u64| -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
         let bytes =
             usize::try_from(bytes).map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
         NumericOperationLayout::bytes(bytes, bytes)
     };
     match value {
-        XsdValue::BigInteger { value, datatype } => {
+        XsdValue::Integer { value, datatype } => {
             admit(copied(value.heap_bytes())?)?;
             let result = match op {
                 NumericUnaryOperator::Minus => value.try_neg()?,
@@ -1626,7 +1962,7 @@ pub fn numeric_unary_admitted(
                 },
             ))
         }
-        XsdValue::BigDecimal(value) => {
+        XsdValue::Decimal(value) => {
             let result = match op {
                 NumericUnaryOperator::Ceil => {
                     value.try_round_admitted(0, Rounding::Ceiling, admit)?
@@ -1648,31 +1984,13 @@ pub fn numeric_unary_admitted(
             };
             Ok(XsdValue::from_exact_decimal(result))
         }
-        XsdValue::Integer { value, .. }
-            if *value == i128::MIN
-                && matches!(op, NumericUnaryOperator::Minus | NumericUnaryOperator::Abs) =>
-        {
-            let value = Integer::from_i128(*value);
-            admit(copied(value.heap_bytes())?)?;
-            let result = if op == NumericUnaryOperator::Minus {
-                value.try_neg()?
-            } else {
-                value.try_abs()?
-            };
-            Ok(XsdValue::from_exact_integer(result, XsdDatatype::Integer))
-        }
-        XsdValue::Decimal(value)
-            if value.mantissa() == i128::MIN
-                && matches!(op, NumericUnaryOperator::Minus | NumericUnaryOperator::Abs) =>
-        {
-            let value = crate::exact::Decimal::from_bounded(value);
-            admit(copied(value.unscaled().heap_bytes())?)?;
-            let result = if op == NumericUnaryOperator::Minus {
-                value.try_neg()?
-            } else {
-                value.try_abs()?
-            };
-            Ok(XsdValue::from_exact_decimal(result))
+        XsdValue::Duration(duration) if op == NumericUnaryOperator::Minus => {
+            crate::temporal::negate_duration_admitted(duration, admit)
+                .map(XsdValue::Duration)
+                .map_err(|error| match error {
+                    XsdError::Storage(cause) => NumericOperationError::Storage(cause),
+                    other => NumericOperationError::Value(other),
+                })
         }
         _ => match op {
             NumericUnaryOperator::Plus => numeric_unary_plus(value),
@@ -1753,33 +2071,27 @@ pub fn numeric_cast_admitted(
             _ => None,
         },
         XsdDatatype::Decimal => match source {
-            XsdValue::Integer { value, .. } => {
-                Some(XsdValue::Decimal(Decimal::from_integer(*value)))
-            }
-            XsdValue::Decimal(value) => Some(XsdValue::Decimal(*value)),
-            XsdValue::Boolean(value) => {
-                Some(XsdValue::Decimal(Decimal::from_integer(i128::from(*value))))
-            }
-            XsdValue::BigInteger { value, .. } => Some(XsdValue::from_exact_decimal(
-                ExactDecimal::from_integer(copy_integer(value, admit)?),
-            )),
-            XsdValue::BigDecimal(value) => {
+            XsdValue::Integer { value, .. } => Some(XsdValue::Decimal(ExactDecimal::from_integer(
+                copy_integer(value, admit)?,
+            ))),
+            XsdValue::Decimal(value) => {
                 let bytes = usize::try_from(value.unscaled().heap_bytes())
                     .map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
                 admit(NumericOperationLayout::bytes(bytes, bytes)?)?;
-                Some(XsdValue::from_exact_decimal(value.try_copy()?))
+                Some(XsdValue::Decimal(value.try_copy()?))
             }
+            XsdValue::Boolean(value) => Some(XsdValue::Decimal(ExactDecimal::from_integer(
+                Integer::from_i128(i128::from(*value)),
+            ))),
             XsdValue::Float(value) => return exact_binary(f64::from(*value), admit),
             XsdValue::Double(value) => return exact_binary(*value, admit),
             _ => None,
         },
         target if target.is_integer_family() => {
             let value = match source {
-                XsdValue::Integer { value, .. } => Integer::from_i128(*value),
-                XsdValue::Decimal(value) => Integer::from_i128(value.whole_part()),
+                XsdValue::Integer { value, .. } => copy_integer(value, admit)?,
+                XsdValue::Decimal(value) => value.try_to_integer_truncated_admitted(admit)?,
                 XsdValue::Boolean(value) => Integer::from_i128(i128::from(*value)),
-                XsdValue::BigInteger { value, .. } => copy_integer(value, admit)?,
-                XsdValue::BigDecimal(value) => value.try_to_integer_truncated_admitted(admit)?,
                 XsdValue::Float(value) => return exact_binary(f64::from(*value), admit),
                 XsdValue::Double(value) => return exact_binary(*value, admit),
                 _ => return Ok(None),
@@ -1793,26 +2105,6 @@ pub fn numeric_cast_admitted(
 }
 
 // ── Numeric arithmetic (SPARQL §17.4 / XPath op:numeric-*) ──────────────────
-
-/// Promote both operands to the least common type in the numeric tower, perform
-/// the given exact-integer operation (add/sub/mul), and return an `XsdValue::Integer`
-/// result. Returns `Err(OutOfRange)` on overflow.
-fn int_binop(
-    x: i128,
-    y: i128,
-    op: impl Fn(i128, i128) -> Option<i128>,
-) -> Result<XsdValue, XsdError> {
-    op(x, y)
-        .map(|value| XsdValue::Integer {
-            value,
-            datatype: XsdDatatype::Integer,
-        })
-        .ok_or_else(|| XsdError::OutOfRange {
-            datatype: XsdDatatype::Integer,
-            lexical: "overflow in integer arithmetic".to_string(),
-            reason: "integer arithmetic overflow",
-        })
-}
 
 /// Align two decimals to the same (higher) scale by scaling up the mantissa of
 /// the lower-scale operand. Returns `(a_mantissa, b_mantissa, common_scale)`, or
@@ -1840,17 +2132,9 @@ pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> Option<(i128, i128, u8
     }
 }
 
-/// Promote an `Integer` to a `Decimal` with scale 0. `pub(crate)` so `ops.rs` can
-/// build the exact factor `value_mul`/`value_div` pass to the duration-scaling
-/// primitives (`temporal::multiply_duration`/`divide_duration`) without widening
-/// `Decimal::from_parts` beyond `pub(crate)`.
-pub(crate) fn integer_to_decimal(value: i128) -> Decimal {
-    Decimal::from_parts(value, 0)
-}
-
 /// `op:numeric-add` — the numeric-TIER `+` operator only. Follows the numeric
 /// promotion tower: `integer ⊂ decimal ⊂ float ⊂ double`. Integer addition is
-/// exact (`i128`); decimal addition is exact within the representable range;
+/// exact at every magnitude; decimal addition retains the exact coefficient and scale;
 /// float/double are IEEE: the sum correctly rounded once into binary32/binary64 on
 /// every target, the x87 included ([`crate::ieee`]). `numeric_sub`, `numeric_mul`
 /// and `numeric_div` hold the same law.
@@ -1861,8 +2145,7 @@ pub(crate) fn integer_to_decimal(value: i128) -> Decimal {
 /// call this function directly only where the operands are already known
 /// numeric.
 ///
-/// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
-/// operand is not numeric.
+/// Returns `Err(TypeMismatch)` if either operand is not numeric.
 ///
 /// # Examples
 ///
@@ -1883,12 +2166,15 @@ pub(crate) fn integer_to_decimal(value: i128) -> Decimal {
 /// # Ok::<(), purrdf_xsd::XsdError>(())
 /// ```
 pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
-    exact_fallback(numeric_add_bounded(a, b), a, b, exact_path::Op::Add)
+    if a.is_exact_numeric() && b.is_exact_numeric() {
+        return exact_path::binop(a, b, exact_path::Op::Add);
+    }
+    numeric_add_bounded(a, b)
 }
 
 /// [`numeric_add`] over the bounded variants only.
 fn numeric_add_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
-    use XsdValue::{Decimal as Dec, Double, Float, Integer};
+    use XsdValue::{Double, Float};
     match (a, b) {
         // Both double OR either double → f64
         (Double(_), _) | (_, Double(_)) => {
@@ -1911,28 +2197,10 @@ fn numeric_add_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError>
             Ok(Float(ieee::f32_add(x, y)))
         }
         // Either decimal (no float/double) → exact decimal
-        (Dec(x), Dec(y)) => decimal_add(x, y),
-        (Integer { value: x, .. }, Dec(y)) => decimal_add(&integer_to_decimal(*x), y),
-        (Dec(x), Integer { value: y, .. }) => decimal_add(x, &integer_to_decimal(*y)),
-        // Both integer → exact i128
-        (Integer { value: x, .. }, Integer { value: y, .. }) => {
-            int_binop(*x, *y, i128::checked_add)
-        }
         _ => Err(XsdError::TypeMismatch {
             reason: "non-numeric operand in add",
         }),
     }
-}
-
-fn decimal_add(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
-    let result = align_decimals(a, b)
-        .and_then(|(am, bm, scale)| am.checked_add(bm).map(|mantissa| (mantissa, scale)));
-    let (result, scale) = result.ok_or_else(|| XsdError::OutOfRange {
-        datatype: XsdDatatype::Decimal,
-        lexical: String::new(),
-        reason: "decimal addition overflow",
-    })?;
-    Ok(XsdValue::Decimal(Decimal::from_parts(result, scale)))
 }
 
 /// `op:numeric-subtract` — the numeric-TIER `-` operator only. Same promotion
@@ -1940,15 +2208,18 @@ fn decimal_add(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
 /// not this function, is the SPARQL-facing entry point for an `XsdValue` of
 /// unknown family.
 ///
-/// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
-/// operand is not numeric.
+/// Integer and decimal subtraction retain the exact result at every magnitude.
+/// Returns `Err(TypeMismatch)` if either operand is not numeric.
 pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
-    exact_fallback(numeric_sub_bounded(a, b), a, b, exact_path::Op::Sub)
+    if a.is_exact_numeric() && b.is_exact_numeric() {
+        return exact_path::binop(a, b, exact_path::Op::Sub);
+    }
+    numeric_sub_bounded(a, b)
 }
 
 /// [`numeric_sub`] over the bounded variants only.
 fn numeric_sub_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
-    use XsdValue::{Decimal as Dec, Double, Float, Integer};
+    use XsdValue::{Double, Float};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
             let x = num_f64(a).ok_or(XsdError::TypeMismatch {
@@ -1968,27 +2239,10 @@ fn numeric_sub_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError>
             })?;
             Ok(Float(ieee::f32_sub(x, y)))
         }
-        (Dec(x), Dec(y)) => decimal_sub(x, y),
-        (Integer { value: x, .. }, Dec(y)) => decimal_sub(&integer_to_decimal(*x), y),
-        (Dec(x), Integer { value: y, .. }) => decimal_sub(x, &integer_to_decimal(*y)),
-        (Integer { value: x, .. }, Integer { value: y, .. }) => {
-            int_binop(*x, *y, i128::checked_sub)
-        }
         _ => Err(XsdError::TypeMismatch {
             reason: "non-numeric operand in sub",
         }),
     }
-}
-
-fn decimal_sub(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
-    let result = align_decimals(a, b)
-        .and_then(|(am, bm, scale)| am.checked_sub(bm).map(|mantissa| (mantissa, scale)));
-    let (result, scale) = result.ok_or_else(|| XsdError::OutOfRange {
-        datatype: XsdDatatype::Decimal,
-        lexical: String::new(),
-        reason: "decimal subtraction overflow",
-    })?;
-    Ok(XsdValue::Decimal(Decimal::from_parts(result, scale)))
 }
 
 /// `op:numeric-multiply` — the numeric-TIER `*` operator only. Same promotion
@@ -1997,19 +2251,21 @@ fn decimal_sub(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
 /// unknown family (it also accepts `xsd:duration × xsd:integer|xsd:decimal`,
 /// which this function does not).
 ///
-/// Decimal multiplication: `new_mantissa = a.mantissa × b.mantissa`,
-/// `new_scale = a.scale + b.scale`. If `new_scale > MAX_DECIMAL_SCALE`, the result
-/// is rounded (truncated toward zero) to scale 18. Mantissa overflow → `OutOfRange`.
+/// Decimal multiplication multiplies the exact coefficients and adds their
+/// scales. It introduces no rounding or eighteen-place ceiling. A scale sum
+/// exceeding `u32::MAX` returns `XsdError::Exact(ExactError::ScaleOverflow)`.
 ///
-/// Returns `Err(OutOfRange)` on exact-type overflow, `Err(TypeMismatch)` if either
-/// operand is not numeric.
+/// Returns `Err(TypeMismatch)` if either operand is not numeric.
 pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
-    exact_fallback(numeric_mul_bounded(a, b), a, b, exact_path::Op::Mul)
+    if a.is_exact_numeric() && b.is_exact_numeric() {
+        return exact_path::binop(a, b, exact_path::Op::Mul);
+    }
+    numeric_mul_bounded(a, b)
 }
 
 /// [`numeric_mul`] over the bounded variants only.
 fn numeric_mul_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
-    use XsdValue::{Decimal as Dec, Double, Float, Integer};
+    use XsdValue::{Double, Float};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
             let x = num_f64(a).ok_or(XsdError::TypeMismatch {
@@ -2029,57 +2285,9 @@ fn numeric_mul_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError>
             })?;
             Ok(Float(ieee::f32_mul(x, y)))
         }
-        (Dec(x), Dec(y)) => decimal_mul(x, y),
-        (Integer { value: x, .. }, Dec(y)) => decimal_mul(&integer_to_decimal(*x), y),
-        (Dec(x), Integer { value: y, .. }) => decimal_mul(x, &integer_to_decimal(*y)),
-        (Integer { value: x, .. }, Integer { value: y, .. }) => {
-            int_binop(*x, *y, i128::checked_mul)
-        }
         _ => Err(XsdError::TypeMismatch {
             reason: "non-numeric operand in mul",
         }),
-    }
-}
-
-fn decimal_mul(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
-    // A product past eighteen fractional digits is exact only on the tower; the
-    // refusal sends it there (`exact_fallback`).
-    if u32::from(a.scale()) + u32::from(b.scale()) > u32::from(MAX_DECIMAL_SCALE) {
-        return Err(XsdError::OutOfRange {
-            datatype: XsdDatatype::Decimal,
-            lexical: String::new(),
-            reason: "decimal product scale exceeds 18",
-        });
-    }
-    decimal_mul_raw(a, b).map(XsdValue::Decimal)
-}
-
-/// The exact-decimal-multiplication math behind [`decimal_mul`], returning the raw
-/// `Decimal` rather than a wrapped `XsdValue`. Shared with `temporal.rs` (duration ×
-/// numeric, XPath F&O `op:multiply-yearMonthDuration`/`op:multiply-dayTimeDuration`).
-pub(crate) fn decimal_mul_raw(a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
-    let new_mantissa =
-        a.mantissa()
-            .checked_mul(b.mantissa())
-            .ok_or_else(|| XsdError::OutOfRange {
-                datatype: XsdDatatype::Decimal,
-                lexical: String::new(),
-                reason: "decimal multiplication overflow",
-            })?;
-    let raw_scale = u32::from(a.scale()) + u32::from(b.scale());
-    if raw_scale <= u32::from(MAX_DECIMAL_SCALE) {
-        Ok(Decimal::from_parts(new_mantissa, raw_scale as u8))
-    } else {
-        // Truncate toward zero to MAX_DECIMAL_SCALE fractional digits.
-        // SAFETY: excess ≤ 36 (max raw_scale is 36); 10^excess ≤ 10^36 < i128::MAX.
-        // But we cannot represent 10^36 in i128 (i128::MAX ≈ 1.70×10^38 > 10^36),
-        // however 10^38 > i128::MAX, so we need to be careful.
-        // excess ≤ raw_scale - 0 ≤ 18 + 18 = 36; 10^36 ≈ 1×10^36 < 1.70×10^38 = i128::MAX.
-        // So 10i128.pow(excess) does not overflow for excess ≤ 36.
-        let excess = raw_scale - u32::from(MAX_DECIMAL_SCALE);
-        let divisor = 10i128.pow(excess);
-        let truncated = new_mantissa / divisor;
-        Ok(Decimal::from_parts(truncated, MAX_DECIMAL_SCALE))
     }
 }
 
@@ -2123,12 +2331,10 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 /// ([`DivisionPolicy`]); `float`/`double` operands divide in IEEE arithmetic as
 /// before.
 ///
-/// Under [`DivisionPolicy::xsd_default`] — eighteen fractional digits, truncated
-/// toward zero — the quotient of two bounded operands is the bounded quotient
-/// whenever that holds the result at eighteen digits, and the same quotient
-/// computed on the tower otherwise; [`numeric_div`] is this function at that
-/// policy. Under any other policy every exact-branch quotient is computed on the
-/// tower.
+/// Under [`DivisionPolicy::xsd_default`] a terminating decimal quotient stays
+/// exact; a repeating quotient is rounded to eighteen fractional digits,
+/// half to even. Every exact-branch quotient uses the same tower operation,
+/// including inputs that fit the older bounded representation.
 ///
 /// # Errors
 ///
@@ -2155,24 +2361,16 @@ pub fn numeric_div_with_policy(
     b: &XsdValue,
     policy: DivisionPolicy,
 ) -> Result<XsdValue, XsdError> {
-    let exact_pair = a.is_exact_numeric() && b.is_exact_numeric();
-    if exact_pair && (policy != DivisionPolicy::xsd_default() || exact_path::involves_big(a, b)) {
+    if a.is_exact_numeric() && b.is_exact_numeric() {
         return exact_path::div(a, b, policy);
     }
-    match numeric_div_bounded(a, b) {
-        // The bounded quotient keeps eighteen digits only while its mantissa fits;
-        // a coarser one is recomputed exactly at the policy's eighteen digits.
-        Ok(XsdValue::Decimal(quotient)) if exact_pair && quotient.scale() != MAX_DECIMAL_SCALE => {
-            exact_path::div(a, b, policy)
-        }
-        Err(XsdError::OutOfRange { .. }) if exact_pair => exact_path::div(a, b, policy),
-        other => other,
-    }
+    numeric_div_ieee(a, b)
 }
 
-/// [`numeric_div`] over the bounded variants only.
-fn numeric_div_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
-    use XsdValue::{Decimal as Dec, Double, Float, Integer};
+/// The IEEE tiers of [`numeric_div`]. Exact pairs were dispatched to the tower
+/// before this function, so no bounded decimal quotient is reachable here.
+fn numeric_div_ieee(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
+    use XsdValue::{Double, Float};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
             let x = num_f64(a).ok_or(XsdError::TypeMismatch {
@@ -2192,133 +2390,18 @@ fn numeric_div_bounded(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError>
             })?;
             Ok(Float(ieee::f32_div(x, y)))
         }
-        // Integer ÷ Integer → Decimal (XPath op:numeric-divide spec rule)
-        (Integer { value: x, .. }, Integer { value: y, .. }) => {
-            if *y == 0 {
-                return Err(XsdError::DivisionByZero {
-                    datatype: XsdDatatype::Integer,
-                });
-            }
-            decimal_div(&integer_to_decimal(*x), &integer_to_decimal(*y))
-        }
-        (Dec(x), Dec(y)) => {
-            if y.is_zero() {
-                return Err(XsdError::DivisionByZero {
-                    datatype: XsdDatatype::Decimal,
-                });
-            }
-            decimal_div(x, y)
-        }
-        (Integer { value: x, .. }, Dec(y)) => {
-            if y.is_zero() {
-                return Err(XsdError::DivisionByZero {
-                    datatype: XsdDatatype::Decimal,
-                });
-            }
-            decimal_div(&integer_to_decimal(*x), y)
-        }
-        (Dec(x), Integer { value: y, .. }) => {
-            if *y == 0 {
-                return Err(XsdError::DivisionByZero {
-                    datatype: XsdDatatype::Decimal,
-                });
-            }
-            decimal_div(x, &integer_to_decimal(*y))
-        }
         _ => Err(XsdError::TypeMismatch {
             reason: "non-numeric operand in div",
         }),
     }
 }
 
-/// Exact decimal long division, producing up to `MAX_DECIMAL_SCALE` (18) fractional
-/// digits by truncation toward zero — the precision rule for `op:numeric-divide` on
-/// decimals, which XPath F&O 3.1 §4.2 (the arithmetic rules §4.2.4
-/// `op:numeric-divide` follows) leaves implementation-defined.
-///
-/// The quotient is `trunc(dividend × 10^S / divisor)` at the finest scale
-/// `S ≤ 18` whose mantissa fits the `i128` the value space holds: the exact quotient
-/// whenever it is representable (`10^21 / 2` is `5 × 10^20`, although its scale-18
-/// mantissa would not fit), otherwise the quotient truncated toward zero at that
-/// scale. The intermediate `dividend_m × 10^shift` is formed in 256 bits
-/// ([`crate::wide::mul_div`]), so it never overflows; only a quotient whose integer
-/// part exceeds `i128` is refused, with [`XsdError::OutOfRange`] (`err:FOAR0002`).
-fn decimal_div(dividend: &Decimal, divisor: &Decimal) -> Result<XsdValue, XsdError> {
-    decimal_div_raw(dividend, divisor).map(XsdValue::Decimal)
-}
-
-/// The exact-decimal-division math behind [`decimal_div`], returning the raw
-/// `Decimal` rather than a wrapped `XsdValue`. Shared with `temporal.rs` (duration ÷
-/// numeric and `dayTimeDuration` ÷ `dayTimeDuration`, XPath F&O
-/// `op:divide-dayTimeDuration`/`op:divide-dayTimeDuration-by-dayTimeDuration`).
-///
-/// Every current caller (in this module and in `temporal.rs`) already checks its own
-/// divisor and returns a datatype-specific `Err(DivisionByZero)` before ever reaching
-/// here, so this function's own zero check normally never fires. It is not, however,
-/// a `debug_assert!`: this is `pub(crate)` and reachable from more than one call
-/// site, so a caller added later that forgets its own check must still get a typed
-/// `Err`, in every build profile, rather than the `i128` division below panicking —
-/// on `wasm32-unknown-unknown` with `panic = "abort"` an integer-division panic tears
-/// down the whole module, not just the one call, so this is not merely a debug-time
-/// convenience. The datatype this reports is always [`XsdDatatype::Decimal`]
-/// (the type this raw function itself operates over) rather than whatever
-/// caller-specific datatype (`Integer`, `YearMonthDuration`, …) a pre-check would
-/// have reported — irrelevant in practice, since every real caller's own check
-/// already reports the right datatype and never lets a zero divisor reach here.
-pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<Decimal, XsdError> {
-    if divisor.is_zero() {
-        return Err(XsdError::DivisionByZero {
-            datatype: XsdDatatype::Decimal,
-        });
-    }
-    // dividend = dm × 10^-ds and divisor = vm × 10^-vs, so the quotient's mantissa at
-    // scale S is trunc(dm × 10^(S + vs - ds) / vm). The result is that mantissa at the
-    // finest scale S ≤ MAX_DECIMAL_SCALE whose mantissa fits the i128 the value space
-    // holds: the exact quotient whenever it is representable, else the quotient
-    // truncated toward zero at that scale (XPath F&O 3.1 §4.2, which §4.2.4 follows,
-    // leaves the precision of a decimal quotient implementation-defined; this crate
-    // truncates, as documented on `decimal_div`). Only a quotient whose integer part
-    // alone exceeds i128 is an overflow (`err:FOAR0002`).
-    let dm = dividend.mantissa();
-    let vm = divisor.mantissa();
-    let vs = i32::from(divisor.scale());
-    let ds = i32::from(dividend.scale());
-    let negative = (dm < 0) != (vm < 0);
-    let fits = |magnitude: u128| {
-        if negative {
-            0_i128.checked_sub_unsigned(magnitude)
-        } else {
-            i128::try_from(magnitude).ok()
-        }
-    };
-    let (numerator, denominator) = (dm.unsigned_abs(), vm.unsigned_abs());
-    for scale in (0..=MAX_DECIMAL_SCALE).rev() {
-        let shift = i32::from(scale) + vs - ds;
-        let magnitude = if shift >= 0 {
-            // shift ≤ 18 + 18 = 36, and 10^36 < 2^128.
-            crate::wide::mul_div(numerator, 10_u128.pow(shift.unsigned_abs()), denominator)
-        } else {
-            // ⌊⌊n / 10^k⌋ / d⌋ = ⌊n / (10^k · d)⌋ for positive integers; k ≤ 18.
-            Some(numerator / 10_u128.pow(shift.unsigned_abs()) / denominator)
-        };
-        if let Some(mantissa) = magnitude.and_then(fits) {
-            return Ok(Decimal::from_parts(mantissa, scale));
-        }
-    }
-    Err(XsdError::OutOfRange {
-        datatype: XsdDatatype::Decimal,
-        lexical: String::new(),
-        reason: "decimal quotient exceeds the i128 mantissa at every scale",
-    })
-}
-
 /// `dividend ÷ count` at eighteen fractional digits, truncated toward zero, as a
-/// bounded [`Decimal`] — `None` when that quotient's mantissa does not fit `i128`.
+/// bounded `Decimal` — `None` when that quotient's mantissa does not fit `i128`.
 ///
 /// A 3.0 helper, kept for its callers: the evaluator's `AVG` now divides through
 /// [`numeric_div_with_policy`] like `/`, which answers every quotient exactly at
-/// eighteen digits whatever its size (in [`XsdValue::BigDecimal`] past the bounded
-/// variant). `numeric_div_with_policy(&XsdValue::from_exact_integer(..), &count,
+/// eighteen digits whatever its size. `numeric_div_with_policy(&XsdValue::from_exact_integer(..), &count,
 /// DivisionPolicy::default())` is the same quotient with no `None` case.
 ///
 /// `count` must be nonzero; `AVG`'s one caller only reaches this with a folded
@@ -2328,7 +2411,8 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
 ///
 /// If `count == 0` — the caller's contract, not a runtime input.
 #[must_use]
-pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Option<XsdValue> {
+#[cfg(test)]
+fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Option<XsdValue> {
     assert!(
         count != 0,
         "AVG's divisor is a folded row count, never zero"
@@ -2338,17 +2422,15 @@ pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Optio
         .div_rem_u64(count)
         .expect("count != 0 was just asserted");
     let mantissa = quotient.to_i128()?;
-    Some(XsdValue::Decimal(Decimal::from_parts(
-        mantissa,
-        MAX_DECIMAL_SCALE,
+    Some(XsdValue::Decimal(crate::exact::Decimal::from_bounded(
+        &Decimal::from_parts(mantissa, MAX_DECIMAL_SCALE),
     )))
 }
 
 /// [`bigint_avg_decimal`]'s quotient as canonical `xsd:decimal` lexical text, at any
 /// size: the exact eighteen-digit quotient, truncated toward zero, rendered through
 /// [`crate::bigint::BigInt::to_decimal_lexical`]. The text always reads back
-/// through [`crate::parse`] as the same value — in [`XsdValue::BigDecimal`] when it
-/// needs more than the bounded variant — so it is a value of the decimal value
+/// through [`crate::parse`] as the same exact decimal value, so it is a value of the decimal value
 /// space, like every result of [`numeric_div_with_policy`], which computes the same
 /// quotient as a value.
 ///
@@ -2360,7 +2442,8 @@ pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Optio
 /// If `count == 0` — the caller's contract, not a runtime input (identical to
 /// [`bigint_avg_decimal`]).
 #[must_use]
-pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) -> String {
+#[cfg(test)]
+fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) -> String {
     assert!(
         count != 0,
         "AVG's divisor is a folded row count, never zero"
@@ -2380,47 +2463,21 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
 /// unknown family (it also accepts `xsd:duration`, a PurRDF extension this
 /// function does not implement).
 ///
-/// For integers, negation uses checked arithmetic; `i128::MIN` negated overflows →
-/// `Err(OutOfRange)`. For float/double, IEEE negation (−0.0 negates to +0.0 and
+/// Integer and decimal negation are exact, including the negation of values
+/// beyond `i128`. For float/double, IEEE negation (−0.0 negates to +0.0 and
 /// vice-versa; NaN negates to NaN with sign flipped per IEEE 754-2008 §6.3).
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_unary_minus(a: &XsdValue) -> Result<XsdValue, XsdError> {
-    match numeric_unary_minus_bounded(a) {
-        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
-            if a.is_exact_numeric() =>
-        {
-            Ok(exact_path::neg(a))
-        }
-        other => other,
+    if a.is_exact_numeric() {
+        return Ok(exact_path::neg(a));
     }
+    numeric_unary_minus_bounded(a)
 }
 
 /// [`numeric_unary_minus`] over the bounded variants only.
 fn numeric_unary_minus_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        XsdValue::Integer { value, datatype } => value
-            .checked_neg()
-            .map(integer_result)
-            .ok_or_else(|| XsdError::OutOfRange {
-                datatype: *datatype,
-                lexical: value.to_string(),
-                reason: "integer unary minus overflow (i128::MIN has no positive counterpart)",
-            }),
-        XsdValue::Decimal(d) => {
-            // Decimal negation negates the mantissa. A mantissa of i128::MIN (a
-            // decimal parse_decimal accepts) has no positive counterpart at its scale or
-            // any other — 2^127 / 10^s is never a multiple of a coarser decimal unit —
-            // so its negation is out of range (`err:FOAR0002`), not rounded.
-            d.mantissa()
-                .checked_neg()
-                .map(|m| XsdValue::Decimal(Decimal::from_parts(m, d.scale())))
-                .ok_or_else(|| XsdError::OutOfRange {
-                    datatype: XsdDatatype::Decimal,
-                    lexical: d.canonical_lexical(),
-                    reason: "decimal unary minus overflow (mantissa is i128::MIN)",
-                })
-        }
         XsdValue::Float(f) => Ok(XsdValue::Float(-f)),
         XsdValue::Double(d) => Ok(XsdValue::Double(-d)),
         _ => Err(XsdError::TypeMismatch {
@@ -2436,7 +2493,7 @@ fn numeric_unary_minus_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
 /// operand's subtype would mint a literal outside its own value space.
 const fn integer_result(value: i128) -> XsdValue {
     XsdValue::Integer {
-        value,
+        value: crate::exact::Integer::from_i128(value),
         datatype: XsdDatatype::Integer,
     }
 }
@@ -2450,9 +2507,7 @@ pub fn numeric_unary_plus(a: &XsdValue) -> Result<XsdValue, XsdError> {
         XsdValue::Integer { .. }
         | XsdValue::Decimal(_)
         | XsdValue::Float(_)
-        | XsdValue::Double(_)
-        | XsdValue::BigInteger { .. }
-        | XsdValue::BigDecimal(_) => Ok(a.clone()),
+        | XsdValue::Double(_) => Ok(a.clone()),
         _ => Err(XsdError::TypeMismatch {
             reason: "unary plus applied to non-numeric value",
         }),
@@ -2465,36 +2520,15 @@ pub fn numeric_unary_plus(a: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_abs(a: &XsdValue) -> Result<XsdValue, XsdError> {
-    match numeric_abs_bounded(a) {
-        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
-            if a.is_exact_numeric() =>
-        {
-            Ok(exact_path::abs(a))
-        }
-        other => other,
+    if a.is_exact_numeric() {
+        return Ok(exact_path::abs(a));
     }
+    numeric_abs_bounded(a)
 }
 
 /// [`numeric_abs`] over the bounded variants only.
 fn numeric_abs_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        XsdValue::Integer { value, datatype } => value
-            .checked_abs()
-            .map(integer_result)
-            .ok_or_else(|| XsdError::OutOfRange {
-                datatype: *datatype,
-                lexical: value.to_string(),
-                reason: "abs overflow (i128::MIN has no positive counterpart)",
-            }),
-        XsdValue::Decimal(d) => d
-            .mantissa()
-            .checked_abs()
-            .map(|m| XsdValue::Decimal(Decimal::from_parts(m, d.scale())))
-            .ok_or_else(|| XsdError::OutOfRange {
-                datatype: XsdDatatype::Decimal,
-                lexical: d.canonical_lexical(),
-                reason: "abs overflow (mantissa is i128::MIN)",
-            }),
         XsdValue::Float(f) => Ok(XsdValue::Float(f.abs())),
         XsdValue::Double(d) => Ok(XsdValue::Double(d.abs())),
         _ => Err(XsdError::TypeMismatch {
@@ -2509,39 +2543,18 @@ fn numeric_abs_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_ceil(a: &XsdValue) -> Result<XsdValue, XsdError> {
-    match numeric_ceil_bounded(a) {
-        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
-            if a.is_exact_numeric() =>
-        {
-            Ok(exact_path::round_to_integer(
-                a,
-                crate::exact::Rounding::Ceiling,
-            ))
-        }
-        other => other,
+    if a.is_exact_numeric() {
+        return Ok(exact_path::round_to_integer(
+            a,
+            crate::exact::Rounding::Ceiling,
+        ));
     }
+    numeric_ceil_bounded(a)
 }
 
 /// [`numeric_ceil`] over the bounded variants only.
 fn numeric_ceil_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        // Integer is already an integer; ceiling is identity.
-        XsdValue::Integer { value, .. } => Ok(integer_result(*value)),
-        XsdValue::Decimal(d) => {
-            // ceiling(n.frac) = whole_part + (if frac > 0 { 1 } else { 0 })
-            let whole = d.whole_part();
-            let frac_m = d.frac_part().mantissa();
-            let result = if frac_m > 0 {
-                whole.checked_add(1).ok_or_else(|| XsdError::OutOfRange {
-                    datatype: XsdDatatype::Decimal,
-                    lexical: d.canonical_lexical(),
-                    reason: "ceiling overflow",
-                })?
-            } else {
-                whole
-            };
-            Ok(XsdValue::Decimal(Decimal::from_parts(result, 0)))
-        }
         XsdValue::Float(f) => Ok(XsdValue::Float(f.ceil())),
         XsdValue::Double(d) => Ok(XsdValue::Double(d.ceil())),
         _ => Err(XsdError::TypeMismatch {
@@ -2556,39 +2569,18 @@ fn numeric_ceil_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_floor(a: &XsdValue) -> Result<XsdValue, XsdError> {
-    match numeric_floor_bounded(a) {
-        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
-            if a.is_exact_numeric() =>
-        {
-            Ok(exact_path::round_to_integer(
-                a,
-                crate::exact::Rounding::Floor,
-            ))
-        }
-        other => other,
+    if a.is_exact_numeric() {
+        return Ok(exact_path::round_to_integer(
+            a,
+            crate::exact::Rounding::Floor,
+        ));
     }
+    numeric_floor_bounded(a)
 }
 
 /// [`numeric_floor`] over the bounded variants only.
 fn numeric_floor_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        // Integer is already an integer; floor is identity.
-        XsdValue::Integer { value, .. } => Ok(integer_result(*value)),
-        XsdValue::Decimal(d) => {
-            // floor(n.frac) = whole_part - (if frac < 0 { 1 } else { 0 })
-            let whole = d.whole_part();
-            let frac_m = d.frac_part().mantissa();
-            let result = if frac_m < 0 {
-                whole.checked_sub(1).ok_or_else(|| XsdError::OutOfRange {
-                    datatype: XsdDatatype::Decimal,
-                    lexical: d.canonical_lexical(),
-                    reason: "floor overflow",
-                })?
-            } else {
-                whole
-            };
-            Ok(XsdValue::Decimal(Decimal::from_parts(result, 0)))
-        }
         XsdValue::Float(f) => Ok(XsdValue::Float(f.floor())),
         XsdValue::Double(d) => Ok(XsdValue::Double(d.floor())),
         _ => Err(XsdError::TypeMismatch {
@@ -2605,69 +2597,18 @@ fn numeric_floor_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// Returns `Err(TypeMismatch)` for non-numeric operands.
 pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
-    match numeric_round_bounded(a) {
-        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. })
-            if a.is_exact_numeric() =>
-        {
-            Ok(exact_path::round_to_integer(
-                a,
-                crate::exact::Rounding::HalfCeiling,
-            ))
-        }
-        other => other,
+    if a.is_exact_numeric() {
+        return Ok(exact_path::round_to_integer(
+            a,
+            crate::exact::Rounding::HalfCeiling,
+        ));
     }
+    numeric_round_bounded(a)
 }
 
 /// [`numeric_round`] over the bounded variants only.
 fn numeric_round_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
     match a {
-        // Integer is already integral; round is identity.
-        XsdValue::Integer { value, .. } => Ok(integer_result(*value)),
-        XsdValue::Decimal(d) => {
-            // XPath fn:round: half-values round toward +infinity.
-            // For positive: round-half-up. For negative: round-half toward zero (not
-            // away), so -2.5 rounds to -2, not -3.
-            //
-            // Algorithm: frac_m is the fractional mantissa (same sign as d.mantissa).
-            // scale is the number of fractional digits.
-            // half-threshold = 10^(scale-1) × 5, same sign as d.
-            let whole = d.whole_part();
-            let frac_m = d.frac_part().mantissa();
-            if d.scale() == 0 {
-                // Already integral (scale 0 means the value IS an integer).
-                return Ok(XsdValue::Decimal(Decimal::from_parts(whole, 0)));
-            }
-            let scale = u32::from(d.scale());
-            // threshold = 5 × 10^(scale-1). For scale 1 that is 5, scale 2 → 50, etc.
-            let threshold = 5i128 * 10i128.pow(scale - 1);
-            // `fn:round` is `floor(x + 0.5)` — round to nearest, ties toward +infinity.
-            // `whole` is truncated toward zero and `frac_m` carries the value's sign:
-            //
-            //   * frac_m >=  threshold  (frac >= +0.5): step up      → whole + 1
-            //         (positive half `1.5` → `2`; `2.5` → `3`).
-            //   * frac_m <  -threshold  (frac <  -0.5): step down     → whole - 1
-            //         (`-1.6` → `-2`: the nearest integer is one step MORE negative;
-            //          the previous code wrongly left this at `whole` = `-1`).
-            //   * otherwise (|frac| < 0.5, OR a negative half frac_m == -threshold):
-            //         stay at `whole` — a negative tie rounds toward +inf, so
-            //         `-2.5` → `-2` and `-1.5` → `-1`.
-            let result = if frac_m >= threshold {
-                whole.checked_add(1).ok_or_else(|| XsdError::OutOfRange {
-                    datatype: XsdDatatype::Decimal,
-                    lexical: d.canonical_lexical(),
-                    reason: "round overflow",
-                })?
-            } else if frac_m < -threshold {
-                whole.checked_sub(1).ok_or_else(|| XsdError::OutOfRange {
-                    datatype: XsdDatatype::Decimal,
-                    lexical: d.canonical_lexical(),
-                    reason: "round overflow",
-                })?
-            } else {
-                whole
-            };
-            Ok(XsdValue::Decimal(Decimal::from_parts(result, 0)))
-        }
         XsdValue::Float(f) => {
             // f32::round() is round-half-away-from-zero; XPath fn:round is
             // round-half-toward-+infinity. For positive they agree. For negative halves
@@ -2884,13 +2825,25 @@ mod tests {
         }
     }
 
+    fn parse_bounded_decimal(s: &str) -> Result<Decimal, XsdError> {
+        read_decimal(s).map_err(|error| error.owned(XsdDatatype::Decimal, s))
+    }
+
     fn dec(s: &str) -> Decimal {
-        parse_decimal(s).unwrap()
+        parse_bounded_decimal(s).unwrap()
+    }
+
+    fn dec_value(s: &str) -> XsdValue {
+        XsdValue::Decimal(crate::exact::Decimal::from_bounded(&dec(s)))
+    }
+
+    fn xsd_decimal(decimal: Decimal) -> XsdValue {
+        XsdValue::Decimal(crate::exact::Decimal::from_bounded(&decimal))
     }
 
     fn int_val(n: i128) -> XsdValue {
         XsdValue::Integer {
-            value: n,
+            value: crate::exact::Integer::from_i128(n),
             datatype: D::Integer,
         }
     }
@@ -2905,7 +2858,7 @@ mod tests {
     /// significant digit and answers consistently.
     #[test]
     fn the_promotion_cycle_at_nineteen_significant_digits_is_closed() {
-        let a = XsdValue::Decimal(dec("1.000000000000000001"));
+        let a = dec_value("1.000000000000000001");
         let b = int_val(1);
         let c = XsdValue::Double(1.0);
 
@@ -2939,7 +2892,7 @@ mod tests {
     /// be what decides it: `0.1f32` is a DIFFERENT rational from `0.1` the decimal.
     #[test]
     fn a_float_operand_is_compared_as_the_dyadic_rational_it_is() {
-        let tenth = XsdValue::Decimal(dec("0.1"));
+        let tenth = dec_value("0.1");
         let float_tenth = XsdValue::Float(0.1f32);
         let double_tenth = XsdValue::Double(0.1f64);
         // 0.1f32 = 13421773 / 2^27 > 1/10; 0.1f64 = 3602879701896397 / 2^55 > 1/10.
@@ -2957,7 +2910,7 @@ mod tests {
             Some(Ordering::Less)
         );
         // A dyadic decimal is EXACTLY its IEEE counterpart, in both widths.
-        let half = XsdValue::Decimal(dec("0.5"));
+        let half = dec_value("0.5");
         assert_eq!(
             numeric_total_cmp(&half, &XsdValue::Float(0.5f32)),
             Some(Ordering::Equal)
@@ -3001,7 +2954,7 @@ mod tests {
         ] {
             assert_eq!(numeric_total_cmp(&int_val(0), &zero), Some(Ordering::Equal));
             assert_eq!(
-                numeric_total_cmp(&XsdValue::Decimal(dec("0.000")), &zero),
+                numeric_total_cmp(&dec_value("0.000"), &zero),
                 Some(Ordering::Equal)
             );
         }
@@ -3018,9 +2971,9 @@ mod tests {
     /// the answer needs the exact cross-multiplication.
     #[test]
     fn magnitudes_outside_and_inside_the_aliasing_window_both_decide_exactly() {
-        let biggest = XsdValue::Decimal(Decimal::from_parts(i128::MAX, 0));
-        let smallest = XsdValue::Decimal(Decimal::from_parts(1, 18));
-        let most_negative = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 0));
+        let biggest = xsd_decimal(Decimal::from_parts(i128::MAX, 0));
+        let smallest = xsd_decimal(Decimal::from_parts(1, 18));
+        let most_negative = xsd_decimal(Decimal::from_parts(i128::MIN, 0));
 
         // Outside the window on the high side: 1e300 dwarfs any i128 mantissa.
         assert_eq!(
@@ -3054,8 +3007,7 @@ mod tests {
             "i128::MIN is exactly -2^127, which is exactly a double"
         );
         // A dyadic decimal at full scale still lands exactly on its double.
-        let five_tenths_at_scale_18 =
-            XsdValue::Decimal(Decimal::from_parts(500_000_000_000_000_000, 18));
+        let five_tenths_at_scale_18 = xsd_decimal(Decimal::from_parts(500_000_000_000_000_000, 18));
         assert_eq!(
             numeric_total_cmp(&five_tenths_at_scale_18, &XsdValue::Double(0.5)),
             Some(Ordering::Equal)
@@ -3070,7 +3022,7 @@ mod tests {
         // Non-negative IEEE exponent: `significand × 2^exp × 10^18` exceeds 2^128
         // whenever |ieee| is past ~3.4e20, while the exact side at scale 18 tops out
         // near 1.7e20.
-        let biggest_at_full_scale = XsdValue::Decimal(Decimal::from_parts(i128::MAX, 18));
+        let biggest_at_full_scale = xsd_decimal(Decimal::from_parts(i128::MAX, 18));
         assert_eq!(
             numeric_total_cmp(&biggest_at_full_scale, &XsdValue::Double(1e21)),
             Some(Ordering::Less)
@@ -3083,7 +3035,7 @@ mod tests {
         // Negative IEEE exponent: `mantissa × 2^-exp` exceeds 2^128 once the mantissa
         // is near the i128 ceiling and the double needs two or more fractional bits
         // (`0.5` alone would not — `(2^127 - 1) << 1` still fits `u128`).
-        let biggest = XsdValue::Decimal(Decimal::from_parts(i128::MAX, 0));
+        let biggest = xsd_decimal(Decimal::from_parts(i128::MAX, 0));
         assert_eq!(
             numeric_total_cmp(&biggest, &XsdValue::Double(0.25)),
             Some(Ordering::Greater)
@@ -3095,7 +3047,7 @@ mod tests {
         // And the near-tie, one ulp of the EXACT side at a magnitude where a
         // promotion through `f64` could not have resolved it at all: `2^126` is
         // exactly a double, and the two decimals either side of it are not.
-        let two_126 = XsdValue::Decimal(Decimal::from_parts(1i128 << 126, 0));
+        let two_126 = xsd_decimal(Decimal::from_parts(1i128 << 126, 0));
         assert_eq!(
             numeric_total_cmp(
                 &two_126,
@@ -3105,14 +3057,14 @@ mod tests {
         );
         assert_eq!(
             numeric_total_cmp(
-                &XsdValue::Decimal(Decimal::from_parts((1i128 << 126) - 1, 0)),
+                &xsd_decimal(Decimal::from_parts((1i128 << 126) - 1, 0)),
                 &XsdValue::Double(85_070_591_730_234_615_865_843_651_857_942_052_864.0)
             ),
             Some(Ordering::Less)
         );
         assert_eq!(
             numeric_total_cmp(
-                &XsdValue::Decimal(Decimal::from_parts((1i128 << 126) + 1, 0)),
+                &xsd_decimal(Decimal::from_parts((1i128 << 126) + 1, 0)),
                 &XsdValue::Double(85_070_591_730_234_615_865_843_651_857_942_052_864.0)
             ),
             Some(Ordering::Greater)
@@ -3127,29 +3079,29 @@ mod tests {
         let samples = vec![
             XsdValue::Double(f64::NEG_INFINITY),
             XsdValue::Float(f32::NEG_INFINITY),
-            XsdValue::Decimal(Decimal::from_parts(i128::MIN, 0)),
+            xsd_decimal(Decimal::from_parts(i128::MIN, 0)),
             int_val(-3),
-            XsdValue::Decimal(dec("-1.000000000000000001")),
+            dec_value("-1.000000000000000001"),
             XsdValue::Float(-1.0f32),
             int_val(-1),
             XsdValue::Double(-0.0),
             int_val(0),
-            XsdValue::Decimal(dec("0.000")),
+            dec_value("0.000"),
             XsdValue::Double(f64::from_bits(1)),
-            XsdValue::Decimal(Decimal::from_parts(1, 18)),
-            XsdValue::Decimal(dec("0.1")),
+            xsd_decimal(Decimal::from_parts(1, 18)),
+            dec_value("0.1"),
             XsdValue::Double(0.1f64),
             XsdValue::Float(0.1f32),
-            XsdValue::Decimal(dec("0.5")),
+            dec_value("0.5"),
             XsdValue::Float(0.5f32),
             int_val(1),
             XsdValue::Double(1.0),
             XsdValue::Float(1.0f32),
-            XsdValue::Decimal(dec("1.000000000000000001")),
+            dec_value("1.000000000000000001"),
             int_val((1i128 << 53) - 1),
             XsdValue::Double((1u64 << 53) as f64),
             int_val((1i128 << 53) + 1),
-            XsdValue::Decimal(Decimal::from_parts(i128::MAX, 0)),
+            xsd_decimal(Decimal::from_parts(i128::MAX, 0)),
             XsdValue::Double(1e300),
             XsdValue::Double(f64::INFINITY),
             XsdValue::Float(f32::INFINITY),
@@ -3196,7 +3148,7 @@ mod tests {
     /// silently change what SPARQL `<` and `=` mean.
     #[test]
     fn the_promotion_based_operator_relation_is_untouched() {
-        let a = XsdValue::Decimal(dec("1.000000000000000001"));
+        let a = dec_value("1.000000000000000001");
         let c = XsdValue::Double(1.0);
         assert!(
             numeric_eq(&a, &c),
@@ -3208,16 +3160,17 @@ mod tests {
 
     #[test]
     fn integer_parse_and_bounds() {
-        assert_eq!(parse_integer("42").unwrap(), 42);
-        assert_eq!(parse_integer("-7").unwrap(), -7);
-        assert_eq!(parse_integer("+7").unwrap(), 7);
-        assert_eq!(parse_integer("007").unwrap(), 7);
-        assert_eq!(parse_integer(&i128::MAX.to_string()).unwrap(), i128::MAX);
-        // i128::MAX + 1 overflows -> hard OutOfRange, not saturation.
-        assert!(matches!(
-            parse_integer("170141183460469231731687303715884105728"),
-            Err(XsdError::OutOfRange { .. })
-        ));
+        let small = |text| parse_integer(text).unwrap().as_i128();
+        assert_eq!(small("42"), Some(42));
+        assert_eq!(small("-7"), Some(-7));
+        assert_eq!(small("+7"), Some(7));
+        assert_eq!(small("007"), Some(7));
+        assert_eq!(small(&i128::MAX.to_string()), Some(i128::MAX));
+        // The public reader keeps the first value past i128 exactly.
+        let past = "170141183460469231731687303715884105728";
+        let parsed = parse_integer(past).unwrap();
+        assert_eq!(parsed.as_i128(), None);
+        assert_eq!(parsed.canonical_lexical(), past);
         assert!(parse_integer("1.0").is_err());
         assert!(parse_integer("").is_err());
         assert!(parse_integer("abc").is_err());
@@ -3225,48 +3178,55 @@ mod tests {
 
     #[test]
     fn parse_integer_typed_range_checks() {
+        let small = |text, datatype| parse_integer_typed(text, datatype).unwrap().as_i128();
         // xsd:byte: -128..127
-        assert_eq!(parse_integer_typed("127", D::Byte).unwrap(), 127);
-        assert_eq!(parse_integer_typed("-128", D::Byte).unwrap(), -128);
+        assert_eq!(small("127", D::Byte), Some(127));
+        assert_eq!(small("-128", D::Byte), Some(-128));
         assert!(parse_integer_typed("128", D::Byte).is_err());
         assert!(parse_integer_typed("-129", D::Byte).is_err());
 
         // xsd:unsignedByte: 0..255
-        assert_eq!(parse_integer_typed("255", D::UnsignedByte).unwrap(), 255);
-        assert_eq!(parse_integer_typed("0", D::UnsignedByte).unwrap(), 0);
+        assert_eq!(small("255", D::UnsignedByte), Some(255));
+        assert_eq!(small("0", D::UnsignedByte), Some(0));
         assert!(parse_integer_typed("256", D::UnsignedByte).is_err());
         assert!(parse_integer_typed("-1", D::UnsignedByte).is_err());
 
         // xsd:positiveInteger: >= 1
-        assert_eq!(parse_integer_typed("1", D::PositiveInteger).unwrap(), 1);
+        assert_eq!(small("1", D::PositiveInteger), Some(1));
         assert!(parse_integer_typed("0", D::PositiveInteger).is_err());
 
         // xsd:negativeInteger: <= -1
-        assert_eq!(parse_integer_typed("-1", D::NegativeInteger).unwrap(), -1);
+        assert_eq!(small("-1", D::NegativeInteger), Some(-1));
         assert!(parse_integer_typed("0", D::NegativeInteger).is_err());
 
         // xsd:nonNegativeInteger: >= 0
-        assert_eq!(parse_integer_typed("0", D::NonNegativeInteger).unwrap(), 0);
+        assert_eq!(small("0", D::NonNegativeInteger), Some(0));
         assert!(parse_integer_typed("-1", D::NonNegativeInteger).is_err());
 
         // xsd:nonPositiveInteger: <= 0
-        assert_eq!(parse_integer_typed("0", D::NonPositiveInteger).unwrap(), 0);
+        assert_eq!(small("0", D::NonPositiveInteger), Some(0));
         assert!(parse_integer_typed("1", D::NonPositiveInteger).is_err());
 
         // xsd:unsignedLong boundary: u64::MAX should pass; u64::MAX+1 should fail
         let u64max = u64::MAX.to_string();
-        assert_eq!(
-            parse_integer_typed(&u64max, D::UnsignedLong).unwrap(),
-            i128::from(u64::MAX)
-        );
+        assert_eq!(small(&u64max, D::UnsignedLong), Some(i128::from(u64::MAX)));
         assert!(parse_integer_typed("18446744073709551616", D::UnsignedLong).is_err());
 
         // xsd:int: 2147483647 ok, 2147483648 fails
-        assert_eq!(
-            parse_integer_typed("2147483647", D::Int).unwrap(),
-            2_147_483_647
-        );
+        assert_eq!(small("2147483647", D::Int), Some(2_147_483_647));
         assert!(parse_integer_typed("2147483648", D::Int).is_err());
+
+        let past = "170141183460469231731687303715884105728";
+        assert_eq!(
+            parse_integer_typed(past, D::NonNegativeInteger)
+                .unwrap()
+                .canonical_lexical(),
+            past
+        );
+        assert!(matches!(
+            parse_integer_typed(past, D::NegativeInteger),
+            Err(XsdError::OutOfRange { .. })
+        ));
     }
 
     #[test]
@@ -3489,7 +3449,7 @@ mod tests {
     #[test]
     fn numeric_promotion() {
         // "1"^^integer = "1.0"^^decimal
-        assert!(numeric_eq(&int_val(1), &XsdValue::Decimal(dec("1.0"))));
+        assert!(numeric_eq(&int_val(1), &dec_value("1.0")));
         // integer vs double
         assert_eq!(
             numeric_cmp(&int_val(2), &XsdValue::Double(2.5)),
@@ -3497,7 +3457,7 @@ mod tests {
         );
         // decimal vs float
         assert_eq!(
-            numeric_cmp(&XsdValue::Decimal(dec("1.5")), &XsdValue::Float(1.25)),
+            numeric_cmp(&dec_value("1.5"), &XsdValue::Float(1.25)),
             Some(Ordering::Greater)
         );
         // NaN is unordered and unequal.
@@ -3511,11 +3471,11 @@ mod tests {
 
         // Cross-subtype integer equality: xsd:int 5 == xsd:long 5.
         let int5 = XsdValue::Integer {
-            value: 5,
+            value: crate::exact::Integer::from_i128(5),
             datatype: D::Int,
         };
         let long5 = XsdValue::Integer {
-            value: 5,
+            value: crate::exact::Integer::from_i128(5),
             datatype: D::Long,
         };
         assert!(numeric_eq(&int5, &long5));
@@ -3525,7 +3485,7 @@ mod tests {
     // ── Arithmetic tests ─────────────────────────────────────────────────────
 
     fn dec_val(s: &str) -> XsdValue {
-        XsdValue::Decimal(parse_decimal(s).unwrap())
+        dec_value(s)
     }
 
     fn float_val(f: f32) -> XsdValue {
@@ -3539,7 +3499,7 @@ mod tests {
     /// Helper: extract the Decimal from an XsdValue::Decimal, panic otherwise.
     fn as_decimal(v: &XsdValue) -> Decimal {
         match v {
-            XsdValue::Decimal(d) => *d,
+            XsdValue::Decimal(d) => d.to_bounded().expect("bounded decimal test value"),
             other => panic!("expected Decimal, got {other:?}"),
         }
     }
@@ -3547,7 +3507,7 @@ mod tests {
     /// Helper: extract the i128 from an XsdValue::Integer, panic otherwise.
     fn as_integer(v: &XsdValue) -> i128 {
         match v {
-            XsdValue::Integer { value, .. } => *value,
+            XsdValue::Integer { value, .. } => value.as_i128().expect("bounded integer test value"),
             other => panic!("expected Integer, got {other:?}"),
         }
     }
@@ -3582,7 +3542,7 @@ mod tests {
         let max = int_val(i128::MAX);
         let one = int_val(1);
         let sum = numeric_add(&max, &one).expect("exact");
-        assert!(matches!(sum, XsdValue::BigInteger { .. }));
+        assert!(matches!(sum, XsdValue::Integer { ref value, .. } if value.as_i128().is_none()));
         assert_eq!(
             sum.canonical_lexical(),
             "170141183460469231731687303715884105728"
@@ -3713,7 +3673,7 @@ mod tests {
         // IEEE double: 0.1 + 0.2 ≠ 0.3; exact decimal: 0.1 + 0.2 == 0.3.
         let result = numeric_add(&dec_val("0.1"), &dec_val("0.2")).unwrap();
         let d = as_decimal(&result);
-        let expected = parse_decimal("0.3").unwrap();
+        let expected = parse_bounded_decimal("0.3").unwrap();
         assert_eq!(
             d.cmp_exact(&expected),
             Ordering::Equal,
@@ -3750,7 +3710,10 @@ mod tests {
             ),
         ] {
             let result = result.expect("exact");
-            assert!(matches!(result, XsdValue::BigDecimal(_)), "{result:?}");
+            assert!(
+                matches!(result, XsdValue::Decimal(ref value) if value.to_bounded().is_none()),
+                "{result:?}"
+            );
             assert_eq!(result.canonical_lexical(), expected);
         }
         let fits = dec_val("10000000000000000000");
@@ -3836,7 +3799,7 @@ mod tests {
             "expected Decimal, got {result:?}"
         );
         let d = as_decimal(&result);
-        let expected = parse_decimal("4.5").unwrap();
+        let expected = parse_bounded_decimal("4.5").unwrap();
         assert_eq!(
             d.cmp_exact(&expected),
             Ordering::Equal,
@@ -3884,55 +3847,6 @@ mod tests {
         let result = numeric_div(&double_val(0.0), &double_val(0.0)).unwrap();
         let d = as_double(&result);
         assert!(d.is_nan(), "0.0 / 0.0 must be NaN");
-    }
-
-    /// Regression coverage: `decimal_div_raw` must return `Err(DivisionByZero)` for a
-    /// zero divisor on its OWN, not merely rely on a caller's pre-check — this
-    /// calls it DIRECTLY (bypassing every one of `numeric_div`'s/`temporal.rs`'s own
-    /// zero checks) with a zero divisor, so this test only passes if the function's
-    /// own check fires. Deliberately not a `debug_assert!`-detecting test (this
-    /// crate does not build with debug assertions disabled in `cargo test`, so a
-    /// `#[should_panic]` on a `debug_assert!` would pass in either build profile);
-    /// instead it asserts the typed `Err` shape directly, which is what actually
-    /// matters: without this check, this exact call would panic on an integer division
-    /// by zero in a release build (where `debug_assert!` compiles out), which on
-    /// `wasm32-unknown-unknown` (`panic = "abort"`) tears down the whole module.
-    #[test]
-    fn decimal_div_raw_rejects_a_zero_divisor_without_a_callers_precheck() {
-        let zero = Decimal::from_parts(0, 0);
-        let five = dec("5.0");
-        assert!(matches!(
-            decimal_div_raw(&five, &zero),
-            Err(XsdError::DivisionByZero {
-                datatype: XsdDatatype::Decimal
-            })
-        ));
-    }
-
-    /// `decimal_div_raw` used to branch on `shift_exp < 0` and scale the
-    /// dividend DOWN (losing precision by plain truncating division) in that
-    /// arm — provably unreachable, since `shift_exp = MAX_DECIMAL_SCALE + vs -
-    /// ds` with both scales bounded by the crate-wide `scale <= 18` invariant
-    /// is always `>= 0`. That arm is gone; this pins the boundary case
-    /// CLOSEST to it — the maximum reachable dividend scale (`ds == 18`)
-    /// against a whole-number divisor (`vs == 0`), so `shift_exp == 0`
-    /// exactly, the `>= 0` branch's own zero edge — with the exact correct
-    /// quotient, proving the surviving code path handles it rather than
-    /// merely not panicking.
-    ///
-    /// The branch's deletion itself is pinned as a shell acceptance check,
-    /// not here: a source grep for the negated `shift_exp` token that the
-    /// dead arm used to scale the dividend down (`10i128.pow(negated as
-    /// u32)`) reports zero hits in this file, where it used to report two
-    /// (the dead arm's cast plus its comment) before this change.
-    #[test]
-    fn decimal_div_has_no_dead_truncating_branch() {
-        let dividend = dec("0.000000000000000001"); // scale 18 (MAX_DECIMAL_SCALE)
-        let divisor = dec("1"); // scale 0
-        let result = decimal_div_raw(&dividend, &divisor).unwrap();
-        assert_eq!(result.mantissa(), 1);
-        assert_eq!(result.scale(), MAX_DECIMAL_SCALE);
-        assert_eq!(result.canonical_lexical(), "0.000000000000000001");
     }
 
     // -- unary minus --
@@ -4170,7 +4084,7 @@ mod tests {
             "{witness} / 10^{scale}"
         );
         // The same bits through promotion into double arithmetic.
-        let sum = numeric_add(&XsdValue::Decimal(decimal), &double_val(0.0)).unwrap();
+        let sum = numeric_add(&xsd_decimal(decimal), &double_val(0.0)).unwrap();
         assert_eq!(as_double(&sum).to_bits(), expected.to_bits());
     }
     /// The closest 18-fractional-digit decimal to `value`, ties toward zero, read
@@ -4209,7 +4123,7 @@ mod tests {
         Some(decimal.canonical_lexical())
     }
 
-    /// The decimal quotient the division rule defines, from the exact rational
+    /// The former bounded decimal quotient, from the exact rational
     /// `dividend / divisor` with integer arithmetic only
     /// ([`purrdf_testkit::exact`]): truncated toward zero at the finest scale `S ≤ 18`
     /// whose mantissa fits an `i128`, as `(mantissa, S)`; `None` when none does.
@@ -4228,12 +4142,17 @@ mod tests {
         })
     }
 
-    /// Hold `numeric_div` on two decimals to the oracle: the same value, or the
-    /// typed overflow when no representable quotient exists.
+    /// Hold the explicit legacy `18:toward-zero` policy on two decimals to the
+    /// oracle. This preserves the original baseline independently of the new
+    /// exact-or-rounded default.
     fn assert_decimal_quotient(dividend: Decimal, divisor: Decimal) {
         use purrdf_testkit::exact::{Direction, Rational as Oracle};
-        let got = numeric_div(&XsdValue::Decimal(dividend), &XsdValue::Decimal(divisor))
-            .unwrap_or_else(|error| panic!("{dividend:?} / {divisor:?}: {error}"));
+        let got = numeric_div_with_policy(
+            &xsd_decimal(dividend),
+            &xsd_decimal(divisor),
+            DivisionPolicy::scale(18, crate::exact::Rounding::TowardZero),
+        )
+        .unwrap_or_else(|error| panic!("{dividend:?} / {divisor:?}: {error}"));
         // The quotient at eighteen digits, truncated — from the oracle, at any size.
         let exact = Oracle::from_decimal(dividend.mantissa(), u32::from(dividend.scale()))
             .div(&Oracle::from_decimal(
@@ -4253,14 +4172,17 @@ mod tests {
                 panic!("{dividend:?} / {divisor:?}: {got:?}, expected bounded {mantissa}e-18");
             };
             assert_eq!(
-                quotient.cmp_exact(&Decimal::from_parts(mantissa, 18)),
+                quotient
+                    .to_bounded()
+                    .expect("bounded quotient test case")
+                    .cmp_exact(&Decimal::from_parts(mantissa, 18)),
                 Ordering::Equal
             );
         }
     }
 
     #[test]
-    fn decimal_division_matches_the_exact_oracle() {
+    fn explicit_legacy_decimal_division_matches_the_exact_oracle() {
         let mut state = 0xD1F1_DE5A_u64;
         let mut next = || purrdf_testkit::rng::splitmix64_next(&mut state);
         let int = |next: &mut dyn FnMut() -> u64| {
@@ -4340,7 +4262,7 @@ mod tests {
 
     #[test]
     fn decimal_negation_and_abs_of_the_smallest_mantissa_are_exact() {
-        let min = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 0));
+        let min = xsd_decimal(Decimal::from_parts(i128::MIN, 0));
         let two_pow_127 = "170141183460469231731687303715884105728";
         assert_eq!(
             numeric_unary_minus(&min)
@@ -4352,27 +4274,27 @@ mod tests {
             numeric_abs(&min).expect("exact").canonical_lexical(),
             two_pow_127
         );
-        let scaled = XsdValue::Decimal(Decimal::from_parts(i128::MIN, 18));
+        let scaled = xsd_decimal(Decimal::from_parts(i128::MIN, 18));
         assert_eq!(
             numeric_abs(&scaled).expect("exact").canonical_lexical(),
             "170141183460469231731.687303715884105728"
         );
         // One above it negates and takes its absolute value.
-        let next = XsdValue::Decimal(Decimal::from_parts(i128::MIN + 1, 0));
+        let next = xsd_decimal(Decimal::from_parts(i128::MIN + 1, 0));
         let Ok(XsdValue::Decimal(abs)) = numeric_abs(&next) else {
             panic!("abs of i128::MIN + 1");
         };
-        assert_eq!(abs.mantissa(), i128::MAX);
+        assert_eq!(abs.unscaled().as_i128(), Some(i128::MAX));
         let Ok(XsdValue::Decimal(negated)) = numeric_unary_minus(&next) else {
             panic!("negation of i128::MIN + 1");
         };
-        assert_eq!(negated.mantissa(), i128::MAX);
+        assert_eq!(negated.unscaled().as_i128(), Some(i128::MAX));
     }
 
     #[test]
     fn decimal_mantissa_spans_the_whole_i128_range() {
         let min = i128::MIN.to_string();
-        let parsed = parse_decimal(&min).expect("i128::MIN is a decimal");
+        let parsed = parse_bounded_decimal(&min).expect("i128::MIN is a decimal");
         assert_eq!(parsed.mantissa(), i128::MIN);
         assert_eq!(parsed.canonical_lexical(), min);
         assert_eq!(
@@ -4380,10 +4302,11 @@ mod tests {
             min,
             "the canonical lexical of the cast reads back"
         );
-        let scaled = parse_decimal("-170141183460469231731.687303715884105728").expect("scaled");
+        let scaled =
+            parse_bounded_decimal("-170141183460469231731.687303715884105728").expect("scaled");
         assert_eq!((scaled.mantissa(), scaled.scale()), (i128::MIN, 18));
         assert_eq!(
-            parse_decimal(&i128::MAX.to_string())
+            parse_bounded_decimal(&i128::MAX.to_string())
                 .expect("max")
                 .mantissa(),
             i128::MAX
@@ -4395,7 +4318,10 @@ mod tests {
             "-170141183460469231731.687303715884105729",
         ] {
             assert!(
-                matches!(parse_decimal(beyond), Err(XsdError::OutOfRange { .. })),
+                matches!(
+                    parse_bounded_decimal(beyond),
+                    Err(XsdError::OutOfRange { .. })
+                ),
                 "{beyond}"
             );
         }

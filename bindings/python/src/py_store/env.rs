@@ -51,9 +51,10 @@ pub(crate) fn extension_env(
 }
 
 /// The precision policy a call's `division` keyword names: the one text form every
-/// surface reads (`exact`, `N` or `N:ROUNDING`), parsed by [`DivisionPolicy`]'s own
-/// `FromStr`. An absent keyword is [`DivisionPolicy::xsd_default`] — eighteen
-/// fractional digits truncated toward zero — exactly as before the keyword existed.
+/// surface reads (`exact`, `N`, `N:ROUNDING` or `exact-or-N[:ROUNDING]`), parsed by
+/// [`DivisionPolicy`]'s own `FromStr`. An absent keyword is
+/// [`DivisionPolicy::xsd_default`]: exact when terminating, otherwise rounded to
+/// eighteen fractional digits, half to even.
 ///
 /// # Errors
 ///

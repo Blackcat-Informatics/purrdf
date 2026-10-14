@@ -208,8 +208,7 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
                 )?
                 .ok_or_else(invalid)?;
                 let integer = match &*value {
-                    purrdf_xsd::XsdValue::Integer { value, .. } => Some(*value),
-                    purrdf_xsd::XsdValue::BigInteger { value, .. } => value.as_i128(),
+                    purrdf_xsd::XsdValue::Integer { value, .. } => value.as_i128(),
                     _ => None,
                 };
                 integer

@@ -812,13 +812,13 @@ pub(crate) struct QueryOptions<'a> {
     /// before this flag existed.
     pub(crate) xpath_regex: Option<Profile>,
     /// `--division`: the precision an `xsd:integer`/`xsd:decimal` quotient is formed
-    /// at, for `/` and `AVG` alike. The default is eighteen fractional digits,
-    /// truncated toward zero.
+    /// at, for `/` and `AVG` alike. The default is exact for terminating quotients,
+    /// otherwise eighteen fractional digits rounded half to even.
     pub(crate) division: DivisionPolicy,
 }
 
 /// Parse `--division`: `exact`, `N` (fractional digits, truncated toward zero) or
-/// `N:ROUNDING`.
+/// `N:ROUNDING`, or `exact-or-N[:ROUNDING]`.
 pub(crate) fn parse_division(text: &str) -> Result<DivisionPolicy, String> {
     text.parse::<DivisionPolicy>()
         .map_err(|error| error.to_string())

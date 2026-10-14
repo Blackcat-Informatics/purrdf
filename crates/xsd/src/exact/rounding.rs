@@ -75,11 +75,20 @@ impl Rounding {
 ///
 /// XPath F&O 3.1 §4.2 leaves the precision of a decimal quotient
 /// implementation-defined; this is where the implementation lets its caller
-/// define it. The default, [`DivisionPolicy::xsd_default`], is eighteen
-/// fractional digits truncated toward zero: exactly the quotient the bounded
-/// [`crate::numeric::Decimal`] produces wherever its `i128` mantissa holds the
-/// result. A reasoner that needs the exact value of a non-terminating quotient
-/// divides [`crate::exact::Rational`]s instead.
+/// define it. The default, [`DivisionPolicy::xsd_default`], is
+/// [`DivisionPolicy::ExactOrScale`] at eighteen digits rounded half to even: the
+/// exact quotient whenever its decimal expansion terminates (`1 / 8` is `0.125`,
+/// `1 / 1024` is `0.0009765625`, `i128::MAX / 2` keeps its `.5`), and otherwise
+/// eighteen fractional digits rounded to the nearest, ties to even (`2 / 3` is
+/// `0.666666666666666667`). A quotient whose expansion does not terminate is never
+/// exactly halfway between two eighteen-digit neighbours, so under the default a
+/// tie cannot arise; it can under [`DivisionPolicy::Scale`]. A reasoner that needs
+/// the exact value of a non-terminating quotient divides
+/// [`crate::exact::Rational`]s instead.
+///
+/// Every surface reads and writes one text form ([`std::str::FromStr`],
+/// [`std::fmt::Display`]): `exact`, `N`, `N:ROUNDING`, `exact-or-N` and
+/// `exact-or-N:ROUNDING`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DivisionPolicy {
@@ -98,19 +107,31 @@ pub enum DivisionPolicy {
     /// in the reduced divisor, which [`crate::exact::Decimal::div_cost`] charges
     /// for.
     Exact,
+    /// [`Self::Exact`] when the quotient terminates — when the divisor, reduced
+    /// against the dividend, has no prime factor other than 2 and 5 — and
+    /// [`Self::Scale`] at `scale` digits in direction `rounding` when it does not.
+    /// The exact expansion's length is bounded as for [`Self::Exact`], and
+    /// [`crate::exact::Decimal::div_cost`] charges for both branches.
+    ExactOrScale {
+        /// Fractional digits kept when the quotient does not terminate.
+        scale: u32,
+        /// How the excess of a non-terminating quotient is rounded away.
+        rounding: Rounding,
+    },
 }
 
 impl DivisionPolicy {
-    /// The scale of [`Self::xsd_default`]: eighteen fractional digits, the bounded
-    /// bounded decimal's maximum scale.
+    /// The scale of [`Self::xsd_default`]: eighteen fractional digits.
     pub const DEFAULT_SCALE: u32 = 18;
 
-    /// Eighteen fractional digits, truncated toward zero — see the type docs.
+    /// The exact quotient when it terminates, otherwise eighteen fractional digits
+    /// rounded half to even — see the type docs. Its text form is
+    /// `exact-or-18:half-even`.
     #[must_use]
     pub const fn xsd_default() -> Self {
-        Self::Scale {
+        Self::ExactOrScale {
             scale: Self::DEFAULT_SCALE,
-            rounding: Rounding::TowardZero,
+            rounding: Rounding::HalfEven,
         }
     }
 
@@ -118,6 +139,13 @@ impl DivisionPolicy {
     #[must_use]
     pub const fn scale(scale: u32, rounding: Rounding) -> Self {
         Self::Scale { scale, rounding }
+    }
+
+    /// Exact when the quotient terminates, otherwise `scale` fractional digits
+    /// rounded in direction `rounding`.
+    #[must_use]
+    pub const fn exact_or_scale(scale: u32, rounding: Rounding) -> Self {
+        Self::ExactOrScale { scale, rounding }
     }
 }
 
@@ -165,8 +193,8 @@ impl std::fmt::Display for DivisionPolicyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "expected a division policy `exact`, `N` or `N:ROUNDING` with N a digit count and \
-             ROUNDING one of {}, got {:?}",
+            "expected a division policy `exact`, `N`, `N:ROUNDING`, `exact-or-N` or \
+             `exact-or-N:ROUNDING` with N a digit count and ROUNDING one of {}, got {:?}",
             Rounding::ALL.map(Rounding::label).join(", "),
             self.text
         )
@@ -180,17 +208,22 @@ impl std::str::FromStr for DivisionPolicy {
 
     /// The policy's one text form, shared by every surface that takes it (the
     /// command line, the C, WebAssembly and Python bindings): `exact`; `N`, `N`
-    /// fractional digits truncated toward zero; or `N:ROUNDING`, rounded in the named
-    /// direction ([`Rounding::label`]).
+    /// fractional digits truncated toward zero; `N:ROUNDING`, rounded in the named
+    /// direction ([`Rounding::label`]); and `exact-or-N` / `exact-or-N:ROUNDING`, the
+    /// exact quotient when it terminates and otherwise `N` digits rounded as `N` /
+    /// `N:ROUNDING` would. A missing `ROUNDING` is `toward-zero` in both forms.
     ///
     /// ```rust
     /// use purrdf_xsd::exact::{DivisionPolicy, Rounding};
     ///
     /// assert_eq!("exact".parse(), Ok(DivisionPolicy::Exact));
-    /// assert_eq!("18".parse(), Ok(DivisionPolicy::xsd_default()));
+    /// assert_eq!("18".parse(), Ok(DivisionPolicy::scale(18, Rounding::TowardZero)));
     /// assert_eq!("5:half-even".parse(), Ok(DivisionPolicy::scale(5, Rounding::HalfEven)));
+    /// assert_eq!("exact-or-18:half-even".parse(), Ok(DivisionPolicy::xsd_default()));
     /// assert!("5:sideways".parse::<DivisionPolicy>().is_err());
+    /// assert!("exact-or-".parse::<DivisionPolicy>().is_err());
     /// assert_eq!(DivisionPolicy::scale(5, Rounding::HalfEven).to_string(), "5:half-even");
+    /// assert_eq!(DivisionPolicy::xsd_default().to_string(), "exact-or-18:half-even");
     /// ```
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         let refuse = || DivisionPolicyError {
@@ -199,7 +232,10 @@ impl std::str::FromStr for DivisionPolicy {
         if text == "exact" {
             return Ok(Self::Exact);
         }
-        let (digits, rounding) = text.split_once(':').unwrap_or((text, "toward-zero"));
+        let (exact_first, rest) = text
+            .strip_prefix("exact-or-")
+            .map_or((false, text), |rest| (true, rest));
+        let (digits, rounding) = rest.split_once(':').unwrap_or((rest, "toward-zero"));
         if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
             return Err(refuse());
         }
@@ -208,16 +244,24 @@ impl std::str::FromStr for DivisionPolicy {
             .into_iter()
             .find(|candidate| candidate.label() == rounding)
             .ok_or_else(refuse)?;
-        Ok(Self::scale(scale, rounding))
+        Ok(if exact_first {
+            Self::exact_or_scale(scale, rounding)
+        } else {
+            Self::scale(scale, rounding)
+        })
     }
 }
 
 impl std::fmt::Display for DivisionPolicy {
-    /// The text form [`std::str::FromStr`] reads: `exact`, or `N:ROUNDING`.
+    /// The text form [`std::str::FromStr`] reads: `exact`, `N:ROUNDING` or
+    /// `exact-or-N:ROUNDING`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Exact => f.write_str("exact"),
             Self::Scale { scale, rounding } => write!(f, "{scale}:{}", rounding.label()),
+            Self::ExactOrScale { scale, rounding } => {
+                write!(f, "exact-or-{scale}:{}", rounding.label())
+            }
         }
     }
 }

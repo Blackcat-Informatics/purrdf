@@ -757,14 +757,16 @@ pub(crate) fn sort_keys_numeric_cost_admitted<
     workspace: &crate::WorkspaceCapability,
 ) -> Result<purrdf_xsd::exact::Cost, EvalError> {
     let mut total = purrdf_xsd::exact::Cost::ZERO;
-    // Only a number past the machine words aligns at any cost; a sort without one
-    // pays this scan of the variants and nothing else.
+    // Only a number past the bounded representation aligns at any cost.
     let any_big = (*keys).clone().any(|key| {
         if let SortKey::Literal(literal) = key {
-            matches!(
-                literal.value.as_ref().map(std::borrow::Borrow::borrow),
-                Some(XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_))
-            )
+            match literal.value.as_ref().map(std::borrow::Borrow::borrow) {
+                Some(XsdValue::Integer { value, .. }) => value.as_i128().is_none(),
+                Some(XsdValue::Decimal(value)) => {
+                    value.scale() > 18 || value.unscaled().as_i128().is_none()
+                }
+                _ => false,
+            }
         } else {
             false
         }
@@ -1483,9 +1485,7 @@ impl ValueClass {
             XsdValue::Integer { .. }
             | XsdValue::Decimal(_)
             | XsdValue::Float(_)
-            | XsdValue::Double(_)
-            | XsdValue::BigInteger { .. }
-            | XsdValue::BigDecimal(_) => Self::Numeric,
+            | XsdValue::Double(_) => Self::Numeric,
             XsdValue::String(_) => Self::Text,
             XsdValue::DateTime(_)
             | XsdValue::Date(_)
@@ -3667,8 +3667,7 @@ pub(crate) fn aggregate_numeric_cost(
     // which the tower adds in five limbs — a constant per row that the row's own
     // aggregate-accumulation charge already covers.
     let machine_words = survivors.iter().all(crate::expr::machine_word_lexical);
-    let tower_mean =
-        matches!(function, AggregateFunction::Avg) && division != DivisionPolicy::xsd_default();
+    let tower_mean = matches!(function, AggregateFunction::Avg);
     if machine_words && !tower_mean {
         return purrdf_xsd::exact::Cost::ZERO;
     }
@@ -3679,7 +3678,7 @@ pub(crate) fn aggregate_numeric_cost(
             let Some(total) = total else {
                 return chain;
             };
-            if total.is_bounded() && division == DivisionPolicy::xsd_default() {
+            if total.is_bounded() && matches!(function, AggregateFunction::Sum) {
                 return chain;
             }
             chain.then(aggregate_numeric_tail_cost::<false>(
@@ -3706,14 +3705,14 @@ fn aggregate_numeric_tail_cost<const CHECK_FAST_PATH: bool>(
     division: DivisionPolicy,
 ) -> purrdf_xsd::exact::Cost {
     use purrdf_xsd::exact::{Cost, cost::Shape};
-    if CHECK_FAST_PATH && total.is_bounded() && division == DivisionPolicy::xsd_default() {
+    if CHECK_FAST_PATH && total.is_bounded() && matches!(function, AggregateFunction::Sum) {
         return Cost::ZERO;
     }
     if matches!(function, AggregateFunction::Sum) {
         return total.render_cost();
     }
     let count = Shape::of_value(&XsdValue::Integer {
-        value: i128::from(count),
+        value: purrdf_xsd::exact::Integer::from_i128(i128::from(count)),
         datatype: XsdDatatype::Integer,
     })
     .expect("an integer has a shape");
@@ -4050,6 +4049,31 @@ pub(crate) fn numeric_fold_binary(
     frame.finish_value(computed)
 }
 
+fn duration_from_parsed_seconds(
+    months: i64,
+    seconds: &purrdf_xsd::exact::Decimal,
+    datatype: XsdDatatype,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<ParsedValue>, EvalError> {
+    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+    let duration = purrdf_xsd::temporal::duration_from_seconds_admitted(
+        months,
+        seconds,
+        datatype,
+        &mut |layout| frame.admit(layout),
+    );
+    let duration = match duration {
+        Ok(duration) => duration,
+        Err(purrdf_xsd::XsdError::Storage(error)) => {
+            return frame.finish_scalar::<()>(Err(error)).map(|()| None);
+        }
+        Err(_) => return Ok(None),
+    };
+    frame
+        .finish_value(Ok(XsdValue::Duration(duration)))
+        .map(Result::ok)
+}
+
 impl NumericFold {
     /// Fold an already-owned native value. A semantic refusal leaves the state
     /// unchanged; the caller records poisoning. Physical admission/allocation
@@ -4066,9 +4090,7 @@ impl NumericFold {
         match self {
             Self::Empty => {
                 *self = match &*xv {
-                    XsdValue::Integer { .. } | XsdValue::BigInteger { .. } => {
-                        Self::Int { sum: xv, count: 1 }
-                    }
+                    XsdValue::Integer { .. } => Self::Int { sum: xv, count: 1 },
                     XsdValue::Duration(dur) => Self::Dur {
                         months: i128::from(dur.months()),
                         seconds: ParsedValue::from_admitted(
@@ -4092,7 +4114,7 @@ impl NumericFold {
                 else {
                     return Ok(false);
                 };
-                if matches!(&*xv, XsdValue::Integer { .. } | XsdValue::BigInteger { .. }) {
+                if matches!(&*xv, XsdValue::Integer { .. }) {
                     *sum = result;
                     *count = next_count;
                 } else {
@@ -4152,11 +4174,14 @@ impl NumericFold {
     }
 
     /// SUM(empty) = integer zero. Duration validation occurs only here.
-    fn sum_value(self) -> Result<Option<ParsedValue>, EvalError> {
+    fn sum_value(
+        self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<ParsedValue>, EvalError> {
         match self {
             Self::Empty => ParsedValue::from_admitted(
                 XsdValue::Integer {
-                    value: 0,
+                    value: purrdf_xsd::exact::Integer::ZERO,
                     datatype: XsdDatatype::Integer,
                 },
                 None,
@@ -4176,11 +4201,7 @@ impl NumericFold {
                 let XsdValue::Decimal(seconds) = &*seconds else {
                     return Ok(None);
                 };
-                let Ok(duration) = purrdf_xsd::temporal::Duration::new(months, *seconds, datatype)
-                else {
-                    return Ok(None);
-                };
-                ParsedValue::from_admitted(XsdValue::Duration(duration), None, 0).map(Some)
+                duration_from_parsed_seconds(months, seconds, datatype, workspace)
             }
         }
     }
@@ -4196,10 +4217,10 @@ impl NumericFold {
     ) -> Result<Option<ParsedValue>, EvalError> {
         use purrdf_xsd::numeric::NumericBinaryOperator::Divide;
         match self {
-            Self::Empty => Self::Empty.sum_value(),
+            Self::Empty => Self::Empty.sum_value(workspace),
             Self::Int { sum, count } | Self::Ok { acc: sum, count } => {
                 let count = XsdValue::Integer {
-                    value: i128::from(count),
+                    value: purrdf_xsd::exact::Integer::from_i128(i128::from(count)),
                     datatype: XsdDatatype::Integer,
                 };
                 match numeric_fold_binary(&sum, &count, Divide, division, workspace)? {
@@ -4223,7 +4244,7 @@ impl NumericFold {
                     return Ok(None);
                 };
                 let count = XsdValue::Integer {
-                    value: divisor,
+                    value: purrdf_xsd::exact::Integer::from_i128(divisor),
                     datatype: XsdDatatype::Integer,
                 };
                 let Ok(mean) = numeric_fold_binary(
@@ -4239,11 +4260,7 @@ impl NumericFold {
                 let XsdValue::Decimal(seconds) = &*mean else {
                     return Ok(None);
                 };
-                let Ok(duration) = purrdf_xsd::temporal::Duration::new(months, *seconds, datatype)
-                else {
-                    return Ok(None);
-                };
-                ParsedValue::from_admitted(XsdValue::Duration(duration), None, 0).map(Some)
+                duration_from_parsed_seconds(months, seconds, datatype, workspace)
             }
         }
     }
@@ -4253,8 +4270,10 @@ impl NumericFold {
         self,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
-        self.sum_value()?
-            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+        self.sum_value(workspace)?
+            .map(|value| {
+                crate::expr::xsd_workspace_value(&value, workspace, value.datatype().iri())
+            })
             .transpose()
     }
 
@@ -4265,7 +4284,9 @@ impl NumericFold {
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         self.avg_value(division, absorb, workspace)?
-            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .map(|value| {
+                crate::expr::xsd_workspace_value(&value, workspace, value.datatype().iri())
+            })
             .transpose()
     }
 
@@ -4619,14 +4640,39 @@ impl MagnitudeBound {
     /// fold stops before those).
     fn add(&mut self, xv: &XsdValue) {
         match xv {
-            XsdValue::Integer { value, .. } => self.add_parts(value.unsigned_abs(), 0),
-            XsdValue::Decimal(d) => self.add_parts(d.mantissa().unsigned_abs(), d.scale()),
-            XsdValue::Duration(dur) => {
-                let seconds = dur.seconds();
-                self.add_parts(seconds.mantissa().unsigned_abs(), seconds.scale());
+            XsdValue::Integer { value, .. } => {
+                if let Some(value) = value.as_i128() {
+                    self.add_parts(value.unsigned_abs(), 0);
+                } else {
+                    self.magnitude = u128::MAX;
+                }
             }
-            // Past machine words: nothing is proven small, so the rows replay.
-            XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => self.magnitude = u128::MAX,
+            XsdValue::Decimal(d) => {
+                if let (Some(value), Ok(scale)) = (d.unscaled().as_i128(), u8::try_from(d.scale()))
+                {
+                    if scale <= 18 {
+                        self.add_parts(value.unsigned_abs(), scale);
+                    } else {
+                        self.magnitude = u128::MAX;
+                    }
+                } else {
+                    self.magnitude = u128::MAX;
+                }
+            }
+            XsdValue::Duration(dur) => {
+                let seconds = dur.seconds_ref();
+                if let (Some(value), Ok(scale)) =
+                    (seconds.unscaled().as_i128(), u8::try_from(seconds.scale()))
+                {
+                    if scale <= 18 {
+                        self.add_parts(value.unsigned_abs(), scale);
+                    } else {
+                        self.magnitude = u128::MAX;
+                    }
+                } else {
+                    self.magnitude = u128::MAX;
+                }
+            }
             _ => {}
         }
     }
@@ -6544,11 +6590,11 @@ mod tests {
             numeric_fold_dataset(&[("a", &max, XINT), ("b", "1", XINT), ("c", &neg_max, XINT)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
         let one = XsdValue::Integer {
-            value: 1,
+            value: purrdf_xsd::exact::Integer::ONE,
             datatype: XsdDatatype::Integer,
         };
         let three = XsdValue::Integer {
-            value: 3,
+            value: purrdf_xsd::exact::Integer::from_i128(3),
             datatype: XsdDatatype::Integer,
         };
         let expected = numeric_div(&one, &three).expect("1/3").canonical_lexical();
@@ -6572,19 +6618,14 @@ mod tests {
         );
     }
 
-    /// `AVG` over a total that genuinely exceeds `i128`, where the scale-18
-    /// quotient mantissa ALSO exceeds `i128` (`bigint_avg_decimal` alone would
-    /// answer `None` here — see `purrdf_xsd::numeric`'s doc on it): must still
-    /// answer exactly rather than go unbound.
+    /// `AVG` over a total that exceeds `i128` must answer through the exact
+    /// numeric division home rather than go unbound.
     /// `AVG({i128::MAX, i128::MAX})` = `i128::MAX` exactly (the two `i128::MAX`
-    /// values sum to `2 × i128::MAX`, divided by a count of 2), rendered through
-    /// [`purrdf_xsd::bigint_avg_decimal_lexical`]'s TEXT bypass — the same shape
+    /// values sum to `2 × i128::MAX`, divided by a count of 2) — the same shape
     /// [`sum_overflow_exceeding_i128_answers_exact_total`] pins for `SUM`. This
-    /// is the exact fixture the crate's public rustdoc worked example describes
-    /// (`(i128::MAX + i128::MAX) / 2 == i128::MAX`); before the lexical-text
-    /// fallback existed this answered unbound instead, because `Decimal`'s own
-    /// `i128`-mantissa bound rejects the scale-18 quotient even though the
-    /// value itself is an ordinary integer.
+    /// is the exact fixture `(i128::MAX + i128::MAX) / 2 == i128::MAX`.
+    /// The historical bounded representation rejected its scale-18 coefficient
+    /// even though the value itself is an ordinary integer.
     #[test]
     fn avg_overflow_exceeding_i128_answers_exact_total() {
         let max = i128::MAX.to_string();
@@ -6661,7 +6702,7 @@ mod tests {
         assert_eq!(result.as_deref(), Some(expected));
         let read_back = purrdf_xsd::parse(expected, XsdDatatype::Decimal).expect("a decimal");
         assert!(
-            matches!(read_back, XsdValue::BigDecimal(_)),
+            matches!(read_back, XsdValue::Decimal(ref value) if value.unscaled().as_i128().is_none()),
             "{read_back:?}"
         );
         // Neighbour: inside the bounded variant the same fold is a bounded decimal.

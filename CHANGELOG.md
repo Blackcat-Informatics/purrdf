@@ -24,6 +24,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **One exact XSD numeric value API:** public `XsdValue::Integer` and
+  `XsdValue::Decimal` carry the exact integer and decimal types at every size.
+  The bounded `purrdf_xsd::Decimal`, bounded `owl:rational` module and decimal
+  narrowing conversions are removed; callers that matched the old wide
+  variants use the same exact variants as small values. Integer narrowing to
+  `i128` or `i64` remains explicit and typed. The old `bigint_avg_decimal` and
+  `bigint_avg_decimal_lexical` helpers are removed; use `numeric_div_with_policy`
+  for aggregate division under the same exact policy as ordinary division.
+  Decimal division now keeps every
+  digit of a terminating quotient and otherwise rounds to 18 fractional
+  places, half to even. Explicit `exact`, `N`, `N:ROUNDING` and
+  `exact-or-N[:ROUNDING]` policies remain available. Temporal seconds use exact
+  decimals, including fractional precision beyond 18 places, through
+  arithmetic, comparisons and canonical output.
+
 - **Rust query-algebra projections:** parsed `SELECT *` can now produce
   `GraphPattern::ProjectStar`, whose ordered `ProjectionVars` shares earlier
   projection snapshots. Explicit `Project` retains its `Vec<Variable>`.

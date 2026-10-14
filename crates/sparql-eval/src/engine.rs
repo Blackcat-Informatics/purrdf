@@ -5856,9 +5856,9 @@ pub struct QueryOptions<'a> {
     /// and `AVG` alike ([`purrdf_xsd::exact::DivisionPolicy`]).
     ///
     /// The default, [`DivisionPolicy::xsd_default`](purrdf_xsd::exact::DivisionPolicy::xsd_default),
-    /// is eighteen fractional digits truncated toward zero — the precision XPath
-    /// F&O 3.1 §4.2 leaves to the implementation, and the one every quotient had
-    /// before this field existed. [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)
+    /// returns terminating quotients exactly and rounds repeating ones to eighteen
+    /// fractional digits, half to even, as XPath F&O 3.1 §4.2 leaves to the
+    /// implementation. [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)
     /// returns every terminating quotient exactly; one with no finite decimal
     /// expansion is an expression error (unbound, err:FOAR0002 in the governed
     /// evidence), as division by zero is.

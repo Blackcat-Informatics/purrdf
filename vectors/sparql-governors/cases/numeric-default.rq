@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+SELECT ?terminating ?repeating
+WHERE {
+  BIND (1 / 1180591620717411303424 AS ?terminating)
+  BIND (1 / 6 AS ?repeating)
+}

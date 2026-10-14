@@ -784,8 +784,37 @@ static int check_division_policy(PurrdfDataset *dataset) {
     int32_t rc = purrdf_dataset_division_policy(dataset, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "read the default division policy");
     purrdf_buffer_data(buffer, &bytes, &len);
-    CHECK(len == strlen("18:toward-zero") && memcmp(bytes, "18:toward-zero", len) == 0,
-          "the default division policy is 18:toward-zero");
+    CHECK(len == strlen("exact-or-18:half-even") && memcmp(bytes, "exact-or-18:half-even", len) == 0,
+          "the default division policy is exact-or-18:half-even");
+    purrdf_buffer_free(buffer);
+
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (1/1048576 AS ?x) {}", NULL, NULL, NULL,
+                           &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default terminating quotient answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.00000095367431640625\""),
+          "default terminating quotient keeps more than eighteen places");
+    purrdf_buffer_free(buffer);
+
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
+                           &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default repeating quotient answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.666666666666666667\""),
+          "default repeating quotient rounds half to even at eighteen places");
+    purrdf_buffer_free(buffer);
+
+    buffer = NULL;
+    rc = purrdf_query_json(dataset,
+                           "SELECT (SECONDS(\"2024-01-02T03:04:05.123456789012345678901Z\"^^"
+                           "<http://www.w3.org/2001/XMLSchema#dateTime>) AS ?x) {}",
+                           NULL, NULL, NULL, &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact temporal seconds answer");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"5.123456789012345678901\""),
+          "exact temporal seconds keep twenty-one fractional places");
     purrdf_buffer_free(buffer);
 
     rc = purrdf_dataset_set_division_policy(dataset, "exact", &error);
@@ -823,6 +852,26 @@ static int check_division_policy(PurrdfDataset *dataset) {
     CHECK(contains_bytes(bytes, len, "\"0.66667\""), "5:half-even 2/3 is 0.66667");
     purrdf_buffer_free(buffer);
 
+    rc = purrdf_dataset_set_division_policy(dataset, "2:half-even", &error);
+    CHECK(rc == PURRDF_STATUS_OK, "set 2:half-even for an exact tie");
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (3/8 AS ?x) {}", NULL, NULL, NULL, &buffer,
+                           &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "half-even tie answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.38\""), "3/8 ties upward to an even cent");
+    purrdf_buffer_free(buffer);
+
+    rc = purrdf_dataset_set_division_policy(dataset, "2", &error);
+    CHECK(rc == PURRDF_STATUS_OK, "set bare scale policy");
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
+                           &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "bare scale quotient answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.66\""), "bare scale truncates toward zero");
+    purrdf_buffer_free(buffer);
+
     PurrdfQueryGovernors governors;
     CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
           "governor initializer");
@@ -847,7 +896,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
         purrdf_rowcursor_free(rows);
     }
 
-    rc = purrdf_dataset_set_division_policy(dataset, "18", &error);
+    rc = purrdf_dataset_set_division_policy(dataset, "exact-or-18:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "restore the default division policy");
     printf("division: policy set, refused, applied and counted\n");
     return 0;

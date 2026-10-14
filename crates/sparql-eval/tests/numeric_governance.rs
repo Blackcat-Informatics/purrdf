@@ -116,6 +116,92 @@ fn long_fraction(zeros: usize, last: char) -> String {
     format!("1.{}{last}", "0".repeat(zeros))
 }
 
+#[test]
+fn temporal_exact_seconds_charge_real_query_fuel() {
+    let fraction = "1".repeat(2000);
+    let wide = format!("\"2024-01-02T12:34:56.{fraction}Z\"^^xsd:dateTime");
+    let tiny = "\"2024-01-02T12:34:56.1Z\"^^xsd:dateTime";
+    let duration = "\"PT1S\"^^xsd:dayTimeDuration";
+    let timezone = "\"PT1H\"^^xsd:dayTimeDuration";
+    for (wide_query, tiny_query) in [
+        (
+            format!("SELECT ({wide} + {duration} AS ?y) WHERE {{}}"),
+            format!("SELECT ({tiny} + {duration} AS ?y) WHERE {{}}"),
+        ),
+        (
+            format!("SELECT ({wide} - {tiny} AS ?y) WHERE {{}}"),
+            format!("SELECT ({tiny} - {tiny} AS ?y) WHERE {{}}"),
+        ),
+        (
+            format!("SELECT (ADJUST({wide}, {timezone}) AS ?y) WHERE {{}}"),
+            format!("SELECT (ADJUST({tiny}, {timezone}) AS ?y) WHERE {{}}"),
+        ),
+    ] {
+        let answer = refused_beside(
+            &wide_query,
+            &tiny_query,
+            QueryOptions::EMPTY,
+            ResourceDimension::Fuel,
+        );
+        assert_ne!(answer, "-", "the bounded neighbour must bind its result");
+    }
+
+    // Both queries parse the same wide source and render a wide result. Only
+    // the shift performs exact day-split arithmetic; removing the timezone
+    // copies the seconds without that computation.
+    let shifted = format!("SELECT (ADJUST({wide}, {timezone}) AS ?y) WHERE {{}}");
+    let retagged = format!("SELECT (ADJUST({wide}, \"\") AS ?y) WHERE {{}}");
+    let answer = refused_beside(
+        &shifted,
+        &retagged,
+        QueryOptions::EMPTY,
+        ResourceDimension::Fuel,
+    );
+    assert_ne!(answer, "-");
+    // Final ScratchBytes evidence is the retained balance, not the maximum
+    // transient request. Find the actual admitted ceiling for each same-input
+    // query instead of using the final balance as though it were a peak.
+    let minimum_accepted = |query: &str| {
+        let mut refused = 0_u64;
+        let mut accepted = 1_u64 << 20;
+        assert!(matches!(
+            governed(
+                query,
+                QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(accepted)
+            ),
+            GovernedOutcome::Complete { .. }
+        ));
+        while refused + 1 < accepted {
+            let middle = refused + (accepted - refused) / 2;
+            let outcome = governed(
+                query,
+                QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(middle),
+            );
+            if matches!(outcome, GovernedOutcome::Complete { .. }) {
+                accepted = middle;
+            } else {
+                assert!(
+                    matches!(outcome, GovernedOutcome::BudgetExhausted(ref exhausted)
+                    if matches!(exhausted.tripped, TrippedGovernor::Budget {
+                        dimension: ResourceDimension::ScratchBytes, ..
+                    })),
+                    "{outcome:?}"
+                );
+                refused = middle;
+            }
+        }
+        accepted
+    };
+    let retag_bytes = minimum_accepted(&retagged);
+    let shift_bytes = minimum_accepted(&shifted);
+    assert!(
+        shift_bytes > retag_bytes,
+        "same-source shift requires {shift_bytes} scratch bytes vs retag {retag_bytes}"
+    );
+}
+
 /// Squaring `0.1` doubles its scale at every step while its coefficient stays one
 /// digit: the product's rendering is what grows, and it is charged. Squaring `1` in
 /// the same chain stays a machine word.
