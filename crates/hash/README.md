@@ -625,7 +625,7 @@ source on every run.
 | `b"purrdf-sparql-eval/user-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/user_fn.rs` |
 | `b"purrdf-text-analysis-profile-v2\0"` | `PROFILE_DOMAIN` | `crates/text/src/profile.rs` |
 | `b"purrdf-text/dictionary-lattice/v2"` | `DICTIONARY_DOMAIN` | `crates/text/src/segment.rs` |
-| `b"purrdf-text/index/v3"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/index/v4"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
 | `b"purrdf-text/resolved-analyzer/v4\0"` | `ANALYZER_DOMAIN` | `crates/text/src/analysis.rs` |
 | `b"purrdf-text/source/v1"` | `SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
 | `b"purrdf-text/surface-generation/v1\0"` | `GENERATION_DOMAIN` | `crates/text/src/surface.rs` |
