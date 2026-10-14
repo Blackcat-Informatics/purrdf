@@ -5813,7 +5813,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                     let value = frame
                         .finish_value(Ok(value))?
                         .expect("timezone adjustment has no numeric value-space error");
-                    governed_xsd_to_term(ctx, &value)
+                    governed_xsd_to_term(ctx, &value, value.datatype().iri())
                 }
                 Err(purrdf_xsd::XsdError::Storage(error)) => {
                     frame.finish_scalar::<()>(Err(error))?;
@@ -6103,7 +6103,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                 frame.admit(layout)
             });
             return match frame.finish_cast(cast)? {
-                Some(cast) => governed_xsd_to_term(ctx, &cast),
+                Some(cast) => governed_xsd_to_term(ctx, &cast, cast.datatype().iri()),
                 None => {
                     ctx.record_expression_error(Some(cast_error_code(&value)));
                     Ok(None)
@@ -6143,7 +6143,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                     }
                     Err(_) => return Ok(None),
                 };
-                return governed_xsd_to_term(ctx, &value);
+                return governed_xsd_to_term(ctx, &value, target.iri());
             }
             // A string's spelling is what it casts by: the lexical path below.
             CalendarSource::Lexical => {}
@@ -6178,8 +6178,8 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // One native parser; malformed lexical and physical refusal stay separate.
     let result =
         match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
-            Ok(value) if target.is_calendar() => governed_xsd_to_term(ctx, &value),
-            Ok(value) => governed_xsd_to_term(ctx, &value),
+            Ok(value) if target.is_calendar() => governed_xsd_to_term(ctx, &value, target.iri()),
+            Ok(value) => governed_xsd_to_term(ctx, &value, value.datatype().iri()),
             Err(code) => {
                 if target.is_numeric() {
                     ctx.record_expression_error(code);
@@ -7442,7 +7442,7 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     v: &XsdValue,
 ) -> Result<SolutionTerm<D::Id>, EvalError> {
-    let value = xsd_workspace_value(v, &ctx.growth)?;
+    let value = xsd_workspace_value(v, &ctx.growth, v.datatype().iri())?;
     ctx.intern_workspace_term(value)?
         .ok_or(EvalError::WorkspaceBoundOverflow)
 }
@@ -7452,19 +7452,20 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
 pub(crate) fn xsd_workspace_value(
     value: &XsdValue,
     workspace: &crate::WorkspaceCapability,
+    datatype: &str,
 ) -> Result<crate::WorkspaceTerm, EvalError> {
     let mut frame = crate::native_numeric::NumericFrame::new(workspace);
     let prepared =
         purrdf_xsd::numeric::prepare_numeric_text(value, &mut |layout| frame.admit(layout));
     match frame.finish_text(prepared)? {
-        Some(text) => numeric_text_value(text, value.datatype().iri(), workspace),
+        Some(text) => numeric_text_value(text, datatype, workspace),
         None => {
             let mut frame = crate::native_numeric::NumericFrame::new(workspace);
             let prepared = purrdf_xsd::temporal::prepare_calendar_text(value, &mut |layout| {
                 frame.admit(layout)
             });
             if let Some(text) = frame.finish_calendar_text(prepared)? {
-                return workspace.literal(text, value.datatype().iri());
+                return workspace.literal(text, datatype);
             }
             if let XsdValue::Duration(duration) = value {
                 let mut frame = crate::native_numeric::NumericFrame::new(workspace);
@@ -7473,11 +7474,11 @@ pub(crate) fn xsd_workspace_value(
                         frame.admit(layout)
                     });
                 let text = frame.finish_duration_text(prepared)?;
-                return workspace.literal(text, value.datatype().iri());
+                return workspace.literal(text, datatype);
             }
             let text = purrdf_xsd::value::canonical_non_numeric(value)
                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
-            workspace.literal(text, value.datatype().iri())
+            workspace.literal(text, datatype)
         }
     }
 }
@@ -7629,7 +7630,7 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
             frame.admit(layout)
         });
     match frame.finish_value(computed)? {
-        Ok(result) => governed_xsd_to_term(ctx, &result),
+        Ok(result) => governed_xsd_to_term(ctx, &result, result.datatype().iri()),
         Err(code) => {
             ctx.record_expression_error(code);
             Ok(None)
@@ -7674,11 +7675,15 @@ fn charge_numeric_step<D: DatasetView + Sync>(
 pub(crate) fn governed_xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: &XsdValue,
+    datatype: &str,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     if !numeric_step_admitted(ctx, numeric_render_cost(value)) {
         return Ok(None);
     }
-    xsd_to_term(ctx, value).map(Some)
+    let value = xsd_workspace_value(value, &ctx.growth, datatype)?;
+    ctx.intern_workspace_term(value)?
+        .ok_or(EvalError::WorkspaceBoundOverflow)
+        .map(Some)
 }
 
 /// A unary numeric operator (`+` / `-`) over its evaluated operand: resolve it to an XSD
@@ -7728,14 +7733,14 @@ fn apply_unary_numeric<D: DatasetView + Sync>(
     }
     // Identity keeps the same immutable parsed allocation, including its subtype.
     if op == purrdf_xsd::numeric::NumericUnaryOperator::Plus && value.is_numeric() {
-        return governed_xsd_to_term(ctx, value);
+        return governed_xsd_to_term(ctx, value, value.datatype().iri());
     }
     let capability = ctx.growth.clone();
     let mut frame = crate::native_numeric::NumericFrame::new(&capability);
     let computed =
         purrdf_xsd::numeric::numeric_unary_admitted(value, op, &mut |layout| frame.admit(layout));
     match frame.finish_value(computed)? {
-        Ok(value) => governed_xsd_to_term(ctx, &value),
+        Ok(value) => governed_xsd_to_term(ctx, &value, value.datatype().iri()),
         Err(code) => {
             ctx.record_expression_error(code);
             Ok(None)
@@ -10371,6 +10376,12 @@ mod tests {
                 Some("2026-10-04T12:00:00Z"),
             ),
             (D::DateTime, "2026-10-04T12:00:00", D::DateTimeStamp, None),
+            (
+                D::DateTime,
+                "2026-10-04T12:00:00.123456789012345678901Z",
+                D::DateTimeStamp,
+                Some("2026-10-04T12:00:00.123456789012345678901Z"),
+            ),
             (
                 D::DateTimeStamp,
                 "2026-10-04T12:00:00+05:30",

@@ -240,7 +240,9 @@ fn push_character(output: &mut String, character: char, in_class: bool, target: 
 /// Explicit scalar ranges, literals, groups and quantifiers are supported.
 #[must_use]
 pub fn ecma_262_rust_compatible(pattern: &str) -> bool {
-    if pattern.len() > MAX_TRANSLATED_BYTES || regex::Regex::new(pattern).is_err() {
+    // Grammar equivalence does not depend on a compiled matcher's memory budget.
+    // Execution still admits its own bounded matcher at the consumer's home.
+    if pattern.len() > MAX_TRANSLATED_BYTES || regex_syntax::Parser::new().parse(pattern).is_err() {
         return false;
     }
     let mut chars = pattern.chars().peekable();
@@ -378,6 +380,14 @@ mod tests {
         ] {
             assert!(ecma_262_rust_compatible(pattern), "must accept {pattern:?}");
         }
+        // A valid shared grammar can exceed the default matcher's memory budget.
+        // That execution refusal must not misclassify the accepted language.
+        let pattern = "a{1000000}";
+        assert!(matches!(
+            regex::Regex::new(pattern),
+            Err(regex::Error::CompiledTooBig(_))
+        ));
+        assert!(ecma_262_rust_compatible(pattern));
     }
 
     /// Run emitted Unicode ECMA-262 source through the Rust engine. The i-flag

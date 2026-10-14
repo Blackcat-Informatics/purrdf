@@ -4271,7 +4271,9 @@ impl NumericFold {
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         self.sum_value(workspace)?
-            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .map(|value| {
+                crate::expr::xsd_workspace_value(&value, workspace, value.datatype().iri())
+            })
             .transpose()
     }
 
@@ -4282,7 +4284,9 @@ impl NumericFold {
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         self.avg_value(division, absorb, workspace)?
-            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .map(|value| {
+                crate::expr::xsd_workspace_value(&value, workspace, value.datatype().iri())
+            })
             .transpose()
     }
 
