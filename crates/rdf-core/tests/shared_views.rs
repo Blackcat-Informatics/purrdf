@@ -1256,7 +1256,7 @@ fn every_term_shape_is_charged_as_the_freeze_interns_it() {
     let build = || {
         let mut mutable = MutableDataset::new_with_graph_existence(
             Arc::clone(&base),
-            purrdf_core::GraphExistenceMode::Implicit,
+            GraphExistenceMode::Implicit,
         );
         let same = TermValue::blank("same");
         let p = TermValue::iri(P);
