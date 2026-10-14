@@ -316,8 +316,8 @@ fn persistent_id_binding_retains_original_admission_and_refuses_atomically() {
     drop(refused);
     let released = small.evidence();
     assert_eq!(
-        released.live_bytes() - released.unpinned_cache_bytes(),
-        baseline.live_bytes() - baseline.unpinned_cache_bytes()
+        released.live_bytes() - released.unpinned_cache_bytes() - released.bookkeeping_bytes(),
+        baseline.live_bytes() - baseline.unpinned_cache_bytes() - baseline.bookkeeping_bytes()
     );
     assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= small.evidence().peak_bytes());
     // Failed replacement keeps the old valid binding and its original owner.
@@ -538,8 +538,8 @@ fn long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation()
         drop(state);
         let released = source.evidence();
         assert_eq!(
-            released.live_bytes() - released.unpinned_cache_bytes(),
-            opening.live_bytes() - opening.unpinned_cache_bytes(),
+            released.live_bytes() - released.unpinned_cache_bytes() - released.bookkeeping_bytes(),
+            opening.live_bytes() - opening.unpinned_cache_bytes() - opening.bookkeeping_bytes(),
             "typed provider refusal releases all native report, preparation and execution owners"
         );
     }
@@ -628,7 +628,7 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
         .render();
 
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-    // Four measuring runs share the session's fixed-capacity request ledger.
+    // Four measuring runs share the session's demand-grown request ledger.
     let source = SegmentedSession::open(
         Arc::new(image.provider()),
         image.receipt(),
@@ -664,8 +664,8 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
     );
     assert!(evidence.peak_bytes() <= CEILING);
     assert!(
-        after.live_bytes() - after.unpinned_cache_bytes()
-            > opening.live_bytes() - opening.unpinned_cache_bytes(),
+        after.live_bytes() - after.unpinned_cache_bytes() - after.bookkeeping_bytes()
+            > opening.live_bytes() - opening.unpinned_cache_bytes() - opening.bookkeeping_bytes(),
         "returned explanation and native cache retain their original live owners"
     );
     assert!(source.read_error().is_none());
@@ -675,9 +675,10 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
     drop(explanation);
     assert_eq!(source.evidence().live_bytes(), held);
     drop(shared);
-    let released = source.evidence().live_bytes();
+    let released_receipt = source.evidence();
+    let released = released_receipt.live_bytes() - released_receipt.bookkeeping_bytes();
     assert!(
-        released < held,
+        released < held - released_receipt.bookkeeping_bytes(),
         "the final explanation owner releases its buffer grant"
     );
 
@@ -688,7 +689,8 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
         let (again, receipt) = engine
             .explain_query_fallible_view(&source, QUERY, None)
             .unwrap();
-        let live = source.evidence().live_bytes();
+        let live_receipt = source.evidence();
+        let live = live_receipt.live_bytes() - live_receipt.bookkeeping_bytes();
         let measured = window.close();
         assert_eq!(again.render(), expected);
         assert!(
@@ -698,8 +700,9 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
         assert_eq!(receipt.request_count(), source.evidence().request_count());
         assert_eq!(receipt.request_digest(), source.evidence().request_digest());
         drop(again);
+        let released_receipt = source.evidence();
         assert_eq!(
-            source.evidence().live_bytes(),
+            released_receipt.live_bytes() - released_receipt.bookkeeping_bytes(),
             released,
             "completed execution and last explanation release their grants"
         );
@@ -710,8 +713,8 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
     drop(engine);
     let released = source.evidence();
     assert_eq!(
-        released.live_bytes() - released.unpinned_cache_bytes(),
-        opening.live_bytes() - opening.unpinned_cache_bytes(),
+        released.live_bytes() - released.unpinned_cache_bytes() - released.bookkeeping_bytes(),
+        opening.live_bytes() - opening.unpinned_cache_bytes() - opening.bookkeeping_bytes(),
         "all repeated explanation, native cache and execution owners return the original account"
     );
 }
@@ -765,8 +768,8 @@ fn fallible_explain_preserves_a_segmented_provider_fault_over_a_fired_stop() {
     drop(engine);
     let released = source.evidence();
     assert_eq!(
-        released.live_bytes() - released.unpinned_cache_bytes(),
-        before.live_bytes() - before.unpinned_cache_bytes(),
+        released.live_bytes() - released.unpinned_cache_bytes() - released.bookkeeping_bytes(),
+        before.live_bytes() - before.unpinned_cache_bytes() - before.bookkeeping_bytes(),
         "original provider fault retains its report only until the last report and native cache owner die"
     );
 }
@@ -1520,8 +1523,10 @@ fn ordered_query_matches_resident_and_tiny_capacity_refuses() {
         ));
         assert_eq!(small.evidence().request_count(), before.request_count());
         assert_eq!(
-            small.evidence().live_bytes() - small.evidence().unpinned_cache_bytes(),
-            before.live_bytes() - before.unpinned_cache_bytes()
+            small.evidence().live_bytes()
+                - small.evidence().unpinned_cache_bytes()
+                - small.evidence().bookkeeping_bytes(),
+            before.live_bytes() - before.unpinned_cache_bytes() - before.bookkeeping_bytes()
         );
     }
 }
@@ -1585,8 +1590,12 @@ fn governed_reporting_refuses_independently_tight_capacity() {
                 drop(outcome);
                 drop(engine);
                 assert_eq!(
-                    source.evidence().live_bytes() - source.evidence().unpinned_cache_bytes(),
-                    before.live_bytes() - before.unpinned_cache_bytes(),
+                    source.evidence().live_bytes()
+                        - source.evidence().unpinned_cache_bytes()
+                        - source.evidence().bookkeeping_bytes(),
+                    before.live_bytes()
+                        - before.unpinned_cache_bytes()
+                        - before.bookkeeping_bytes(),
                     "failed invocation releases original controls and preparation arrays"
                 );
                 assert!(
@@ -1749,8 +1758,10 @@ fn request_metadata_and_prefix_match_resident_and_refuse_tight_capacity() {
             drop(tight_engine);
             assert_eq!(small.evidence().request_count(), before.request_count());
             assert_eq!(
-                small.evidence().live_bytes() - small.evidence().unpinned_cache_bytes(),
-                before.live_bytes() - before.unpinned_cache_bytes()
+                small.evidence().live_bytes()
+                    - small.evidence().unpinned_cache_bytes()
+                    - small.evidence().bookkeeping_bytes(),
+                before.live_bytes() - before.unpinned_cache_bytes() - before.bookkeeping_bytes()
             );
         }
     }
@@ -1789,8 +1800,10 @@ fn request_metadata_and_prefix_match_resident_and_refuse_tight_capacity() {
     drop(engine);
     assert_eq!(source.evidence().request_count(), before.request_count());
     assert_eq!(
-        source.evidence().live_bytes() - source.evidence().unpinned_cache_bytes(),
-        before.live_bytes() - before.unpinned_cache_bytes()
+        source.evidence().live_bytes()
+            - source.evidence().unpinned_cache_bytes()
+            - source.evidence().bookkeeping_bytes(),
+        before.live_bytes() - before.unpinned_cache_bytes() - before.bookkeeping_bytes()
     );
     assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
 }
@@ -1828,8 +1841,10 @@ fn explain_tight_capacity_releases_native_preparation_and_reporting() {
             drop(error);
             drop(engine);
             assert_eq!(
-                source.evidence().live_bytes() - source.evidence().unpinned_cache_bytes(),
-                before.live_bytes() - before.unpinned_cache_bytes()
+                source.evidence().live_bytes()
+                    - source.evidence().unpinned_cache_bytes()
+                    - source.evidence().bookkeeping_bytes(),
+                before.live_bytes() - before.unpinned_cache_bytes() - before.bookkeeping_bytes()
             );
         }
     }
@@ -1900,7 +1915,8 @@ fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
     let (image, _) = fixture();
     let scoped_source = open(&image, CEILING);
     let before = scoped_source.evidence();
-    let before_owners = before.live_bytes() - before.unpinned_cache_bytes();
+    let before_owners =
+        before.live_bytes() - before.unpinned_cache_bytes() - before.bookkeeping_bytes();
     let ((), scoped_evidence) = {
         let engine = NativeSparqlEngine::new();
         let mut execution = engine
@@ -1913,7 +1929,12 @@ fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
                 QueryOptions::EMPTY,
                 |outcome| {
                     let active = scoped_source.evidence();
-                    assert!(active.live_bytes() - active.unpinned_cache_bytes() > before_owners);
+                    assert!(
+                        active.live_bytes()
+                            - active.unpinned_cache_bytes()
+                            - active.bookkeeping_bytes()
+                            > before_owners
+                    );
                     let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
                         panic!("SELECT")
                     };
@@ -1929,7 +1950,7 @@ fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
         "scoped publication retains the exact final read prefix"
     );
     assert_eq!(
-        released.live_bytes() - released.unpinned_cache_bytes(),
+        released.live_bytes() - released.unpinned_cache_bytes() - released.bookkeeping_bytes(),
         before_owners,
         "scoped execution and its distinct native cache owners release every grant"
     );
@@ -2032,7 +2053,8 @@ fn interned_graph_retention_keeps_original_account_until_last_extraction() {
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
     let source = open(&image, CEILING);
     let opening = source.evidence();
-    let opening_owners = opening.live_bytes() - opening.unpinned_cache_bytes();
+    let opening_owners =
+        opening.live_bytes() - opening.unpinned_cache_bytes() - opening.bookkeeping_bytes();
     let (graph, evidence) = engine
         .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |outcome| {
             let purrdf_sparql_eval::InternedOutcome::Graph(graph) = outcome else {
@@ -2052,7 +2074,8 @@ fn interned_graph_retention_keeps_original_account_until_last_extraction() {
     drop(engine);
     let retained = source.evidence().live_bytes();
     assert!(
-        retained - source.evidence().unpinned_cache_bytes() > opening_owners,
+        retained - source.evidence().unpinned_cache_bytes() - source.evidence().bookkeeping_bytes()
+            > opening_owners,
         "graph owns its original grant after the distinct execution and engine owners are destroyed"
     );
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
@@ -2074,7 +2097,10 @@ fn interned_graph_retention_keeps_original_account_until_last_extraction() {
     );
     drop(result);
     assert!(
-        source.evidence().live_bytes() - source.evidence().unpinned_cache_bytes() > opening_owners,
+        source.evidence().live_bytes()
+            - source.evidence().unpinned_cache_bytes()
+            - source.evidence().bookkeeping_bytes()
+            > opening_owners,
         "dataset handles retain the graph's original physical account after wrapper extraction"
     );
     assert_eq!(direct_handle.quad_count(), 1);
@@ -2086,7 +2112,7 @@ fn interned_graph_retention_keeps_original_account_until_last_extraction() {
     drop(extracted_handle);
     let released = source.evidence();
     assert_eq!(
-        released.live_bytes() - released.unpinned_cache_bytes(),
+        released.live_bytes() - released.unpinned_cache_bytes() - released.bookkeeping_bytes(),
         opening_owners,
         "last graph owner releases every graph grant back to the original account"
     );

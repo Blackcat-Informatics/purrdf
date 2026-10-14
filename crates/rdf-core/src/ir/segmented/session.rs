@@ -368,6 +368,7 @@ pub struct SegmentedEvidence<Identity = SegmentedSnapshot> {
     io_bytes: u64,
     live_bytes: u64,
     unpinned_cache_bytes: u64,
+    bookkeeping_bytes: u64,
     peak_bytes: u64,
     evictions: u64,
     _base: Arc<SegmentedReservation>,
@@ -380,6 +381,7 @@ impl<Identity: PartialEq> PartialEq for SegmentedEvidence<Identity> {
             || self.io_bytes != other.io_bytes
             || self.live_bytes != other.live_bytes
             || self.unpinned_cache_bytes != other.unpinned_cache_bytes
+            || self.bookkeeping_bytes != other.bookkeeping_bytes
             || self.peak_bytes != other.peak_bytes
             || self.evictions != other.evictions
         {
@@ -445,9 +447,19 @@ impl<Identity> SegmentedEvidence<Identity> {
     /// Subtracting this from [`Self::live_bytes`] isolates the original account's
     /// other live owners. Pinned blocks remain in that balance: a leaked pin or
     /// query grant cannot be hidden by a legitimate cache eviction or reload.
+    /// Reader array capacity is reported separately by [`Self::bookkeeping_bytes`].
     #[must_use]
     pub const fn unpinned_cache_bytes(&self) -> u64 {
         self.unpinned_cache_bytes
+    }
+    /// Charged request-ledger and cache-slot capacity retained by the reader.
+    ///
+    /// These buffers grow on demand and survive individual query results.
+    /// Subtract this and [`Self::unpinned_cache_bytes`] from live residency to
+    /// compare the original control, pinned blocks and external workspace owners.
+    #[must_use]
+    pub const fn bookkeeping_bytes(&self) -> u64 {
+        self.bookkeeping_bytes
     }
     /// Highest pre-admitted live capacity so far; never exceeds the caller's ceiling.
     #[must_use]
@@ -484,6 +496,7 @@ fn checkpoint<I>(
         hash: *state.hash.finalize().as_bytes(),
         io_bytes: state.io_bytes,
         live_bytes: residency.live,
+        bookkeeping_bytes: state.storage.reservation.bytes(),
         // Disjoint charged reservations cannot sum past checked live residency.
         unpinned_cache_bytes: state
             .cache
@@ -1714,6 +1727,15 @@ mod operation_tests {
         let retained = session.base.bytes
             + u64::try_from(Shared::<RequestIdentity>::allocation_layout().size()).unwrap();
         let evidence = session.evidence();
+        {
+            let state = lock_read_state(&session.state);
+            let buffers = state.requests.capacity() * size_of::<SegmentedRequest>()
+                + state.cache.capacity() * size_of::<CacheEntry>();
+            assert_eq!(
+                evidence.bookkeeping_bytes(),
+                u64::try_from(buffers).unwrap()
+            );
+        }
         let request = evidence.with_requests(|requests| requests[0].try_clone().unwrap());
         let duplicate = request.try_clone().unwrap();
         assert_eq!(request, duplicate);

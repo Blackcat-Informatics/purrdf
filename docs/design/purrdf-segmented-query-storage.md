@@ -10,6 +10,12 @@ live-byte admission. Buffer replacement admits both the old and new layouts
 until the old allocation is destroyed. A refusal reports the original typed
 cause; evidence is never truncated to fit a smaller ledger.
 
+`SegmentedEvidence::bookkeeping_bytes()` reports the exact charged capacity of
+the reader's retained request ledger and cache-slot arrays. It is included in
+`live_bytes()` and can grow across queries. For query-owner release checks,
+exclude this capacity and `unpinned_cache_bytes()` from both observations;
+the original control, pinned blocks and query workspace remain in the balance.
+
 `SegmentedFileProvider::from_file` attaches an opened native file to the caller's
 certified snapshot identity. Supply the independently trusted receipt when
 opening a session or publishing a layer. The adapter does not certify an

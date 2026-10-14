@@ -93,7 +93,7 @@ fn fixture(wide: bool) -> (SegmentedImage, Arc<RdfDataset>, Arc<TextIndex>) {
 
 fn non_cache_live(source: &SegmentedSession) -> u64 {
     let evidence = source.evidence();
-    evidence.live_bytes() - evidence.unpinned_cache_bytes()
+    evidence.live_bytes() - evidence.unpinned_cache_bytes() - evidence.bookkeeping_bytes()
 }
 
 #[test]
