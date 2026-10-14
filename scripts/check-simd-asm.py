@@ -1341,7 +1341,7 @@ def build_commands(config: Config, packages: tuple[str, ...], rlib_packages: tup
     ]
     cmds = [["cargo", "build", *common, "--lib", *(arg for p in packages for arg in ("-p", p))]]
     cmds += [["cargo", "rustc", *common, "--lib", "-p", p, "--crate-type", "rlib"] for p in rlib_packages]
-    cmds += [["cargo", "rustc", *common, "-p", p, "--bench", b, "--", "--emit=asm,metadata"] for p, b in (c.split(":") for c in consumers)]
+    cmds += [["cargo", "check", *common, "-p", p, "--bench", b] for p, b in (c.split(":") for c in consumers)]
     return cmds
 
 
@@ -2141,7 +2141,7 @@ def self_test() -> int:
     expect(all(c[c.index("--color") + 1] == "never" for c in cmds), f"every build asks cargo for an uncoloured stream: {cmds}")
     consumer = load_manifest({**_manifest_dict(), "build": {"packages": ["demo"], "consumer_benches": ["demo:actual"]}})
     cmd = build_commands(CONFIG_BY_NAME["aarch64"], consumer.packages, (), consumer.consumer_benches)[-1]
-    expect(cmd[-6:] == ["-p", "demo", "--bench", "actual", "--", "--emit=asm,metadata"] and "--lib" not in cmd, "the real consumer emits assembly without linking or running")
+    expect(cmd[:2] == ["cargo", "check"] and cmd[-4:] == ["-p", "demo", "--bench", "actual"] and "--lib" not in cmd, "the real consumer checks and emits assembly without linking or running")
 
     # -- a wrong-typed field is a named manifest error, never a coercion; its neighbour loads
     base_measure = _manifest_dict()["site"][0]["measure"][0]
