@@ -299,7 +299,7 @@ fn persistent_id_binding_retains_original_admission_and_refuses_atomically() {
     assert!(expected_answer);
     assert_eq!(answer, expected_answer);
     let cold = open(&image, CEILING);
-    let floor = cold.evidence().live_bytes();
+    let floor = cold.evidence().peak_bytes();
     drop(cold);
     let small = open(&image, floor);
     let baseline = small.evidence();
@@ -1552,7 +1552,7 @@ fn raw_evaluator_cannot_bypass_a_bounded_source_ownership_capability() {
 #[test]
 fn governed_reporting_refuses_independently_tight_capacity() {
     let (image, _) = fixture();
-    let opening = open(&image, CEILING).evidence().live_bytes();
+    let opening = baseline_ceiling(&image);
     let ordered = format!("{QUERY} ORDER BY ?label");
     for query in [QUERY, ordered.as_str()] {
         for headroom in [0, 1] {
@@ -1812,7 +1812,7 @@ fn request_metadata_and_prefix_match_resident_and_refuse_tight_capacity() {
 #[test]
 fn explain_tight_capacity_releases_native_preparation_and_reporting() {
     let (image, _) = fixture();
-    let opening = open(&image, CEILING).evidence().live_bytes();
+    let opening = baseline_ceiling(&image);
     let ordered = format!("{QUERY} ORDER BY ?label");
     for query in [QUERY, ordered.as_str()] {
         for headroom in [0, 1] {
