@@ -1080,7 +1080,10 @@ fn every_term_shape_is_charged_as_the_freeze_interns_it() {
     // declared graph that also names a row.
     let base = complete_source();
     let build = || {
-        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let mut mutable = MutableDataset::new_with_graph_existence(
+            Arc::clone(&base),
+            purrdf_core::GraphExistenceMode::Implicit,
+        );
         let same = TermValue::blank("same");
         let p = TermValue::iri(P);
         let inner = TermValue::Triple {

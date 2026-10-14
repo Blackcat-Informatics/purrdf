@@ -5757,7 +5757,8 @@ pub struct QueryOptions<'a> {
     pub candidate_scope: Option<&'a dyn crate::CandidateScope>,
     /// The named-graph lifetime policy for this request's UPDATE branch.
     /// Queries read the existing graph registry independently of this policy.
-    /// [`purrdf_core::GraphExistenceMode::Implicit`] preserves the default behavior.
+    /// [`purrdf_core::GraphExistenceMode::RememberEmpty`] is the default;
+    /// select [`purrdf_core::GraphExistenceMode::Implicit`] for row-driven lifetime.
     pub graph_existence: purrdf_core::GraphExistenceMode,
     /// The pre-binding lane the request names (see [`ShaclPrebinding`]); every lane
     /// takes the same rewrite.
@@ -5947,9 +5948,11 @@ impl QueryOptions<'_> {
     /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
     /// depth, no `SERVICE` source, and the engine's own `LOAD` resolver. What every
     /// entry did before it took options.
+    /// UPDATE remembers empty named graphs; explicitly select
+    /// [`purrdf_core::GraphExistenceMode::Implicit`] for row-driven lifetime.
     pub const EMPTY: Self = Self {
         candidate_scope: None,
-        graph_existence: purrdf_core::GraphExistenceMode::Implicit,
+        graph_existence: purrdf_core::GraphExistenceMode::RememberEmpty,
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::BoundFunctionRegistry::EMPTY,
         user_function_admission: None,
@@ -6010,8 +6013,8 @@ impl<'a> QueryOptions<'a> {
 
     /// Select the named-graph lifetime policy used by either UPDATE entry point.
     /// Frozen graph presence and ordinary query evaluation remain unchanged.
-    /// [`Self::EMPTY`] selects `GraphExistenceMode::Implicit` in 3.x; remembered
-    /// empty graphs are expected to become the default in v4.0.
+    /// [`Self::EMPTY`] selects [`purrdf_core::GraphExistenceMode::RememberEmpty`].
+    /// Select [`purrdf_core::GraphExistenceMode::Implicit`] to opt out explicitly.
     #[must_use]
     pub const fn with_graph_existence(
         mut self,

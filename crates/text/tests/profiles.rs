@@ -322,7 +322,11 @@ fn search_and_occurrence_relations_use_the_stored_analyzer() {
         [vec!["<https://example.org/doc>".to_owned()]]
     );
     assert_eq!(
-        index.surface_index().substring("afé").unwrap()[0]
+        index
+            .surface_index()
+            .expect("default surface index")
+            .substring("afé")
+            .unwrap()[0]
             .term
             .text(),
         "cafes"
@@ -332,7 +336,11 @@ fn search_and_occurrence_relations_use_the_stored_analyzer() {
         configuration.analyzer().fingerprint()
     );
     assert_eq!(
-        index.surface_index().analyzer().fingerprint(),
+        index
+            .surface_index()
+            .expect("default surface index")
+            .analyzer()
+            .fingerprint(),
         index.analyzer_fingerprint()
     );
 }

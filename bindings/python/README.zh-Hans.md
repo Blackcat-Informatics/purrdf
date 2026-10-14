@@ -33,6 +33,33 @@ pip install purrdf
 例如 `pip install -i https://pypi.tuna.tsinghua.edu.cn/simple purrdf`。具体配置请参考各镜像站
 的说明，本文不再重复。
 
+## 空命名图
+
+`Store` 和 `MutableDataset` 默认记住空命名图：命名图在其最后一行被移除后或
+`CLEAR` 之后仍然保留，`DROP` 才会移除该槽位。仅限关键字的
+`remember_empty_graphs=False` 选择退出，改用隐式生命周期：图仅在包含行时存在，
+`CLEAR` 会移除它。
+
+```python
+import purrdf
+
+store = purrdf.Store()
+graph = purrdf.NamedNode("https://example.org/empty")
+store.add_graph(graph)
+store.update("CLEAR GRAPH <https://example.org/empty>")
+print(store.named_graphs())
+
+implicit = purrdf.Store(remember_empty_graphs=False)
+```
+
+默认情况下，`add_graph` 具有原生 CREATE 语义：它注册一个命名图或空白节点图，
+对已存在的槽位抛出 `ValueError`，除非 `silent=True`。在隐式模式下，它不注册槽位
+即成功返回。无效的图名称即使在 `silent=True` 时也会被拒绝。`named_graphs()` 返回
+原生 `NamedNode`/`BlankNode` 值，包括声明的空图，并排除必然存在的默认图。UPDATE、
+受治理的 UPDATE、checkpoint 和 compaction 都保留所选策略。以 TriG、JSON-LD 和
+TriX 加载及导出声明的空图在两种策略下都能工作；被拒绝的受治理请求既不改变行，也
+不改变图槽位。
+
 ## 解析 RDF
 
 ```python
