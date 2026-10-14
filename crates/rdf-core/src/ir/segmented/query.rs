@@ -350,9 +350,9 @@ impl SegmentedStackQuery<'_> {
 }
 
 #[derive(Debug)]
-struct QueryStorage {
-    reservation: SegmentedReservation,
-    cause: Option<SegmentedError>,
+pub(super) struct QueryStorage {
+    pub(super) reservation: SegmentedReservation,
+    pub(super) cause: Option<SegmentedError>,
 }
 
 impl QueryStorage {
@@ -371,7 +371,7 @@ impl QueryStorage {
         })
     }
 
-    fn run<T, E: Into<SegmentedError>>(
+    pub(super) fn run<T, E: Into<SegmentedError>>(
         &mut self,
         body: impl FnOnce(&mut Memory<'_, Self>) -> Result<T, E>,
     ) -> Result<T, SegmentedError> {

@@ -278,6 +278,10 @@ struct State {
     io_bytes: u64,
     evictions: u64,
     hash: Hasher,
+    // Buffers die before their original live-byte grant is released. This
+    // reservation has no cache backlink: resizing while holding State must not
+    // lock State again.
+    storage: super::query::QueryStorage,
 }
 
 // Workspace growth and block loading evict through the same account. A pinned
@@ -526,33 +530,19 @@ impl SegmentedOperation {
     pub(super) fn new(limits: SegmentedReadLimits) -> Result<Self, SegmentedError> {
         let cache_count =
             usize::try_from(limits.cache_blocks).map_err(|_| SegmentedError::AddressExhausted)?;
-        let requests =
-            usize::try_from(limits.requests).map_err(|_| SegmentedError::AddressExhausted)?;
         if cache_count == 0 {
             return Err(SegmentedError::PinnedBlocks);
         }
         let base_bytes =
             u64::try_from(size_of::<Self>() + size_of::<State>() + size_of::<Budget>() + 192)
-                .map_err(|_| SegmentedError::AddressExhausted)?
-                .checked_add(
-                    u64::from(limits.cache_blocks)
-                        * u64::try_from(size_of::<CacheEntry>())
-                            .map_err(|_| SegmentedError::AddressExhausted)?,
-                )
-                .and_then(|v| {
-                    v.checked_add(
-                        u64::from(limits.requests)
-                            * u64::try_from(size_of::<SegmentedRequest>()).ok()?,
-                    )
-                })
-                .ok_or(SegmentedError::AddressExhausted)?;
+                .map_err(|_| SegmentedError::AddressExhausted)?;
         if base_bytes > limits.live_bytes {
             return Err(SegmentedError::Residency {
                 requested: base_bytes,
                 limit: limits.live_bytes,
             });
         }
-        // Reserve before creating the session's heap owners or fixed capacities.
+        // Reserve actual account/control layouts, not permitted future reads.
         let budget = Arc::new(Budget {
             state: Mutex::new(Residency {
                 live: base_bytes,
@@ -570,8 +560,8 @@ impl SegmentedOperation {
             base: None,
         });
         let state = Arc::new(Mutex::new(State {
-            cache: Vec::with_capacity(cache_count),
-            requests: Vec::with_capacity(requests),
+            cache: Vec::new(),
+            requests: Vec::new(),
             error: None,
             io_bytes: 0,
             evictions: 0,
@@ -579,6 +569,10 @@ impl SegmentedOperation {
                 let mut hash = Hasher::new();
                 hash.update(super::SEGMENTED_REQUESTS_DOMAIN.as_bytes());
                 hash
+            },
+            storage: super::query::QueryStorage {
+                reservation: budget.reserve(0)?,
+                cause: None,
             },
         }));
         Ok(Self {
@@ -828,7 +822,9 @@ impl SegmentedSession {
         position: u64,
         output: &mut [u8],
     ) -> Result<(), SegmentedError> {
-        if state.requests.len() == state.requests.capacity() {
+        if u64::try_from(state.requests.len()).map_err(|_| SegmentedError::AddressExhausted)?
+            >= u64::from(self.limits.requests)
+        {
             return Err(SegmentedError::EvidenceExhausted);
         }
         let bytes = u32::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
@@ -848,6 +844,9 @@ impl SegmentedSession {
         {
             return Err(SegmentedError::Corrupt("range escapes certified provider"));
         }
+        state
+            .storage
+            .run(|memory| memory.reserve_for_push(&mut state.requests))?;
         state.requests.push(SegmentedRequest {
             snapshot: self
                 .identity
@@ -898,7 +897,9 @@ impl SegmentedSession {
             .requests
             .len()
             .checked_add(needed)
-            .is_none_or(|count| count > state.requests.capacity())
+            .is_none_or(|count| {
+                u64::try_from(count).map_or(true, |count| count > u64::from(self.limits.requests))
+            })
         {
             state.error = Some(SegmentedError::EvidenceExhausted);
             return Err(SegmentedError::EvidenceExhausted);
@@ -943,6 +944,11 @@ impl SegmentedSession {
             .and_then(|v| v.checked_add(overhead))
             .ok_or(SegmentedError::AddressExhausted)?;
         self.make_room(&mut state, charge, true)?;
+        let State { cache, storage, .. } = &mut *state;
+        if let Err(error) = storage.run(|memory| memory.reserve_for_push(cache)) {
+            state.error.get_or_insert_with(|| error.clone());
+            return Err(error);
+        }
         let mut reservation = self.budget.reserve(charge)?;
         let mut bytes = vec![
             0_u8;

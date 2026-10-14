@@ -726,6 +726,21 @@ fn thousand_distinct_sources_open_only_headers_under_one_request_budget() {
         snapshot.validate(SegmentedReadLimits::new(4_000_000, 2, 20, 10_000_000, 4)),
         Err(SegmentedError::EvidenceExhausted)
     ));
+    // Permitted future reads/cache entries are logical ceilings, not resident
+    // arrays. Maximum limits must still open this small real publication under
+    // a practical live-byte budget and retain only the actual requests.
+    let large_limits =
+        SegmentedReadLimits::new(256 * 1024 * 1024, u32::MAX, u32::MAX, 10_000_000, 4);
+    let window = CurrentThreadWindow::open();
+    snapshot.validate(large_limits).unwrap();
+    let query = snapshot.query(large_limits).unwrap();
+    assert_eq!(query.touched_terms(), 0);
+    query.check_ready().unwrap();
+    drop(query);
+    let measured = window.close();
+    assert_eq!(measured.retained_bytes, 0);
+    assert!(measured.requested_bytes < 16 * 1024 * 1024);
+    assert!(measured.peak_working_bytes < 16 * 1024 * 1024);
 }
 
 fn tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation() {
