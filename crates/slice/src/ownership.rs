@@ -1099,6 +1099,7 @@ fn pattern_iris<'a>(
             }
         }
         G::Project { inner, .. }
+        | G::ProjectStar { inner, .. }
         | G::Distinct { inner }
         | G::Reduced { inner }
         | G::Slice { inner, .. } => pending.push(Reach::Pattern(inner)),

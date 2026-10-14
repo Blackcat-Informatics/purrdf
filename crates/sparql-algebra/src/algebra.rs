@@ -1070,6 +1070,14 @@ pub enum GraphPattern {
         /// The projected variables.
         variables: Vec<Variable>,
     },
+    /// `SELECT *`, retaining the ordered projection prefix shared with inner
+    /// sub-SELECTs instead of copying every visible name at every level.
+    ProjectStar {
+        /// The pattern being projected.
+        inner: Child<Self>,
+        /// First-appearance-ordered visible variables.
+        variables: crate::ProjectionVars,
+    },
     /// `DISTINCT`.
     Distinct {
         /// The pattern whose solutions are de-duplicated.
@@ -1647,6 +1655,16 @@ impl PropertyPathExpression {
 }
 
 impl GraphPattern {
+    /// Names retained by a projection, in their visible order.
+    #[must_use]
+    pub fn projected_names(&self) -> Option<crate::ProjectionNames<'_>> {
+        match self {
+            Self::Project { variables, .. } => Some(crate::ProjectionNames::Explicit(variables)),
+            Self::ProjectStar { variables, .. } => Some(crate::ProjectionNames::Star(variables)),
+            _ => None,
+        }
+    }
+
     /// The empty basic graph pattern: the identity table `Z` of §18.2, one solution
     /// with no bindings. The one spelling of it, so every rewrite that leaves a hole
     /// or tests for the identity agrees with the parser on what it is.

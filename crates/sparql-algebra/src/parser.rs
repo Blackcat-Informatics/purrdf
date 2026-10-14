@@ -654,6 +654,39 @@ impl SparqlParser {
     ) -> Result<Parser<'a, 'o, 'm, 's, RDFLIB>> {
         let mut lexemes =
             tokenize_with_memory(text, crate::lexer::LexerOptions::default(), memory)?;
+        let last_exists_token = lexemes.iter().rposition(|lexeme| {
+            matches!(&lexeme.token, Token::Word(word) if word.eq_ignore_ascii_case("EXISTS"))
+        });
+        // A later EXISTS outside a sub-SELECT cannot require its private
+        // scope trail. Only requests with an EXISTS need per-brace sites.
+        let mut brace_last_exists = Vec::new();
+        if last_exists_token.is_some() {
+            memory.reserve(&mut brace_last_exists, lexemes.len())?;
+            brace_last_exists.resize(lexemes.len(), usize::MAX);
+            let mut braces = Vec::new();
+            for (at, lexeme) in lexemes.iter().enumerate() {
+                match &lexeme.token {
+                    Token::LBrace => memory.push(&mut braces, (at, usize::MAX))?,
+                    Token::RBrace => {
+                        if let Some((open, last)) = braces.pop() {
+                            brace_last_exists[open] = last;
+                            if last != usize::MAX
+                                && let Some((_, parent_last)) = braces.last_mut()
+                            {
+                                *parent_last = last;
+                            }
+                        }
+                    }
+                    Token::Word(word) if word.eq_ignore_ascii_case("EXISTS") => {
+                        if let Some((_, last)) = braces.last_mut() {
+                            *last = at;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            memory.release_vec(braces)?;
+        }
         let mut tokens = Vec::new();
         memory.reserve(&mut tokens, lexemes.len())?;
         #[expect(
@@ -677,6 +710,8 @@ impl SparqlParser {
             anon_prefix,
             group_counter: 0,
             exists_scope_stack: ExistsScopes::default(),
+            last_exists_token,
+            brace_last_exists,
             dataset_at: None,
             dataset_slot: None,
             update_slots: Vec::new(),
@@ -779,6 +814,11 @@ struct Parser<'a, 'o, 'm, 's, const RDFLIB: bool> {
     /// [`Parser::push_exists_scope_boundary`]/[`Parser::push_exists_scope_isolated`]
     /// for how frames are opened.
     exists_scope_stack: ExistsScopes,
+    /// Last lexical `EXISTS` site in the current SELECT's braced region; a
+    /// finished nested group need not mirror its whole projection after it.
+    last_exists_token: Option<usize>,
+    /// Last lexical EXISTS inside each matched opening brace, or `usize::MAX`.
+    brace_last_exists: Vec<usize>,
     /// True while parsing a `SELECT`'s own projection list — its `(expr AS
     /// ?v)` targets and any aggregate arguments lifted out of them — i.e. the
     /// window BEFORE `WHERE` is even read, where [`Parser::exists_scope`] is
@@ -933,6 +973,7 @@ impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
         }
         self.memory.release_string(self.anon_prefix)?;
         self.exists_scope_stack.release(self.memory)?;
+        self.memory.release_vec(self.brace_last_exists)?;
         self.blank_label_bgps.release(self.memory)?;
         self.memory.release_vec(self.prebound)?;
         self.memory.release_vec(self.projection_seen_targets)?;
@@ -1060,6 +1101,8 @@ impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
             // and the two buffers start empty regardless of `self`'s own
             // mid-projection-list state at the fork point.
             exists_scope_stack: ExistsScopes::default(),
+            last_exists_token: None,
+            brace_last_exists: Vec::new(),
             projection_scope_pending: false,
             in_aggregate_argument: false,
             projection_seen_targets: Vec::new(),
@@ -1205,7 +1248,7 @@ impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
     fn parse_where_clause(&mut self) -> Result<GraphPattern> {
         self.push_exists_scope_boundary()?;
         let group = self.parse_group()?;
-        for v in group.scope.as_slice() {
+        for v in group.scope.visible_iter() {
             self.note_exists_scope_var(v)?;
         }
         group.scope.release(self.memory)?;
@@ -3865,7 +3908,13 @@ fn split_trailing_filters<S: Admission + ?Sized>(
 #[derive(Default)]
 struct VarScope {
     order: Vec<Variable>,
-    seen: ScopeTable<Variable, ()>,
+    /// `Some(generation)` is visible only to RDFLib's contextual projection
+    /// until the surrounding SELECT publishes that projection.
+    seen: ScopeTable<Variable, Option<u32>>,
+    star_snapshot: crate::ProjectionVars,
+    snapshotted: usize,
+    contextual_minus: bool,
+    generation: u32,
 }
 
 impl VarScope {
@@ -3876,7 +3925,35 @@ impl VarScope {
         variable: &Variable,
         memory: &mut Memory<'_, S>,
     ) -> std::result::Result<bool, StorageError> {
-        if variable.is_hidden() || self.seen.get(variable).is_some() {
+        self.note_with_visibility(variable, true, memory)
+    }
+
+    /// RDFLib's `MINUS` right side contributes to contextual `SELECT *`, but
+    /// not to the enclosing group's ordinary binding scope.
+    fn note_contextual<S: Admission + ?Sized>(
+        &mut self,
+        variable: &Variable,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<bool, StorageError> {
+        self.note_with_visibility(variable, false, memory)
+    }
+
+    fn note_with_visibility<S: Admission + ?Sized>(
+        &mut self,
+        variable: &Variable,
+        visible: bool,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<bool, StorageError> {
+        #[cfg(test)]
+        crate::projection::record_variable_work();
+        if variable.is_hidden() {
+            return Ok(false);
+        }
+        if let Some(entry) = self.seen.get_mut(variable) {
+            if visible && *entry == Some(self.generation) {
+                *entry = None;
+                return Ok(true);
+            }
             return Ok(false);
         }
         let required = self
@@ -3893,17 +3970,52 @@ impl VarScope {
                 .max(required);
             memory.reserve(&mut self.order, capacity)?;
         }
-        self.seen.insert(variable.clone(), (), memory)?;
+        self.seen.insert(
+            variable.clone(),
+            if visible { None } else { Some(self.generation) },
+            memory,
+        )?;
         self.order.push(variable.clone());
+        self.contextual_minus |= !visible;
         Ok(true)
     }
 
     fn contains(&self, variable: &Variable) -> bool {
-        self.seen.get(variable).is_some()
+        self.seen
+            .get(variable)
+            .is_some_and(|marker| *marker != Some(self.generation))
+    }
+
+    fn visible_iter(&self) -> impl Iterator<Item = &Variable> {
+        self.order.iter().filter(|variable| self.contains(variable))
+    }
+
+    fn publish_contextual(&mut self) -> std::result::Result<(), StorageError> {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        self.contextual_minus = false;
+        Ok(())
     }
 
     fn as_slice(&self) -> &[Variable] {
         &self.order
+    }
+
+    fn star_snapshot<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<crate::ProjectionVars, StorageError> {
+        let mut snapshot = self.star_snapshot.clone();
+        for variable in &self.order[self.snapshotted..] {
+            #[cfg(test)]
+            crate::projection::record_variable_work();
+            snapshot.push_with_memory(variable, memory)?;
+        }
+        self.snapshotted = self.order.len();
+        self.star_snapshot = snapshot.clone();
+        Ok(snapshot)
     }
 
     /// Publish the already-admitted projection array; the lookup arena dies first.
@@ -4014,6 +4126,8 @@ impl ExistsScopes {
         variable: &Variable,
         memory: &mut Memory<'_, S>,
     ) -> std::result::Result<(), StorageError> {
+        #[cfg(test)]
+        crate::projection::record_variable_work();
         let Some(frame) = self.frames.last() else {
             return Ok(());
         };
@@ -4087,7 +4201,7 @@ pub fn visible_variables_with_memory<S: Admission + ?Sized>(
     scope.into_vec(memory)
 }
 
-fn contextual_visible_variables<S: Admission + ?Sized>(
+pub(crate) fn contextual_visible_variables<S: Admission + ?Sized>(
     pattern: &GraphPattern,
     memory: &mut Memory<'_, S>,
 ) -> std::result::Result<Vec<Variable>, StorageError> {
@@ -4218,6 +4332,11 @@ fn note_vars<const RDFLIB: bool, S: Admission + ?Sized>(
                 memory.push(pending, VarStep::Pattern(inner))?;
             }
             GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                for variable in variables {
+                    out.note(variable, memory)?;
+                }
+            }
+            GraphPattern::ProjectStar { variables, .. } => {
                 for variable in variables {
                     out.note(variable, memory)?;
                 }
@@ -4626,6 +4745,26 @@ fn find_scope_conflict<'a, S: Admission + ?Sized>(
                 GraphPattern::Project { inner, variables } => {
                     // Build each projection's lookup once, preserving the enclosing
                     // scope's written order in the narrowed scope.
+                    let mut projected = VarScope::default();
+                    for variable in variables {
+                        projected.note(variable, memory)?;
+                    }
+                    let mut narrowed = VarScope::default();
+                    for variable in scope.as_slice() {
+                        if projected.contains(variable) {
+                            narrowed.note(variable, memory)?;
+                        }
+                    }
+                    projected.release(memory)?;
+                    if narrowed.as_slice().is_empty() {
+                        narrowed.release(memory)?;
+                    } else {
+                        let at = scopes.len();
+                        memory.push(&mut scopes, narrowed)?;
+                        memory.push(&mut pending, (&**inner, at))?;
+                    }
+                }
+                GraphPattern::ProjectStar { inner, variables } => {
                     let mut projected = VarScope::default();
                     for variable in variables {
                         projected.note(variable, memory)?;
@@ -5353,7 +5492,9 @@ mod tests {
     /// Strip the outer `Project` wrapper to reach the WHERE algebra.
     fn unproject(p: GraphPattern) -> GraphPattern {
         match p {
-            GraphPattern::Project { inner, .. } => inner.into_inner(),
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                inner.into_inner()
+            }
             other => other,
         }
     }
@@ -6595,10 +6736,158 @@ mod tests {
     #[test]
     fn select_star_collects_visible_vars() {
         let q = format!("{GM}SELECT * WHERE {{ ?a purrdf:p ?b . }}");
-        let GraphPattern::Project { variables, .. } = select_pattern(&q) else {
-            panic!("expected Project");
+        let GraphPattern::ProjectStar { variables, .. } = select_pattern(&q) else {
+            panic!("expected ProjectStar");
         };
-        assert_eq!(variables, vec![Variable::new("a"), Variable::new("b")]);
+        assert_eq!(
+            variables.iter().cloned().collect::<Vec<_>>(),
+            vec![Variable::new("a"), Variable::new("b")]
+        );
+    }
+
+    #[test]
+    fn nested_star_keeps_order_and_shares_each_prefix() {
+        use std::fmt::Write;
+        fn nested(depth: usize) -> String {
+            let mut query = String::new();
+            for _ in 1..depth {
+                query.push_str("SELECT * WHERE { { ");
+            }
+            query.push_str("SELECT * WHERE { BIND(0 AS ?v0) }");
+            for level in 1..depth {
+                write!(query, " }} BIND({level} AS ?v{level}) }}").expect("String write");
+            }
+            query
+        }
+        for depth in [2, 4, 8, 8_000] {
+            let query = SparqlParser::new()
+                .parse_query(&nested(depth))
+                .expect("nested stars parse within linear-memory ownership");
+            let Query::Select { pattern, .. } = &query else {
+                panic!("SELECT query");
+            };
+            let GraphPattern::ProjectStar { variables, .. } = pattern else {
+                panic!("persistent star projection");
+            };
+            assert_eq!(variables.len(), depth);
+            assert_eq!(variables.get(0), Some(&Variable::new("v0")));
+            assert_eq!(
+                variables.get(depth - 1),
+                Some(&Variable::new(format!("v{}", depth - 1)))
+            );
+            if depth <= 8 {
+                assert_eq!(
+                    variables.iter().cloned().collect::<Vec<_>>(),
+                    (0..depth)
+                        .map(|level| Variable::new(format!("v{level}")))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_star_variable_visits_and_copies_grow_below_threefold() {
+        use std::fmt::Write;
+        for (leaf, trailing_values, rdflib, contextual_minus) in [
+            ("0", false, false, false),
+            (
+                "EXISTS { ?s <http://example.org/p> ?o }",
+                false,
+                false,
+                false,
+            ),
+            ("0", true, false, false),
+            ("0", false, true, false),
+            ("0", false, true, true),
+        ] {
+            let mut measured = Vec::new();
+            for depth in [2_000, 4_000, 8_000] {
+                let mut query = String::new();
+                for _ in 1..depth {
+                    query.push_str("SELECT * WHERE { { ");
+                }
+                write!(query, "SELECT * WHERE {{ BIND({leaf} AS ?v0)").expect("String write");
+                if contextual_minus {
+                    query.push_str(" MINUS { ?m0 <http://example.org/p> ?n0 }");
+                }
+                query.push_str(" }");
+                if trailing_values {
+                    query.push_str(" VALUES ?t0 { 1 }");
+                }
+                for level in 1..depth {
+                    write!(query, " }} BIND({level} AS ?v{level})").expect("String write");
+                    if contextual_minus {
+                        write!(
+                            query,
+                            " MINUS {{ ?m{level} <http://example.org/p> ?n{level} }}"
+                        )
+                        .expect("String write");
+                    }
+                    query.push_str(" }");
+                    if trailing_values {
+                        write!(query, " VALUES ?t{level} {{ 1 }}").expect("String write");
+                    }
+                }
+                let _ = crate::projection::take_variable_work();
+                let parsed = if rdflib {
+                    SparqlParser::new().parse_rdflib_query_with(&query, &ParserOptions::default())
+                } else {
+                    SparqlParser::new().parse_query(&query)
+                }
+                .expect("public parse");
+                measured.push(crate::projection::take_variable_work());
+                drop(parsed);
+            }
+            eprintln!(
+                "nested star projection variable visits/copies leaf={leaf} trailing={trailing_values} rdflib={rdflib} contextual_minus={contextual_minus}: {measured:?}"
+            );
+            for pair in measured.windows(2) {
+                assert!(
+                    pair[1] < pair[0] * 3,
+                    "accepted variable work: {measured:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exists_scope_sites_follow_tokens_not_literal_comment_or_iri_text() {
+        let source = "SELECT * WHERE { BIND(\"EXISTS\" AS ?a) # EXISTS\n \
+                      BIND(<http://example.org/EXISTS> AS ?b) }";
+        let options = ParserOptions::default();
+        let mut resident = ResidentParserAdmission;
+        let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
+        let parser = SparqlParser::new()
+            .parser_for::<false>(source, &options, &mut memory)
+            .expect("tokenize source");
+        assert_eq!(parser.last_exists_token, None);
+        assert_eq!(parser.brace_last_exists.as_slice(), &[]);
+        drop(parser);
+        SparqlParser::new()
+            .parse_query(source)
+            .expect("source parses");
+    }
+
+    #[test]
+    fn admitted_nested_star_publishes_its_exact_live_raw_account() {
+        let source = "SELECT * WHERE { { SELECT * WHERE { { SELECT * WHERE { \
+                      BIND(0 AS ?v0) } } BIND(1 AS ?v1) } } BIND(2 AS ?v2) }";
+        let mut resident = ResidentParserAdmission;
+        let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
+        let query = SparqlParser::parse_query_admitted(
+            source,
+            &ParserOptions::default(),
+            None,
+            &[],
+            &mut memory,
+        )
+        .expect("admitted nested wildcard");
+        let raw = query.raw_owned_bytes_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), raw);
+        drop(query);
+        memory.release_bytes(raw).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]
@@ -8204,7 +8493,9 @@ mod tests {
         let Query::Select { pattern, .. } = q else {
             panic!("a SELECT");
         };
-        let GraphPattern::Project { inner, .. } = pattern else {
+        let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+            pattern
+        else {
             panic!("a projection");
         };
         let inner = inner.into_inner();
@@ -9042,7 +9333,8 @@ mod tests {
         // right operand of MINUS. `?v` is MINUS-right-only, so the projection is
         // exactly {?s, ?o}.
         let q = format!("{GM}SELECT * WHERE {{ ?s purrdf:p ?o MINUS {{ ?x purrdf:q ?v }} }}");
-        let GraphPattern::Project { variables, .. } = select_pattern(&q) else {
+        let pattern = select_pattern(&q);
+        let Some(variables) = pattern.projected_names() else {
             panic!("expected a Project wrapper for SELECT *");
         };
         let names: Vec<&str> = variables.iter().map(Variable::as_str).collect();
@@ -10494,6 +10786,7 @@ mod tests {
                 find_held_in(inner)
             }
             GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Filter { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Slice { inner, .. }
@@ -10812,6 +11105,7 @@ mod tests {
                 GraphPattern::Filter { inner, .. }
                 | GraphPattern::Graph { inner, .. }
                 | GraphPattern::Project { inner, .. }
+                | GraphPattern::ProjectStar { inner, .. }
                 | GraphPattern::Extend { inner, .. } => walk(inner, out),
                 _ => {}
             }
@@ -11181,11 +11475,12 @@ mod tests {
     fn argument_variables_are_visible_in_the_enclosing_group() {
         // SELECT * projects every argument variable, both sides, in order.
         let q = format!("{PFP}SELECT * WHERE {{ ( ?a ?b ) pf:solve ( ?c ?d ) }}");
-        let GraphPattern::Project { variables, .. } = select_pattern_with(&q, &pf_options()) else {
+        let pattern = select_pattern_with(&q, &pf_options());
+        let Some(variables) = pattern.projected_names() else {
             panic!("expected a Project wrapper");
         };
         assert_eq!(
-            variables,
+            variables.iter().cloned().collect::<Vec<_>>(),
             vec![
                 Variable::new("a"),
                 Variable::new("b"),

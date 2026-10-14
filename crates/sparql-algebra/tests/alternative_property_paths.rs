@@ -27,10 +27,19 @@ fn parsed(body: &str) -> GraphPattern {
 #[test]
 fn branching_compositions_stay_compact_and_keep_repeated_arms() {
     let pattern = parsed("?s (ex:p|ex:p)/(ex:q|ex:r) ?o");
-    let GraphPattern::Project { inner, variables } = pattern else {
-        panic!("projection");
+    assert_eq!(
+        pattern
+            .projected_names()
+            .expect("projection")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+        [Variable::new("s"), Variable::new("o")]
+    );
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+    else {
+        panic!("projection")
     };
-    assert_eq!(variables, [Variable::new("s"), Variable::new("o")]);
     let GraphPattern::Join { left, right } = &*inner else {
         panic!("composition");
     };
@@ -64,13 +73,19 @@ fn every_object_has_a_hygienic_witness_and_only_real_variables_are_projected() {
         "?s (ex:p|ex:q)/ex:r ?o, ?z . \
         ?__purrdf_hidden_0 ex:t _:__purrdf_anon_0",
     );
-    let GraphPattern::Project { variables, inner } = pattern else {
-        panic!("projection");
-    };
     assert_eq!(
-        variables,
+        pattern
+            .projected_names()
+            .expect("projection")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
         ["__purrdf_hidden_0", "s", "o", "z"].map(Variable::new)
     );
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+    else {
+        panic!("projection")
+    };
     let mut hidden = std::collections::BTreeSet::new();
     walk_pre_post(NodeRef::Pattern(&inner), |visit, node| {
         if visit == Visit::Enter {
@@ -162,8 +177,10 @@ fn deeply_nested_inverse_alternatives_translate_on_a_small_stack() {
                 ")".repeat(100_000)
             );
             let pattern = parsed(&body);
-            let GraphPattern::Project { inner, .. } = pattern else {
-                panic!("projection");
+            let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+                pattern
+            else {
+                panic!("projection")
             };
             assert!(matches!(&*inner, GraphPattern::Union { .. }));
         })
@@ -216,7 +233,7 @@ fn non_distinguished_identity_is_admitted_only_in_match_roles() {
     };
     let hidden = Variable::hidden("witness");
     let Query::Select {
-        pattern: GraphPattern::Project { inner, .. },
+        pattern,
         dataset,
         base_iri,
         version,
@@ -225,6 +242,10 @@ fn non_distinguished_identity_is_admitted_only_in_match_roles() {
         .expect("ordinary control")
     else {
         panic!("SELECT");
+    };
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+    else {
+        panic!("projection")
     };
     let mut matched = (*inner).clone();
     let GraphPattern::Bgp { patterns } = &mut matched else {

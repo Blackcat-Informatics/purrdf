@@ -2181,7 +2181,7 @@ impl<'q> CallReadShape<'q> {
                 if read
                     .operators
                     .iter()
-                    .any(|operator| matches!(operator, GraphPattern::Project { .. }))
+                    .any(|operator| operator.projected_names().is_some())
                 {
                     Ok(read)
                 } else {
@@ -2764,7 +2764,8 @@ impl<'q> ShapeWalk<'q> {
                     }),
                 ));
             }
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 // A sub-`SELECT` is its own scope: the frames around it inject into it
                 // only the variables it projects, which is how the planner reads it
                 // too. Those it carries in from the scope around, which a call inside
@@ -3216,7 +3217,7 @@ enum WalkFrame<'q> {
 enum Resume<'q> {
     Project {
         pattern: &'q GraphPattern,
-        variables: &'q [Variable],
+        variables: purrdf_sparql_algebra::ProjectionNames<'q>,
         outer: CallContext<'q>,
         outer_frame: usize,
         outer_graphs: Vec<NamedNodePattern>,
@@ -3775,9 +3776,10 @@ pub(crate) fn open_call_cursor(
                 let slot = lookup(&visible, source);
                 call_push(&mut visible, (variable, slot), &mut memory)?;
             }
-            GraphPattern::Project { variables, .. } => {
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                let variables = operator.projected_names().expect("projection names");
                 projection.clear();
-                for variable in variables {
+                for variable in variables.iter() {
                     call_push(
                         &mut projection,
                         (variable, lookup(&visible, variable)),
@@ -6764,7 +6766,8 @@ mod walk_tests {
                         }),
                     )
                 }
-                GraphPattern::Project { inner, variables } => {
+                GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                    let variables = pattern.projected_names().expect("projection names");
                     let mut carried: Vec<Variable> = Vec::new();
                     for name in self
                         .context

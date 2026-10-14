@@ -252,7 +252,7 @@
 //! recomputed per row.
 
 use purrdf_sparql_algebra::Chain;
-use purrdf_sparql_algebra::{GraphPattern, OrderExpression, Variable};
+use purrdf_sparql_algebra::{GraphPattern, OrderExpression};
 
 use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
 use crate::governor::soundness;
@@ -444,7 +444,9 @@ fn map_spine_admitted(
             } if *length != Some(0) => original = inner,
             // `Project`/`Union`: synthesizing cases this walk declines to track — see
             // [`ledger_source_map_admitted`]'s doc.
-            GraphPattern::Project { .. } | GraphPattern::Union { .. } => return Ok(()),
+            GraphPattern::Project { .. }
+            | GraphPattern::ProjectStar { .. }
+            | GraphPattern::Union { .. } => return Ok(()),
             // Every other shape, including a non-erasing `LeftJoin`/`OrderBy`/`Slice`,
             // is the terminal shape `normalize` clones wholesale.
             _ => return map_clone_admitted(original, normalized, map, workspace),
@@ -1162,6 +1164,13 @@ mod iterative_walk_tests {
                     variables: variables.clone(),
                 }),
             },
+            GraphPattern::ProjectStar { inner, variables } => match normalize_ref(inner) {
+                Enf::FoldedEmpty => Enf::FoldedEmpty,
+                Enf::Pattern(p) => Enf::Pattern(GraphPattern::ProjectStar {
+                    inner: Child::new(p),
+                    variables: variables.clone(),
+                }),
+            },
             GraphPattern::Union { arms } => {
                 let kept: Vec<GraphPattern> = arms
                     .iter()
@@ -1206,7 +1215,9 @@ mod iterative_walk_tests {
             } if *length != Some(0) => {
                 map_spine_ref(inner, normalized, map);
             }
-            GraphPattern::Project { .. } | GraphPattern::Union { .. } => {}
+            GraphPattern::Project { .. }
+            | GraphPattern::ProjectStar { .. }
+            | GraphPattern::Union { .. } => {}
             _ => map_clone_1to1_ref(original, normalized, map),
         }
     }
@@ -1536,7 +1547,7 @@ pub(crate) fn normalize_with_memory(
         /// Normalize this spine node.
         Enter(&'a GraphPattern),
         /// Rebuild a `Project` over the normal form on top of the value stack.
-        Project(&'a [Variable]),
+        Project(&'a GraphPattern),
         /// Rebuild a `Union` over the `count` normal forms on top of the value stack,
         /// the first arm's deepest.
         Union(usize),
@@ -1611,8 +1622,8 @@ pub(crate) fn normalize_with_memory(
                 // output (the `PrjMap` boundary substitution narrows against) — rebuild it
                 // over whatever its own child normalized to, rather than erasing it
                 // outright.
-                GraphPattern::Project { inner, variables } => {
-                    steps.push(Step::Project(variables))?;
+                GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                    steps.push(Step::Project(pattern))?;
                     steps.push(Step::Enter(inner))?;
                 }
                 // Union: every arm is on the spine (empty iff ALL are), so each gets the
@@ -1640,17 +1651,24 @@ pub(crate) fn normalize_with_memory(
                     forms.push(Enf::Pattern(copied_with_memory(other, memory)?))?;
                 }
             },
-            Step::Project(variables) => {
+            Step::Project(source) => {
                 let inner = forms
                     .pop()
                     .expect("a Project's inner is normalized before the Project is rebuilt");
                 forms.push(match inner {
                     Enf::FoldedEmpty => Enf::FoldedEmpty,
-                    Enf::Pattern(p) => Enf::Pattern(GraphPattern::Project {
-                        inner: crate::expr::correlated_box(p, memory)?.into(),
-                        variables: memory
-                            .collect(variables.iter().cloned())
-                            .map_err(|e| crate::expr::correlated_storage_error(memory, e))?,
+                    Enf::Pattern(p) => Enf::Pattern(match source {
+                        GraphPattern::Project { variables, .. } => GraphPattern::Project {
+                            inner: crate::expr::correlated_box(p, memory)?.into(),
+                            variables: memory
+                                .collect(variables.iter().cloned())
+                                .map_err(|e| crate::expr::correlated_storage_error(memory, e))?,
+                        },
+                        GraphPattern::ProjectStar { variables, .. } => GraphPattern::ProjectStar {
+                            inner: crate::expr::correlated_box(p, memory)?.into(),
+                            variables: variables.clone(),
+                        },
+                        _ => unreachable!("projection step holds a projection"),
                     }),
                 })?;
             }

@@ -2046,6 +2046,10 @@ fn collect_vars_admitted<'a>(
                         out.try_extend(variables.iter().cloned())?;
                         pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
+                    GraphPattern::ProjectStar { inner, variables } => {
+                        out.try_extend(variables.iter().cloned())?;
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
+                    }
                 }
             }
         }
@@ -3718,7 +3722,7 @@ impl SubstitutionRow {
 
     fn narrow_to(
         &self,
-        variables: &[Variable],
+        variables: purrdf_sparql_algebra::ProjectionNames<'_>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
         self.filtered(workspace, |v| variables.contains(v))
@@ -4779,7 +4783,10 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
             let inner_sub = if PRESERVE {
                 substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?
             } else {
-                let narrowed = row.narrow_to(variables, memory.admission_mut().workspace())?;
+                let narrowed = row.narrow_to(
+                    purrdf_sparql_algebra::ProjectionNames::Explicit(variables),
+                    memory.admission_mut().workspace(),
+                )?;
                 substitute_pattern_impl::<PRESERVE>(inner, &narrowed, map, defer, memory)?
             };
             boxed_and_mapped(
@@ -4788,6 +4795,26 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                     variables: memory
                         .collect(variables.iter().cloned())
                         .map_err(|e| correlated_storage_error(memory, e))?,
+                },
+                pattern,
+                map,
+                memory,
+            )?
+        }
+        GraphPattern::ProjectStar { inner, variables } => {
+            let inner_sub = if PRESERVE {
+                substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?
+            } else {
+                let narrowed = row.narrow_to(
+                    purrdf_sparql_algebra::ProjectionNames::Star(variables),
+                    memory.admission_mut().workspace(),
+                )?;
+                substitute_pattern_impl::<PRESERVE>(inner, &narrowed, map, defer, memory)?
+            };
+            boxed_and_mapped(
+                GraphPattern::ProjectStar {
+                    inner: inner_sub.into(),
+                    variables: variables.clone(),
                 },
                 pattern,
                 map,
@@ -12075,6 +12102,51 @@ mod tests {
     }
 
     #[test]
+    fn star_substitution_borrows_names_under_a_fixed_workspace_limit() {
+        use crate::workspace::owned_row_regressions::{Refusal, account};
+        use std::sync::atomic::Ordering;
+
+        for width in [32, 256, 2048] {
+            let names = (0..width)
+                .map(|index| format!("?v{index}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let query = purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(&format!("SELECT * WHERE {{ VALUES ({names}) {{}} }}"))
+                .expect("valid wide star projection");
+            let GraphPattern::ProjectStar { variables, .. } = query.pattern() else {
+                panic!("star query retains its shared projection");
+            };
+            let pattern = GraphPattern::ProjectStar {
+                inner: Child::new(GraphPattern::empty_bgp()),
+                variables: variables.clone(),
+            };
+            let base = crate::workspace::QueryWorkspace::<Refusal>::control_bytes().unwrap();
+            let (workspace, ledger, _) = account(base + 4096);
+            let empty = SubstitutionRow::resident(Vec::new(), Vec::new());
+            let rewritten = substitute_pattern_admitted(&pattern, &empty, &workspace.capability())
+                .expect("empty bindings do not copy the growing projection snapshot");
+            drop(rewritten);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+
+            for name in ["v0", "outside"] {
+                let row = row_binding_iri(name, "value");
+                let narrowed = row
+                    .narrow_to(
+                        purrdf_sparql_algebra::ProjectionNames::Star(variables),
+                        &workspace.capability(),
+                    )
+                    .expect("only the bound row is admitted");
+                let expected = usize::from(name == "v0");
+                assert_eq!(narrowed.expr.len(), expected);
+                assert_eq!(narrowed.term.len(), expected);
+                drop(narrowed);
+                assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            }
+        }
+    }
+
+    #[test]
     fn property_function_arg_with_a_literal_binding_is_written_into_the_call() {
         // A property-function argument is an invocation input: nothing but the call
         // itself can carry the row's value to the relation. A literal is written
@@ -13728,6 +13800,10 @@ mod walk_tests {
                 reference_pattern_vars_outside(inner, endpoint, out);
             }
             GraphPattern::Project { inner, variables } => {
+                out.extend(variables.iter().cloned());
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::ProjectStar { inner, variables } => {
                 out.extend(variables.iter().cloned());
                 reference_pattern_vars_outside(inner, endpoint, out);
             }

@@ -228,6 +228,22 @@ impl JobError {
 
     /// The message a JavaScript caller reads.
     pub(crate) fn rendered(&self) -> String {
+        if cfg!(target_arch = "wasm32")
+            && self.text == ErrorText::Diagnostic
+            && self.code() == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+        {
+            // The evaluator retains the exact frame in its native diagnostic, but
+            // two equivalent wasm runs can discover the low stack in adjacent frames.
+            // The package reports one position-independent statement on both lanes.
+            return RdfDiagnostic::error(
+                self.code(),
+                purrdf_sparql_eval::EvalError::StackExhausted {
+                    construct: "query evaluation",
+                }
+                .to_string(),
+            )
+            .to_string();
+        }
         match &self.text {
             ErrorText::Diagnostic => self.diagnostic.to_string(),
             ErrorText::Message => self.diagnostic.message.clone(),

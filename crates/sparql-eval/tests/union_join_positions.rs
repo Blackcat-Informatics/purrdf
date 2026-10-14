@@ -930,7 +930,8 @@ fn projectless_raw_local_blank_slots_do_not_reappear_after_a_positive_join() {
     let Query::Select { pattern, .. } = &mut query else {
         unreachable!()
     };
-    let GraphPattern::Project { inner, .. } = std::mem::replace(pattern, GraphPattern::empty_bgp())
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+        std::mem::replace(pattern, GraphPattern::empty_bgp())
     else {
         unreachable!()
     };

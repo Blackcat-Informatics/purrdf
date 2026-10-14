@@ -207,6 +207,13 @@ pub const LEDGER: &[ThreadLocal] = &[
         safety: Safety::NotCompiledIn,
         reason: TEST_ONLY,
     },
+    // ── purrdf-sparql-algebra test instrumentation ─────────────────────────────────
+    ThreadLocal {
+        file: "crates/sparql-algebra/src/projection.rs",
+        name: "VARIABLE_WORK",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
     // ── purrdf-sparql-eval ──────────────────────────────────────────────────────────
     ThreadLocal {
         file: "crates/sparql-eval/src/solution.rs",

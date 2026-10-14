@@ -146,16 +146,25 @@ fn tree_bytes_with_memory<S: Admission + ?Sized>(
     raw: bool,
 ) -> Result<usize, StorageError> {
     let mut total = 0usize;
+    let mut shared_nodes = purrdf_lex::allocation::OrderedTable::<usize, ()>::default();
     walk_pre_post_with_memory(
         root,
-        |visit, node, _| {
+        |visit, node, memory| {
             if visit == crate::walk::Visit::Enter {
                 total = total.saturating_add(own_bytes(node, raw));
+                if let NodeRef::Pattern(GraphPattern::ProjectStar { variables, .. }) = node {
+                    total = total.saturating_add(variables.reachable_bytes(
+                        &mut shared_nodes,
+                        memory,
+                        raw,
+                    )?);
+                }
             }
             Ok::<_, StorageError>(Flow::Descend)
         },
         memory,
     )?;
+    shared_nodes.release(memory)?;
     Ok(total)
 }
 
@@ -274,6 +283,7 @@ fn pattern_bytes(pattern: &GraphPattern, raw: bool) -> usize {
                 .fold(0, usize::saturating_add),
         ]),
         G::Project { variables, .. } => sum([INNER, variables.heap_bytes(raw)]),
+        G::ProjectStar { .. } => INNER,
         G::Group {
             variables,
             aggregates,
@@ -344,7 +354,7 @@ fn path_bytes(path: &PropertyPathExpression, raw: bool) -> usize {
 }
 
 /// The heap a leaf value owns; leaves own no node, so this never recurses.
-trait HeapBytes {
+pub(crate) trait HeapBytes {
     fn heap_bytes(&self, raw: bool) -> usize;
 }
 impl<T: HeapBytes> HeapBytes for Vec<T> {
@@ -511,6 +521,78 @@ impl HeapBytes for Function {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outer_only_star_and_its_clone_keep_the_full_raw_storage_account() {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut projection = crate::ProjectionVars::default();
+        for index in 0..4 {
+            projection
+                .push_with_memory(&Variable::new(format!("v{index}")), &mut memory)
+                .expect("admitted projection append");
+        }
+        let mut seen = purrdf_lex::allocation::OrderedTable::default();
+        let live_nodes = projection
+            .reachable_bytes(&mut seen, &mut memory, true)
+            .expect("full projection census");
+        seen.release(&mut memory).expect("release census scratch");
+        let query = Query::Select {
+            pattern: GraphPattern::ProjectStar {
+                inner: crate::Child::new(GraphPattern::Bgp { patterns: vec![] }),
+                variables: projection.clone(),
+            },
+            dataset: QueryDataset::default(),
+            base_iri: None,
+            version: None,
+        };
+        drop(projection);
+        assert_eq!(
+            query.raw_owned_bytes_with_memory(&mut memory).unwrap(),
+            live_nodes + size_of::<GraphPattern>()
+        );
+        let mut copy_resident = Resident;
+        let mut copy_memory = Memory::new(&mut copy_resident);
+        let copied = query.clone_with_memory(&mut copy_memory).unwrap();
+        assert_eq!(
+            copy_memory.admitted_bytes(),
+            copied
+                .raw_owned_bytes_with_memory(&mut copy_memory)
+                .unwrap(),
+            "the clone's surviving grant covers its original shared roots"
+        );
+        drop(query);
+        assert_eq!(
+            copied.raw_owned_bytes_with_memory(&mut memory).unwrap(),
+            live_nodes + size_of::<GraphPattern>()
+        );
+    }
+
+    #[test]
+    fn nested_star_clone_counts_shared_roots_once() {
+        for levels in [1, 16, 128] {
+            let query = crate::SparqlParser::new()
+                .parse_query(&format!(
+                    "SELECT * WHERE {{ {} ?s ?p ?o {} }}",
+                    "{ SELECT * WHERE { ".repeat(levels),
+                    " } }".repeat(levels)
+                ))
+                .expect("nested shared star roots");
+            let mut resident = Resident;
+            let mut memory = Memory::new(&mut resident);
+            let copy = query.clone_with_memory(&mut memory).unwrap();
+            let retained = copy.raw_owned_bytes_with_memory(&mut memory).unwrap();
+            assert_eq!(memory.admitted_bytes(), retained);
+            drop(query);
+            assert_eq!(
+                copy.raw_owned_bytes_with_memory(&mut memory).unwrap(),
+                retained
+            );
+            drop(copy);
+            memory.release_bytes(retained).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+    }
 
     #[test]
     fn reserved_capacity_is_charged_even_when_the_vector_is_empty() {
