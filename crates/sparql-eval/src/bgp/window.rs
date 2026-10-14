@@ -14,6 +14,7 @@ use crate::solution::{RetainedRow, VarSchema};
 use crate::{AdmittedMap, AdmittedVec, EvalError, WorkspaceCapability};
 use core::cmp::Ordering;
 use purrdf_core::{DatasetView, GraphMatch, QuadIds, ViewTermId};
+use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 type Key<I> = (Option<I>, Option<I>, Option<I>);
@@ -152,7 +153,7 @@ impl<I: ViewTermId> PreparedWindow<I> {
                     let mut failure = None;
                     emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies, graph, |quad| {
                         if failure.is_some() || ctx.stop_check().is_some() {
-                            return;
+                            return ControlFlow::Break(());
                         }
                         let added = (|| {
                             result.visits = result
@@ -172,6 +173,9 @@ impl<I: ViewTermId> PreparedWindow<I> {
                         })();
                         if let Err(error) = added {
                             failure = Some(error);
+                            ControlFlow::Break(())
+                        } else {
+                            ControlFlow::Continue(())
                         }
                     });
                     if let Some(error) = failure {

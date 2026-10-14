@@ -1303,6 +1303,184 @@ fn bounded_virtual_streams_and_empty_graph_declarations_match_resident() {
     }
 }
 
+/// LIMIT over real persisted reifiers must stop the source traversal, not merely
+/// discard already translated rows in the consumer callback.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+    use purrdf_core::{
+        PackBuilder, RdfDatasetBuilder, SegmentedBuildLimits, SegmentedFileProvider,
+        SegmentedImage, SegmentedLayer, SegmentedLayerMetadata, SegmentedStack, TermBox,
+    };
+    for claims in [2000, 200_000] {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = TermValue::iri("https://example.org/claim-predicate");
+        let annotation = builder
+            .intern_value(&TermValue::iri("https://example.org/annotation"))
+            .unwrap();
+        for index in 0..claims {
+            let reifier = builder
+                .intern_value(&TermValue::iri(format!(
+                    "https://example.org/claim/{index}"
+                )))
+                .unwrap();
+            let object = TermValue::simple_literal(format!("value {}", index % 256));
+            let triple = builder
+                .intern_value(&TermValue::Triple {
+                    s: TermBox::new(TermValue::iri(format!(
+                        "https://example.org/subject/{index}"
+                    ))),
+                    p: TermBox::new(predicate.clone()),
+                    o: TermBox::new(object.clone()),
+                })
+                .unwrap();
+            let object = builder.intern_value(&object).unwrap();
+            builder
+                .push_reifier_in_graph(reifier, triple, None)
+                .unwrap();
+            builder
+                .push_annotation_in_graph(reifier, annotation, object, None)
+                .unwrap();
+        }
+        let resident = builder.freeze().unwrap();
+        let packed = PackBuilder::build_view_bytes(resident.as_ref()).unwrap();
+        for (block_bytes, records_per_block) in [(4096, 32), (4096, 64), (4096, 128), (8192, 128)] {
+            let built = SegmentedImage::from_pack_v1(
+                &packed,
+                SegmentedBuildLimits::new(
+                    u32::MAX - 1,
+                    u32::MAX,
+                    u32::MAX,
+                    block_bytes,
+                    records_per_block,
+                )
+                .unwrap(),
+            );
+            if (block_bytes, records_per_block) == (4096, 128) {
+                assert!(matches!(built, Err(SegmentedError::ConstructionLimit)));
+                eprintln!(
+                    "claims={claims} block_bytes=4096 records_per_block=128 refusal=ConstructionLimit"
+                );
+                continue;
+            }
+            let image = built.unwrap();
+            eprintln!(
+                "claims={claims} block_bytes={block_bytes} records_per_block={records_per_block} terms={} pack_bytes={} image_bytes={}",
+                resident.term_count(),
+                packed.len(),
+                image.bytes().len()
+            );
+            let mut kinds = [0_u64; 256];
+            let authenticated_bytes = image.receipt().block_count() * u64::from(block_bytes);
+            for block in image.bytes()[..usize::try_from(authenticated_bytes).unwrap()]
+                .chunks_exact(usize::try_from(block_bytes).unwrap())
+                .skip(1)
+            {
+                kinds[usize::from(block[0])] += u64::from(block_bytes);
+            }
+            eprintln!(
+                "claims={claims} block_bytes={block_bytes} records_per_block={records_per_block} block_kind_bytes={:?} authentication_bytes={}",
+                &kinds[..6],
+                image.receipt().byte_len() - authenticated_bytes
+            );
+            let directory = purrdf_testkit::temp_dir!("persisted-reifier-limit-").unwrap();
+            let path = directory.path().join("claims.seg");
+            std::fs::write(&path, image.bytes()).unwrap();
+            let provider = SegmentedFileProvider::from_file(
+                std::fs::File::open(&path).unwrap(),
+                image.receipt().snapshot(),
+            )
+            .unwrap();
+            let read_limits =
+                SegmentedReadLimits::new(256 * 1024 * 1024, 32, u32::MAX, u64::MAX, 32);
+            let mut stack = SegmentedStack::default();
+            stack
+                .publish(
+                    vec![Arc::new(
+                        SegmentedLayer::new(
+                            Arc::new(provider),
+                            image.receipt().clone(),
+                            SegmentedLayerMetadata::default(),
+                        )
+                        .unwrap(),
+                    )],
+                    read_limits,
+                )
+                .unwrap();
+            drop(image);
+            let snapshot = stack.snapshot().unwrap();
+            let engine = NativeSparqlEngine::new();
+            let text = format!(
+                "SELECT ?r WHERE {{ ?r <{}> ?t }} LIMIT 10",
+                purrdf_iri::vocab::rdf::REIFIES
+            );
+            let source = snapshot.query(read_limits).unwrap();
+            let limited = engine
+                .query_fallible_view(
+                    &source,
+                    SparqlRequest {
+                        query: &text,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY,
+                )
+                .unwrap();
+            assert_eq!(support::solutions(limited.result).1.len(), 10);
+            assert!(
+                source.touched_terms() <= 64,
+                "claims={claims}: touched {} terms",
+                source.touched_terms()
+            );
+            eprintln!(
+                "claims={claims} limit_touched={} requests={} io_bytes={} peak_bytes={}",
+                source.touched_terms(),
+                limited.evidence.request_count(),
+                limited.evidence.io_bytes(),
+                limited.evidence.peak_bytes()
+            );
+            source.check_ready().unwrap();
+            drop(source);
+            let text = "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }";
+            let prepared = engine.prepare_query(text, None).unwrap();
+            let expected = support::solutions(
+                engine
+                    .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+                    .unwrap(),
+            );
+            assert_eq!(
+                expected.1,
+                vec![vec![Some(TermValue::typed_literal(
+                    (2 * claims).to_string(),
+                    purrdf_xsd::XsdDatatype::Integer.iri()
+                ))]]
+            );
+            let source = snapshot.query(read_limits).unwrap();
+            let counted = engine
+                .query_fallible_view(
+                    &source,
+                    SparqlRequest {
+                        query: text,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY,
+                )
+                .unwrap();
+            assert_eq!(support::solutions(counted.result), expected);
+            source.check_ready().unwrap();
+            eprintln!(
+                "claims={claims} count_touched={} requests={} io_bytes={} peak_bytes={}",
+                source.touched_terms(),
+                counted.evidence.request_count(),
+                counted.evidence.io_bytes(),
+                counted.evidence.peak_bytes()
+            );
+        }
+        drop(packed);
+    }
+}
+
 /// ORDER BY has the resident bag; physical refusal remains independently typed.
 #[test]
 fn ordered_query_matches_resident_and_tiny_capacity_refuses() {

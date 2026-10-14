@@ -188,6 +188,8 @@ pub use governor::{
     StopCause, TrippedGovernor,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
+#[cfg(not(target_arch = "wasm32"))]
+pub use ir::SegmentedFileProvider;
 /// Deterministic embedding companions bound to exact PurRDF packs.
 pub use ir::embedding;
 pub use ir::embedding::*;

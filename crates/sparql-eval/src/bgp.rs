@@ -49,6 +49,7 @@ use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
 use crate::statement_layer::{self, StatementProbe};
 use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 mod positive;
@@ -742,7 +743,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                     // and a `GRAPH :g`-scoped reifier shows only under that named graph.
                     emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, *gm, |quad| {
                         if acc.is_full() || ctx.stop_check().is_some() {
-                            return;
+                            return ControlFlow::Break(());
                         }
                         *fuel = fuel.saturating_add(1);
                         match bind_row(row, cp, &quad, ctx) {
@@ -750,7 +751,13 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                             Ok(None) => {}
                             Err(error) => {
                                 acc.fail(error);
+                                return ControlFlow::Break(());
                             }
+                        }
+                        if acc.is_full() {
+                            ControlFlow::Break(())
+                        } else {
+                            ControlFlow::Continue(())
                         }
                     });
                 }
@@ -2651,7 +2658,7 @@ fn emit_virtual_candidates<D: DatasetView>(
     o: Option<D::Id>,
     reifies_id: Option<D::Id>,
     gm: GraphMatch<D::Id>,
-    emit: impl FnMut(QuadIds<D::Id>),
+    emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
 ) {
     // Reifier layer: only when the predicate can be `rdf:reifies`. The object must also
     // be triple-term-shaped to be worth scanning — a quoted-triple pattern position

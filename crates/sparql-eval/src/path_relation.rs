@@ -347,6 +347,7 @@
 use purrdf_core::TermBox;
 use purrdf_hash::Domain;
 use std::collections::VecDeque;
+use std::ops::ControlFlow;
 use std::sync::{Arc, LazyLock, OnceLock};
 
 use purrdf_core::binding_pattern::BindingPattern;
@@ -1128,14 +1129,20 @@ fn canonical_edges<D: DatasetView>(
                 },
                 |quad| {
                     if visit_error.is_some() {
-                        return;
+                        return ControlFlow::Break(());
                     }
                     match (
                         crate::scratch::try_term_id_to_value(dataset, quad.s),
                         crate::scratch::try_term_id_to_value(dataset, quad.o),
                     ) {
-                        (Ok(subject), Ok(object)) => record(subject, object),
-                        (Err(error), _) | (_, Err(error)) => visit_error = Some(error),
+                        (Ok(subject), Ok(object)) => {
+                            record(subject, object);
+                            ControlFlow::Continue(())
+                        }
+                        (Err(error), _) | (_, Err(error)) => {
+                            visit_error = Some(error);
+                            ControlFlow::Break(())
+                        }
                     }
                 },
             );

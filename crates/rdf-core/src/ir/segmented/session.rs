@@ -1230,7 +1230,11 @@ impl SegmentedSession {
         self.header.streams[table].rows != 0
     }
 
-    fn stream(&self, table: usize, pattern: Pattern) -> QuadIter<'_> {
+    pub(super) fn stream(
+        &self,
+        table: usize,
+        pattern: Pattern,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         QuadIter {
             session: self,
             table,
@@ -1628,6 +1632,16 @@ impl DatasetView for SegmentedSession {
     }
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.stream(1, (None, None, None, GraphMatch::Any))
+    }
+    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.stream(1, (Some(reifier), None, None, GraphMatch::Any))
+    }
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        self.stream(2, (Some(reifier), None, None, GraphMatch::Any))
+            .map(|row| (row.p, row.o, row.g))
     }
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.stream(2, (None, None, None, GraphMatch::Any))
