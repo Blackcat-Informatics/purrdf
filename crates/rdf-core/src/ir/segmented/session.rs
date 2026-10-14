@@ -1731,6 +1731,7 @@ mod operation_tests {
             let state = lock_read_state(&session.state);
             let buffers = state.requests.capacity() * size_of::<SegmentedRequest>()
                 + state.cache.capacity() * size_of::<CacheEntry>();
+            drop(state);
             assert_eq!(
                 evidence.bookkeeping_bytes(),
                 u64::try_from(buffers).unwrap()
