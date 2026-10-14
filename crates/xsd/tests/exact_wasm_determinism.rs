@@ -37,6 +37,9 @@
 //!   `tests/vectors/exact_numeric_vectors.txt`, generated from the exact rational
 //!   oracle, replayed through the `XsdValue` operators (`+ − ×`, both division
 //!   policies, comparison, the conversions to `f64`/`f32` and canonical forms).
+//! * `large_binary_products_match_the_schoolbook_oracle`: large binary-limb
+//!   products around recursive cutoffs, including asymmetric and signed cases,
+//!   checked against the independent schoolbook kernel.
 //! * `large_decimal_group_parse_replays_on_this_target`: long decimal input
 //!   around the balanced-reader crossover and at 40,000 digits, checked
 //!   against the independent decimal renderer on the actual target.
@@ -284,9 +287,53 @@ fn large_decimal_group_parse_replays_on_this_target() {
     }
 }
 
+fn large_binary_products_match_the_schoolbook_oracle() {
+    let mut transcript = String::new();
+    let operand = |limbs: usize, mut state: u64| {
+        let mut value = BigInt::from_i128(1);
+        for _ in 1..limbs {
+            value = value.shl(64).add(&BigInt::from_i128(i128::from(
+                splitmix64_next(&mut state) | 1,
+            )));
+        }
+        assert_eq!(value.limb_len(), limbs);
+        value
+    };
+    for (left_limbs, right_limbs) in [
+        (511, 511),
+        (512, 512),
+        (513, 514),
+        (1024, 1024),
+        (2048, 2048),
+        (512, 1024),
+        (1025, 2048),
+    ] {
+        let left = operand(left_limbs, 0x1234_5678_9abc_def0);
+        let right = operand(right_limbs, 0xfedc_ba98_7654_3210);
+        let schoolbook = left.mul(&right);
+        assert_eq!(left.mul_fast(&right), schoolbook);
+        writeln!(transcript, "{left_limbs}/{right_limbs} {schoolbook}").expect("a String");
+        if left_limbs == 512 && right_limbs == 512 {
+            for (a, b) in [
+                (left.neg(), right.clone()),
+                (left.clone(), right.neg()),
+                (left.neg(), right.neg()),
+            ] {
+                let schoolbook = a.mul(&b);
+                assert_eq!(a.mul_fast(&b), schoolbook);
+                writeln!(transcript, "signed {schoolbook}").expect("a String");
+            }
+        }
+    }
+    // The independent Python integer product was rendered and FNV-folded over
+    // the 325,271-byte transcript when this corpus was frozen.
+    assert_transcript_digest("exact-large-products", &transcript, 0x6017_91f9_7aa1_152f);
+}
+
 purrdf_testkit::harness_main!(
     the_hand_values_are_reproduced_on_this_target,
     the_transcript_digest_is_reproduced_on_this_target,
     the_oracle_vectors_replay_on_this_target,
     large_decimal_group_parse_replays_on_this_target,
+    large_binary_products_match_the_schoolbook_oracle,
 );

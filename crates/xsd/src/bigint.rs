@@ -10,6 +10,7 @@
 use core::{cmp::Ordering, fmt};
 mod compat;
 pub use compat::KARATSUBA_THRESHOLD;
+pub(crate) use compat::TOOM3_THRESHOLD;
 #[cfg(test)]
 mod arithmetic_tests;
 pub(crate) mod scratch;

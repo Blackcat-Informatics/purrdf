@@ -206,9 +206,9 @@ pub fn integer_operation_layout(
             if la.min(lb) < crate::bigint::KARATSUBA_THRESHOLD as u64 {
                 return NumericOperationLayout::words(result, result);
             }
-            // Native Karatsuba's established eight-result working law. The
-            // fallible shared body retains exact-capacity destinations; the
-            // original numerical recursion and threshold are unchanged.
+            // Two-way and balanced three-way recursion share the eight-result
+            // working envelope. The three-way path begins at 1024 limbs;
+            // asymmetric products retain the original two-way/chunked route.
             let peak = result.checked_mul(8).ok_or(SizeOverflow)?;
             // Recombination adds one explicit carry word to the output.
             let retained = result.checked_add(1).ok_or(SizeOverflow)?;
@@ -750,17 +750,23 @@ pub(crate) const fn add(la: u64, lb: u64) -> Cost {
     Cost::new(result, limb_bytes(result))
 }
 
-/// `a × b`. Karatsuba's recursion holds its half-size sums and partial products
-/// beside the result along one path of the recursion — a geometric series under
-/// the top level's — so its working set is a constant multiple of the result's.
+/// A product's recursive two-way and balanced three-way paths retain split
+/// operands and partial products along a geometric path.
 #[must_use]
 pub(crate) const fn mul(la: u64, lb: u64) -> Cost {
     let result = la.saturating_add(lb);
+    let shorter = if la < lb { la } else { lb };
+    // Five child products and point/interpolation work fit this conservative
+    // linear allowance when the shorter input reaches the 1024-limb cutoff.
+    let linear = if shorter >= crate::bigint::TOOM3_THRESHOLD as u64 {
+        16
+    } else {
+        8
+    };
     let work = la
         .saturating_mul(lb)
-        .saturating_add(result.saturating_mul(8))
+        .saturating_add(result.saturating_mul(linear))
         .saturating_add(1);
-    let shorter = if la < lb { la } else { lb };
     let working = if shorter >= crate::bigint::KARATSUBA_THRESHOLD as u64 {
         8
     } else {
