@@ -871,6 +871,45 @@ fn query_ids_touch_only_values_and_preserve_source_scopes() {
     let measured = window.close();
     assert_eq!(measured.retained_bytes, 0);
     assert!(measured.peak_working_bytes <= i64::try_from(limits().live_bytes()).unwrap());
+
+    let mut growing_head = RdfDatasetBuilder::new();
+    let growing_ids: Vec<_> = (0..4096)
+        .map(|index| {
+            growing_head
+                .intern_value(&TermValue::iri(format!("urn:amortized:{index}")))
+                .unwrap()
+        })
+        .collect();
+    let mut growing_stack = SegmentedStack::default();
+    growing_stack.set_head(Some(
+        purrdf_core::SegmentedResidentHead::new(
+            growing_head.freeze().unwrap(),
+            SegmentedLayerMetadata::default(),
+        )
+        .unwrap(),
+    ));
+    let growing_snapshot = growing_stack.snapshot().unwrap();
+    let window = CurrentThreadWindow::open();
+    let growing_query = growing_snapshot.query(limits()).unwrap();
+    for id in &growing_ids {
+        growing_query
+            .intern_source_term(
+                SegmentedStackSource::Head,
+                u64::try_from(id.index()).unwrap(),
+            )
+            .unwrap();
+    }
+    assert_eq!(growing_query.touched_terms(), growing_ids.len());
+    growing_query.check_ready().unwrap();
+    drop(growing_query);
+    let measured = window.close();
+    assert_eq!(measured.retained_bytes, 0);
+    assert!(measured.peak_working_bytes <= i64::try_from(limits().live_bytes()).unwrap());
+    assert!(
+        measured.requested_bytes < 16 * 1024 * 1024,
+        "incremental import allocated {} bytes",
+        measured.requested_bytes
+    );
 }
 
 fn memoized_term_hits_allocate_nothing_and_failed_import_latches() {
