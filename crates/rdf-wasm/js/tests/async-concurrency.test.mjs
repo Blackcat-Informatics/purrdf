@@ -427,6 +427,7 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
   const { synchronous, job } = ends;
   t.diagnostic(`admitted nesting endpoints: ${JSON.stringify(ends)}`);
   assert.equal(job, synchronous, `the lanes must end at the same depth: ${JSON.stringify(ends)}`);
+  assert.ok(synchronous >= 181, `${synchronous} levels answer synchronously; 182 did on the build measured`);
 
   // The refusal, one level past both ends: the synchronous lane's typed refusal, and the
   // job's, twice — a trap or region fault would poison the instance. Both errors must
