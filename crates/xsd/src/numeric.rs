@@ -114,7 +114,7 @@ fn calendar_arithmetic_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> Option<cr
     if matches!(calendar, XsdValue::Gregorian(_)) && !seconds.is_integer() {
         return Some(Cost::ZERO);
     }
-    let source_wide = source.is_some_and(&wide);
+    let source_wide = source.is_some_and(wide);
     let bounded_spill = match (
         source.map(crate::exact::Decimal::to_bounded),
         seconds.to_bounded(),
@@ -194,7 +194,7 @@ fn instant_difference_cost(a: &XsdValue, b: &XsdValue) -> Option<crate::exact::C
     let wide = |seconds: &crate::exact::Decimal| {
         seconds.unscaled().as_i128().is_none() || seconds.scale() > 18
     };
-    if !left.is_some_and(&wide) && !right.is_some_and(&wide) {
+    if !left.is_some_and(wide) && !right.is_some_and(wide) {
         return Some(Cost::ZERO);
     }
     let base = Shape::of_i128(i128::MAX, 0);
@@ -2399,7 +2399,7 @@ fn numeric_div_ieee(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 }
 
 /// `dividend ÷ count` at eighteen fractional digits, truncated toward zero, as a
-/// bounded [`Decimal`] — `None` when that quotient's mantissa does not fit `i128`.
+/// bounded `Decimal` — `None` when that quotient's mantissa does not fit `i128`.
 ///
 /// A 3.0 helper, kept for its callers: the evaluator's `AVG` now divides through
 /// [`numeric_div_with_policy`] like `/`, which answers every quotient exactly at
@@ -2413,7 +2413,8 @@ fn numeric_div_ieee(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 ///
 /// If `count == 0` — the caller's contract, not a runtime input.
 #[must_use]
-pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Option<XsdValue> {
+#[cfg(test)]
+fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Option<XsdValue> {
     assert!(
         count != 0,
         "AVG's divisor is a folded row count, never zero"
@@ -2443,7 +2444,8 @@ pub fn bigint_avg_decimal(dividend: &crate::bigint::BigInt, count: u64) -> Optio
 /// If `count == 0` — the caller's contract, not a runtime input (identical to
 /// [`bigint_avg_decimal`]).
 #[must_use]
-pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) -> String {
+#[cfg(test)]
+fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) -> String {
     assert!(
         count != 0,
         "AVG's divisor is a folded row count, never zero"

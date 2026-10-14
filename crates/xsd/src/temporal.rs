@@ -1913,10 +1913,9 @@ pub fn cmp_duration_admitted(
 /// are in scope and compare by value, exactly like [`cmp_duration`]'s zero-pair
 /// case. `"P1M" = "P30D"` is `false` — never an error.
 ///
-/// Seconds equality goes through [`Decimal::cmp_exact`], never `==`: `Decimal`
-/// deliberately derives no `PartialEq` because two different `(mantissa, scale)`
-/// pairs (e.g. mantissa 10 scale 1, and mantissa 1 scale 0) denote the same
-/// value, and `cmp_exact` is the only correct equality over that representation.
+/// Seconds equality compares exact coefficient/scale pairs through
+/// [`Decimal::try_cmp_parts_admitted`]. Coefficient 10 at scale 1 and coefficient
+/// 1 at scale 0 denote the same value; their stored representations differ.
 ///
 /// # Examples
 ///

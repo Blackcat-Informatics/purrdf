@@ -29,7 +29,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   The bounded `purrdf_xsd::Decimal`, bounded `owl:rational` module and decimal
   narrowing conversions are removed; callers that matched the old wide
   variants use the same exact variants as small values. Integer narrowing to
-  `i128` or `i64` remains explicit and typed. Decimal division now keeps every
+  `i128` or `i64` remains explicit and typed. The old `bigint_avg_decimal` and
+  `bigint_avg_decimal_lexical` helpers are removed; use `numeric_div_with_policy`
+  for aggregate division under the same exact policy as ordinary division.
+  Decimal division now keeps every
   digit of a terminating quotient and otherwise rounds to 18 fractional
   places, half to even. Explicit `exact`, `N`, `N:ROUNDING` and
   `exact-or-N[:ROUNDING]` policies remain available. Temporal seconds use exact

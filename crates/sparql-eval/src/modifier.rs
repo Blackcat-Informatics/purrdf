@@ -6618,19 +6618,14 @@ mod tests {
         );
     }
 
-    /// `AVG` over a total that genuinely exceeds `i128`, where the scale-18
-    /// quotient mantissa ALSO exceeds `i128` (`bigint_avg_decimal` alone would
-    /// answer `None` here — see `purrdf_xsd::numeric`'s doc on it): must still
-    /// answer exactly rather than go unbound.
+    /// `AVG` over a total that exceeds `i128` must answer through the exact
+    /// numeric division home rather than go unbound.
     /// `AVG({i128::MAX, i128::MAX})` = `i128::MAX` exactly (the two `i128::MAX`
-    /// values sum to `2 × i128::MAX`, divided by a count of 2), rendered through
-    /// [`purrdf_xsd::bigint_avg_decimal_lexical`]'s TEXT bypass — the same shape
+    /// values sum to `2 × i128::MAX`, divided by a count of 2) — the same shape
     /// [`sum_overflow_exceeding_i128_answers_exact_total`] pins for `SUM`. This
-    /// is the exact fixture the crate's public rustdoc worked example describes
-    /// (`(i128::MAX + i128::MAX) / 2 == i128::MAX`); before the lexical-text
-    /// fallback existed this answered unbound instead, because `Decimal`'s own
-    /// `i128`-mantissa bound rejects the scale-18 quotient even though the
-    /// value itself is an ordinary integer.
+    /// is the exact fixture `(i128::MAX + i128::MAX) / 2 == i128::MAX`.
+    /// The historical bounded representation rejected its scale-18 coefficient
+    /// even though the value itself is an ordinary integer.
     #[test]
     fn avg_overflow_exceeding_i128_answers_exact_total() {
         let max = i128::MAX.to_string();
