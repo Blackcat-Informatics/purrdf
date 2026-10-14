@@ -1143,6 +1143,8 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     /// which is where a needle wider than the ranking profile admits is refused —
     /// the ranker's own check, called rather than restated, so a needle too wide
     /// to rank is too wide to look up rather than quietly answering empty.
+    // Keep the shared point lookup out of line across physical corpus shapes.
+    #[inline(never)]
     fn holdings_owned(
         &self,
         subject: &TermValue,

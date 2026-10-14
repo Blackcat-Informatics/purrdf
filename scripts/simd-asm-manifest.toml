@@ -44,6 +44,9 @@ packages = [
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
 rlib_packages = ["purrdf-wasm"]
+# Compile the real generic text/retrieval consumer to assembly, without linking
+# or executing its report-only benchmark.
+consumer_benches = ["purrdf:multimodal_on_demand_read"]
 
 [[site]]
 id = "lex.find-byte2-sparql-string"
@@ -3036,12 +3039,12 @@ summary = "`gallop_lower_bound` (in `Batch::subject_run`) and `LeapfrogValueCurs
 
 [[site]]
 id = "datalog.chase"
-summary = "`chase::chase_until`, the chase fixpoint"
+summary = "`chase::chase_with`, the shared chase fixpoint reached by `chase_until`"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_datalog"
-  symbol = "purrdf_datalog::chase::chase_until"
+  symbol = "purrdf_datalog::chase::chase_with"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

@@ -74,12 +74,6 @@ class Runner:
         self.lock = threading.Lock()
         self.children = set()
         self.compiler = subprocess.check_output(["rustc", "-vV"], text=True)
-        capability = subprocess.run(["cargo", "--stage-asm-capabilities"], capture_output=True, text=True)
-        self.stage = None
-        if capability.returncode == 0:
-            self.stage = json.loads(capability.stdout)
-            if self.stage != {"version": 1, "slots": "/opt/.cargo/slots", "locks": "/opt/.cargo/.slot-locks"}:
-                raise gate.GateError("unrecognized Stage assembly context protocol")
         self.root = Path(os.environ.get("CARGO_TARGET_DIR", str(gate.REPO_ROOT / "target"))) / "simd-asm"
         self.nonce = uuid.uuid4().hex if options.fresh else ""
         budget = subprocess.run(
@@ -92,7 +86,7 @@ class Runner:
             available = min(available, configured if configured > 0 else max(1, available + configured))
         except (ValueError, IndexError):
             pass
-        self.workers = min(options.jobs, available, configurations)
+        self.workers = 1  # Standard Cargo directories are shared by every configuration.
         self.cargo_jobs = max(1, available // self.workers)
         self.timings = {}
 
@@ -105,7 +99,7 @@ class Runner:
                         os.killpg(child.pid, signal.SIGTERM)
 
     def execute(self, cmd, env, lease, graph=0):
-        directory = Path(env["CARGO_TARGET_DIR"]).parent
+        directory = self.log_directory
         stdout_path = directory / f"cargo.graph-{graph}.stdout.jsonl"
         stderr_path = directory / f"cargo.graph-{graph}.stderr.log"
         with self.lock:
@@ -127,13 +121,8 @@ class Runner:
     @contextlib.contextmanager
     def context(self, identity):
         key = digest(encoded(identity))
-        if self.stage:
-            workspace = digest(f"{self.gate.REPO_ROOT.resolve()}\n{key}".encode())[:16]
-            root = Path(self.stage["slots"]) / workspace / "0"
-            lock = Path(self.stage["locks"]) / workspace / "0.lock"
-        else:
-            root = self.root / "contexts" / key
-            lock = root / "lease.lock"
+        root = self.root / "contexts" / key
+        lock = root / "lease.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
         with lock.open("a+") as lease:
             while True:
@@ -144,8 +133,7 @@ class Runner:
                     if self.stopped.wait(0.1):
                         raise self.gate.GateError("assembly run cancelled while waiting for its context")
             root.mkdir(parents=True, exist_ok=True)
-            if self.stage:
-                (root / ".stage-asm-context").write_text(key)
+            self.log_directory = root
             yield root, key, lease.fileno()
 
     def configuration(self, config, manifest, chooser):
@@ -159,14 +147,13 @@ class Runner:
         parser_key = digest(Path(gate.__file__).read_bytes() + Path(__file__).read_bytes())
         selectors = [(m.crate, m.symbol) for s in manifest.sites for m in s.measures if config.name in m.configs]
         print(f"== {config.name}: {self.cargo_jobs} Cargo jobs", flush=True)
-        commands = gate.build_commands(config, manifest.packages, manifest.rlib_packages)
+        commands = gate.build_commands(config, manifest.packages, manifest.rlib_packages, manifest.consumer_benches)
         identity = dict(schema=SCHEMA, compiler=self.compiler, config=dataclasses.asdict(config),
                         commands=commands, fresh="",
                         environment={k: v for k, v in env.items() if k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_", "RUST", "CC", "AR", "CFLAGS", "CXXFLAGS"))})
         # Sequential graphs reuse Cargo's compatible units, but every graph still
         # supplies its own membership and logs. One lease protects their shared
         # artifacts and receipts until the entire configuration is judged.
-        # A fresh generation becomes the default for subsequent runs too.
         generation_path = self.root / "generations" / (digest(encoded(identity)) + ".json")
         if self.nonce:
             atomic_json(generation_path, self.nonce)
@@ -178,13 +165,10 @@ class Runner:
         waiting = time.monotonic()
         with self.context(identity) as (root, key, lease):
             stats["lock_seconds"] += time.monotonic() - waiting
-            child_env = dict(env, CARGO_TARGET_DIR=str(root / "target"), CARGO_BUILD_BUILD_DIR=str(root / "build"))
-            if self.stage:
-                child_env.update(STAGE_CARGO_ASM_CONTEXT=key, STAGE_CARGO_ASM_LEASE_FD=str(lease))
+            child_env = env
             for graph, cmd in enumerate(commands):
-                actual_cmd = [*cmd, "--jobs", str(self.cargo_jobs), "--timings",
-                              "--config", f'build.target-dir={json.dumps(str(root / "target"))}',
-                              "--config", f'build.build-dir={json.dumps(str(root / "build"))}']
+                split = cmd.index("--") if "--" in cmd else len(cmd)
+                actual_cmd = [*cmd[:split], "--jobs", str(self.cargo_jobs), "--timings", *cmd[split:]]
                 log_path = root / f"cargo.graph-{graph}.stderr.log"
                 print(f"== {config.name} graph {graph}: {log_path}", flush=True)
                 t = time.monotonic()
@@ -200,7 +184,7 @@ class Runner:
                 stats["rustc_invocations"] += len(lines)
                 messages = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
                 artifacts = [m for m in messages if m.get("reason") == "compiler-artifact"
-                             and set(m["target"]["kind"]) & {"lib", "rlib"}
+                             and set(m["target"]["kind"]) & {"lib", "rlib", "bench"}
                              and any(f"/{config.triple}/" in f for f in m["filenames"])]
                 t = time.monotonic()
                 for artifact in artifacts:

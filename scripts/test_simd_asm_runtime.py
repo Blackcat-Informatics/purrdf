@@ -45,7 +45,6 @@ class EvidenceTests(unittest.TestCase):
         self.runner.gate = self.gate
         self.runner.options = argparse.Namespace(probe=None)
         self.runner.compiler = "fixture compiler"
-        self.runner.stage = None
         self.runner.root = self.root
         self.runner.nonce = ""
         self.runner.stopped = threading.Event()
@@ -61,7 +60,8 @@ class EvidenceTests(unittest.TestCase):
         self.runner.execute = self.execute
 
     def execute(self, cmd, env, lease, graph=0):
-        self.context_root = Path(env["CARGO_TARGET_DIR"]).parent
+        self.context_root = self.runner.log_directory
+        self.assertEqual({k: v for k, v in env.items() if k in {"CARGO_TARGET_DIR", "CARGO_BUILD_BUILD_DIR", "STAGE_CARGO_ASM_CONTEXT", "STAGE_CARGO_ASM_LEASE_FD"}}, {k: v for k, v in os.environ.items() if k in {"CARGO_TARGET_DIR", "CARGO_BUILD_BUILD_DIR", "STAGE_CARGO_ASM_CONTEXT", "STAGE_CARGO_ASM_LEASE_FD"}})
         self.executions.append((graph, self.context_root, lease))
         folder = self.context_root / "build" / self.config.triple / "release" / "deps"
         folder.mkdir(parents=True, exist_ok=True)
@@ -168,7 +168,7 @@ class EvidenceTests(unittest.TestCase):
                     fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
         def leased_execute(cmd, env, lease, graph):
-            require_lease(Path(env["CARGO_TARGET_DIR"]).parent)
+            require_lease(self.runner.log_directory)
             return execute(cmd, env, lease, graph)
 
         def leased_evaluate(*args):

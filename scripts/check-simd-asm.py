@@ -116,8 +116,8 @@ Static checks
 Build reuse and parallel execution
 ----------------------------------
 
-The driver keeps a separate persistent Cargo context for each compiler, target and
-build graph. Cargo validates freshness on every invocation; assembly digests and
+The driver records each compiler, target and build graph in an evidence context,
+using standard Cargo directories. Cargo validates freshness; assembly digests and
 verified compiler-command receipts bind reused output to its configuration. Parsed
 functions are cached by assembly content, reader version and selectors; verdicts are
 always recomputed. Context leases cover both Cargo and the reader. On Stage the shim
@@ -877,6 +877,7 @@ class Manifest:
     packages: tuple[str, ...]
     sites: tuple[Site, ...]
     rlib_packages: tuple[str, ...] = ()
+    consumer_benches: tuple[str, ...] = ()
 
     def ids(self) -> set[str]:
         return {site.id for site in self.sites}
@@ -965,7 +966,7 @@ def load_manifest(data: dict) -> Manifest:
     if unknown_top:
         problems.append(f"unknown top-level keys {sorted(unknown_top)}")
     build = data.get("build", {})
-    for key in set(build) - {"packages", "rlib_packages"}:
+    for key in set(build) - {"packages", "rlib_packages", "consumer_benches"}:
         problems.append(f"`[build]`: unknown key `{key}`")
     packages = build.get("packages")
     if not isinstance(packages, list) or not packages or not all(isinstance(p, str) for p in packages):
@@ -977,6 +978,10 @@ def load_manifest(data: dict) -> Manifest:
         rlib_packages = []
     for package in sorted(set(rlib_packages) & set(packages)):
         problems.append(f"`{package}` is in both `packages` and `rlib_packages`; a package is built one way")
+    consumers = build.get("consumer_benches", [])
+    if not isinstance(consumers, list) or not all(isinstance(c, str) and re.fullmatch(r"[\w-]+:[\w-]+", c) for c in consumers):
+        problems.append("`[build] consumer_benches` must list package:bench names")
+        consumers = []
     sites: list[Site] = []
     seen: set[str] = set()
     for raw in data.get("site", []):
@@ -1042,7 +1047,7 @@ def load_manifest(data: dict) -> Manifest:
         sites.append(Site(sid, str(raw.get("summary", "")), tuple(measures)))
     if problems:
         raise GateError("manifest is invalid:\n  " + "\n  ".join(problems))
-    return Manifest(tuple(packages), tuple(sites), tuple(rlib_packages))
+    return Manifest(tuple(packages), tuple(sites), tuple(rlib_packages), tuple(consumers))
 
 
 # --------------------------------------------------------------------------- evaluation
@@ -1279,14 +1284,7 @@ def verify_command_lines(stderr: str, config: Config) -> list[str]:
 
 
 def asm_paths(stdout: str, config: Config, is_file=Path.is_file) -> list[Path]:
-    """The ``.s`` of every target library unit, located from cargo's artifact messages.
-
-    rustc writes the ``.s`` beside the unit's own rlib/rmeta. For a plain library that
-    file carries cargo's hash suffix (``libname-<16 hex>.rmeta``). A package that is also
-    a ``cdylib`` cannot take the suffix, so its unit files are unhashed, in the unit's
-    own output directory, next to the unhashed copy cargo uplifts. So the hashed files
-    are tried first and every other rlib/rmeta after them, and the first with a ``.s``
-    beside it is the unit's asm.
+    """Require actual assembly beside Cargo's library or metadata-only bench output.
     """
     paths: list[Path] = []
     problems: list[str] = []
@@ -1297,12 +1295,12 @@ def asm_paths(stdout: str, config: Config, is_file=Path.is_file) -> list[Path]:
         if message.get("reason") != "compiler-artifact":
             continue
         kinds = set(message["target"]["kind"])
-        if not kinds & {"lib", "rlib"}:
+        if not kinds & {"lib", "rlib", "bench"}:
             continue
         files = [Path(f) for f in message.get("filenames", [])]
         if not any(f"/{config.triple}/" in str(f) for f in files):
             continue
-        libs = [f for f in files if f.suffix in (".rmeta", ".rlib")]
+        libs = [f for f in files if f.suffix in (".rmeta", ".rlib") or "bench" in kinds]
         if not libs:
             problems.append(f"{message['package_id']}: no rlib/rmeta among {files}")
             continue
@@ -1334,18 +1332,16 @@ def failure_tail(stderr: str, lines: int = 40) -> str:
     return "\n".join(kept[-lines:])
 
 
-def build_commands(config: Config, packages: tuple[str, ...], rlib_packages: tuple[str, ...]) -> list[list[str]]:
-    """The cargo invocations for one configuration: one build, then one per rlib-only package."""
-    # `--color never`: the provenance checks read cargo's `Running` lines, and a
-    # coloured stream (CARGO_TERM_COLOR=always, which CI's toolchain action sets)
-    # wraps each in escape codes that no line pattern matches.
+def build_commands(config: Config, packages: tuple[str, ...], rlib_packages: tuple[str, ...], consumers: tuple[str, ...] = ()) -> list[list[str]]:
+    """Library graphs and real bench consumers; Cargo's uncoloured commands prove flags."""
     common = [
         "-v", "--color", "never", "--message-format=json-render-diagnostics", "--release", "--locked",
-        "--lib", "--target", config.triple,
+        "--target", config.triple,
         "--config", "profile.release.lto=false", "--config", "profile.release.codegen-units=1",
     ]
-    cmds = [["cargo", "build", *common, *(arg for p in packages for arg in ("-p", p))]]
-    cmds += [["cargo", "rustc", *common, "-p", p, "--crate-type", "rlib"] for p in rlib_packages]
+    cmds = [["cargo", "build", *common, "--lib", *(arg for p in packages for arg in ("-p", p))]]
+    cmds += [["cargo", "rustc", *common, "--lib", "-p", p, "--crate-type", "rlib"] for p in rlib_packages]
+    cmds += [["cargo", "rustc", *common, "-p", p, "--bench", b, "--", "--emit=asm,metadata"] for p, b in (c.split(":") for c in consumers)]
     return cmds
 
 
@@ -2130,6 +2126,7 @@ def self_test() -> int:
     for build, what in (
         ({"packages": ["demo"], "rlib_packages": ["demo"]}, "a package in both lists"),
         ({"packages": ["demo"], "rlib_packages": "demo-wasm"}, "a string rlib_packages"),
+        ({"packages": ["demo"], "consumer_benches": ["demo/bench"]}, "an invalid consumer target"),
         ({"packages": ["demo"], "features": ["x"]}, "an unknown [build] key"),
     ):
         try:
@@ -2142,6 +2139,9 @@ def self_test() -> int:
     expect(cmds[1][-4:] == ["-p", "demo-wasm", "--crate-type", "rlib"] and "--target" in cmds[1] and "--lib" in cmds[1], f"the rlib build names its package and crate type: {cmds[1]}")
     expect(len(build_commands(CONFIG_BY_NAME["x86_64"], ("demo",), ())) == 1, "no rlib package, one command")
     expect(all(c[c.index("--color") + 1] == "never" for c in cmds), f"every build asks cargo for an uncoloured stream: {cmds}")
+    consumer = load_manifest({**_manifest_dict(), "build": {"packages": ["demo"], "consumer_benches": ["demo:actual"]}})
+    cmd = build_commands(CONFIG_BY_NAME["aarch64"], consumer.packages, (), consumer.consumer_benches)[-1]
+    expect(cmd[-6:] == ["-p", "demo", "--bench", "actual", "--", "--emit=asm,metadata"] and "--lib" not in cmd, "the real consumer emits assembly without linking or running")
 
     # -- a wrong-typed field is a named manifest error, never a coercion; its neighbour loads
     base_measure = _manifest_dict()["site"][0]["measure"][0]
