@@ -1,0 +1,7 @@
+# Shared hosted corrections
+
+Published2916fbce4 with normal hooks and push terminal0. The first actual PR543 CI run reported strict Clippy failures, four rustdoc link/placement failures, i686 MXCSR fixture mismatch, nested-term Python fixture mismatches and22 manual assembly cells out of date. Exact reviewed corrections retain original production homes, test inputs/assertions and thresholds. The existing assembly writer regenerated only those22 cells from actual current hosted diagnostics; original incomplete reports remain unqualified. No tooling or configuration changed.
+
+Affected standard Cargo core/geo all-target warning-denied Clippy PASS; counter regressions3/3 and native MXCSR1/1 PASS; evaluator warnings-denied rustdoc PASS. Current two Python fixture tests PASS against the existing installed471 package, proving corrected fixture behavior; this is not a current542 package qualification. Independent bounded review PASS at reviews/shared-hosted-corrections.md. Original compaction API/full local gate/scale/facade evidence remains applicable as scoped in validation.md.
+
+PR creation returned a Stage JSON parsing error after the actual creation. GitHub readback confirms PR543; no creation retry was made. The normal corrected-head push now triggers hosted qualification. Updated hosted checks, review debt, integration assessment, ghprsq merge and issue closure remain pending. No local work is counted as an issue closure.

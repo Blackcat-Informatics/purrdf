@@ -1,0 +1,53 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+   Compiling either v1.16.0
+   Compiling getrandom v0.3.4
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/geo-kernel)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/sparql-algebra)
+   Compiling cpubits v0.1.1
+   Compiling cipher v0.5.2
+   Compiling ctutils v0.4.2
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling universal-hash v0.6.1
+   Compiling aes v0.9.3
+   Compiling crossbeam-epoch v0.9.18
+   Compiling ctr v0.10.1
+   Compiling polyval v0.7.3
+   Compiling structured-zstd v0.0.49
+   Compiling aead v0.6.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling ghash v0.6.0
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/shex)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/markdown)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/mime)
+   Compiling rayon v1.12.0
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/columnar)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/gts)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/datalog)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/json)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/purrdf)
+    Finished `test` profile [optimized] target(s) in 3m 41s
+     Running tests/base_surface.rs (/opt/.cargo/e0/12130452c84c75/debug/build/purrdf/349fe1c0f9d6e06d/out/base_surface-349fe1c0f9d6e06d)
+
+running 1 test
+test caller_limited_compaction_keeps_the_resolved_base_through_the_facade ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+

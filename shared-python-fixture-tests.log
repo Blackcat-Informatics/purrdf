@@ -1,0 +1,9 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.12, pytest-9.0.3, pluggy-1.6.0
+rootdir: /home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/bindings/python
+configfile: pyproject.toml
+collected 129 items / 127 deselected / 2 selected
+
+bindings/python/tests/test_retrieval.py ..                               [100%]
+
+====================== 2 passed, 127 deselected in 0.23s =======================

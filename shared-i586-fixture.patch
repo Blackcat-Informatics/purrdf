@@ -1,0 +1,48 @@
+diff --git crates/rdf-core/src/distance/binary64_tests.rs crates/rdf-core/src/distance/binary64_tests.rs
+index 5c7604de3..11c0fb650 100644
+--- crates/rdf-core/src/distance/binary64_tests.rs
++++ crates/rdf-core/src/distance/binary64_tests.rs
+@@ -441,20 +441,26 @@ mod x87 {
+         // The refused case: the guard bypassed, the thread at Linux's 64-bit precision.
+         // Every double-rounding row fails and nothing else does, and the first names the
+         // departure.
+-        let (failing, probed, resolved, reassociated) = {
++        let saved = x87::control_word();
++        let (failing, probed) = {
+             let _bypassed = bypass::bypass();
+-            (
+-                failing_rows(),
+-                env::probe(),
+-                Exact::resolve(),
+-                Reassociated::resolve(),
+-            )
++            let failing = failing_rows();
++            let precision = Precision::enter();
++            let probed = env::probe_with(precision.binary64());
++            // The core-only bypass supplies a faulty token; public admission owns
++            // its separate Binary64Scope and must still guard and restore it.
++            assert_eq!(env::probe(), Ok(()));
++            assert_eq!(x87::control_word(), saved);
++            assert!(Exact::resolve().is_ok());
++            assert_eq!(x87::control_word(), saved);
++            assert!(Reassociated::resolve().is_ok());
++            assert_eq!(x87::control_word(), saved);
++            (failing, probed)
+         };
++        assert_eq!(x87::control_word(), saved);
+         assert_eq!(failing, vec![8, 9, 10, 11, 12]);
+         let refused = refusal(8, 1.0);
+         assert_eq!(probed, Err(refused));
+-        assert_eq!(resolved, Err(refused));
+-        assert_eq!(reassociated.map(|_| ()), Err(refused));
+         assert!(
+             refused
+                 .to_string()
+@@ -467,6 +473,7 @@ mod x87 {
+         assert_eq!(env::probe(), Ok(()));
+         assert!(Exact::resolve().is_ok());
+         assert!(Reassociated::resolve().is_ok());
++        assert_eq!(x87::control_word(), saved);
+     }
+ 
+     #[test]

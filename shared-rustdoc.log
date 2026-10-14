@@ -1,0 +1,6 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/sparql-results)
+ Documenting purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 16.88s
+   Generated /opt/.cargo/target/542-rdf-core-mutabledataset-freeze-uses-2fec91d0/doc/purrdf_sparql_eval/index.html

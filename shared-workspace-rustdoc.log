@@ -1,0 +1,4 @@
+error: document output filename collision
+The lib `purrdf` in package `purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/rdf-capi)` has the same name as the lib `purrdf` in package `purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/purrdf)`.
+Only one may be documented at once since they output to the same path.
+Consider documenting only one, renaming one, or marking one with `doc = false` in Cargo.toml.

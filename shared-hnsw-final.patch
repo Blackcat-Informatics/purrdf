@@ -1,0 +1,153 @@
+diff --git crates/hnsw/tests/float_environment.rs crates/hnsw/tests/float_environment.rs
+index 8ed586f56..479415576 100644
+--- crates/hnsw/tests/float_environment.rs
++++ crates/hnsw/tests/float_environment.rs
+@@ -12,10 +12,8 @@
+ //! named refusal; then it runs the same calls in the default environment and asserts
+ //! they answer. The register is per-thread, so no other test observes it.
+ //!
+-//! On `x86_64` the refusal names the MXCSR, which is read before anything else. On 32-bit
+-//! x86 with SSE2 no register is read, so the same flushed thread is refused on the
+-//! behavioural probe's evidence alone, and the default environment still answers: that is
+-//! the target class the probe exists for. The refusal itself is unit-tested for
++//! On `x86_64` and 32-bit x86 with SSE2 the refusal names the MXCSR, which is read
++//! before anything else. The default environment still answers. The refusal is unit-tested for
+ //! `aarch64`'s FPCR and RISC-V's `frm` in `purrdf_core::distance`, and wasm has no such
+ //! register.
+ //!
+@@ -34,14 +32,13 @@ mod purremb;
+ 
+ #[path = "support/fixture.rs"]
+ mod fixture;
+-use fixture::{bits, knn_invoke, params};
++use fixture::{bits, is_ftz, is_ftz_refusal, knn_invoke, params};
+ use std::sync::Arc;
+ 
+ use purrdf_core::DistanceMetric;
+ use purrdf_core::distance::control::Mxcsr;
+ use purrdf_core::distance::{
+-    Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
+-    Reassociated, RecordedPathError, Resolved, RowsRef,
++    Arithmetic, Bound, Bounded, Exact, Measure, Reassociated, RecordedPathError, Resolved, RowsRef,
+ };
+ use purrdf_core::purremb_fixture::reference_norm;
+ use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Ranked, VectorMatrix, guard, relation::HnswSpace};
+@@ -49,33 +46,6 @@ use purrdf_sparql_eval::{
+     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
+ };
+ 
+-/// Whether `refusal` is the flush-to-zero refusal this target reports for an FTZ thread:
+-/// the MXCSR by name where it is read, and the probe's flushed-result row where not.
+-fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
+-    let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
+-        return false;
+-    };
+-    if cfg!(target_arch = "x86_64") {
+-        matches!(
+-            evidence,
+-            FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
+-        )
+-    } else {
+-        matches!(
+-            evidence,
+-            FloatEnvironmentEvidence::Probe {
+-                operation: "f64::MIN_POSITIVE * 0.5",
+-                observed: 0,
+-                ..
+-            }
+-        )
+-    }
+-}
+-
+-fn is_ftz(error: &HnswError) -> bool {
+-    matches!(error, HnswError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
+-}
+-
+ fn is_ftz_eval(error: &EvalError) -> bool {
+     matches!(error, EvalError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
+ }
+diff --git crates/hnsw/tests/float_environment_rayon.rs crates/hnsw/tests/float_environment_rayon.rs
+index 589e055ed..d953a0e0d 100644
+--- crates/hnsw/tests/float_environment_rayon.rs
++++ crates/hnsw/tests/float_environment_rayon.rs
+@@ -32,12 +32,11 @@
+ 
+ #[path = "support/fixture.rs"]
+ mod fixture;
+-use fixture::{bits, params, seeded_matrix};
++use fixture::{bits, is_ftz, params, seeded_matrix};
+ use purrdf_core::DistanceMetric;
+ use purrdf_core::distance::Reassociated;
+ use purrdf_core::distance::control;
+-use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
+-use purrdf_hnsw::{HnswError, HnswIndex, Ranked};
++use purrdf_hnsw::{HnswIndex, Ranked};
+ 
+ /// Set FTZ on the calling thread for the rest of its life: called only from the global
+ /// pool's start handler, on threads this binary's pool owns and no other test shares.
+@@ -45,30 +44,6 @@ fn flush_this_thread() {
+     control::set_mxcsr(control::mxcsr() | control::MXCSR_FTZ);
+ }
+ 
+-/// Whether `error` is the flush-to-zero refusal this target reports: the MXCSR by name
+-/// on `x86_64`, where it is read, and the probe's flushed-result row on 32-bit x86 with
+-/// SSE2.
+-fn is_ftz(error: &HnswError) -> bool {
+-    let HnswError::FloatEnvironment(FloatEnvironmentError::FlushToZero { evidence }) = error else {
+-        return false;
+-    };
+-    if cfg!(target_arch = "x86_64") {
+-        matches!(
+-            evidence,
+-            FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
+-        )
+-    } else {
+-        matches!(
+-            evidence,
+-            FloatEnvironmentEvidence::Probe {
+-                operation: "f64::MIN_POSITIVE * 0.5",
+-                observed: 0,
+-                ..
+-            }
+-        )
+-    }
+-}
+-
+ #[test]
+ fn a_flushing_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_thread_bits() {
+     // The global pool flushes; nothing in this binary has touched rayon before, so this is
+diff --git crates/hnsw/tests/support/fixture.rs crates/hnsw/tests/support/fixture.rs
+index 1cd77f608..c3824767f 100644
+--- crates/hnsw/tests/support/fixture.rs
++++ crates/hnsw/tests/support/fixture.rs
+@@ -9,12 +9,28 @@
+ // subset. Matches the sibling `support/purremb.rs`.
+ #![allow(dead_code, unreachable_pub, unused_imports)]
+ 
+-use purrdf_core::distance::{Arithmetic, Exact};
+-use purrdf_hnsw::{Kernel, Ranked, VectorMatrix};
++use purrdf_core::distance::{Arithmetic, Exact, FloatEnvironmentError, FloatEnvironmentEvidence};
++use purrdf_hnsw::{HnswError, Kernel, Ranked, VectorMatrix};
+ use purrdf_sparql_eval::{EmbeddingKnnRelation, EvalError, PfArgs, PfRow, PropertyFunction};
+ 
+ pub use purrdf_hnsw::fixture::params;
+ 
++/// Whether `refusal` names the MXCSR flush-to-zero departure used by x86 tests.
++pub fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
++    let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
++        return false;
++    };
++    matches!(
++        evidence,
++        FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
++    )
++}
++
++/// Whether an index refuses the MXCSR departure on its computing thread.
++pub fn is_ftz(error: &HnswError) -> bool {
++    matches!(error, HnswError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
++}
++
+ /// A deterministic `rows x dims` matrix of SplitMix64 draws in `[-1, 1)` from `seed`.
+ /// With `zero = Some(substitute)` an exact zero draw is replaced by `substitute`; with
+ /// `None` the draws are kept as they are. Nothing here reads a clock or an RNG.

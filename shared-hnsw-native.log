@@ -1,0 +1,24 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/sparql-eval)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/hnsw)
+    Finished `test` profile [optimized] target(s) in 6m 53s
+     Running tests/float_environment.rs (/opt/.cargo/e0/12130452c84c75/debug/build/purrdf-hnsw/cbcc222ffd61c87a/out/float_environment-cbcc222ffd61c87a)
+
+running 5 tests
+test every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain ... ok
+test every_norm_entry_point_needs_the_exact_handle_a_flushing_thread_cannot_obtain ... ok
+test every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_default ... ok
+test every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the_default ... ok
+test a_worker_thread_is_checked_where_it_computes_not_where_the_index_was_built ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/float_environment_rayon.rs (/opt/.cargo/e0/12130452c84c75/debug/build/purrdf-hnsw/cc6037a7d8a0a3b8/out/float_environment_rayon-cc6037a7d8a0a3b8)
+
+running 1 test
+test a_flushing_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_thread_bits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

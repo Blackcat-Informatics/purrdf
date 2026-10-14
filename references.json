@@ -1,0 +1,50 @@
+{
+  "paths": [
+    {
+      "ref": "crates/rdf-core/src/ir/mutable.rs",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/ir/mutable.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 4065,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "c3171c015 Admit complete operational SPARQL storage before allocation",
+        "be3fdeb84 Preserve independent record ordinals during classification",
+        "20e2e637c Preserve typed graph transfers and fresh LOAD identities",
+        "b0fc9e889 Preserve physical RDF record roles in mutable datasets",
+        "dd9109995 core: layer sealed paged generations with pinned mutable snapshots",
+        "5231acd17 fix(core): withdraw a populated remembered slot the same from either origin",
+        "cb9a5b379 docs(core): name the mutable dataset, not a branch, in graph-mode rustdoc",
+        "1305804df docs: document named graph lifetime and its expected v4.0 default",
+        "b050f7848 fix(sparql): checkpoint declaration work and final UPDATE publication",
+        "e0343ae16 Avoid allocating the named graph registry for capability reads"
+      ]
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "MutableDataset::freeze",
+      "files": 6
+    },
+    {
+      "name": "ViewLimits",
+      "files": 44
+    },
+    {
+      "name": "snapshot_view_with_limits",
+      "files": 3
+    },
+    {
+      "name": "UNBOUNDED",
+      "files": 106
+    },
+    {
+      "name": "freeze",
+      "files": 628
+    }
+  ],
+  "packages": [],
+  "urls": [],
+  "truncated": []
+}

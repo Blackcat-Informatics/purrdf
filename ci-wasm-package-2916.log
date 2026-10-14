@@ -1,0 +1,1274 @@
+wasm-package	Set up job	﻿2026-10-13T08:18:50.9711080Z Current runner version: '2.337.0'
+wasm-package	Set up job	2026-10-13T08:18:50.9731776Z ##[group]Runner Image Provisioner
+wasm-package	Set up job	2026-10-13T08:18:50.9732434Z Hosted Compute Agent
+wasm-package	Set up job	2026-10-13T08:18:50.9732836Z Version: 20261002.596
+wasm-package	Set up job	2026-10-13T08:18:50.9733234Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+wasm-package	Set up job	2026-10-13T08:18:50.9733672Z Build Date: 2026-10-02T22:28:27Z
+wasm-package	Set up job	2026-10-13T08:18:50.9734075Z Worker ID: {5a410dee-90f4-4679-a674-4b2705748290}
+wasm-package	Set up job	2026-10-13T08:18:50.9734536Z Region: centralus
+wasm-package	Set up job	2026-10-13T08:18:50.9734901Z Cloud: Azure
+wasm-package	Set up job	2026-10-13T08:18:50.9735219Z ##[endgroup]
+wasm-package	Set up job	2026-10-13T08:18:50.9736064Z ##[group]Operating System
+wasm-package	Set up job	2026-10-13T08:18:50.9736423Z Ubuntu
+wasm-package	Set up job	2026-10-13T08:18:50.9736791Z 24.04.5
+wasm-package	Set up job	2026-10-13T08:18:50.9737130Z LTS
+wasm-package	Set up job	2026-10-13T08:18:50.9737434Z ##[endgroup]
+wasm-package	Set up job	2026-10-13T08:18:50.9737811Z ##[group]Runner Image
+wasm-package	Set up job	2026-10-13T08:18:50.9738175Z Image: ubuntu-24.04
+wasm-package	Set up job	2026-10-13T08:18:50.9738542Z Version: 20261004.327.1
+wasm-package	Set up job	2026-10-13T08:18:50.9739324Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+wasm-package	Set up job	2026-10-13T08:18:50.9740376Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+wasm-package	Set up job	2026-10-13T08:18:50.9740930Z ##[endgroup]
+wasm-package	Set up job	2026-10-13T08:18:50.9741658Z ##[group]GITHUB_TOKEN Permissions
+wasm-package	Set up job	2026-10-13T08:18:50.9742875Z Contents: read
+wasm-package	Set up job	2026-10-13T08:18:50.9743263Z Metadata: read
+wasm-package	Set up job	2026-10-13T08:18:50.9743612Z ##[endgroup]
+wasm-package	Set up job	2026-10-13T08:18:50.9744963Z Secret source: Actions
+wasm-package	Set up job	2026-10-13T08:18:50.9745589Z Cache mode: write
+wasm-package	Set up job	2026-10-13T08:18:50.9746012Z Prepare workflow directory
+wasm-package	Set up job	2026-10-13T08:18:51.0591202Z Prepare all required actions
+wasm-package	Set up job	2026-10-13T08:18:51.0624628Z Getting action download info
+wasm-package	Set up job	2026-10-13T08:18:51.2677392Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+wasm-package	Set up job	2026-10-13T08:18:51.7265014Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+wasm-package	Set up job	2026-10-13T08:18:51.9310933Z Download action repository 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e' (SHA:48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e)
+wasm-package	Set up job	2026-10-13T08:18:52.2911868Z Complete job name: wasm-package
+wasm-package	Checkout	﻿2026-10-13T08:18:52.3791169Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+wasm-package	Checkout	2026-10-13T08:18:52.3792020Z with:
+wasm-package	Checkout	2026-10-13T08:18:52.3792294Z   persist-credentials: false
+wasm-package	Checkout	2026-10-13T08:18:52.3792615Z   repository: Blackcat-Informatics/purrdf
+wasm-package	Checkout	2026-10-13T08:18:52.3794930Z   token: ***
+wasm-package	Checkout	2026-10-13T08:18:52.3795186Z   ssh-strict: true
+wasm-package	Checkout	2026-10-13T08:18:52.3795445Z   ssh-user: git
+wasm-package	Checkout	2026-10-13T08:18:52.3795701Z   clean: true
+wasm-package	Checkout	2026-10-13T08:18:52.3795972Z   sparse-checkout-cone-mode: true
+wasm-package	Checkout	2026-10-13T08:18:52.3796285Z   fetch-depth: 1
+wasm-package	Checkout	2026-10-13T08:18:52.3796554Z   fetch-tags: false
+wasm-package	Checkout	2026-10-13T08:18:52.3796821Z   show-progress: true
+wasm-package	Checkout	2026-10-13T08:18:52.3797091Z   lfs: false
+wasm-package	Checkout	2026-10-13T08:18:52.3797343Z   submodules: false
+wasm-package	Checkout	2026-10-13T08:18:52.3797639Z   set-safe-directory: true
+wasm-package	Checkout	2026-10-13T08:18:52.3797953Z   allow-unsafe-pr-checkout: false
+wasm-package	Checkout	2026-10-13T08:18:52.3798395Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:18:52.5643310Z Syncing repository: Blackcat-Informatics/purrdf
+wasm-package	Checkout	2026-10-13T08:18:52.5644540Z ##[group]Getting Git version info
+wasm-package	Checkout	2026-10-13T08:18:52.5645040Z Working directory is '/home/runner/work/purrdf/purrdf'
+wasm-package	Checkout	2026-10-13T08:18:52.5645608Z [command]/usr/bin/git version
+wasm-package	Checkout	2026-10-13T08:18:52.5706784Z git version 2.55.0
+wasm-package	Checkout	2026-10-13T08:18:52.5719569Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:18:52.5727347Z Temporarily overriding HOME='/home/runner/work/_temp/cb325796-9347-4518-898a-ef806b6b4c1c' before making global git config changes
+wasm-package	Checkout	2026-10-13T08:18:52.5728524Z Adding repository directory to the temporary git global config as a safe directory
+wasm-package	Checkout	2026-10-13T08:18:52.5731371Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+wasm-package	Checkout	2026-10-13T08:18:52.6102805Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+wasm-package	Checkout	2026-10-13T08:18:52.6106168Z ##[group]Determining repository object format
+wasm-package	Checkout	2026-10-13T08:18:52.6107381Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:18:52.6107963Z ##[group]Initializing the repository
+wasm-package	Checkout	2026-10-13T08:18:52.6111005Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+wasm-package	Checkout	2026-10-13T08:18:52.6997422Z hint: Using 'master' as the name for the initial branch. This default branch name
+wasm-package	Checkout	2026-10-13T08:18:52.6998538Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+wasm-package	Checkout	2026-10-13T08:18:52.6999623Z hint: to use in all of your new repositories, which will suppress this warning,
+wasm-package	Checkout	2026-10-13T08:18:52.7000130Z hint: call:
+wasm-package	Checkout	2026-10-13T08:18:52.7000444Z hint:
+wasm-package	Checkout	2026-10-13T08:18:52.7000841Z hint: 	git config --global init.defaultBranch <name>
+wasm-package	Checkout	2026-10-13T08:18:52.7001272Z hint:
+wasm-package	Checkout	2026-10-13T08:18:52.7001727Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+wasm-package	Checkout	2026-10-13T08:18:52.7002652Z hint: 'development'. The just-created branch can be renamed via this command:
+wasm-package	Checkout	2026-10-13T08:18:52.7003230Z hint:
+wasm-package	Checkout	2026-10-13T08:18:52.7003605Z hint: 	git branch -m <name>
+wasm-package	Checkout	2026-10-13T08:18:52.7003940Z hint:
+wasm-package	Checkout	2026-10-13T08:18:52.7004372Z hint: Disable this message with "git config set advice.defaultBranchName false"
+wasm-package	Checkout	2026-10-13T08:18:52.7005014Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+wasm-package	Checkout	2026-10-13T08:18:52.7007899Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+wasm-package	Checkout	2026-10-13T08:18:52.7898152Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:18:52.7899980Z ##[group]Disabling automatic garbage collection
+wasm-package	Checkout	2026-10-13T08:18:52.7901106Z [command]/usr/bin/git config --local gc.auto 0
+wasm-package	Checkout	2026-10-13T08:18:52.8499233Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:18:52.8500390Z ##[group]Setting up auth
+wasm-package	Checkout	2026-10-13T08:18:52.8501069Z Removing SSH command configuration
+wasm-package	Checkout	2026-10-13T08:18:52.8503675Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+wasm-package	Checkout	2026-10-13T08:18:52.8532416Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+wasm-package	Checkout	2026-10-13T08:18:52.8828654Z Removing HTTP extra header
+wasm-package	Checkout	2026-10-13T08:18:52.8833232Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+wasm-package	Checkout	2026-10-13T08:18:52.8860484Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+wasm-package	Checkout	2026-10-13T08:18:52.9026331Z Removing includeIf entries pointing to credentials config files
+wasm-package	Checkout	2026-10-13T08:18:52.9030627Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+wasm-package	Checkout	2026-10-13T08:18:52.9056794Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+wasm-package	Checkout	2026-10-13T08:18:52.9295368Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+wasm-package	Checkout	2026-10-13T08:18:52.9300833Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:18:52.9305502Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:18:52.9316844Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:18:52.9343166Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:18:52.9364702Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:18:52.9366380Z ##[group]Fetching the repository
+wasm-package	Checkout	2026-10-13T08:18:52.9371248Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +1197ece05cc0805891e8ace681b4430fa853a04c:refs/remotes/pull/543/merge
+wasm-package	Checkout	2026-10-13T08:18:58.9923472Z From https://github.com/Blackcat-Informatics/purrdf
+wasm-package	Checkout	2026-10-13T08:18:58.9924587Z  * [new ref]           1197ece05cc0805891e8ace681b4430fa853a04c -> pull/543/merge
+wasm-package	Checkout	2026-10-13T08:18:58.9931179Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:18:58.9931567Z ##[group]Determining the checkout info
+wasm-package	Checkout	2026-10-13T08:18:58.9932023Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:18:58.9932343Z [command]/usr/bin/git sparse-checkout disable
+wasm-package	Checkout	2026-10-13T08:18:58.9975509Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+wasm-package	Checkout	2026-10-13T08:18:59.0000292Z ##[group]Checking out the ref
+wasm-package	Checkout	2026-10-13T08:18:59.0002691Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/543/merge
+wasm-package	Checkout	2026-10-13T08:19:00.0119789Z Note: switching to 'refs/remotes/pull/543/merge'.
+wasm-package	Checkout	2026-10-13T08:19:00.0120301Z 
+wasm-package	Checkout	2026-10-13T08:19:00.0120557Z You are in 'detached HEAD' state. You can look around, make experimental
+wasm-package	Checkout	2026-10-13T08:19:00.0121029Z changes and commit them, and you can discard any commits you make in this
+wasm-package	Checkout	2026-10-13T08:19:00.0121586Z state without impacting any branches by switching back to a branch.
+wasm-package	Checkout	2026-10-13T08:19:00.0122026Z 
+wasm-package	Checkout	2026-10-13T08:19:00.0122274Z If you want to create a new branch to retain commits you create, you may
+wasm-package	Checkout	2026-10-13T08:19:00.0122642Z do so (now or later) by using -c with the switch command. Example:
+wasm-package	Checkout	2026-10-13T08:19:00.0122831Z 
+wasm-package	Checkout	2026-10-13T08:19:00.0122915Z   git switch -c <new-branch-name>
+wasm-package	Checkout	2026-10-13T08:19:00.0123031Z 
+wasm-package	Checkout	2026-10-13T08:19:00.0123117Z Or undo this operation with:
+wasm-package	Checkout	2026-10-13T08:19:00.0123226Z 
+wasm-package	Checkout	2026-10-13T08:19:00.0123291Z   git switch -
+wasm-package	Checkout	2026-10-13T08:19:00.0123409Z 
+wasm-package	Checkout	2026-10-13T08:19:00.0123543Z Turn off this advice by setting config variable advice.detachedHead to false
+wasm-package	Checkout	2026-10-13T08:19:00.0123768Z 
+wasm-package	Checkout	2026-10-13T08:19:00.0123971Z HEAD is now at 1197ece0 Merge 2916fbce469b3e5b60097130b2a305fb97ef128f into 5144f5c1a7dc824f32165eca91d3c2a6df6226fb
+wasm-package	Checkout	2026-10-13T08:19:00.0142233Z ##[endgroup]
+wasm-package	Checkout	2026-10-13T08:19:00.0180218Z [command]/usr/bin/git log -1 --format=%H
+wasm-package	Checkout	2026-10-13T08:19:00.0201294Z 1197ece05cc0805891e8ace681b4430fa853a04c
+wasm-package	Checkout	2026-10-13T08:19:00.0209888Z ##[group]Removing auth
+wasm-package	Checkout	2026-10-13T08:19:00.0210467Z Removing SSH command configuration
+wasm-package	Checkout	2026-10-13T08:19:00.0212973Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+wasm-package	Checkout	2026-10-13T08:19:00.0236689Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+wasm-package	Checkout	2026-10-13T08:19:00.0422255Z Removing HTTP extra header
+wasm-package	Checkout	2026-10-13T08:19:00.0424780Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+wasm-package	Checkout	2026-10-13T08:19:00.0450683Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+wasm-package	Checkout	2026-10-13T08:19:00.0635596Z Removing includeIf entries pointing to credentials config files
+wasm-package	Checkout	2026-10-13T08:19:00.0638323Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+wasm-package	Checkout	2026-10-13T08:19:00.0660715Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+wasm-package	Checkout	2026-10-13T08:19:00.0661163Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+wasm-package	Checkout	2026-10-13T08:19:00.0661524Z includeif.gitdir:/github/workspace/.git.path
+wasm-package	Checkout	2026-10-13T08:19:00.0661839Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+wasm-package	Checkout	2026-10-13T08:19:00.0667788Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+wasm-package	Checkout	2026-10-13T08:19:00.0685671Z /home/runner/work/_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:19:00.0693412Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:19:00.0721245Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+wasm-package	Checkout	2026-10-13T08:19:00.0738123Z /home/runner/work/_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:19:00.0744159Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:19:00.0769266Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+wasm-package	Checkout	2026-10-13T08:19:00.0785543Z /github/runner_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:19:00.0794853Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:19:00.0845398Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+wasm-package	Checkout	2026-10-13T08:19:00.0870703Z /github/runner_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:19:00.0873321Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config
+wasm-package	Checkout	2026-10-13T08:19:00.0899550Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+wasm-package	Checkout	2026-10-13T08:19:00.1083171Z Removing credentials config '/home/runner/work/_temp/git-credentials-1a801501-b16e-4684-b210-ca9702e293b7.config'
+wasm-package	Checkout	2026-10-13T08:19:00.1091079Z ##[endgroup]
+wasm-package	Install Rust	﻿2026-10-13T08:19:00.1318362Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+wasm-package	Install Rust	2026-10-13T08:19:00.1318626Z with:
+wasm-package	Install Rust	2026-10-13T08:19:00.1318738Z   toolchain: nightly
+wasm-package	Install Rust	2026-10-13T08:19:00.1319031Z   targets: wasm32-unknown-unknown
+wasm-package	Install Rust	2026-10-13T08:19:00.1319175Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:00.1383116Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+wasm-package	Install Rust	2026-10-13T08:19:00.1416534Z ##[group]Run : parse toolchain version
+wasm-package	Install Rust	2026-10-13T08:19:00.1416803Z ^[[36;1m: parse toolchain version^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1416967Z ^[[36;1mif [[ -z $toolchain ]]; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1417270Z ^[[36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1417580Z ^[[36;1m  echo "'toolchain' is a required input" >&2^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1417747Z ^[[36;1m  exit 1^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1417938Z ^[[36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1418169Z ^[[36;1m  if [[ Linux == macOS ]]; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1418510Z ^[[36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1418789Z ^[[36;1m  else^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1419169Z ^[[36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1419423Z ^[[36;1m  fi^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1419592Z ^[[36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1419885Z ^[[36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1420134Z ^[[36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1420423Z ^[[36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1420687Z ^[[36;1melse^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1420830Z ^[[36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1420994Z ^[[36;1mfi^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1651593Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:00.1651880Z env:
+wasm-package	Install Rust	2026-10-13T08:19:00.1652048Z   toolchain: nightly
+wasm-package	Install Rust	2026-10-13T08:19:00.1652186Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:00.1769987Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=38]
+wasm-package	Install Rust	2026-10-13T08:19:00.1785942Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+wasm-package	Install Rust	2026-10-13T08:19:00.1807354Z ##[group]Run : construct rustup command line
+wasm-package	Install Rust	2026-10-13T08:19:00.1807586Z ^[[36;1m: construct rustup command line^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1807842Z ^[[36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1808193Z ^[[36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1808478Z ^[[36;1mecho "downgrade=" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1860034Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:00.1860232Z env:
+wasm-package	Install Rust	2026-10-13T08:19:00.1860358Z   targets: wasm32-unknown-unknown
+wasm-package	Install Rust	2026-10-13T08:19:00.1860507Z   components: 
+wasm-package	Install Rust	2026-10-13T08:19:00.1860623Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:00.1942672Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=15]
+wasm-package	Install Rust	2026-10-13T08:19:00.1945698Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+wasm-package	Install Rust	2026-10-13T08:19:00.1965180Z ##[group]Run : set $CARGO_HOME
+wasm-package	Install Rust	2026-10-13T08:19:00.1965358Z ^[[36;1m: set $CARGO_HOME^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.1965540Z ^[[36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.2016976Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:00.2017174Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:00.2095438Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=14]
+wasm-package	Install Rust	2026-10-13T08:19:00.2097389Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+wasm-package	Install Rust	2026-10-13T08:19:00.2121484Z ##[group]Run : install rustup if needed
+wasm-package	Install Rust	2026-10-13T08:19:00.2121687Z ^[[36;1m: install rustup if needed^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.2121854Z ^[[36;1mif ! command -v rustup &>/dev/null; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.2122295Z ^[[36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.2122688Z ^[[36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.2122842Z ^[[36;1mfi^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.2172694Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:00.2172881Z env:
+wasm-package	Install Rust	2026-10-13T08:19:00.2173002Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:00.2173144Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:00.2244260Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=14]
+wasm-package	Install Rust	2026-10-13T08:19:00.2247447Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+wasm-package	Install Rust	2026-10-13T08:19:00.2252701Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+wasm-package	Install Rust	2026-10-13T08:19:00.2254970Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+wasm-package	Install Rust	2026-10-13T08:19:00.2294140Z ##[group]Run rustup toolchain install nightly --target wasm32-unknown-unknown --profile minimal --no-self-update
+wasm-package	Install Rust	2026-10-13T08:19:00.2294582Z ^[[36;1mrustup toolchain install nightly --target wasm32-unknown-unknown --profile minimal --no-self-update^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:00.2344846Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:00.2345042Z env:
+wasm-package	Install Rust	2026-10-13T08:19:00.2345167Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:00.2345321Z   RUSTUP_PERMIT_COPY_RENAME: 1
+wasm-package	Install Rust	2026-10-13T08:19:00.2345455Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:00.2804147Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+wasm-package	Install Rust	2026-10-13T08:19:00.7424753Z info: latest update on 2026-10-13 for version 1.101.0-nightly (e9bbadf68 2026-10-12)
+wasm-package	Install Rust	2026-10-13T08:19:00.7425090Z info: downloading 4 components
+wasm-package	Install Rust	2026-10-13T08:19:08.5617716Z 
+wasm-package	Install Rust	2026-10-13T08:19:08.5674336Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (e9bbadf68 2026-10-12)
+wasm-package	Install Rust	2026-10-13T08:19:08.5674952Z 
+wasm-package	Install Rust	2026-10-13T08:19:08.5733624Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=8347]
+wasm-package	Install Rust	2026-10-13T08:19:08.5739572Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+wasm-package	Install Rust	2026-10-13T08:19:08.5756326Z ##[group]Run rustup default nightly
+wasm-package	Install Rust	2026-10-13T08:19:08.5756507Z ^[[36;1mrustup default nightly^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.5806260Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:08.5806444Z env:
+wasm-package	Install Rust	2026-10-13T08:19:08.5806558Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:08.5806692Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:08.5905404Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+wasm-package	Install Rust	2026-10-13T08:19:08.5911540Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+wasm-package	Install Rust	2026-10-13T08:19:08.5911681Z 
+wasm-package	Install Rust	2026-10-13T08:19:08.5964848Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (e9bbadf68 2026-10-12)
+wasm-package	Install Rust	2026-10-13T08:19:08.5965478Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+wasm-package	Install Rust	2026-10-13T08:19:08.5965769Z 
+wasm-package	Install Rust	2026-10-13T08:19:08.5979805Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=23]
+wasm-package	Install Rust	2026-10-13T08:19:08.5983927Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+wasm-package	Install Rust	2026-10-13T08:19:08.5999478Z ##[group]Run : create cachekey
+wasm-package	Install Rust	2026-10-13T08:19:08.5999662Z ^[[36;1m: create cachekey^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.5999952Z ^[[36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6000453Z ^[[36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6000711Z ^[[36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6049431Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:08.6049618Z env:
+wasm-package	Install Rust	2026-10-13T08:19:08.6049734Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:08.6049869Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:08.6320780Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=33]
+wasm-package	Install Rust	2026-10-13T08:19:08.6322927Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+wasm-package	Install Rust	2026-10-13T08:19:08.6338308Z ##[group]Run : disable incremental compilation
+wasm-package	Install Rust	2026-10-13T08:19:08.6338531Z ^[[36;1m: disable incremental compilation^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6338707Z ^[[36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6339095Z ^[[36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6339277Z ^[[36;1mfi^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6390914Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:08.6391112Z env:
+wasm-package	Install Rust	2026-10-13T08:19:08.6391231Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:08.6391372Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:08.6464602Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=14]
+wasm-package	Install Rust	2026-10-13T08:19:08.6466437Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+wasm-package	Install Rust	2026-10-13T08:19:08.6481372Z ##[group]Run : enable colors in Cargo output
+wasm-package	Install Rust	2026-10-13T08:19:08.6481575Z ^[[36;1m: enable colors in Cargo output^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6481746Z ^[[36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6481936Z ^[[36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6482095Z ^[[36;1mfi^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6541209Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:08.6541413Z env:
+wasm-package	Install Rust	2026-10-13T08:19:08.6541528Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:08.6541668Z   CARGO_INCREMENTAL: 0
+wasm-package	Install Rust	2026-10-13T08:19:08.6541791Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:08.6610257Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=14]
+wasm-package	Install Rust	2026-10-13T08:19:08.6614109Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+wasm-package	Install Rust	2026-10-13T08:19:08.6629465Z ##[group]Run : enable Cargo sparse registry
+wasm-package	Install Rust	2026-10-13T08:19:08.6629669Z ^[[36;1m: enable Cargo sparse registry^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6629866Z ^[[36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6630247Z ^[[36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6630635Z ^[[36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6630944Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6631249Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6631523Z ^[[36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6631832Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6632118Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6632308Z ^[[36;1m  fi^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6632415Z ^[[36;1mfi^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6680189Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:08.6680373Z env:
+wasm-package	Install Rust	2026-10-13T08:19:08.6680490Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:08.6680632Z   CARGO_INCREMENTAL: 0
+wasm-package	Install Rust	2026-10-13T08:19:08.6680755Z   CARGO_TERM_COLOR: always
+wasm-package	Install Rust	2026-10-13T08:19:08.6680882Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:08.6934414Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=31]
+wasm-package	Install Rust	2026-10-13T08:19:08.6938256Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+wasm-package	Install Rust	2026-10-13T08:19:08.6952955Z ##[group]Run : work around spurious network errors in curl 8.0
+wasm-package	Install Rust	2026-10-13T08:19:08.6953217Z ^[[36;1m: work around spurious network errors in curl 8.0^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6953535Z ^[[36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6953898Z ^[[36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6954143Z ^[[36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.6954309Z ^[[36;1mfi^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.7003821Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:08.7004005Z env:
+wasm-package	Install Rust	2026-10-13T08:19:08.7004120Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:08.7004263Z   CARGO_INCREMENTAL: 0
+wasm-package	Install Rust	2026-10-13T08:19:08.7004397Z   CARGO_TERM_COLOR: always
+wasm-package	Install Rust	2026-10-13T08:19:08.7004522Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:08.7163787Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=22]
+wasm-package	Install Rust	2026-10-13T08:19:08.7167335Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+wasm-package	Install Rust	2026-10-13T08:19:08.7183245Z ##[group]Run rustc +nightly --version --verbose
+wasm-package	Install Rust	2026-10-13T08:19:08.7183466Z ^[[36;1mrustc +nightly --version --verbose^[[0m
+wasm-package	Install Rust	2026-10-13T08:19:08.7235102Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Install Rust	2026-10-13T08:19:08.7235302Z env:
+wasm-package	Install Rust	2026-10-13T08:19:08.7235424Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Install Rust	2026-10-13T08:19:08.7235570Z   CARGO_INCREMENTAL: 0
+wasm-package	Install Rust	2026-10-13T08:19:08.7235732Z   CARGO_TERM_COLOR: always
+wasm-package	Install Rust	2026-10-13T08:19:08.7235863Z ##[endgroup]
+wasm-package	Install Rust	2026-10-13T08:19:08.7385857Z rustc 1.101.0-nightly (e9bbadf68 2026-10-12)
+wasm-package	Install Rust	2026-10-13T08:19:08.7386259Z binary: rustc
+wasm-package	Install Rust	2026-10-13T08:19:08.7386483Z commit-hash: e9bbadf6824e65b3583c2dda3a0926ec76df9143
+wasm-package	Install Rust	2026-10-13T08:19:08.7386812Z commit-date: 2026-10-12
+wasm-package	Install Rust	2026-10-13T08:19:08.7386954Z host: x86_64-unknown-linux-gnu
+wasm-package	Install Rust	2026-10-13T08:19:08.7387093Z release: 1.101.0-nightly
+wasm-package	Install Rust	2026-10-13T08:19:08.7387225Z LLVM version: 23.1.3
+wasm-package	Install Rust	2026-10-13T08:19:08.7400252Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=23]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	﻿2026-10-13T08:19:08.7467527Z Prepare all required actions
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:08.7481734Z Getting action download info
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:08.8312998Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7185176Z ##[group]Run ./.github/actions/wasm-toolchain
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7185370Z env:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7185487Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7185626Z   CARGO_INCREMENTAL: 0
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7185746Z   CARGO_TERM_COLOR: always
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7185868Z ##[endgroup]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7190095Z ##[start-action display=Add the wasm32 target;id=__self.__run]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7204076Z ##[group]Run rustup target add wasm32-unknown-unknown
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7204318Z ^[[36;1mrustup target add wasm32-unknown-unknown^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7252904Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7253086Z env:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7253216Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7253385Z   CARGO_INCREMENTAL: 0
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7253507Z   CARGO_TERM_COLOR: always
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.7253629Z ##[endgroup]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:09.8649527Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:10.4428444Z info: latest update on 2026-10-13 for version 1.101.0-nightly (e9bbadf68 2026-10-12)
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:10.4506084Z info: component rust-std for target wasm32-unknown-unknown is up to date
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:10.4509455Z info: downloading 3 components
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8131101Z info: component rust-std for target wasm32-unknown-unknown is up to date
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8192763Z ##[end-action id=__self.__run;outcome=success;conclusion=success;duration_ms=4100]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8195142Z ##[start-action display=Cache the Rust build;id=__self.__Swatinem_rust-cache]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8316218Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8316442Z with:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8316569Z   key: wasm-toolchain
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8316702Z   prefix-key: v0-rust
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8316824Z   add-job-id-key: true
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8316955Z   add-rust-environment-hash-key: true
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8317102Z   cache-targets: true
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8317221Z   cache-all-crates: false
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8317356Z   cache-workspace-crates: false
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8317490Z   save-if: true
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8317603Z   cache-provider: github
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8317722Z   cache-bin: true
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8317833Z   lookup-only: false
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8317944Z   cmd-format: {0}
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8318049Z env:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8318161Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8318296Z   CARGO_INCREMENTAL: 0
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8318415Z   CARGO_TERM_COLOR: always
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:13.8318536Z ##[endgroup]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:14.0271983Z (node:2344) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:14.0272699Z (Use `node --trace-deprecation ...` to show where the warning was created)
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0104957Z ##[group]Cache Configuration
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0105219Z Cache Provider:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0105330Z     github
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0105500Z Workspaces:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0105810Z     /home/runner/work/purrdf/purrdf
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0106023Z Cache Paths:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0106198Z     /home/runner/.cargo/bin
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0106403Z     /home/runner/.cargo/.crates.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0106632Z     /home/runner/.cargo/.crates2.json
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0106856Z     /home/runner/.cargo/registry
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0107063Z     /home/runner/.cargo/git
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0107296Z     /home/runner/work/purrdf/purrdf/target
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0107519Z Restore Key:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0107748Z     v0-rust-wasm-toolchain-wasm-package-Linux-x64-dafec859
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0108024Z Cache Key:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0108279Z     v0-rust-wasm-toolchain-wasm-package-Linux-x64-dafec859-e890734d
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0109310Z .. Prefix:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0109518Z   - v0-rust-wasm-toolchain-wasm-package-Linux-x64
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0109785Z .. Environment considered:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0109977Z   - Rust Versions:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0110276Z     - 1.101.0-nightly x86_64-unknown-linux-gnu e9bbadf6824e65b3583c2dda3a0926ec76df9143
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0110719Z     - 1.99.0 x86_64-unknown-linux-gnu b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0111146Z     - 1.101.0-nightly x86_64-unknown-linux-gnu e9bbadf6824e65b3583c2dda3a0926ec76df9143
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0111488Z   - CARGO_HOME
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0111654Z   - CARGO_INCREMENTAL
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0111834Z   - CARGO_TERM_COLOR
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0112012Z .. Lockfiles considered:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0112272Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0112522Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0112731Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0112933Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0113145Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0113342Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0113529Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0113723Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0113945Z   - /home/runner/work/purrdf/purrdf/crates/conformance-kit/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0114161Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0114459Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0114771Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0115086Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0115308Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0115539Z   - /home/runner/work/purrdf/purrdf/crates/geo-kernel/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0115742Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0115929Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0116138Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0116382Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0116707Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0116919Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0117110Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0117299Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0117500Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0117699Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0118034Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0118241Z   - /home/runner/work/purrdf/purrdf/crates/mime/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0118434Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0118641Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0118985Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0119198Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0119511Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0119705Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0119906Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0120109Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0120302Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0120741Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0121173Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0121535Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0121907Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0122238Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0122574Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0122900Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0123220Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0123549Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0123906Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0124228Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0124532Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0124987Z ##[endgroup]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0125090Z 
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.0125166Z ... Restoring cache ...
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.1751178Z No cache found.
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.1862407Z ##[end-action id=__self.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=1366]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.1864606Z ##[start-action display=Read the toolchain pins (single source of truth);id=__self.pins]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2380747Z ##[group]Run set -euo pipefail
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2380965Z ^[[36;1mset -euo pipefail^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2381147Z ^[[36;1mwb="$(grep -oP 'wasm-bindgen = "=\K[0-9.]+' Cargo.toml)"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2381431Z ^[[36;1mtest -n "$wb" || { echo "could not read the wasm-bindgen pin from Cargo.toml"; exit 1; }^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2381713Z ^[[36;1mbn="$(grep -oP '^BINARYEN_VERSION := \K[0-9]+' Makefile)"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2381966Z ^[[36;1mtest -n "$bn" || { echo "could not read BINARYEN_VERSION from Makefile"; exit 1; }^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2382228Z ^[[36;1mecho "wasm_bindgen=$wb" >> "$GITHUB_OUTPUT"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2382420Z ^[[36;1mecho "binaryen=$bn" >> "$GITHUB_OUTPUT"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2434017Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2434214Z env:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2434334Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2434477Z   CARGO_INCREMENTAL: 0
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2434605Z   CARGO_TERM_COLOR: always
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2434733Z   CACHE_ON_FAILURE: false
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.2434857Z ##[endgroup]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.3626879Z ##[end-action id=__self.pins;outcome=success;conclusion=success;duration_ms=176]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.3628698Z ##[start-action display=Install wasm-bindgen-cli (prebuilt, matched to the workspace pin);id=__self.__run_2]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4686144Z ##[group]Run set -euo pipefail
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4686371Z ^[[36;1mset -euo pipefail^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4686507Z ^[[36;1mver="0.2.125"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4686679Z ^[[36;1mbase="wasm-bindgen-${ver}-x86_64-unknown-linux-musl"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4687012Z ^[[36;1murl="https://github.com/rustwasm/wasm-bindgen/releases/download/${ver}/${base}.tar.gz"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4687274Z ^[[36;1mcurl -fsSL "$url" -o /tmp/wb.tar.gz^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4687462Z ^[[36;1mcurl -fsSL "${url}.sha256sum" -o /tmp/wb.sha256^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4687710Z ^[[36;1mecho "$(awk '{print $1}' /tmp/wb.sha256)  /tmp/wb.tar.gz" | sha256sum -c -^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4687992Z ^[[36;1mmkdir -p /tmp/wb && tar -xzf /tmp/wb.tar.gz -C /tmp/wb --strip-components=1^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4688276Z ^[[36;1minstall -Dm0755 /tmp/wb/wasm-bindgen "$HOME/.cargo/bin/wasm-bindgen"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4688520Z ^[[36;1mfound="$(wasm-bindgen --version | awk '{print $2}')"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4688804Z ^[[36;1mtest "$found" = "$ver" || { echo "wasm-bindgen version mismatch: got $found, expected $ver"; exit 1; }^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4689348Z ^[[36;1mecho "wasm-bindgen $found installed"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4689920Z ^[[36;1m# The same CLI is the wasm32 test runner's: scripts/wasm-test-runner.sh^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4690388Z ^[[36;1m# generates each wasm32 test binary's Node bindings with it, so^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4690930Z ^[[36;1m# `make wasm-test` and `make wasm-pkg-test` are held to this one^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4691355Z ^[[36;1m# wasm-bindgen pin rather than to a second one.^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4765489Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4765705Z env:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4765829Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4765974Z   CARGO_INCREMENTAL: 0
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4766100Z   CARGO_TERM_COLOR: always
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4766228Z   CACHE_ON_FAILURE: false
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:15.4766351Z ##[endgroup]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.4471811Z /tmp/wb.tar.gz: OK
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6139272Z wasm-bindgen 0.2.125 installed
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6144752Z ##[end-action id=__self.__run_2;outcome=success;conclusion=success;duration_ms=1251]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6146627Z ##[start-action display=Install the pinned Binaryen validator and optimizer;id=__self.__self]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6160047Z Prepare all required actions
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6957377Z ##[group]Run ./.github/actions/binaryen-toolchain
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6957580Z env:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6957696Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6957841Z   CARGO_INCREMENTAL: 0
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6957966Z   CARGO_TERM_COLOR: always
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6958094Z   CACHE_ON_FAILURE: false
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6958212Z ##[endgroup]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6961338Z ##[start-action display=Install binaryen (prebuilt, matched to BINARYEN_VERSION) and verify SIMD;id=__self.__self.__run]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6974741Z ##[group]Run set -euo pipefail
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6974930Z ^[[36;1mset -euo pipefail^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6975107Z ^[[36;1mver="$(grep -oP '^BINARYEN_VERSION := \K[0-9]+' Makefile)"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6975315Z ^[[36;1mbase="binaryen-version_${ver}-x86_64-linux"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6975606Z ^[[36;1murl="https://github.com/WebAssembly/binaryen/releases/download/version_${ver}/${base}.tar.gz"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6975907Z ^[[36;1mcurl -fsSL "$url" -o /tmp/bn.tar.gz^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6976085Z ^[[36;1mcurl -fsSL "${url}.sha256" -o /tmp/bn.sha256^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6976320Z ^[[36;1mecho "$(awk '{print $1}' /tmp/bn.sha256)  /tmp/bn.tar.gz" | sha256sum -c -^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6976624Z ^[[36;1mmkdir -p /tmp/binaryen && tar -xzf /tmp/bn.tar.gz -C /tmp/binaryen --strip-components=1^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6976881Z ^[[36;1mecho "/tmp/binaryen/bin" >> "$GITHUB_PATH"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6977057Z ^[[36;1mexport PATH="/tmp/binaryen/bin:$PATH"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6977258Z ^[[36;1mfound="$(wasm-opt --version | grep -oE '[0-9]+' | head -1)"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6977545Z ^[[36;1mtest "$found" = "$ver" || { echo "binaryen version mismatch: got $found, expected $ver"; exit 1; }^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6977835Z ^[[36;1mprintf '(module)\n' | wasm-opt --enable-simd -o /dev/null - \^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6978098Z ^[[36;1m  || { echo "FAIL: installed wasm-opt lacks --enable-simd support"; exit 1; }^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.6978372Z ^[[36;1mecho "binaryen $found installed (wasm-opt --enable-simd verified)"^[[0m
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.7029207Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.7029383Z env:
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.7029499Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.7029641Z   CARGO_INCREMENTAL: 0
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.7029765Z   CARGO_TERM_COLOR: always
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.7029892Z   CACHE_ON_FAILURE: false
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:16.7030015Z ##[endgroup]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:17.4779064Z /tmp/bn.tar.gz: OK
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:18.9857062Z warning: no passes specified, not doing any work
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:18.9860594Z binaryen 130 installed (wasm-opt --enable-simd verified)
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:18.9868996Z ##[end-action id=__self.__self.__run;outcome=success;conclusion=success;duration_ms=2290]
+wasm-package	Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:19:18.9871666Z ##[end-action id=__self.__self;outcome=success;conclusion=success;duration_ms=2372]
+wasm-package	Build the optimized wasm package	﻿2026-10-13T08:19:18.9891620Z ##[group]Run make wasm-pkg
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:18.9891788Z ^[[36;1mmake wasm-pkg^[[0m
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:18.9944836Z shell: /usr/bin/bash -e {0}
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:18.9944984Z env:
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:18.9945100Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:18.9945246Z   CARGO_INCREMENTAL: 0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:18.9945374Z   CARGO_TERM_COLOR: always
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:18.9945499Z   CACHE_ON_FAILURE: false
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:18.9945622Z ##[endgroup]
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.1389580Z ^[[1m^[[92m    Updating^[[0m crates.io index
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.5744833Z ^[[1m^[[92m Downloading^[[0m crates ...
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6451228Z ^[[1m^[[92m  Downloaded^[[0m aead v0.6.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6535606Z ^[[1m^[[92m  Downloaded^[[0m block-buffer v0.12.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6662945Z ^[[1m^[[92m  Downloaded^[[0m aes v0.9.3
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6857497Z ^[[1m^[[92m  Downloaded^[[0m cpufeatures v0.3.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6871589Z ^[[1m^[[92m  Downloaded^[[0m cfg-if v1.0.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6880586Z ^[[1m^[[92m  Downloaded^[[0m cpubits v0.1.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6886467Z ^[[1m^[[92m  Downloaded^[[0m crypto-common v0.2.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6918937Z ^[[1m^[[92m  Downloaded^[[0m universal-hash v0.6.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6980016Z ^[[1m^[[92m  Downloaded^[[0m wasm-bindgen-macro v0.2.125
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.6986947Z ^[[1m^[[92m  Downloaded^[[0m ghash v0.6.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7026928Z ^[[1m^[[92m  Downloaded^[[0m inout v0.2.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7089107Z ^[[1m^[[92m  Downloaded^[[0m wasm-bindgen-shared v0.2.125
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7187963Z ^[[1m^[[92m  Downloaded^[[0m cmov v0.5.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7202609Z ^[[1m^[[92m  Downloaded^[[0m ctutils v0.4.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7217274Z ^[[1m^[[92m  Downloaded^[[0m digest v0.11.3
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7234469Z ^[[1m^[[92m  Downloaded^[[0m ctr v0.10.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7250169Z ^[[1m^[[92m  Downloaded^[[0m cipher v0.5.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7266808Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-deque v0.8.6
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7276234Z ^[[1m^[[92m  Downloaded^[[0m rustversion v1.0.22
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7298044Z ^[[1m^[[92m  Downloaded^[[0m fastrand v2.4.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7309441Z ^[[1m^[[92m  Downloaded^[[0m either v1.16.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7320997Z ^[[1m^[[92m  Downloaded^[[0m visual-hashing v1.0.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7336939Z ^[[1m^[[92m  Downloaded^[[0m quote v1.0.46
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7356636Z ^[[1m^[[92m  Downloaded^[[0m sha2 v0.11.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7383100Z ^[[1m^[[92m  Downloaded^[[0m hybrid-array v0.4.15
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7398399Z ^[[1m^[[92m  Downloaded^[[0m once_cell v1.21.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7422187Z ^[[1m^[[92m  Downloaded^[[0m polyval v0.7.3
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7441229Z ^[[1m^[[92m  Downloaded^[[0m twox-hash v2.1.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7458215Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-utils v0.8.21
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7477321Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-epoch v0.9.18
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7494464Z ^[[1m^[[92m  Downloaded^[[0m const-oid v0.10.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7511214Z ^[[1m^[[92m  Downloaded^[[0m proc-macro2 v1.0.106
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7548152Z ^[[1m^[[92m  Downloaded^[[0m getrandom v0.3.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7575412Z ^[[1m^[[92m  Downloaded^[[0m unicode-ident v1.0.24
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7595832Z ^[[1m^[[92m  Downloaded^[[0m wasm-bindgen v0.2.125
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7614880Z ^[[1m^[[92m  Downloaded^[[0m rayon-core v1.13.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7667369Z ^[[1m^[[92m  Downloaded^[[0m wasm-bindgen-macro-support v0.2.125
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7683236Z ^[[1m^[[92m  Downloaded^[[0m aes-gcm v0.11.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7704863Z ^[[1m^[[92m  Downloaded^[[0m memchr v2.8.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7752008Z ^[[1m^[[92m  Downloaded^[[0m bumpalo v3.20.3
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7770825Z ^[[1m^[[92m  Downloaded^[[0m typenum v1.20.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7795727Z ^[[1m^[[92m  Downloaded^[[0m aho-corasick v1.1.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7832883Z ^[[1m^[[92m  Downloaded^[[0m hashbrown v0.17.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7870752Z ^[[1m^[[92m  Downloaded^[[0m regex v1.12.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7909084Z ^[[1m^[[92m  Downloaded^[[0m rayon v1.12.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.7977964Z ^[[1m^[[92m  Downloaded^[[0m syn v2.0.118
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.8053911Z ^[[1m^[[92m  Downloaded^[[0m regex-syntax v0.8.11
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.8102422Z ^[[1m^[[92m  Downloaded^[[0m regex-automata v0.4.14
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.8207146Z ^[[1m^[[92m  Downloaded^[[0m libc v0.2.186
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.8500426Z ^[[1m^[[92m  Downloaded^[[0m structured-zstd v0.0.49
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.9080342Z ^[[1m^[[92m   Compiling^[[0m typenum v1.20.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.9080942Z ^[[1m^[[92m   Compiling^[[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.9089420Z ^[[1m^[[92m   Compiling^[[0m const-oid v0.10.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.9099479Z ^[[1m^[[92m   Compiling^[[0m cfg-if v1.0.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.9320555Z ^[[1m^[[92m   Compiling^[[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:19.9963949Z ^[[1m^[[92m   Compiling^[[0m regex-syntax v0.8.11
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:20.0206025Z ^[[1m^[[92m   Compiling^[[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:20.2550426Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.17.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:20.7550626Z ^[[1m^[[92m   Compiling^[[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:20.7956971Z ^[[1m^[[92m   Compiling^[[0m hybrid-array v0.4.15
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:21.2005701Z ^[[1m^[[92m   Compiling^[[0m crypto-common v0.2.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:21.3131786Z ^[[1m^[[92m   Compiling^[[0m block-buffer v0.12.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:21.3905687Z ^[[1m^[[92m   Compiling^[[0m regex-automata v0.4.14
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:21.7899989Z ^[[1m^[[92m   Compiling^[[0m digest v0.11.3
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:21.8720319Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.11.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:22.0668032Z ^[[1m^[[92m   Compiling^[[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:22.7615306Z ^[[1m^[[92m   Compiling^[[0m crossbeam-utils v0.8.21
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:22.8600457Z ^[[1m^[[92m   Compiling^[[0m wasm-bindgen-shared v0.2.125
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:22.9830592Z ^[[1m^[[92m   Compiling^[[0m proc-macro2 v1.0.106
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:23.1048236Z ^[[1m^[[92m   Compiling^[[0m unicode-ident v1.0.24
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:23.1760476Z ^[[1m^[[92m   Compiling^[[0m rayon-core v1.13.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:23.2281124Z ^[[1m^[[92m   Compiling^[[0m quote v1.0.46
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:23.3134446Z ^[[1m^[[92m   Compiling^[[0m regex v1.12.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:23.3320572Z ^[[1m^[[92m   Compiling^[[0m crossbeam-epoch v0.9.18
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:23.5289741Z ^[[1m^[[92m   Compiling^[[0m crossbeam-deque v0.8.6
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:23.6331389Z ^[[1m^[[92m   Compiling^[[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:23.7630573Z ^[[1m^[[92m   Compiling^[[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:25.8410861Z ^[[1m^[[92m   Compiling^[[0m rustversion v1.0.22
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:26.0400103Z ^[[1m^[[92m   Compiling^[[0m either v1.16.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:26.2490534Z ^[[1m^[[92m   Compiling^[[0m syn v2.0.118
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:26.5920756Z ^[[1m^[[92m   Compiling^[[0m rayon v1.12.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:27.6120457Z ^[[1m^[[92m   Compiling^[[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:29.6540726Z ^[[1m^[[92m   Compiling^[[0m bumpalo v3.20.3
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:29.7900425Z ^[[1m^[[92m   Compiling^[[0m wasm-bindgen-macro-support v0.2.125
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:29.9370307Z ^[[1m^[[92m   Compiling^[[0m wasm-bindgen v0.2.125
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:30.5533668Z ^[[1m^[[92m   Compiling^[[0m inout v0.2.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:30.6080350Z ^[[1m^[[92m   Compiling^[[0m once_cell v1.21.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:30.6510278Z ^[[1m^[[92m   Compiling^[[0m cmov v0.5.4
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:30.7740072Z ^[[1m^[[92m   Compiling^[[0m ctutils v0.4.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:30.9020489Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:32.1840382Z ^[[1m^[[92m   Compiling^[[0m wasm-bindgen-macro v0.2.125
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:32.9470266Z ^[[1m^[[92m   Compiling^[[0m cpubits v0.1.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:32.9640633Z ^[[1m^[[92m   Compiling^[[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.0380318Z ^[[1m^[[92m   Compiling^[[0m universal-hash v0.6.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.0860299Z ^[[1m^[[92m   Compiling^[[0m cipher v0.5.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.2430350Z ^[[1m^[[92m   Compiling^[[0m polyval v0.7.3
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.3040265Z ^[[1m^[[92m   Compiling^[[0m fastrand v2.4.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.4020181Z ^[[1m^[[92m   Compiling^[[0m twox-hash v2.1.2
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.4320714Z ^[[1m^[[92m   Compiling^[[0m ghash v0.6.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.4514046Z ^[[1m^[[92m   Compiling^[[0m structured-zstd v0.0.49
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.4664514Z ^[[1m^[[92m   Compiling^[[0m aes v0.9.3
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.6627970Z ^[[1m^[[92m   Compiling^[[0m ctr v0.10.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.7510446Z ^[[1m^[[92m   Compiling^[[0m aead v0.6.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.8100269Z ^[[1m^[[92m   Compiling^[[0m aes-gcm v0.11.1
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:33.8690400Z ^[[1m^[[92m   Compiling^[[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:34.3390456Z ^[[1m^[[92m   Compiling^[[0m visual-hashing v1.0.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:35.9610548Z ^[[1m^[[92m   Compiling^[[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:41.8890994Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:43.8168142Z ^[[1m^[[92m   Compiling^[[0m purrdf-geo-kernel v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo-kernel)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:44.3180224Z ^[[1m^[[92m   Compiling^[[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:51.5260549Z ^[[1m^[[92m   Compiling^[[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+wasm-package	Build the optimized wasm package	2026-10-13T08:19:57.1182141Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+wasm-package	Build the optimized wasm package	2026-10-13T08:20:13.3591084Z ^[[1m^[[92m   Compiling^[[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+wasm-package	Build the optimized wasm package	2026-10-13T08:20:16.9040274Z ^[[1m^[[92m   Compiling^[[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+wasm-package	Build the optimized wasm package	2026-10-13T08:20:18.1730110Z ^[[1m^[[92m   Compiling^[[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+wasm-package	Build the optimized wasm package	2026-10-13T08:20:28.1360709Z ^[[1m^[[92m   Compiling^[[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+wasm-package	Build the optimized wasm package	2026-10-13T08:20:36.6222181Z ^[[1m^[[92m   Compiling^[[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+wasm-package	Build the optimized wasm package	2026-10-13T08:20:41.2890556Z ^[[1m^[[92m   Compiling^[[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+wasm-package	Build the optimized wasm package	2026-10-13T08:21:08.3516250Z ^[[1m^[[92m   Compiling^[[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+wasm-package	Build the optimized wasm package	2026-10-13T08:21:20.2110983Z ^[[1m^[[92m   Compiling^[[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+wasm-package	Build the optimized wasm package	2026-10-13T08:21:20.2396691Z ^[[1m^[[92m   Compiling^[[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+wasm-package	Build the optimized wasm package	2026-10-13T08:21:22.1800700Z ^[[1m^[[92m   Compiling^[[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+wasm-package	Build the optimized wasm package	2026-10-13T08:21:22.5180810Z ^[[1m^[[92m   Compiling^[[0m purrdf-mime v3.0.1 (/home/runner/work/purrdf/purrdf/crates/mime)
+wasm-package	Build the optimized wasm package	2026-10-13T08:21:23.4411429Z ^[[1m^[[92m   Compiling^[[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+wasm-package	Build the optimized wasm package	2026-10-13T08:21:23.9510465Z ^[[1m^[[92m   Compiling^[[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+wasm-package	Build the optimized wasm package	2026-10-13T08:21:24.5830406Z ^[[1m^[[92m   Compiling^[[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+wasm-package	Build the optimized wasm package	2026-10-13T08:22:15.8974270Z ^[[1m^[[92m   Compiling^[[0m purrdf-wasm v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-wasm)
+wasm-package	Build the optimized wasm package	2026-10-13T08:25:18.5472703Z ^[[1m^[[92m    Finished^[[0m `release` profile [optimized] target(s) in 5m 59s
+wasm-package	Build the optimized wasm package	2026-10-13T08:25:24.4416506Z cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+wasm-package	Build the optimized wasm package	2026-10-13T08:25:24.4500465Z wasm-opt -Oz \
+wasm-package	Build the optimized wasm package	2026-10-13T08:25:24.4500873Z 	--enable-bulk-memory --enable-nontrapping-float-to-int \
+wasm-package	Build the optimized wasm package	2026-10-13T08:25:24.4501127Z 	--enable-sign-ext --enable-mutable-globals --enable-simd \
+wasm-package	Build the optimized wasm package	2026-10-13T08:25:24.4501405Z 	-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:28.4995121Z cargo run -p wasm-link --release --locked -- crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:28.5521281Z ^[[1m^[[92m Downloading^[[0m crates ...
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:28.6719109Z ^[[1m^[[92m  Downloaded^[[0m leb128fmt v0.1.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:28.6860643Z ^[[1m^[[92m  Downloaded^[[0m wasm-encoder v0.259.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:28.6969963Z ^[[1m^[[92m   Compiling^[[0m leb128fmt v0.1.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:28.7367336Z ^[[1m^[[92m   Compiling^[[0m wasm-encoder v0.259.0
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:29.0771432Z ^[[1m^[[92m   Compiling^[[0m wasm-link v3.0.1 (/home/runner/work/purrdf/purrdf/crates/wasm-link)
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:33.0916858Z ^[[1m^[[92m    Finished^[[0m `release` profile [optimized] target(s) in 4.57s
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:33.0925503Z ^[[1m^[[92m     Running^[[0m `target/release/wasm-link crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm`
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:38.7685457Z OK: wasm-link linked crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm: stack pointer is global 0 (exported as purrdf_stack_pointer); purrdf_jspi_suspend is function 8, called only from $suspend (function 17253), which 1 call site(s) reach; 52 other import(s) behind trampolines with 418 reference(s) routed; purrdf_jspi_run wrapped by function 17298 (region top appended as its last parameter); 411 exported function(s) behind the poison gate (366 trapping, 45 inert release function(s); globals idle=3, poisoned=4, active=5, parked=6, outbound=7); validated under ["mutable-globals", "nontrapping-float-to-int", "sign-ext", "bulk-memory", "simd"]
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:43.2368004Z OK: verified 416331 SIMD opcode(s) present in the optimized wasm artifact
+wasm-package	Build the optimized wasm package	2026-10-13T08:26:43.2374979Z OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)
+wasm-package	Set up Node.js	﻿2026-10-13T08:26:43.2435024Z ##[group]Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2435255Z with:
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2435370Z   node-version: 24
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2435488Z   check-latest: false
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2436836Z   token: ***
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2436955Z   package-manager-cache: true
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2437091Z env:
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2437202Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2437341Z   CARGO_INCREMENTAL: 0
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2437465Z   CARGO_TERM_COLOR: always
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2437606Z   CACHE_ON_FAILURE: false
+wasm-package	Set up Node.js	2026-10-13T08:26:43.2437730Z ##[endgroup]
+wasm-package	Set up Node.js	2026-10-13T08:26:43.3471764Z Found in cache @ /opt/hostedtoolcache/node/24.21.0/x64
+wasm-package	Set up Node.js	2026-10-13T08:26:43.3474260Z ##[group]Environment details
+wasm-package	Set up Node.js	2026-10-13T08:26:43.6694230Z node: v24.21.0
+wasm-package	Set up Node.js	2026-10-13T08:26:43.6694530Z npm: 11.19.0
+wasm-package	Set up Node.js	2026-10-13T08:26:43.6694696Z yarn: 1.22.22
+wasm-package	Set up Node.js	2026-10-13T08:26:43.6695104Z ##[endgroup]
+wasm-package	Run npm package gates	﻿2026-10-13T08:26:43.6792088Z ##[group]Run npm ci --ignore-scripts --no-audit --no-fund
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6792345Z ^[[36;1mnpm ci --ignore-scripts --no-audit --no-fund^[[0m
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6792517Z ^[[36;1mnpm run check^[[0m
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6847477Z shell: /usr/bin/bash -e {0}
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6847620Z env:
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6847735Z   CARGO_HOME: /home/runner/.cargo
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6847875Z   CARGO_INCREMENTAL: 0
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6848003Z   CARGO_TERM_COLOR: always
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6848130Z   CACHE_ON_FAILURE: false
+wasm-package	Run npm package gates	2026-10-13T08:26:43.6848259Z ##[endgroup]
+wasm-package	Run npm package gates	2026-10-13T08:26:44.5115310Z 
+wasm-package	Run npm package gates	2026-10-13T08:26:44.5122122Z added 3 packages in 782ms
+wasm-package	Run npm package gates	2026-10-13T08:26:44.6108370Z 
+wasm-package	Run npm package gates	2026-10-13T08:26:44.6109199Z > @blackcatinformatics/purrdf@3.0.1 check
+wasm-package	Run npm package gates	2026-10-13T08:26:44.6109530Z > npm run typecheck && npm test && npm run smoke:pack
+wasm-package	Run npm package gates	2026-10-13T08:26:44.6109663Z 
+wasm-package	Run npm package gates	2026-10-13T08:26:44.6777531Z 
+wasm-package	Run npm package gates	2026-10-13T08:26:44.6778310Z > @blackcatinformatics/purrdf@3.0.1 typecheck
+wasm-package	Run npm package gates	2026-10-13T08:26:44.6778776Z > tsc -p tsconfig.types.json
+wasm-package	Run npm package gates	2026-10-13T08:26:44.6779218Z 
+wasm-package	Run npm package gates	2026-10-13T08:26:44.9777859Z 
+wasm-package	Run npm package gates	2026-10-13T08:26:44.9778504Z > @blackcatinformatics/purrdf@3.0.1 test
+wasm-package	Run npm package gates	2026-10-13T08:26:44.9778774Z > node --test tests/*.test.mjs
+wasm-package	Run npm package gates	2026-10-13T08:26:44.9779015Z 
+wasm-package	Run npm package gates	2026-10-13T08:26:45.4761149Z ✔ queryGoverned computes MEDIAN through aggregateNamespace (72.974546ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:45.4850932Z ✔ omitting aggregateNamespace leaves the ten names unregistered, with the existing typed error (2.550494ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:45.4880618Z ✔ updateGoverned reaches MEDIAN from a DELETE/INSERT WHERE nested SELECT (29.635272ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:45.4940802Z ✔ an ungoverned entry refuses aggregateNamespace rather than ignoring it (0.543406ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:45.4962295Z ✔ queryEntailmentGoverned computes MEDIAN through aggregateNamespace over an entailed closure (135.72264ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:45.5030742Z ✔ omitting aggregateNamespace leaves queryEntailmentGoverned's statistical set unregistered (1.014581ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:46.4569107Z ✔ three interleaved async queries resume out of order and all answer correctly (86.977244ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:46.4570112Z ✔ a deep sync query during a suspension is answered (118.468044ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:46.4571403Z ✔ jobs suspended inside a property path's walk scope, interleaved with each other and with synchronous paths, all answer their synchronous baselines (1051.919395ms)
+wasm-package	Run npm package gates	2026-10-13T08:26:48.0020684Z ✔ an async job started from inside a sync callback runs and returns (19.583023ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.1657717Z ✔ a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included (732440.410518ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.1688028Z ✖ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (524.229933ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.1693100Z ℹ admitted nesting endpoints: {"synchronous":135,"job":135}
+wasm-package	Run npm package gates	2026-10-13T08:39:00.1696516Z ✔ a FILTER nested 10 000 parentheses deep answers what one pair answers, on both lanes (9.224929ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.1720250Z ✔ nesting answers on the asynchronous lane as deep as the job's stacks hold it, and is the synchronous lane's refusal past that (357.001453ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.1722751Z ✔ a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing (356.756833ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.2792590Z ✔ beginAsync beyond maxConcurrentJobs is refused (118.578089ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3137618Z ✔ every sync-suite query answers identically through queryAsync, eight at a time, yielding at every poll (4478.753388ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3138562Z ✔ every corpus query's asynchronous job stays inside the top quarter of its stack region (33.856373ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3139554Z ✔ explainQueryAsync on a SERVICE-free query is byte-identical to explainQuery (52.086091ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3140493Z ✔ explainQueryAsync explains a SERVICE join over the host's answer; the synchronous twin refuses it (21.126197ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3141478Z ✔ SERVICE SILENT under explainQueryAsync: a failing resolver is the join identity, as on queryAsync (7.82815ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3143101Z ✔ a CPU-heavy explainQueryAsync yields to the event loop; the synchronous twin does not (3596.604571ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3143808Z ✔ an AbortSignal aborted mid-explain rejects with the abort reason (47.492153ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3144521Z ✔ a deadline stops explainQueryAsync as it stops the other ungoverned twins (50.060666ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3145128Z ✔ a parse error rejects with the synchronous twin's words (2.337453ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3145743Z ✔ async SHACL twins return exactly their synchronous twins' results on core and SHACL-SPARQL fixtures, conforming and not (573.340379ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3146549Z ✔ the change, entailment and product twins return their synchronous twins' values (82.040031ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3147275Z ✔ a refused product rejects with the synchronous twin's ShaclProductRefusal, dimension and all (5.921551ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3148214Z ✔ a SERVICE in a SHACL-SPARQL target is refused on both lanes and no host handler is asked; the local target answers (8.947735ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3149217Z ✔ the shapes-graph arguments reach the job exactly as they reach the synchronous twin (16.126045ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3150059Z ✔ a heavy validation with no SPARQL in it yields to the event loop; the synchronous twin does not (949.118934ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3150834Z ✔ a signal stops a SHACL validation: its reason, a timeout, and an already-aborted signal (790.988326ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3151859Z ✔ concurrent SHACL validations suspended at every poll, interleaved with synchronous validations, all answer their synchronous baselines (2468.193144ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3153214Z ✔ two concurrent jobs issuing the same request without deadlines share one host call (54.668771ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3153760Z ✔ a job stopped while it waits abandons only itself; the host's signal waits for the other job (3.65236ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3154203Z ✔ the host's signal aborts once every job waiting on the call has been stopped (1.525125ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3154693Z ✔ the same request under SERVICE and SERVICE SILENT is two host calls, each told its own silent (1.388078ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3155126Z ✔ a different cell ceiling is its own host call; the same ceiling is shared (3.898873ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3155581Z ✔ a job whose deadline is later than the in-flight call's is its own call; an earlier one shares it (2.485627ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3156064Z ✔ a job without a deadline never joins a call bounded by one; a job with one joins an unbounded call (1.77949ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3156552Z ✔ a short-deadline job's timed-out call is never a SILENT failure for a job with a longer deadline (5.633305ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3156991Z ✔ one job asks the host once for a request it repeats; sequential jobs each ask (5.862241ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3157483Z ✔ jobs sharing a call each abandon it at their request's timeout, and the call aborts when the last leaves (35.1451ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3157960Z ✔ host-effect deadlines settle in otherwise idle Node, with every timer released (1794.71557ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3158435Z ✔ a 20,000-level SERVICE term can be walked, cloned, compared and dropped without poisoning (512.523364ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3158807Z ✔ queryAsync joins remote bindings with local rows (65.692072ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3159413Z ✔ a delayed promise is awaited, not raced (52.530964ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3159822Z ✔ a transport failure is a thrown error without SILENT (3.273117ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3160242Z ✔ a transport failure is the join identity under SILENT (1.554951ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3160808Z ✔ a resolver that throws fails its invocation: the join identity under SILENT, recorded as a fault; native-sparql-host-fault without (6.74809ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3161433Z ✔ a host denial with no catalog installed fails the query, is the identity under SILENT, and never invents a catalog cause (2.856067ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3161888Z ✔ a catalog denies an endpoint it does not list, before any host call (4.969672ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3162497Z ✔ SERVICE SILENT with a resolver still forwards the request (0.932389ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3162830Z ✔ a variable endpoint bound by VALUES resolves per row (10.126057ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3163175Z ✔ an endpoint variable nothing binds is refused, under SILENT too (7.96527ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3163648Z ✔ SERVICE SILENT with no source, or with an endpoint that is not an IRI, is the join identity on both lanes (12.104597ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3164121Z ✔ a group join binding the endpoint on its right answers as the left-bound form (7.892911ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3164613Z ✔ a variable endpoint some solution cannot name refuses the query before any request, in either row order (5.051445ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3165125Z ✔ a variable endpoint bound by an OPTIONAL, group join or MINUS left side is asked once per endpoint (4.79582ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3165556Z ✔ SILENT swallows one variable endpoint's failure for that endpoint only (4.590199ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3165923Z ✔ a nested SERVICE is forwarded inside the outer request text (1.220825ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3166259Z ✔ queryAsync without resolveService fails like the sync path (1.32364ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3166742Z ✔ synchronous query methods are unchanged (12.540165ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3167134Z ✔ every async twin evaluates (110.961898ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3167975Z ✔ a yielding job lets a setTimeout(…, 0) timer another party scheduled fire between its turns; a job that never yields does not (322.26536ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3168630Z ✔ AbortSignal cancels a running query (56.180411ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3169483Z ✔ a resolver that ignores ctx.signal still cancels promptly (522.537027ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3170010Z ✔ deadlineMs spans the awaited SERVICE time (122.893313ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3170539Z ✔ maxRemoteRequests governs async SERVICE dispatch (3.390685ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3171139Z ✔ maxIntermediateCells bounds the decoded remote answer (10.536096ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3171858Z ✔ an unconfigured cell ceiling never reaches the resolver as the metering sentinel (1.721102ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3172417Z ✔ LOAD resolves through resolveLoad (16.144003ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3172850Z ✔ LOAD without resolveLoad fails unless SILENT (2.113224ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3173673Z ✔ LOAD: a host policy denial reads distinctly from a catalog capability denial, and LOAD SILENT loads nothing over either (1.310481ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3174589Z ✔ LOAD redirect: every hop is resolved and authorized in Rust, with its own profile's headers (2.430574ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3175190Z ✔ a LOAD parse error is the LOAD's decode failure (0.987222ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3175713Z ✔ INSERT WHERE federates through resolveService (4.193148ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3176220Z ✔ dataset mutation during an async update is refused (2.463013ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3176700Z ✔ commitUpdate refuses a different dataset (0.783374ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3177220Z ✔ queries see a snapshot; mutation during a query is allowed (1.309089ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3178071Z ✔ refusal pair: an update begun while another update of the dataset is in flight is refused; a sequential one applies (2.244172ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3178698Z ✔ hasAsyncQueries reports JSPI (0.125961ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3179243Z ✔ async methods hard-fail without JSPI (183.094343ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3179869Z ✔ governor vectors: service transport cases certify identically on the async lane (4.151025ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3180576Z ✔ refusal pair: yieldEveryPolls -1 is refused, 0 yields at every poll (8.968998ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3181186Z ✔ a job's stack region is the size of the module's own shadow stack (0.853791ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3182123Z ✔ refusal pair: a failure kind "nope" is a host fault the request reports, "denied" is a denial; SILENT answers both with the join identity (2.625188ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3183003Z ✔ refusal pair: mediaType text/x-unknown fails the LOAD, text/turtle loads (0.765728ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3183623Z ✔ refusal pair: the cancel option is refused, signal is accepted (0.926912ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3184644Z ✔ refusal pair: a localServices value that is not a Dataset is refused; a Dataset serves, and stays the caller's (1.801874ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3185536Z ✔ refusal pair: a catalog that is not a ServiceCatalog is refused; a ServiceCatalog governs, and stays usable (1.868124ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3186063Z ✔ refusal pair: a profile timeout no JavaScript timer can honour is refused; the longest one is accepted (0.192011ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3186533Z ✔ a job's memo keeps rows only: a repeated request whose first answer failed asks again (2.695955ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3186987Z ✔ a fresh engine keeps scope: two same-label blanks in different scopes stay distinct (45.341529ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3187441Z ✔ blankScope = "merge" drops the scope: the same blanks become one node (0.897297ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3187777Z ✔ the mode is per engine, and can be set back to keep (1.962557ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3188147Z ✔ a value that is not a mode throws with the options code and leaves the mode alone (0.790735ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3188522Z ✔ an unscoped blank and an IRI are the same under both modes (2.167096ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3189000Z ✔ the dataset's own quads are not affected by the option (0.805437ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3189515Z ✔ an asynchronous job takes the mode in force when it begins (7.397322ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3190154Z ✔ typed scoped blanks retain identity through insertion, serialization and parsing (6.888983ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3190716Z ✔ SparqlProtocolRequest reads an operation and its dataset parameters (16.095169ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3191302Z ✔ SparqlProtocolRequest reads an update's USING and USING NAMED parameters in request order (1.814242ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3191751Z ✔ refusal pair: a protocol refusal is a typed Error with name, status and parameter (0.413575ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3192178Z ✔ refusal pair: effectiveText refuses a malformed operation, not a well-formed one (0.347786ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3192603Z ✔ the negotiated twin serializes by Accept and names the formats a dataset needs (42.726635ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3193005Z ✔ refusal pair: accept is refused by every twin but the negotiated one (3.94246ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3193440Z ✔ refusal pair: the service resolver refuses an option it would ignore; its own options build (1.563834ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3193807Z ✔ refusal pair: cache options are all-or-nothing (0.367556ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3194094Z ✔ refusal pair: a bindings key must be an origin (0.207143ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3194454Z ✔ a request to a bound origin goes through its binding; any other through fetch (2.650747ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3195040Z ✔ headers are sent protocol first, then the profile's, then the credential (0.343329ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3195726Z ✔ the effect's headers are the catalog profile's, then its credential, end to end (14.234938ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3196612Z ✔ a request is abandoned when the query abandons it: at its profile's timeout, a transport failure SILENT absorbs; the prompt neighbour answers (46.65995ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3197136Z ✔ a non-2xx answer is a transport failure and its body is cancelled, unread (0.911988ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3197509Z ✔ a transport failure fails a query, and SERVICE SILENT swallows it (2.89769ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3198028Z ✔ SERVICE redirect: a 302 to an unlisted origin is a transport failure, never fetched; SILENT matches the endpoint being down (2.777158ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3198544Z ✔ SERVICE redirect: a 307 is never followed — no body or header ever reaches the Location (0.27802ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3199342Z ✔ SERVICE redirect: an opaque-redirect response is also a transport failure, its Location withheld (0.163076ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3199805Z ✔ the cache answers a repeated cacheable request, and a different request is a miss (8.621063ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3200291Z ✔ refusal pair: a request the job marks not cacheable never touches the cache; a cacheable one is cached (2.262811ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3200730Z ✔ the job marks a request carrying a credential not cacheable, end to end (4.116923ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3201359Z ✔ refusal pair: a cache whose match or put rejects fails the request as a transport failure; a healthy cache answers (5.381204ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3201876Z ✔ a failed cache call fails a plain SERVICE and is the join identity under SERVICE SILENT, recorded (4.19478ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3202345Z ✔ refusal pair: the load resolver refuses an option it would ignore; its own options build (0.539035ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3202787Z ✔ one LOAD hop sends the job's Accept, User-Agent and headers, and answers the document (0.78072ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3203336Z ✔ refusal pair: a LOAD the catalog does not authorize is denied before any fetch; an authorized one is fetched with its profile (7.266754ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3203833Z ✔ a LOAD response without a Content-Type is a transport failure; with one it loads (2.762205ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3204279Z ✔ a redirect is handed back to the job, never followed; an opaque one withholds its Location (0.366804ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3204797Z ✔ LOAD redirect: a redirect to an unlisted origin is denied, and the unlisted origin is never fetched (1.322839ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3205354Z ✔ LOAD redirect: the valid neighbour — a redirect to a listed origin loads, and a relative IRI resolves against the final URL (2.081036ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3205881Z ✔ LOAD redirect: a redirect loop fails as typed transport after exactly five hops; four hops load (3.134308ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3206353Z ✔ LOAD redirect: the redirected origin's own profile headers are sent, never the source's (0.948184ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3206983Z ✔ refusal pair: handleSparqlRequest requires governors with deadlineMs (2.618959ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3207446Z ✔ every request form answers (6.441337ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3207768Z ✔ each Accept is answered in its format, byte for byte what queryRaw writes (27.588893ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3208156Z ✔ refusal pair: 406 before evaluation, and after it for named graphs (21.058001ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3208587Z ✔ refusal pair: protocol refusals are 400/405/415 problems; the valid neighbour is 200 (11.493433ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3209192Z ✔ dataset parameters are honoured, and without them the query's own dataset answers (58.791959ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3209716Z ✔ the operation text is parsed exactly once on the request path: effectiveText runs only to splice dataset parameters (5.031846ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3210266Z ✔ refusal pair: maxRequestBytes must be a positive integer when given; without it, 1 MiB is the default (1.208567ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3211001Z ✔ refusal pair: a body over maxRequestBytes is a 413, by Content-Length, by streaming past it with none, or with a lying smaller one; the valid neighbour answers at exactly the limit (3.330725ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3211612Z ✔ a deterministic ceiling is a 422 carrying its dimension; the unbounded neighbour is 200 (3.655246ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3224797Z ✔ a deadline or a cancelled request is a 503 without Retry-After, not a 422 (34.917059ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3225523Z ✔ refusal pair: a SERVICE no resolver reaches is a 500 with its engine code and a correlation id; with a resolver it answers 200 (3.692242ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3226260Z ✔ refusal pair: an unbound SERVICE ?e is a 400 with the engine's refusal; a host fault stays a sanitized 500 (5.016633ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3227049Z ✔ refusal pair: a resolveService that throws is a 500 with a correlation id, never the exception's own words; a healthy resolver is the 200 neighbour and the hook is never called for it (7.722044ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3228171Z ✔ SERVICE SILENT over a resolveService bug is the join identity, a 200 whose body never carries the bug's words, and the bug still reaches onInternalError under a correlation id; the neighbour is a genuine typed transport failure, which never touches the hook (5.298088ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3229283Z ✔ the default onInternalError hook writes one console.error line carrying the original error and the correlation id (5.213761ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3230228Z ✔ an onInternalError that throws synchronously still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error (5.24653ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3230987Z ✔ an onInternalError that returns a rejecting promise still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error (3.258425ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3231714Z ✔ valid neighbour: a non-throwing onInternalError (sync, and async-resolving) is called exactly once and console.error is never called (5.328644ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3232697Z ✔ an unexpected exception anywhere else in the adapter is also a 500 with a correlation id, never a bare rejection (1.725418ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3233550Z ✔ the catalog denies an unlisted endpoint before any fetch; a listed one is fetched (2.168888ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3234223Z ✔ refusal pair: a SERVICE the catalog denies is a 403 with its engine code and none of the catalog's configuration; an endpoint the same catalog allows answers 200 (3.194689ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3234958Z ✔ refusal pair: a SERVICE the resolver's own policy denies is a 403 with its engine code and none of the resolver's words; a request it allows answers 200 (5.080249ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3235662Z ✔ refusal pair: a SERVICE endpoint that answers an HTTP error is a 502 with its engine code and none of its words; an allowed endpoint that answers is 200 (3.938774ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3236365Z ✔ refusal pair: a SERVICE whose transport throws is a 502 with its engine code and none of the exception's words; an allowed endpoint that answers is 200 (6.147392ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3237766Z ✔ refusal pair: a LOAD the catalog denies is a 403 and one whose fetch fails a 502, each with its engine code and none of its words; an allowed, answering source is 204 (5.46449ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3239212Z ✔ refusal pair: an operation this endpoint misconfigured is a 500 InternalError with a correlation id, never the error class name; the configured neighbour answers 200 (2.26266ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3240286Z ✔ refusal pair: the first stack guard keeps its status, code and words; the shallow neighbour answers 200 (895.213256ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3240963Z ✔ a federated query runs end to end through a service binding (5.743482ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3241589Z ✔ CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS without (5.962052ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3242132Z ✔ a poisoned instance still answers every request with the sanitized 500 and a correlation id (237.925925ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3242531Z ✔ an engine starts at eighteen digits truncated toward zero (78.88435ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3242932Z ✔ exact answers a terminating quotient and leaves a non-terminating one unbound (5.715607ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3243282Z ✔ a rounded policy rounds in its named direction (0.866079ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3243628Z ✔ an unreadable policy is refused and the previous one stays in force (1.022345ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3243996Z ✔ the policy reaches the governed, update and entailment entries (193.487115ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3244422Z ✔ governed evidence counts each absorbed expression error by its F&O code (2.502092ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3244818Z ✔ an asynchronous job takes the policy and reports its expression errors (5.816112ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3245240Z ✔ the README and the book say the remote endpoint's CORS policy governs a browser host (4.976613ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3245603Z ✔ the book's recipes are the README's, byte for byte (1.58092ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3246012Z ✔ the resolveService recipe joins the remote rows, and reports a network failure as transport (217.994559ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3246467Z ✔ the Worker recipe answers a SPARQL Protocol request with the joined results (42.979616ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3246836Z ✔ parse resolves a relative IRI against the supplied base (9.147738ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3247180Z ✔ parse without a base refuses a relative IRI with the shared code (1.592727ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3247503Z ✔ parse rejects a base that is not an absolute IRI (0.296068ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3247951Z ✔ an in-document base wins over the supplied one (0.51602ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3248274Z ✔ serializeConfigured carries the document base into JSON-LD (13.453726ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3248617Z ✔ serializeWithContext carries the same document base (2.953705ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3249147Z ✔ serializeConfigured rejects a base that is not an absolute IRI (0.368407ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3249485Z ✔ omitting the egress base leaves the document absolute (0.798417ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3249818Z ✔ serialize emits the base declaration, with a no-base control (0.749914ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3250201Z ✔ serialize to a base-incapable format stays absolute rather than throwing (0.484993ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3250582Z ✔ serialize rejects a base that is not an absolute IRI (0.232621ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3250927Z ✔ serialize without a base is byte-identical to omitting the argument (0.211289ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3251274Z ✔ serialize keeps the RDF 1.2 statement layer under a base (5.635569ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3251660Z ✔ a format with no triple-term surface fails closed rather than dropping rows (0.901283ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3252073Z ✔ entailCheckProofGoldenVectors runs the committed proof artifact ON WASM (57.048053ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3252460Z ✔ an answer nobody recorded is never presented as verified ON WASM (8.077029ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3252794Z ✔ the session records proofs only when asked ON WASM (1.797277ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3253160Z ✔ entailCheckGoldenVectors runs the committed tri-host artifact ON WASM (116.557126ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3253645Z ✔ an inconsistent input is refused WITH its certificate ON WASM (20.147014ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3254005Z ✔ every golden case is byte-identical across the wasm/JS boundary (46.605658ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3254395Z ✔ entailMaterialize's evaluation limits refuse naming this host's arguments (19.307565ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3254818Z ✔ entailMaterialize and entailConsistency close over the import table (15.776988ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3255269Z ✔ the conclusion-directed services take the evaluation limits, naming this host's argument (25.956546ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3255677Z ✔ entailMaterialize closes under rdfs and always returns a report (7.974865ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3256019Z ✔ entailMaterialize under simple is the identity closure (0.515038ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3256350Z ✔ entailMaterialize is byte-stable across repeated calls (29.035578ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3256713Z ✔ entailMaterialize rejects an unknown regime, naming the accepted set (0.346834ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3257073Z ✔ entailMaterialize materializes every regime spelling (20.533609ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3257429Z ✔ a rule document belongs to rif alone and is refused elsewhere (0.337079ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3257835Z ✔ entailMaterialize rejects a malformed document (never a silent empty closure) (0.828382ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3258243Z ✔ entailMaterialize throws on a reserved-vocabulary closure, naming it (0.259873ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3258743Z ✔ entailMaterialize still closes an ordinary document neighbouring the reserved one (0.167914ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3259528Z ✔ the rule inventories are the specification tables, and the gap is measurable (20.313175ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3260184Z ✔ the rule inventories reject an unknown regime, naming the accepted set (0.969065ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3260767Z ✔ entailExtensions names what this build adds beyond the specification table (5.33896ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3261161Z ✔ entailConsistency decides consistency ON WASM, with its certificate (1.397624ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3261539Z ✔ entailClassify reaches the full subsumption hierarchy ON WASM (0.635641ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3261889Z ✔ entailRealize reaches the individuals' entailed types ON WASM (0.522319ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3262311Z ✔ entailInstances retrieves instances for a class the schema never asserts them of ON WASM (0.390841ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3262724Z ✔ entailEntails decides an axiom entailed nowhere by assertion ON WASM (0.463671ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3263230Z ✔ entailEntails answers unknown (never false) on an exhausted budget ON WASM (0.339313ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3263622Z ✔ entailProfile certifies the most restrictive profile first ON WASM (1.979492ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3264021Z ✔ entailExtractModule extracts a locality module as canonical N-Quads ON WASM (0.352222ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3264428Z ✔ entailExtractModule rejects an unknown method, naming the accepted set (0.235727ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3264783Z ✔ entailJustify finds a minimal entailing subset ON WASM (1.517764ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3265166Z ✔ entailExplainConclusion derives a chase conclusion never asserted ON WASM (10.554294ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3265558Z ✔ the existential refusal is per conclusion, not per regime ON WASM (2.722976ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3265964Z ✔ every DL reasoning service is reachable from the package root, not only ./pkg/ (0.146031ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3266400Z ✔ every conclusion-directed entailment service is reachable from the package root (14.604756ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3266796Z ✔ a variable in PREDICATE position is projected like any other (6.228034ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3267133Z ✔ a conclusion nothing derives has no warrant, and says so (5.053209ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3267477Z ✔ the two regimes defined by a missing input are refused by name (0.501298ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3267847Z ✔ webont-imports-011 answers from its own premise, owl:imports intact (37.444551ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3268225Z ✔ an unsupplied import throws by name rather than reasoning without it (1.531536ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3268677Z ✔ the import arrays are parallel, and a length mismatch is refused (1.268667ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3269150Z ✔ a malformed import table is refused by entry (1.40912ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3269479Z ✔ wasm_entail_premise_iris: the three services honour premiseIris (1.088285ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3269900Z ✔ literal(value, { language, direction }) builds an RDF 1.2 directional literal (2.187336ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3270492Z ✔ Dataset.from and DataFactory.dataset build chainable datasets from quads (5.506964ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3270859Z ✔ Dataset#toStream is the instance form of datasetToStream (0.497462ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3271246Z ✔ native geographic response and strict semantic refusal cross the package root (38.050716ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3271671Z ✔ an original work refusal throws instead of allocating a partial JSON response (4.724311ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3272044Z ✔ point buckets and their profile outlive the creating session (10.09552ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3272447Z ✔ explicit axes reach sync queries and an already started async profile snapshot (56.521336ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3272883Z ✔ an ungoverned query is unchanged: same rows, and no governor vocabulary reaches it (51.85284ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3273279Z ✔ an ungoverned entry refuses a governor option rather than ignoring it (0.881863ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3273662Z ✔ queryGoverned with no ceiling completes and still hands back a receipt (1.20356ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3274083Z ✔ queryEntailmentGoverned carries the query outcome and closure report together (57.348547ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3274485Z ✔ queryEntailmentGoverned closes over the dataset's owl:imports table (45.807172ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3274912Z ✔ queryEntailmentGoverned takes the closure's evaluation limits, naming its own option (22.271408ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3275346Z ✔ queryEntailmentGoverned exposes a closure stop without an answer or report (0.995665ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3275740Z ✔ the evidence maps are keyed by the engine's own dimension vocabulary (0.900962ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3276096Z ✔ the answer cap is inclusive: cap == answer size completes (0.764265ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3276511Z ✔ the answer cap is inclusive: cap == answer size - 1 exhausts and certifies what it reached (0.859409ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3276894Z ✔ a zero fuel ceiling trips on the first charged unit of work (1.124089ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3277230Z ✔ a fuel ceiling large enough to cover the query completes it (0.781611ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3277727Z ✔ a zero wall deadline trips on the first stop poll inside the real wasm module (0.769484ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3278151Z ✔ a non-zero wall deadline trips a query it cannot cover, so the wasm clock advances (58.645927ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3278568Z ✔ the same query completes when the wall deadline is not the binding constraint (1.165752ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3279087Z ✔ a cancelled token stops the query as an outcome and survives the call (1.144791ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3279417Z ✔ an uncancelled token leaves the query complete (0.678706ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3279765Z ✔ cancellation outranks a deadline when both fire at the same point (0.575509ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3280103Z ✔ every governor trip is a returned outcome, not a throw (6.421747ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3280562Z ✔ a ceiling the planner's estimate already exceeds is REFUSED, and reports an estimate rather than a measurement (0.650404ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3281050Z ✔ the scratch ceiling binds a value-constructing query and leaves a plain one alone (0.998299ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3281469Z ✔ a genuine query error still throws — a trip is not the only outcome shape (3.998354ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3281865Z ✔ a negative ceiling is refused rather than wrapping into an unreachable one (0.817556ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3282251Z ✔ the answer cap counts RDF 1.2 triple-term solutions like any other (4.80352ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3282644Z ✔ the answer cap counts RDF 1.2 reifier statements in a CONSTRUCT answer sequence (3.771701ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3283029Z ✔ a governed UPDATE that fits its budget applies and reports a receipt (6.771506ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3283501Z ✔ a tripped UPDATE applies NOTHING and leaves the dataset byte-identical (3.898082ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3283833Z ✔ a cancelled token stops an UPDATE as an outcome (0.478022ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3284208Z ✔ updateGoverned refuses maxAnswers rather than ignoring a ceiling the caller set (0.282707ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3284596Z ✔ explainQuery renders the charge ledger a budget is sized from (1.9051ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3284966Z ✔ dataset identities and mutation generations use exact bigint transport (18.664673ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3285344Z ✔ isomorphic() is true for the same graph under blank-node relabeling (8.017909ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3285684Z ✔ isomorphic() is false for a structurally different graph (0.41665ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3286048Z ✔ canonicalize() is stable and identifies isomorphic graphs byte-for-byte (0.759097ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3286474Z ✔ canonicalize() throws on a reserved-vocabulary IRI, naming it, rather than aborting (0.795202ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3287200Z ✔ an ordinary IRI neighbouring the reserved namespace still canonicalizes (0.333414ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3287762Z ✔ configured Dataset serialization reuses compiled contexts (18.547196ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3288219Z ✔ configured graph results and YAML schema headers use the same engine (32.09884ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3288554Z ✔ closed options fail before output (0.680148ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3289424Z ✔ frozen lexical capability inventory accounts for every file (0.980742ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3289820Z ✔ every frozen JSON string vector crosses the package decoder (55.364562ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3290280Z ✔ every JSON code unit and surrogate pair matches the frozen answer digest (12630.953328ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3290661Z ✔ every unreserved percent vector crosses SPARQL ENCODE_FOR_URI (7497.21756ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3291031Z ✔ every frozen string escape preserves its consumed-prefix boundary (16.245874ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3291416Z ✔ every UCHAR scalar and refusal matches the frozen answer digests (8346.43994ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3291748Z ✔ parsePackument accepts the npm 11 array response (1.360696ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3292064Z ✔ parsePackument accepts the npm 12 package-name map (0.195636ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3292391Z ✔ parsePackument rejects zero or multiple package records (0.421908ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3292714Z ✔ parsePackument rejects a malformed package record (0.130587ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3293173Z ✔ missingPackedFiles accepts a tarball holding every promised path (0.344771ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3293531Z ✔ missingPackedFiles names a files entry npm silently omitted (0.116847ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3293878Z ✔ missingPackedFiles names an exports target the tarball lacks (0.134894ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3294225Z ✔ missingPackedFiles refuses a pack record without a file list (0.124679ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3294610Z ✔ missingPackedFiles accepts nested contents of an explicit directory promise (0.127192ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3294980Z ✔ missingPackedFiles refuses an empty directory marker (0.197199ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3295304Z ✔ missingPackedFiles refuses a directory prefix lookalike (0.137297ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3295625Z ✔ missingPackedFiles keeps exact file promises strict (3.297695ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3295986Z ✔ missingPackedFiles never turns an export target into a directory promise (0.252151ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3296560Z ✔ a panic in a synchronous call poisons every entry point, and typed errors poison nothing (221.913227ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3297164Z ✔ a refused query carries sparql-parse-lex on both lanes (16.125144ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3297689Z ✔ a refused query carries sparql-parse-syntax on both lanes (7.479135ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3298249Z ✔ a refused query carries sparql-parse-unsupported on both lanes (1.506417ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3298789Z ✔ a refused query carries sparql-parse-iri on both lanes (1.397933ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3299428Z ✔ a refused query carries sparql-parse-cdt-arity on both lanes (1.474049ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3300113Z ✔ a relative IRI without a base names its typed cause (1.569345ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3300643Z ✔ a refused update carries its typed presentation on both lanes (5.399241ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3301290Z ✔ a failure without a typed presentation carries none; the valid neighbour answers (25.879188ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3301890Z ✔ projection archive matches the shared Rust/Python bytes (42.905264ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3302470Z ✔ write-only profiles and mismatched tagged config fail explicitly (2.114717ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3303085Z ✔ all research-object profiles execute through the shared WASM carrier (58.823487ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3303724Z ✔ DCAT RDF executes deterministically and remains write-only through WASM (51.992654ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3304354Z ✔ VoID executes deterministically and remains write-only through WASM (4.324925ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3305003Z ✔ attached RO-Crate matches the cross-host archive through generated WASM (6.542209ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3305543Z ✔ SELECT returns SPARQL Results JSON bindings (41.313629ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3306061Z ✔ SELECT over the default graph does not see named-graph triples (0.805056ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3306538Z ✔ ASK returns a boolean result document (1.028185ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3307007Z ✔ QueryEngine SELECT returns typed package-root bindings (1.760771ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3307553Z ✔ NOW and RAND read the live JavaScript clock and entropy on wasm (4.330316ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3308114Z ✔ QueryEngine SELECT rows are a single-owner stream (0.624334ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3308718Z ✔ QueryEngine query routes ASK and graph results into discriminated objects (2.537596ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3309465Z ✔ QueryEngine raw serialization supports result and graph formats (2.576435ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3309920Z ✔ CONSTRUCT returns Turtle (0.950857ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3310334Z ✔ a malformed query throws, never a silent empty result (3.126106ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3310870Z ✔ a SERVICE clause hard-fails offline (no resolver in the browser) (4.701026ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3311515Z ✔ QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolver (6.286923ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3312158Z ✔ queryRaw provenanceNamespace populates and round-trips through JSON (2.101015ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3312771Z ✔ queryRaw provenanceNamespace populates and round-trips through XML (2.752741ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3313431Z ✔ omitting provenanceNamespace emits pure W3C output (0.446074ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3313894Z ✔ a lone provenanceNamespace half is refused (0.184159ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3314408Z ✔ serialize supports JSON-LD (the docs 'copy as' transcode surface) (4.894839ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3315058Z ✔ the default query() format never returns an empty string for a named-graph CONSTRUCT (1.603895ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3315711Z ✔ the default query() format is still Turtle for a default-graph CONSTRUCT (3.774686ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3316308Z ✔ an explicit single-graph format throws for a named-graph CONSTRUCT (1.42878ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3316897Z ✔ an explicit quad-capable format carries a named-graph CONSTRUCT (0.461017ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3317510Z ✔ an explicit single-graph format still serializes a default-graph CONSTRUCT (0.422769ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3318181Z ✔ the default query() format carries a named-graph DESCRIBE instead of emptying it (6.359754ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3318813Z ✔ an explicit single-graph format throws for a named-graph DESCRIBE (4.129712ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3319555Z ✔ serializeWithLoss reports the named-graph rows a single-graph syntax drops (0.940692ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3320167Z ✔ SERVICE SILENT and LOAD SILENT succeed with nothing fetched (5.963214ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3320948Z ✔ nesting answers on the synchronous lane as deep as its stacks hold it, and is a typed refusal past that (242.795536ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3321726Z ✔ on the synchronous lane the deepest answer and the first refusal are neighbours (185.877458ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3322666Z ✔ a FILTER nested 10 000 parentheses deep answers what one pair answers, and the engine answers afterwards (4.212197ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3323720Z ✖ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (347.624994ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3324828Z ✖ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (2759.036148ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3325800Z ✔ a pattern nested past the dataset's triple terms answers nothing, and its stored-depth neighbour matches (5.096234ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3326668Z ✔ inserting a triple term past the dataset's limit is the dataset's typed refusal, and 16 levels insert (1.284822ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3327425Z ✔ a synchronous failure carries its code; the well-formed neighbour answers (1.703175ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3328061Z ✔ the synchronous and asynchronous lanes answer and refuse identically (11.830634ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3328636Z ✔ a snapshot is an independent dataset with its own identity (1.254406ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3329324Z ✔ every results alias has the same bytes through all raw format APIs (58.313809ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3329967Z ✔ every governed twin exposes metered and explicit no-ceiling execution (106.054546ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3330616Z ✔ no-ceiling execution preserves cancellation and refuses ignored options (29.229675ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3331182Z ✔ strict JSON options refuse repeated members and arrays with diagnostic pointers (4.531209ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3331569Z ✔ generated host Reflect.get preserves throwing getter refusal (0.479164ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3331854Z ✔ version() returns the crate semver (1.009636ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3332093Z ✔ DataFactory builds RDF/JS terms (1.248898ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3332518Z ✔ literal() refuses a non-tag where the caller named it (0.685346ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3333057Z ✔ polymorphic literal(value, datatype) dispatches to a typed literal (0.240123ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3333604Z ✔ parse → serialize → reparse round-trips N-Triples (5.278119ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3334087Z ✔ expanded JSON-LD and YAML-LD wasm bytes are frozen (7.041064ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3334526Z ✔ DatasetCore add/has/delete/match/iterate (4.852174ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3334986Z ✔ DatasetCore.add/delete chain (RDF/JS return-this) (0.174183ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3335523Z ✔ DatasetCore.match treats a Variable as a wildcard (RDF/JS idiom) (0.296198ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3336315Z ✔ RDF-1.2 wedge — directional literal round-trips through N-Quads (4.260229ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3336914Z ✔ RDF-1.2 wedge — quoted-triple term round-trips through N-Quads (0.820059ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3337372Z ✔ Sink streams quads into a dataset (0.93298ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3337864Z ✔ datasetToStream → streamToDataset round-trips via the Sink (0.262036ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3338346Z ✔ an unsupported format is a rejected error (3.197002ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3339119Z ✔ RDF-1.2 — directional literal: .datatype.value derives rdf:dirLangString (0.175886ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3339809Z ✔ RDF-1.2 — directional literal: in-memory add/has without serialize round-trip (0.229978ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3340453Z ✔ RDF-1.2 — directional literal: parse then factory-built has() (cross-path) (0.389318ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3340982Z ✔ Term.equals(null) returns false (RDF/JS spec) (0.134003ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3341513Z ✔ Term.equals(undefined) returns false (RDF/JS spec) (0.043185ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3342093Z ✔ Term.equals sanity: same term is true, different term is false (0.100902ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3342596Z ✔ Quad.equals(null) returns false (RDF/JS spec) (0.042995ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3343073Z ✔ Quad.equals(undefined) returns false (RDF/JS spec) (0.028684ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3343615Z ✔ Quad.equals sanity: same quad is true, different quad is false (0.074483ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3344113Z ✔ Term.equals does not consume its argument (0.044827ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3344550Z ✔ Quad.equals does not consume its argument (0.069565ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3345357Z ✔ serialize refuses what serializeWithLoss projects, for a star-incapable target (2.767173ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3346064Z ✔ serializeWithLoss counts the declared empty graphs a target cannot write (55.085049ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3346647Z ✔ a sink receives the same bytes serialize returns (58.07653ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3347147Z ✔ a sink that throws aborts instead of truncating (15.512817ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3347757Z ✔ an object without write is refused rather than silently producing nothing (0.688741ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3348473Z ✔ SHA-3 built-ins reach their published FIPS 202 digests through the wasm module (43.157518ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3349456Z ✔ SEP-0008's underscored spelling reaches the same digests through the wasm module (0.931278ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3350100Z ✔ SHA-3 digests survive the typed QueryEngine.select surface (2.264563ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3350732Z ✔ the SHA-3 hyphen is part of the name, and a spaced hyphen still subtracts (4.376355ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3351670Z ✔ wasm_shacl_import_unresolved: shaclValidateToSarif rejects an unresolved owl:imports with the typed ShaclImportError (8.398736ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3352742Z ✔ wasm_shacl_import_unresolved: shaclValidateChangesToSarif rejects an unresolved owl:imports with the typed ShaclImportError (2.783077ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3353741Z ✔ wasm_shacl_import_unresolved: shaclEntail rejects an unresolved owl:imports with the typed ShaclImportError (0.524944ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3354758Z ✔ wasm_shacl_import_unresolved: shaclApplyRules rejects an unresolved owl:imports with the typed ShaclImportError (0.53615ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3355800Z ✔ wasm_shacl_import_unresolved: shaclEvalNodeExpr rejects an unresolved owl:imports with the typed ShaclImportError (1.537955ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3356828Z ✔ wasm_shacl_import_unresolved: shaclLintShapes rejects an unresolved owl:imports with the typed ShaclImportError (0.604173ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3357783Z ✔ wasm_shacl_import_unresolved: shaclPackProduct rejects an unresolved owl:imports with the typed ShaclImportError (2.627862ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3358564Z ✔ wasm_shacl_import_supplied: every entry point applies a supplied import (134.193128ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3359633Z ✔ wasm_shacl_import_declared_in_place: an ontology declared in place resolves the import, and its neighbour does not (5.130546ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3360301Z ✔ wasm_shacl_import_unreached_entry: a table entry nothing imports is refused, and a reached one is not (4.34613ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3361269Z ✔ wasm_shacl_import_array_lengths: import arrays of different lengths are refused, never truncated (0.417991ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3362115Z ✔ wasm_shacl_import_prefix_idiom: SHACL's prefix idiom resolves with no table, and a header import does not (70.720504ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3363111Z ✔ shaclPackProduct -> shaclProductValidateToSarif round trips to the SAME verdict shaclValidateToSarif reaches (39.543325ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3363713Z ✔ shaclProductExplain reports well-formed identity/format fields without admitting the product (1.608962ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3364388Z ✔ shaclProductCertify succeeds on a genuine product (0.667449ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3365157Z ✔ shaclProductValidateToSarifRebuild validates and agrees with the admit path (1.148406ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3365837Z ✔ *Expecting variants accept the product's own identity digest (1.922396ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3366642Z ✔ *Expecting variants refuse a product bound to a DIFFERENT identity digest, with a neighbouring valid case beside it (1.919001ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3367727Z ✔ a corrupted product is refused as a ShaclProductRefusal carrying its dimension label across the boundary, with a valid neighbour beside it (0.812098ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3368594Z ✔ wasm_shacl_shapes_graph: shapesGraph-001 through shaclValidateToSarif (81.390743ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3369406Z ✔ wasm_shacl_shapes_graph: the change path, a packed product and lint carry it (114.177715ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3370067Z ✔ wasm_shacl_shapes_graph: a relative shapes graph with no base is refused (5.646666ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3370913Z ✔ wasm_rules_shapes_graph: shaclApplyRules and shaclEntail pre-bind $shapesGraph (67.35075ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3371512Z ✔ shaclValidateToSarif emits SARIF 2.1.0 with a violation (30.088222ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3372104Z ✔ shaclValidateToSarif rejects malformed shapes (never a silent pass) (0.948955ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3372806Z ✔ wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformanceDisallows (1.737537ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3373538Z ✔ wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWellFormed (79.049664ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3374305Z ✔ wasm_shacl_subclass_of_in_shapes_graph: shaclValidateToSarif honours subClassOfInShapesGraph (2.643516ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3375216Z ✔ wasm_shacl_sparql_expr_declaration: shaclValidateToSarif evaluates sh:sparqlExpr beside its vocabulary declaration (54.994391ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3376088Z ✔ wasm_shacl_message_languages: shaclValidateToSarif carries every message with its language (1.287467ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3376791Z ✔ shaclEntail materializes the inferred triple and keeps the base fact (17.412611ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3377507Z ✔ wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, beside the verdict (3.863941ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3378207Z ✔ shaclValidateChangesToSarif validates the change and reports its scope (5.328946ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3378794Z ✔ shaclValidateChangesToSarif honours the retract half (1.05875ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3379539Z ✔ shaclValidateChangesToSarif reports an unbounded footprint rather than guessing (31.46955ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3380192Z ✔ shaclValidateChangesToSarif rejects a malformed change document (0.962485ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3380984Z ✔ wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its proof, and honours the round limit (127.229701ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3381865Z ✔ wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope (5.956354ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3382717Z ✔ shaclEvalNodeExpr reports the mandatory diagnostic as { rule, shape }, and none for the neighbour (1.52822ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3383619Z ✔ wasm_shacl_eval_node_expr_selectors: shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle (4.624201ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3384587Z ✔ wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one (109.663631ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3385795Z ✔ wasm_shacl_apply_rules: the wasm32 default stored-fact limit refuses a 70,000-triple copy, naming maxStoredFacts, and admits it when raised (2737.329648ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3386987Z ✔ wasm_shacl_entail_limits: shaclEntail takes the four rule-evaluation limits, names its own arguments, and materializes the closure when they are raised (11.646846ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3388043Z ✔ wasm_shacl_check_rules: shaclCheckRules checks a SPARQL 1.2 RL rule set to a level and evaluates nothing (1.689122ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3388787Z ✔ a trap that is not a panic, in a synchronous call, poisons every entry point (180.596523ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3389671Z ✔ installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it (4.578614ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3390575Z ✔ a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error (1.851742ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3391318Z ✔ visualization APIs preserve RDF 1.2 statement semantics (34.165337ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3391790Z ✔ visualization modes share the same model (2.72583ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3392376Z ✔ cross-graph reifier roles survive graph selection without leaking occurrences (1.066629ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3393062Z ✔ typed refusal and healthy nullable-count neighbor: xpath-2.0-2010-12-14 (92.142121ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3393754Z ✔ large finite REGEX shapes through the optimized package: xpath-2.0-2010-12-14 (1982.84596ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3394519Z ✔ large finite REPLACE retains the last capture: xpath-2.0-2010-12-14 (232.961995ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3395138Z ✔ typed refusal and healthy nullable-count neighbor: xpath-3.1-2017-03-21 (38.354195ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3395793Z ✔ large finite REGEX shapes through the optimized package: xpath-3.1-2017-03-21 (1731.422331ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3396417Z ✔ large finite REPLACE retains the last capture: xpath-3.1-2017-03-21 (136.853912ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3396975Z ✔ an integer past i128 has its exact canonical lexical form (3.677909ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3397464Z ✔ a long decimal has its exact canonical lexical form (0.521298ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3398044Z ✔ a malformed lexical has no canonical form, and its well-formed neighbour does (0.229988ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3398522Z ✔ long integers compare exactly (0.564383ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3399136Z ✔ malformed and incomparable values have no order, and their neighbours do (0.296558ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3399689Z ✔ a SPARQL sum past i128 returns its exact lexical form (37.589387ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3400022Z ℹ tests 449
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3400201Z ℹ suites 0
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3400382Z ℹ pass 446
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3400557Z ℹ fail 3
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3400735Z ℹ cancelled 0
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3400926Z ℹ skipped 0
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3401104Z ℹ todo 0
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3401314Z ℹ duration_ms 735315.892311
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3401512Z 
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3401619Z ✖ failing tests:
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3401731Z 
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3401901Z test at tests/async-concurrency.test.mjs:390:1
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3402679Z ✖ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (524.229933ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3403420Z   AssertionError [ERR_ASSERTION]: 135 levels answer synchronously; 182 did on the build measured
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3404166Z       at TestContext.<anonymous> (file:///home/runner/work/purrdf/purrdf/crates/rdf-wasm/js/tests/async-concurrency.test.mjs:434:10)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3404808Z       at async Test.run (node:internal/test_runner/test:1409:7)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3405272Z       at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3405653Z     generatedMessage: false,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3405878Z     code: 'ERR_ASSERTION',
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3406084Z     actual: false,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3406269Z     expected: true,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3406580Z     operator: '==',
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3406763Z     diff: 'simple'
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3406944Z   }
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3407035Z 
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3407169Z test at tests/query.test.mjs:600:1
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3408014Z ✖ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (347.624994ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3408754Z   AssertionError [ERR_ASSERTION]: 236 levels answer; 282 did on the build measured
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3409533Z       at TestContext.<anonymous> (file:///home/runner/work/purrdf/purrdf/crates/rdf-wasm/js/tests/query.test.mjs:640:10)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3410115Z       at Test.runInAsyncScope (node:async_hooks:227:14)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3410500Z       at Test.run (node:internal/test_runner/test:1402:25)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3410919Z       at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3411348Z       at Test.postRun (node:internal/test_runner/test:1542:19)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3411720Z       at Test.run (node:internal/test_runner/test:1467:12)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3412160Z       at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3412535Z     generatedMessage: false,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3412759Z     code: 'ERR_ASSERTION',
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3412961Z     actual: false,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3413146Z     expected: true,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3413358Z     operator: '==',
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3413563Z     diff: 'simple'
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3413748Z   }
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3413840Z 
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3414096Z test at tests/query.test.mjs:706:1
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3414888Z ✖ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (2759.036148ms)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3415648Z   AssertionError [ERR_ASSERTION]: 134 levels answer; 181 did on the smallest build measured
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3416307Z       at TestContext.<anonymous> (file:///home/runner/work/purrdf/purrdf/crates/rdf-wasm/js/tests/query.test.mjs:751:10)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3416884Z       at Test.runInAsyncScope (node:async_hooks:227:14)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3417217Z       at Test.run (node:internal/test_runner/test:1402:25)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3417637Z       at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3417932Z       at Test.postRun (node:internal/test_runner/test:1542:19)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3418151Z       at Test.run (node:internal/test_runner/test:1467:12)
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3418414Z       at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3418659Z     generatedMessage: false,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3418801Z     code: 'ERR_ASSERTION',
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3419110Z     actual: false,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3419240Z     expected: true,
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3419358Z     operator: '==',
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3419477Z     diff: 'simple'
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3419589Z   }
+wasm-package	Run npm package gates	2026-10-13T08:39:00.3432158Z ##[error]Process completed with exit code 1.
+wasm-package	Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	﻿2026-10-13T08:39:00.3513828Z Post job cleanup.
+wasm-package	Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:39:00.3516341Z ##[start-action display=Cache the Rust build;id=__19d9f310-ea02-45f6-95ba-a9fdbfc41b6b.__Swatinem_rust-cache]
+wasm-package	Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache	2026-10-13T08:39:00.3520644Z ##[end-action id=__19d9f310-ea02-45f6-95ba-a9fdbfc41b6b.__Swatinem_rust-cache;outcome=skipped;conclusion=skipped;duration_ms=0]
+wasm-package	Post Checkout	﻿2026-10-13T08:39:00.3574042Z Post job cleanup.
+wasm-package	Post Checkout	2026-10-13T08:39:00.4276755Z [command]/usr/bin/git version
+wasm-package	Post Checkout	2026-10-13T08:39:00.4317115Z git version 2.55.0
+wasm-package	Post Checkout	2026-10-13T08:39:00.4341764Z Temporarily overriding HOME='/home/runner/work/_temp/06623e72-b09d-46ab-b780-0554dce414f5' before making global git config changes
+wasm-package	Post Checkout	2026-10-13T08:39:00.4342627Z Adding repository directory to the temporary git global config as a safe directory
+wasm-package	Post Checkout	2026-10-13T08:39:00.4345892Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+wasm-package	Post Checkout	2026-10-13T08:39:00.4380732Z Removing SSH command configuration
+wasm-package	Post Checkout	2026-10-13T08:39:00.4385387Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+wasm-package	Post Checkout	2026-10-13T08:39:00.4418234Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+wasm-package	Post Checkout	2026-10-13T08:39:00.4641672Z Removing HTTP extra header
+wasm-package	Post Checkout	2026-10-13T08:39:00.4642435Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+wasm-package	Post Checkout	2026-10-13T08:39:00.4666838Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+wasm-package	Post Checkout	2026-10-13T08:39:00.4904592Z Removing includeIf entries pointing to credentials config files
+wasm-package	Post Checkout	2026-10-13T08:39:00.4910515Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+wasm-package	Post Checkout	2026-10-13T08:39:00.4946611Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+wasm-package	Complete job	﻿2026-10-13T08:39:00.5381929Z Cleaning up orphan processes

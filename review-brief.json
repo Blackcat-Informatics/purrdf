@@ -1,0 +1,57 @@
+{
+  "issue": 542,
+  "branch": "paudley/542-rdf-core-mutabledataset-freeze-uses",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "20ede055fdbe0ec55efd19c32e789486f5d93e6a",
+      "subject": "docs: align the handwritten Python conformance count",
+      "date": "2026-10-13"
+    },
+    {
+      "oid": "ba624d2110b6c4b4f0122bdcf4059756d191bb13",
+      "subject": "Refresh conformance scoreboard from hosted shard measurements",
+      "date": "2026-10-13"
+    },
+    {
+      "oid": "8360fff43db28dd08f76e01d2c9b946217678e0e",
+      "subject": "Fix retrieval rustdoc links and cross-architecture HNSW fixtures",
+      "date": "2026-10-13"
+    },
+    {
+      "oid": "2916fbce469b3e5b60097130b2a305fb97ef128f",
+      "subject": "Align shared fixtures and documentation with admitted behavior",
+      "date": "2026-10-13"
+    },
+    {
+      "oid": "5170165b8695d7458b211882c7fb8c0cf45675c0",
+      "subject": "Correct the deliberately faulty x87 precision fixture",
+      "date": "2026-10-13"
+    },
+    {
+      "oid": "3d9571582d728a3f92e5c1f8aad2fc8d256fce5e",
+      "subject": "Allow caller-selected limits for mutable compaction",
+      "date": "2026-10-13"
+    }
+  ],
+  "files": [
+    "bindings/python/tests/test_retrieval.py",
+    "crates/geo-kernel/src/measure.rs",
+    "crates/hnsw/tests/float_environment.rs",
+    "crates/hnsw/tests/float_environment_rayon.rs",
+    "crates/hnsw/tests/support/fixture.rs",
+    "crates/purrdf/tests/base_surface.rs",
+    "crates/rdf-core/src/distance/binary64_tests.rs",
+    "crates/rdf-core/src/distance/tests.rs",
+    "crates/rdf-core/src/ir/mutable.rs",
+    "crates/rdf-core/src/query_scope/counters.rs",
+    "crates/rdf-core/tests/shared_views.rs",
+    "crates/retrieval/src/search.rs",
+    "crates/sparql-eval/src/engine.rs",
+    "crates/sparql-eval/src/geo/relation.rs",
+    "crates/sparql-eval/src/property_fn_eval.rs",
+    "docs/CONFORMANCE.md",
+    "docs/design/purrdf-simd.md"
+  ],
+  "adrs_touched": []
+}

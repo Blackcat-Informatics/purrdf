@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n\n`MutableDataset::freeze` (`crates/rdf-core/src/ir/mutable.rs`) calls `snapshot_view()` with the default `ViewLimits`, so a dataset whose auxiliary bytes pass 512 MiB cannot be frozen at all: it is refused with `view-retention-limit`. `snapshot_view_with_limits` exists for snapshots, but there is no way to freeze under caller-chosen limits.\n\nKatamari's query projection publishes every view with `UNBOUNDED` limits and compacts its mutable dataset through `freeze`. Loading a synthetic corpus of about 950k claims into one dataset is refused at that compaction step, though the process stayed far below the machine's memory.\n\n## Ask\n\nA `freeze_with_limits(&self, limits: ViewLimits)` (or `freeze` honouring limits the dataset was built with), so a caller can freeze under the same limits it already publishes snapshots with.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-13T05:04:54Z",
+  "labels": [],
+  "milestone": null,
+  "number": 542,
+  "state": "OPEN",
+  "title": "rdf-core: MutableDataset::freeze uses fixed default ViewLimits; allow caller limits",
+  "updatedAt": "2026-10-13T05:04:54Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/542"
+}

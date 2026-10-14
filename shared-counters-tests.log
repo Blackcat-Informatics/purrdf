@@ -1,0 +1,11 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/542-rdf-core-mutabledataset-freeze-uses/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 56s
+     Running unittests src/lib.rs (/opt/.cargo/e0/12130452c84c75/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 3 tests
+test query_scope::counters::tests::satisfied_candidates_need_no_temporary_decision_capacity ... ok
+test query_scope::counters::tests::operational_failure_cannot_publish_partial_counts_or_an_unknown_row ... ok
+test query_scope::counters::tests::unknown_time_is_counted_separately_even_when_place_rejects ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1300 filtered out; finished in 0.00s
+

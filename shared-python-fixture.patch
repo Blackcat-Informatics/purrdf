@@ -1,0 +1,13 @@
+diff --git bindings/python/tests/test_retrieval.py bindings/python/tests/test_retrieval.py
+index 7d51e2971..41955cd9d 100644
+--- bindings/python/tests/test_retrieval.py
++++ bindings/python/tests/test_retrieval.py
+@@ -257,7 +257,7 @@ def _producer_call(sparql: str) -> tuple[str, str]:
+     build that rendered a request term into the wrong argument list, or into no
+     argument list at all, leaves every substring of the text where it was.
+     """
+-    found = re.search(r"<([^<>]+)> \( ([^()]*) \)", sparql)
++    found = re.search(r"<([^<>]+)> \( (.+) \) \} LIMIT \d+ \}", sparql)
+     assert found is not None, f"a compiled unit calls one producer: {sparql!r}"
+     return found.group(1), found.group(2)
+ 

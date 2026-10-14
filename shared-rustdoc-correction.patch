@@ -1,0 +1,74 @@
+diff --git crates/sparql-eval/src/engine.rs crates/sparql-eval/src/engine.rs
+index c071618c4..cccdd7a70 100644
+--- crates/sparql-eval/src/engine.rs
++++ crates/sparql-eval/src/engine.rs
+@@ -6628,21 +6628,6 @@ fn check_plan_matches_registries(
+         .map_err(EvaluationFailure::into_diagnostic)
+ }
+ 
+-/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
+-/// registry fingerprint — validated against `relations` by
+-/// [`check_plan_matches_relations`] at every call site before this runs, so it is safe to
+-/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
+-/// taken over, sorted.
+-///
+-/// Called once per governed execution rather than per outcome arm, so the refusal path
+-/// ([`NativeSparqlEngine::admit`]), the complete path, and the truncated path all carry
+-/// the SAME identity for the SAME execution — there is exactly one place this is computed
+-/// and every [`GovernedOutcome`] arm reads from it.
+-///
+-/// # Errors
+-///
+-/// The host's execution diagnostic if a registered relation's declaration
+-/// methods panic.
+ /// A governed visitor result retaining its original registry identity buffers.
+ /// Native callers borrow the outcome; only legacy egress transfers caller storage.
+ pub struct AdmittedInternedGoverned<R> {
+@@ -6698,6 +6683,21 @@ struct AdmittedRelationIdentity {
+     frame: crate::workspace::LexicalFrame,
+ }
+ 
++/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
++/// registry fingerprint — validated by the preparation and registry admission
++/// checks before this runs, so it is safe to
++/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
++/// taken over, sorted.
++///
++/// Called once per governed execution rather than per outcome arm, so the refusal path
++/// (`NativeSparqlEngine::admit_refusal`), the complete path, and the truncated path all carry
++/// the SAME identity for the SAME execution — there is exactly one place this is computed
++/// and every [`GovernedOutcome`] arm reads from it.
++///
++/// # Errors
++///
++/// The host's execution diagnostic if a registered relation's declaration
++/// methods panic, or the original admission failure while retaining the identity.
+ fn relation_identity(
+     prepared: &PreparedQuery,
+     relations: &crate::property_fn::PropertyFunctionRegistry,
+diff --git crates/sparql-eval/src/geo/relation.rs crates/sparql-eval/src/geo/relation.rs
+index bd9b4702e..19da39b2a 100644
+--- crates/sparql-eval/src/geo/relation.rs
++++ crates/sparql-eval/src/geo/relation.rs
+@@ -150,7 +150,7 @@ impl RowBounds {
+ ///
+ /// # Emission order is `(?so1, ?so2)` ascending, and that is the contract
+ ///
+-/// Rows are sorted lexicographically on the pair, in [`TermValue`]'s own total
++/// Rows are sorted lexicographically on the pair, in [`purrdf_core::TermValue`]'s own total
+ /// order, and deduplicated. The engine preserves that order verbatim into the
+ /// query's answer, so it is part of this relation's public behaviour rather than
+ /// an implementation detail.
+diff --git crates/sparql-eval/src/property_fn_eval.rs crates/sparql-eval/src/property_fn_eval.rs
+index 4c93e59c5..087ef9802 100644
+--- crates/sparql-eval/src/property_fn_eval.rs
++++ crates/sparql-eval/src/property_fn_eval.rs
+@@ -3969,7 +3969,7 @@ impl CallCursor {
+     }
+ 
+     /// The work the relation has reported so far, summed over every pull
+-    /// ([`PfCursor::take_work`]).
++    /// ([`crate::property_fn::PfCursor::take_work`]).
+     #[must_use]
+     pub const fn work(&self) -> u64 {
+         self.work
