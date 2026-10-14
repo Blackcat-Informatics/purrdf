@@ -150,7 +150,7 @@ impl RowBounds {
 ///
 /// # Emission order is `(?so1, ?so2)` ascending, and that is the contract
 ///
-/// Rows are sorted lexicographically on the pair, in [`TermValue`]'s own total
+/// Rows are sorted lexicographically on the pair, in [`purrdf_core::TermValue`]'s own total
 /// order, and deduplicated. The engine preserves that order verbatim into the
 /// query's answer, so it is part of this relation's public behaviour rather than
 /// an implementation detail.

@@ -87,7 +87,7 @@ use crate::ranking::{FieldInputs, PreparedCorpus, RankingProfile};
 use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
-const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v3");
+const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v4");
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`].
 const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v1");
 
@@ -130,6 +130,8 @@ pub struct TextIndexConfig {
     projection: IndexProjection,
     /// The immutable analysis law used on both sides of retrieval.
     analyzer: Analyzer,
+    /// Whether to build the independent substring and phonetic index.
+    surface: bool,
 }
 
 impl TextIndexConfig {
@@ -191,11 +193,24 @@ impl TextIndexConfig {
             graph,
             projection: IndexProjection::Lexical,
             analyzer,
+            surface: true,
         })
     }
 
     pub(crate) fn for_han(mut self) -> Self {
         self.projection = IndexProjection::Han;
+        self
+    }
+
+    /// Select whether substring and phonetic retrieval are indexed.
+    ///
+    /// Construction enables this by default. Disabling it omits the surface
+    /// postings while retaining identical exact ranked-term retrieval. The
+    /// resulting index reports absence through [`TextIndex::surface_index`]
+    /// and records the selection in its fingerprint.
+    #[must_use]
+    pub const fn with_surface_index(mut self, enabled: bool) -> Self {
+        self.surface = enabled;
         self
     }
 
@@ -533,7 +548,7 @@ pub struct TextIndex {
     /// Physical documents grouped by the logical occurrence key (subject, language).
     occurrence_order: Vec<u32>,
     /// Distinct pre-stem words and bounded punctuation-bearing spans.
-    surface: SurfaceIndex,
+    surface: Option<SurfaceIndex>,
     /// Source-aligned Han unigram and bigram occurrences for the independent producer.
     pub(crate) han_occurrences: Vec<crate::character::HanOccurrence>,
     /// The digest of everything that can change an answer.
@@ -659,7 +674,9 @@ impl TextIndex {
         self.ranking = profile;
         self.rebuild_field_statistics()?;
         self.fingerprint = self.compute_fingerprint();
-        self.surface.bind_generation(self.fingerprint);
+        if let Some(surface) = &mut self.surface {
+            surface.bind_generation(self.fingerprint);
+        }
         Ok(self)
     }
 
@@ -706,8 +723,9 @@ impl TextIndex {
 
     /// Substring and phonetic retrieval over distinct surface terms, including
     /// sorted document membership and inspectable exact match evidence.
-    pub const fn surface_index(&self) -> &SurfaceIndex {
-        &self.surface
+    /// Returns `None` when the caller disabled surface indexing.
+    pub const fn surface_index(&self) -> Option<&SurfaceIndex> {
+        self.surface.as_ref()
     }
 
     /// Exact field token totals for a partition, in ranking field order.
@@ -1431,10 +1449,19 @@ impl TextIndex {
                             }),
                     );
                 }
-                analyses.push((id as u32, literal, analysis));
+                if config.surface {
+                    analyses.push((id as u32, literal, analysis));
+                }
             }
         }
-        let surface = SurfaceIndex::from_analyses(config.analyzer.clone(), analyses)?;
+        let surface = if config.surface {
+            Some(SurfaceIndex::from_analyses(
+                config.analyzer.clone(),
+                analyses,
+            )?)
+        } else {
+            None
+        };
 
         let mut index = Self {
             config,
@@ -1458,7 +1485,9 @@ impl TextIndex {
         };
         index.rebuild_field_statistics()?;
         index.fingerprint = index.compute_fingerprint();
-        index.surface.bind_generation(index.fingerprint);
+        if let Some(surface) = &mut index.surface {
+            surface.bind_generation(index.fingerprint);
+        }
         Ok(index)
     }
 
@@ -1506,13 +1535,16 @@ impl TextIndex {
             digest.number(version.patch);
         }
 
-        for terms in [self.surface.words(), self.surface.spans()] {
-            digest.count(terms.len());
-            for term in terms {
-                digest.text(term.text());
-                digest.count(term.documents().len());
-                for &document in term.documents() {
-                    digest.number(u64::from(document));
+        digest.tag(u8::from(self.surface.is_some()));
+        if let Some(surface) = &self.surface {
+            for terms in [surface.words(), surface.spans()] {
+                digest.count(terms.len());
+                for term in terms {
+                    digest.text(term.text());
+                    digest.count(term.documents().len());
+                    for &document in term.documents() {
+                        digest.number(u64::from(document));
+                    }
                 }
             }
         }
@@ -1915,6 +1947,7 @@ fn analyze_rows(
         // Ordinals belong only to this index's declared projection. Auxiliary
         // terms never advance lexical phrase positions or document lengths.
         let mut position: u32 = 0;
+        let mut has_auxiliary = false;
         for index in indices {
             let row = &rows[index as usize];
             let predicate = config
@@ -1922,6 +1955,7 @@ fn analyze_rows(
                 .binary_search(&row.predicate)
                 .expect("walk selected configured predicates") as u32;
             let mut analysis = analyzer.projections(&row.lexical_form)?;
+            has_auxiliary |= !analysis.surface.is_empty() || !analysis.spans.is_empty();
             let character;
             let projections = match config.projection {
                 IndexProjection::Lexical => &analysis.lexical,
@@ -1960,15 +1994,13 @@ fn analyze_rows(
             // and their original source alignment. Release this actual scratch
             // buffer, including capacity, before retaining the remaining views.
             drop(core::mem::take(&mut analysis.lexical));
-            analyses.push((digest_rows(std::slice::from_ref(row)), analysis));
+            if config.surface || config.projection == IndexProjection::Han {
+                analyses.push((digest_rows(std::slice::from_ref(row)), analysis));
+            }
         }
         // Retain auxiliary-only documents without admitting them into the
         // independent lexical or Han scoring population.
-        if tokens.is_empty()
-            && analyses
-                .iter()
-                .all(|(_, analysis)| analysis.surface.is_empty() && analysis.spans.is_empty())
-        {
+        if tokens.is_empty() && !has_auxiliary {
             continue;
         }
 
