@@ -882,7 +882,8 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     /// not a property of this type — the same relation is a ranked producer in
     /// one host and an ordinary row source in another. What this method adds is
     /// only that a host does not have to hand-write the argument indices: the
-    /// positions come from [`SEARCH_DOC`] and [`SEARCH_NEEDLE`], which are this
+    /// positions come from [`TextSearchRelation::DOC`] and
+    /// [`TextSearchRelation::NEEDLE`], which are this
     /// relation's own, so a declaration cannot drift from the row shape.
     ///
     /// Nothing is minted. `stratum` is the caller's IRI; `predicate` is the
@@ -893,7 +894,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     ///
     /// # What it declares, and why
     ///
-    /// * **Candidate at [`SEARCH_DOC`]** — the document subject is the term a
+    /// * **Candidate at [`TextSearchRelation::DOC`]** — the document subject is the term a
     ///   consumer fuses and joins on; every other position is about the row.
     /// * **One accepted alternative: a literal request term**, with an explicit
     ///   predicate retained through [`LexicalQuery`]. Field membership is resolved
@@ -919,7 +920,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     ///   refuse every untagged request term, which is the larger population;
     ///   a host that wants a tag to *select* a partition writes its own
     ///   alternative, with a [`TermPattern`] naming that language and a
-    ///   [`RequestFacet::Language`] placement at [`SEARCH_LANG`].
+    ///   [`RequestFacet::Language`] placement at [`TextSearchRelation::LANG`].
     /// * **No depth placement.** This relation takes no `k` argument; a consumer
     ///   bounds it with `LIMIT`, which is what "bounded by the consumer's row
     ///   ceiling" means in [`RankedDeclaration::depth_placement`].
