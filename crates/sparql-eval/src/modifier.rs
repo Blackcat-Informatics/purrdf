@@ -317,7 +317,7 @@ pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelive
             inner,
             delivery,
             |seq, ctx| {
-                let out = if ctx.dataset.storage_live_budget().is_some() {
+                let out = if ctx.growth.is_bounded() {
                     VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
                         .shared_admitted(&ctx.growth)?
                 } else {
@@ -5418,6 +5418,59 @@ mod tests {
             },
             ctx,
         )
+    }
+
+    #[test]
+    fn streamed_star_schema_retains_its_query_workspace_grant() {
+        use crate::workspace::owned_row_regressions::account;
+        use std::sync::atomic::Ordering;
+
+        let names = (0..256)
+            .map(|index| format!("?v{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&format!("SELECT * WHERE {{ VALUES ({names}) {{}} }}"))
+            .expect("valid wide star projection");
+        let GraphPattern::ProjectStar { variables, .. } = query.pattern() else {
+            panic!("star query retains its shared projection");
+        };
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        assert!(dataset.storage_live_budget().is_none());
+        let (workspace, ledger, base) = account(1 << 20);
+        let mut ctx = EvalCtx::new(dataset.as_ref());
+        ctx.growth = workspace.capability();
+        let inner = GraphPattern::empty_bgp();
+        let node = GraphPattern::ProjectStar {
+            inner: Child::new(inner.clone()),
+            variables: variables.clone(),
+        };
+        let mut delivered = 0;
+        let mut consume = |rows: &SolutionSeq, _: &mut EvalCtx<'_, RdfDataset>| {
+            delivered += 1;
+            assert_eq!(rows.schema.len(), 256);
+            assert_eq!(rows.rows.len(), 1);
+            assert!(
+                ledger.live.load(Ordering::Relaxed)
+                    >= base + u64::try_from(rows.schema.retained_size_bytes()).unwrap(),
+                "the delivered schema remains covered by the query reservation"
+            );
+            Ok(std::ops::ControlFlow::Continue(()))
+        };
+        let outcome = eval_project_with(
+            &node,
+            &inner,
+            purrdf_sparql_algebra::ProjectionNames::Star(variables),
+            &mut crate::eval::RowConsumer::new(&mut consume),
+            &mut ctx,
+        )
+        .expect("streamed projection fits its workspace");
+        assert_eq!(delivered, 1);
+        drop(outcome);
+        drop(ctx);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
 
     fn eval_slice<D: DatasetView<Id = purrdf_core::TermId> + Sync>(
