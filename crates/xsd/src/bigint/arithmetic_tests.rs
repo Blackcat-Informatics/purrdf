@@ -5,7 +5,7 @@ use super::KARATSUBA_THRESHOLD;
 
 #[cfg(test)]
 mod tests {
-    use super::super::BigInt;
+    use super::super::{BigInt, LimbScratch};
     use super::KARATSUBA_THRESHOLD;
     use purrdf_testkit::rng::splitmix64_next;
 
@@ -80,5 +80,17 @@ mod tests {
             (q, r),
             (BigInt::from_i128(-12_345_678), BigInt::from_i128(-9_012))
         );
+    }
+
+    #[test]
+    fn gcd_reduces_a_wide_initial_gap_without_changing_the_exact_factor() {
+        let mut state = 0x4743_4457_u64;
+        let common = random(&mut state, 17, false);
+        let wide = common.shl(64 * 500);
+        let narrow = common.mul_fast(&BigInt::from_u64(3));
+        assert_eq!(wide.gcd(&narrow), common);
+        assert_eq!(narrow.negated().gcd(&wide), common);
+        let scratch = LimbScratch::new(8, wide.limb_len() + 1).unwrap();
+        assert_eq!(wide.gcd_in(&narrow, &scratch).unwrap(), common);
     }
 }

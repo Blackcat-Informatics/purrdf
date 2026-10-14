@@ -275,7 +275,18 @@ pub(crate) fn decimal_exact_initial_layout(
     lb: u64,
 ) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
     let (a, b, g) = (owned_words(la), owned_words(lb), owned_words(la.min(lb)));
-    let gcd = checked_sum_words(&[a, b, a, b, g])?;
+    let mut gcd = checked_sum_words(&[a, b, a, b, g])?;
+    let longer = la.max(lb);
+    let shorter = la.min(lb);
+    if shorter != 0 && longer >= shorter.saturating_mul(2) {
+        // The binary GCD's one wide-gap Euclidean step holds the original
+        // operands while normalized division owns its complete destinations.
+        gcd = gcd.max(checked_sum_words(&[
+            a,
+            b,
+            division_words(longer, shorter)?,
+        ])?);
+    }
     let reduce_a = checked_sum_words(&[a, b, g, division_words(la, la.min(lb))?])?;
     let reduce_b = checked_sum_words(&[a, b, g, a, division_words(lb, la.min(lb))?])?;
     let factor = checked_sum_words(&[a, b, b])?;
@@ -857,16 +868,27 @@ pub(crate) const fn pow(log2_q16: u64, exp: u32) -> Cost {
     Cost::new(work, limb_bytes(result))
 }
 
-/// `gcd(a, b)` by Euclid's algorithm.
+/// `gcd(a, b)` by binary reduction with one initial wide-gap division.
 #[must_use]
 pub(crate) const fn gcd(la: u64, lb: u64) -> Cost {
     let longer = if la > lb { la } else { lb };
+    let shorter = if la < lb { la } else { lb };
     let work = la
         .saturating_add(1)
         .saturating_mul(lb.saturating_add(1))
         .saturating_mul(8)
         .saturating_add(longer.saturating_mul(64));
-    Cost::new(work, limb_bytes(longer.saturating_add(1)))
+    let scratch = if shorter != 0 && longer >= shorter.saturating_mul(2) {
+        // The initial division retains its normalized numerator, divisor and
+        // quotient/remainder alongside the original operands.
+        longer
+            .saturating_mul(3)
+            .saturating_add(shorter.saturating_mul(2))
+            .saturating_add(2)
+    } else {
+        longer.saturating_add(1)
+    };
+    Cost::new(work, limb_bytes(scratch))
 }
 
 /// `a × 10^digits`, including forming the binary power of ten and multiplying.

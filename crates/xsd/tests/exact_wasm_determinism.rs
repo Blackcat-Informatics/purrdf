@@ -330,10 +330,24 @@ fn large_binary_products_match_the_schoolbook_oracle() {
     assert_transcript_digest("exact-large-products", &transcript, 0x6017_91f9_7aa1_152f);
 }
 
+fn wide_gap_gcd_replays_on_this_target() {
+    let mut common = BigInt::from_i128(1);
+    for word in 1..17_u64 {
+        common = common
+            .shl(64)
+            .add(&BigInt::from_i128(i128::from(word * 17 + 1)));
+    }
+    let wide = common.shl(64 * 500);
+    let narrow = common.mul(&BigInt::from_i128(3));
+    assert_eq!(wide.gcd(&narrow), common);
+    assert_eq!(narrow.neg().gcd(&wide), common);
+}
+
 purrdf_testkit::harness_main!(
     the_hand_values_are_reproduced_on_this_target,
     the_transcript_digest_is_reproduced_on_this_target,
     the_oracle_vectors_replay_on_this_target,
     large_decimal_group_parse_replays_on_this_target,
     large_binary_products_match_the_schoolbook_oracle,
+    wide_gap_gcd_replays_on_this_target,
 );

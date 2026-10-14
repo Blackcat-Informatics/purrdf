@@ -1139,6 +1139,18 @@ fn assert_bounded(what: &str, cost: Cost, measurement: Measurement) {
     );
 }
 
+#[test]
+fn wide_gap_gcd_stays_within_its_work_and_physical_cost() {
+    let narrow: Integer = "9".repeat(200).parse().expect("integer");
+    let wide: Integer = format!("{}{}", "9".repeat(200), "0".repeat(1_000))
+        .parse()
+        .expect("integer");
+    let cost = wide.gcd_cost(&narrow);
+    let (result, measurement) = measured(|| wide.gcd(&narrow));
+    assert_eq!(result, narrow);
+    assert_bounded("wide-gap gcd", cost, measurement);
+}
+
 /// `1 × 10^-scale`: one digit of coefficient, `scale` fractional digits.
 fn tiny(scale: usize) -> Decimal {
     format!("0.{}1", "0".repeat(scale - 1))

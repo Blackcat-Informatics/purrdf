@@ -495,6 +495,10 @@ fn mag_div_rem(
 }
 
 /// Stein's binary greatest common divisor on magnitudes.
+///
+/// One Euclidean reduction removes a wide initial limb imbalance before the
+/// subtraction loop. Comparable operands retain the allocation-light binary
+/// path; a later imbalance does not add another division destination.
 fn mag_gcd(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
     if a.is_empty() {
         return storage.copy(b);
@@ -507,6 +511,19 @@ fn mag_gcd(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScr
     }
     if let (Some(x), Some(y)) = (mag_to_u128(a), mag_to_u128(b)) {
         return Ok(mag_from_u128(crate::wide::gcd(x, y)));
+    }
+    let reduced = if a.len() >= b.len().saturating_mul(2) {
+        Some((b, mag_div_rem(a, b, storage)?.1))
+    } else if b.len() >= a.len().saturating_mul(2) {
+        Some((a, mag_div_rem(b, a, storage)?.1))
+    } else {
+        None
+    };
+    let (a, b) = reduced
+        .as_ref()
+        .map_or((a, b), |(short, remainder)| (*short, &remainder[..]));
+    if b.is_empty() {
+        return storage.copy(a);
     }
     let common = mag_trailing_zeros(a).min(mag_trailing_zeros(b));
     let mut u = mag_shr(a, mag_trailing_zeros(a), storage)?;
