@@ -2929,65 +2929,67 @@ summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row (the
 
 [[site]]
 id = "datalog.relation-contains"
-summary = "`Relation::contains`, the galloping batch probe plus the tail's duplicate probe (`Tail::contains`, inlined): a branch-free OR-fold of `(s == subject) & (o == object)` over the tail's structure-of-arrays key columns"
+summary = "`Relation::contains`, the galloping batch probe plus the tail's duplicate probe (`Tail::contains`, inlined): count full-width `(s == subject) & (o == object)` matches over the tail's structure-of-arrays key columns without an early exit"
 
-  # Packed `u32` compares of both key columns, `movmskps` folds the lanes. Measured v13.
+  # SSE2 compares both halves of each u64 key; shuffle/and combine them before
+  # the bounded u32 match-count reduction. Measured v25.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
   crate = "purrdf_datalog"
   symbol = "<purrdf_datalog::store::Relation>::contains"
   min_vector_ops = 6
-  require_mnemonics = ["pcmpeqd", "movmskps"]
+  require_mnemonics = ["pcmpeqd", "pshufd", "pand", "paddd"]
   max_fma = 0
   forbid_relaxed = true
 
-  # The same fold at 256 bits; `vpmovmskb` and `vptest` answer the any. Measured v34.
+  # AVX2 compares full u64 keys at 256 bits and reduces u32 match counts. Measured v41.
   [[site.measure]]
   label = "avx2"
   configs = ["x86_64-v3"]
   crate = "purrdf_datalog"
   symbol = "<purrdf_datalog::store::Relation>::contains"
   min_vector_ops = 17
-  require_mnemonics = ["vpcmpeqd", "vpmovmskb"]
+  require_mnemonics = ["vpcmpeqq", "vpand", "vpsubd", "vpaddd"]
   max_fma = 0
   forbid_relaxed = true
 
   # With AVX-512 the compares write mask registers, the object compare predicated on the
-  # subject compare's mask. Measured v10.
+  # subject compare's mask; bounded match counts use dword lanes. Measured v26.
   [[site.measure]]
   label = "avx512 masks"
   configs = ["x86_64-v4"]
   crate = "purrdf_datalog"
   symbol = "<purrdf_datalog::store::Relation>::contains"
   min_vector_ops = 5
-  require_mnemonics = ["vpcmpeqd %k"]
+  require_mnemonics = ["vpcmpeqq %k", "vpsubd", "vpaddd"]
   max_fma = 0
   forbid_relaxed = true
 
-  # NEON word compares, narrowed by `uzp1`; `addp` folds the lanes. Measured v43.
+  # NEON compares full u64 keys, narrows boolean masks through uzp1 and reduces
+  # the bounded u32 counts with addv. Measured v45.
   [[site.measure]]
   label = "neon"
   configs = ["aarch64"]
   crate = "purrdf_datalog"
   symbol = "<purrdf_datalog::store::Relation>::contains"
   min_vector_ops = 21
-  require_mnemonics = ["cmeq .4s", "addp"]
+  require_mnemonics = ["cmeq .2d", "uzp1 .4s", "sub .4s", "addv .4s"]
   max_fma = 0
   forbid_relaxed = true
 
-  # SVE predicate compares (`cmpeq`) of both key columns. Measured v15.
+  # SVE predicate compares of full u64 keys and counted-match reduction. Measured v22.
   [[site.measure]]
   label = "sve"
   configs = ["aarch64-neoverse-v1"]
   crate = "purrdf_datalog"
   symbol = "<purrdf_datalog::store::Relation>::contains"
   min_vector_ops = 7
-  require_mnemonics = ["cmpeq"]
+  require_mnemonics = ["cmpeq .d", "add .d", "uaddv .d"]
   max_fma = 0
   forbid_relaxed = true
 
-  # Baseline wasm32 has no vector instructions: the fold is a scalar loop with no exit,
+  # Baseline wasm32 has no vector instructions: counting is a scalar loop with no exit,
   # same answer. Measured v0.
   [[site.measure]]
   label = "scalar"
@@ -2998,14 +3000,15 @@ summary = "`Relation::contains`, the galloping batch probe plus the tail's dupli
   max_fma = 0
   forbid_relaxed = true
 
-  # Packed `u32` compares, `v128.any_true` answers the fold. Measured v7.
+  # SIMD128 compares full u64 keys, combines both columns and adds bounded
+  # match counts in u32 lanes. Measured v8.
   [[site.measure]]
   label = "simd128"
   configs = ["wasm32-simd128"]
   crate = "purrdf_datalog"
   symbol = "<purrdf_datalog::store::Relation>::contains"
   min_vector_ops = 3
-  require_mnemonics = ["i32x4.eq", "v128.any_true"]
+  require_mnemonics = ["i64x2.eq", "v128.and", "i32x4.add"]
   max_fma = 0
   forbid_relaxed = true
 
