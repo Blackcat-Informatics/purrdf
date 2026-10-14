@@ -30,11 +30,13 @@ const PARAMETERIZED: &str = QUERY;
 
 fn bench(c: &mut Bench) {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let value = builder.intern_iri("http://example.org/value");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let value = builder.intern_iri("http://example.org/value").unwrap();
     for index in 0..64 {
-        let subject = builder.intern_iri(&format!("http://example.org/s{index}"));
-        builder.push_quad(subject, predicate, value, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, value, None).unwrap();
     }
     let data = builder.freeze().expect("valid benchmark dataset");
     let engine = NativeSparqlEngine::new();
@@ -134,18 +136,24 @@ fn canonical_reuse(c: &mut Bench) {
         ("blank_literal_payload", true),
     ] {
         let mut builder = RdfDatasetBuilder::new();
-        let predicate = builder.intern_iri("http://example.org/payload");
+        let predicate = builder.intern_iri("http://example.org/payload").unwrap();
         for index in 0..256 {
             let subject = if blanks {
-                builder.intern_blank(&format!("b{index}"), BlankScope::DEFAULT)
+                builder
+                    .intern_blank(&format!("b{index}"), BlankScope::DEFAULT)
+                    .unwrap()
             } else {
-                builder.intern_iri(&format!("http://example.org/s{index}"))
+                builder
+                    .intern_iri(&format!("http://example.org/s{index}"))
+                    .unwrap()
             };
-            let object = builder.intern_literal(RdfLiteral::simple(format!(
-                "{index}:{}",
-                "directional correspondence provenance ".repeat(64)
-            )));
-            builder.push_quad(subject, predicate, object, None);
+            let object = builder
+                .intern_literal(RdfLiteral::simple(format!(
+                    "{index}:{}",
+                    "directional correspondence provenance ".repeat(64)
+                )))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         let data = builder.freeze().expect("valid canonical benchmark dataset");
         group.bench_function(name, |b| {
@@ -157,13 +165,17 @@ fn canonical_reuse(c: &mut Bench) {
 
 fn typed_materialization(c: &mut Bench) {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let literal = builder.intern_literal(RdfLiteral::simple("payload".repeat(512)));
-    let shared = builder.intern_iri("http://example.org/shared");
-    let triple = builder.intern_triple(shared, predicate, literal);
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral::simple("payload".repeat(512)))
+        .unwrap();
+    let shared = builder.intern_iri("http://example.org/shared").unwrap();
+    let triple = builder.intern_triple(shared, predicate, literal).unwrap();
     for index in 0..4096 {
-        let subject = builder.intern_iri(&format!("http://example.org/s{index}"));
-        builder.push_quad(subject, predicate, triple, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, triple, None).unwrap();
     }
     let data = builder.freeze().expect("valid materialization dataset");
     c.bench_function("dataset_from_view/repeated_quoted_payload", |b| {

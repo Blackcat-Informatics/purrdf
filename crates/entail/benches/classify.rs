@@ -67,62 +67,71 @@ use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTYOF;
 /// role-hierarchy and role-composition rules.
 fn terminology(classes: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let first = b.intern_iri(RDF_FIRST);
-    let rest = b.intern_iri(RDF_REST);
-    let nil = b.intern_iri(RDF_NIL);
-    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
-    let sub_property = b.intern_iri(RDFS_SUBPROPERTYOF);
-    let class = b.intern_iri(OWL_CLASS);
-    let object_property = b.intern_iri(OWL_OBJECTPROPERTY);
-    let transitive = b.intern_iri(OWL_TRANSITIVEPROPERTY);
-    let equivalent = b.intern_iri(OWL_EQUIVALENTCLASS);
-    let intersection_of = b.intern_iri(OWL_INTERSECTIONOF);
-    let restriction = b.intern_iri(OWL_RESTRICTION);
-    let on_property = b.intern_iri(OWL_ONPROPERTY);
-    let some_values = b.intern_iri(OWL_SOMEVALUESFROM);
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let first = b.intern_iri(RDF_FIRST).unwrap();
+    let rest = b.intern_iri(RDF_REST).unwrap();
+    let nil = b.intern_iri(RDF_NIL).unwrap();
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let sub_property = b.intern_iri(RDFS_SUBPROPERTYOF).unwrap();
+    let class = b.intern_iri(OWL_CLASS).unwrap();
+    let object_property = b.intern_iri(OWL_OBJECTPROPERTY).unwrap();
+    let transitive = b.intern_iri(OWL_TRANSITIVEPROPERTY).unwrap();
+    let equivalent = b.intern_iri(OWL_EQUIVALENTCLASS).unwrap();
+    let intersection_of = b.intern_iri(OWL_INTERSECTIONOF).unwrap();
+    let restriction = b.intern_iri(OWL_RESTRICTION).unwrap();
+    let on_property = b.intern_iri(OWL_ONPROPERTY).unwrap();
+    let some_values = b.intern_iri(OWL_SOMEVALUESFROM).unwrap();
 
     let named: Vec<TermId> = (0..classes)
         .map(|i| {
-            let c = b.intern_iri(&format!("{EX}C{i}"));
-            b.push_quad(c, ty, class, None);
+            let c = b.intern_iri(&format!("{EX}C{i}")).unwrap();
+            b.push_quad(c, ty, class, None).unwrap();
             c
         })
         .collect();
     for i in 1..classes {
-        b.push_quad(named[i], sub_class, named[(i - 1) / 2], None);
+        b.push_quad(named[i], sub_class, named[(i - 1) / 2], None)
+            .unwrap();
     }
 
     // A defined class per eighth of the signature, each an intersection of two tree nodes.
     for k in 0..classes / 8 {
-        let defined = b.intern_iri(&format!("{EX}D{k}"));
-        b.push_quad(defined, ty, class, None);
+        let defined = b.intern_iri(&format!("{EX}D{k}")).unwrap();
+        b.push_quad(defined, ty, class, None).unwrap();
         let left = named[k % classes];
         let right = named[(k * 7 + 3) % classes];
-        let tail = b.intern_blank(&format!("conj{k}b"), BlankScope::DEFAULT);
-        let head = b.intern_blank(&format!("conj{k}a"), BlankScope::DEFAULT);
-        b.push_quad(tail, first, right, None);
-        b.push_quad(tail, rest, nil, None);
-        b.push_quad(head, first, left, None);
-        b.push_quad(head, rest, tail, None);
-        let conjunction = b.intern_blank(&format!("conj{k}"), BlankScope::DEFAULT);
-        b.push_quad(conjunction, intersection_of, head, None);
-        b.push_quad(defined, equivalent, conjunction, None);
+        let tail = b
+            .intern_blank(&format!("conj{k}b"), BlankScope::DEFAULT)
+            .unwrap();
+        let head = b
+            .intern_blank(&format!("conj{k}a"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(tail, first, right, None).unwrap();
+        b.push_quad(tail, rest, nil, None).unwrap();
+        b.push_quad(head, first, left, None).unwrap();
+        b.push_quad(head, rest, tail, None).unwrap();
+        let conjunction = b
+            .intern_blank(&format!("conj{k}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(conjunction, intersection_of, head, None)
+            .unwrap();
+        b.push_quad(defined, equivalent, conjunction, None).unwrap();
     }
 
-    let has_child = b.intern_iri(&format!("{EX}hasChild"));
-    let ancestor_of = b.intern_iri(&format!("{EX}ancestorOf"));
-    b.push_quad(has_child, ty, object_property, None);
-    b.push_quad(ancestor_of, ty, object_property, None);
-    b.push_quad(ancestor_of, ty, transitive, None);
-    b.push_quad(has_child, sub_property, ancestor_of, None);
-    let parent = b.intern_iri(&format!("{EX}Parent"));
-    b.push_quad(parent, ty, class, None);
-    let some = b.intern_blank("someChild", BlankScope::DEFAULT);
-    b.push_quad(some, ty, restriction, None);
-    b.push_quad(some, on_property, has_child, None);
-    b.push_quad(some, some_values, named[0], None);
-    b.push_quad(parent, equivalent, some, None);
+    let has_child = b.intern_iri(&format!("{EX}hasChild")).unwrap();
+    let ancestor_of = b.intern_iri(&format!("{EX}ancestorOf")).unwrap();
+    b.push_quad(has_child, ty, object_property, None).unwrap();
+    b.push_quad(ancestor_of, ty, object_property, None).unwrap();
+    b.push_quad(ancestor_of, ty, transitive, None).unwrap();
+    b.push_quad(has_child, sub_property, ancestor_of, None)
+        .unwrap();
+    let parent = b.intern_iri(&format!("{EX}Parent")).unwrap();
+    b.push_quad(parent, ty, class, None).unwrap();
+    let some = b.intern_blank("someChild", BlankScope::DEFAULT).unwrap();
+    b.push_quad(some, ty, restriction, None).unwrap();
+    b.push_quad(some, on_property, has_child, None).unwrap();
+    b.push_quad(some, some_values, named[0], None).unwrap();
+    b.push_quad(parent, equivalent, some, None).unwrap();
 
     b.freeze().expect("freeze")
 }

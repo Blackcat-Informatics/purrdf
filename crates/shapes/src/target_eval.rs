@@ -105,7 +105,7 @@ pub(crate) fn where_targets(
     data: &ShaclData,
     shape: &Shape,
     disallows: &ConformanceDisallows,
-) -> Result<Vec<TermId>, String> {
+) -> Result<Vec<TermId>, crate::error::ShapesError> {
     let lowered = crate::plan::lower_shapes(std::iter::once(shape));
     let mut binding = lowered.bind(data.core_view(), lowered.classes());
     binding.set_conformance_disallows(disallows);
@@ -136,9 +136,12 @@ pub(crate) fn node_expression_targets(
     shape: &Term,
     expr: &NodeExpr,
     disallows: &ConformanceDisallows,
-) -> Result<Vec<Term>, String> {
-    crate::expression::eval_node_expr_in_run(data, shape, expr, disallows)
-        .map_err(|e| format!("sh:targetNode node expression on shape {shape} failed: {e}"))
+) -> Result<Vec<Term>, crate::error::ShapesError> {
+    crate::expression::eval_node_expr_in_run(data, shape, expr, disallows).map_err(|error| {
+        error.context(&format!(
+            "sh:targetNode node expression on shape {shape} failed: "
+        ))
+    })
 }
 
 /// A set of data-graph NODES that holds every node that can conform to `shape`,

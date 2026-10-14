@@ -91,40 +91,46 @@ const ROWS: u32 = 800;
 /// uses, scaled up to benchmark size.
 fn build_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let g = b.intern_iri("http://example.org/g");
-    let asserts = b.intern_iri("http://example.org/asserts");
-    let confidence = b.intern_iri("http://example.org/confidence");
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    let asserts = b.intern_iri("http://example.org/asserts").unwrap();
+    let confidence = b.intern_iri("http://example.org/confidence").unwrap();
 
     for n in 0..ROWS {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 4));
-        let lit = b.intern_literal(RdfLiteral::language_tagged(format!("value {n}"), "EN"));
-        let typed = b.intern_literal(RdfLiteral::typed(
-            format!("{n}"),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 4)).unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral::language_tagged(format!("value {n}"), "EN"))
+            .unwrap();
+        let typed = b
+            .intern_literal(RdfLiteral::typed(
+                format!("{n}"),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
 
         // Plain triples spanning the default and a named graph.
-        b.push_quad(s, p, bnode, None);
-        b.push_quad(s, p, lit, Some(g));
-        b.push_quad(bnode, p, typed, None);
+        b.push_quad(s, p, bnode, None).unwrap();
+        b.push_quad(s, p, lit, Some(g)).unwrap();
+        b.push_quad(bnode, p, typed, None).unwrap();
 
         // A nested triple term as object, exercising the Triple arm of resolve().
-        let inner = b.intern_triple(s, p, typed);
-        b.push_quad(s, asserts, inner, Some(g));
+        let inner = b.intern_triple(s, p, typed).unwrap();
+        b.push_quad(s, asserts, inner, Some(g)).unwrap();
 
         // Reify every 4th row and annotate it, so the reifier/annotation tables and
         // their capability flags are populated.
         if n % 4 == 0 {
-            let triple = b.intern_triple(s, p, bnode);
-            let reifier = b.intern_iri(&format!("http://example.org/r{n}"));
-            b.push_reifier(reifier, triple);
-            let score = b.intern_literal(RdfLiteral::typed(
-                format!("0.{n}"),
-                "http://www.w3.org/2001/XMLSchema#decimal",
-            ));
-            b.push_annotation(reifier, confidence, score);
+            let triple = b.intern_triple(s, p, bnode).unwrap();
+            let reifier = b.intern_iri(&format!("http://example.org/r{n}")).unwrap();
+            b.push_reifier(reifier, triple).unwrap();
+            let score = b
+                .intern_literal(RdfLiteral::typed(
+                    format!("0.{n}"),
+                    "http://www.w3.org/2001/XMLSchema#decimal",
+                ))
+                .unwrap();
+            b.push_annotation(reifier, confidence, score).unwrap();
         }
     }
 
@@ -329,6 +335,7 @@ fn bench_literal_intern(c: &mut Bench) {
         for i in 0..n {
             last = b
                 .intern_literal(RdfLiteral::typed(shape(i), datatype))
+                .unwrap()
                 .index();
         }
         last
@@ -341,7 +348,10 @@ fn bench_literal_intern(c: &mut Bench) {
         let mut b = RdfDatasetBuilder::new();
         let mut last = 0;
         for i in 0..n {
-            last = b.intern_literal(RdfLiteral::simple(i.to_string())).index();
+            last = b
+                .intern_literal(RdfLiteral::simple(i.to_string()))
+                .unwrap()
+                .index();
         }
         last
     }
@@ -351,6 +361,7 @@ fn bench_literal_intern(c: &mut Bench) {
         for i in 0..n {
             last = b
                 .intern_literal(RdfLiteral::language_tagged(i.to_string(), "en-GB"))
+                .unwrap()
                 .index();
         }
         last
@@ -502,17 +513,19 @@ fn bench_segmented_dictionary(c: &mut Bench) {
     let mut resident = RdfDatasetBuilder::new();
     let resident_ids: Vec<_> = values
         .iter()
-        .map(|value| resident.intern_iri(value.as_iri().unwrap()))
+        .map(|value| resident.intern_iri(value.as_iri().unwrap()).unwrap())
         .collect();
     for &object in &resident_ids {
-        resident.push_quad(resident_ids[0], resident_ids[1], object, None);
+        resident
+            .push_quad(resident_ids[0], resident_ids[1], object, None)
+            .unwrap();
     }
     let resident = resident.freeze().expect("resident benchmark fixture");
     let limits = SegmentedBuildLimits::new(512, 65536, 256, 1024, 8)
         .unwrap()
         .with_first_term_index(1_u64 << 33)
         .unwrap();
-    let mut builder = SegmentedBuilder::new(limits);
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut ids = Vec::with_capacity(values.len());
     builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
     for &object in &ids {
@@ -953,24 +966,34 @@ fn bench_canonicalize(c: &mut Bench) {
     const RING: u32 = 6;
 
     let mut b = RdfDatasetBuilder::new();
-    let next = b.intern_iri("http://example.org/next");
-    let label = b.intern_iri("http://example.org/label");
+    let next = b.intern_iri("http://example.org/next").unwrap();
+    let label = b.intern_iri("http://example.org/label").unwrap();
     for chain in 0..CHAINS {
-        let mut prev = b.intern_blank(&format!("c{chain}_0"), BlankScope::DEFAULT);
-        let lit = b.intern_literal(RdfLiteral::simple(format!("chain {chain}")));
-        b.push_quad(prev, label, lit, None);
+        let mut prev = b
+            .intern_blank(&format!("c{chain}_0"), BlankScope::DEFAULT)
+            .unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral::simple(format!("chain {chain}")))
+            .unwrap();
+        b.push_quad(prev, label, lit, None).unwrap();
         for i in 1..LEN {
-            let cur = b.intern_blank(&format!("c{chain}_{i}"), BlankScope::DEFAULT);
-            b.push_quad(prev, next, cur, None);
+            let cur = b
+                .intern_blank(&format!("c{chain}_{i}"), BlankScope::DEFAULT)
+                .unwrap();
+            b.push_quad(prev, next, cur, None).unwrap();
             prev = cur;
         }
     }
     // The ring: every blank looks identical at first degree.
     let ring: Vec<TermId> = (0..RING)
-        .map(|i| b.intern_blank(&format!("r{i}"), BlankScope::DEFAULT))
+        .map(|i| {
+            b.intern_blank(&format!("r{i}"), BlankScope::DEFAULT)
+                .unwrap()
+        })
         .collect();
     for i in 0..RING as usize {
-        b.push_quad(ring[i], next, ring[(i + 1) % RING as usize], None);
+        b.push_quad(ring[i], next, ring[(i + 1) % RING as usize], None)
+            .unwrap();
     }
     let ds = b.freeze().expect("bench fixture freezes");
 

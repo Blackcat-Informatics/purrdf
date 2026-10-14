@@ -734,17 +734,21 @@ mod tests {
     /// Build a dataset from `rows`, placing every quad in `graph`.
     fn dataset_in(rows: &[Row], graph: Option<&str>) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let graph = graph.map(|name| builder.intern_iri(name));
+        let graph = graph.map(|name| builder.intern_iri(name).unwrap());
         for entry in rows {
-            let s = builder.intern_iri(&format!("http://example.org/{}", entry.subject));
-            let p = builder.intern_iri(&entry.predicate);
+            let s = builder
+                .intern_iri(&format!("http://example.org/{}", entry.subject))
+                .unwrap();
+            let p = builder.intern_iri(&entry.predicate).unwrap();
             let o = match &entry.object {
-                Obj::Node(local) => builder.intern_iri(&format!("http://example.org/{local}")),
-                Obj::Lit(lexical, datatype) => {
-                    builder.intern_literal(RdfLiteral::typed(lexical, datatype))
-                }
+                Obj::Node(local) => builder
+                    .intern_iri(&format!("http://example.org/{local}"))
+                    .unwrap(),
+                Obj::Lit(lexical, datatype) => builder
+                    .intern_literal(RdfLiteral::typed(lexical, datatype))
+                    .unwrap(),
             };
-            builder.push_quad(s, p, o, graph);
+            builder.push_quad(s, p, o, graph).unwrap();
         }
         builder.freeze().expect("a well-formed fixture")
     }

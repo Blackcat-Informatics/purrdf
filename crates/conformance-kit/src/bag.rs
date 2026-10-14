@@ -34,25 +34,25 @@ pub fn canonical_solutions(
     }
     let mut builder = RdfDatasetBuilder::new();
     let mut identities = Identities::default();
-    let set = builder.intern_blank("set", BlankScope(1));
-    let header = builder.intern_iri(&format!("{NS}header"));
-    let row_predicate = builder.intern_iri(&format!("{NS}row"));
-    let binding = builder.intern_iri(&format!("{NS}binding"));
-    let variable = builder.intern_iri(&format!("{NS}variable"));
-    let value_predicate = builder.intern_iri(&format!("{NS}value"));
-    let index = builder.intern_iri(&format!("{NS}index"));
-    let width = builder.intern_iri(&format!("{NS}width"));
+    let set = builder.intern_blank("set", BlankScope(1))?;
+    let header = builder.intern_iri(&format!("{NS}header"))?;
+    let row_predicate = builder.intern_iri(&format!("{NS}row"))?;
+    let binding = builder.intern_iri(&format!("{NS}binding"))?;
+    let variable = builder.intern_iri(&format!("{NS}variable"))?;
+    let value_predicate = builder.intern_iri(&format!("{NS}value"))?;
+    let index = builder.intern_iri(&format!("{NS}index"))?;
+    let width = builder.intern_iri(&format!("{NS}width"))?;
     let literal = |text: String| RdfLiteral {
         lexical_form: text,
         datatype: None,
         language: None,
         direction: None,
     };
-    let width_value = builder.intern_literal(literal(variables.len().to_string()));
-    builder.push_quad(set, width, width_value, None);
+    let width_value = builder.intern_literal(literal(variables.len().to_string()))?;
+    builder.push_quad(set, width, width_value, None)?;
     for name in variables {
-        let name = builder.intern_literal(literal(name.clone()));
-        builder.push_quad(set, header, name, None);
+        let name = builder.intern_literal(literal(name.clone()))?;
+        builder.push_quad(set, header, name, None)?;
     }
     for (row_index, row) in rows.iter().enumerate() {
         if row.len() != variables.len() {
@@ -62,31 +62,29 @@ pub fn canonical_solutions(
                 variables.len()
             )));
         }
-        let row_node = builder.intern_blank(&format!("row{row_index}"), BlankScope(1));
-        builder.push_quad(set, row_predicate, row_node, None);
+        let row_node = builder.intern_blank(&format!("row{row_index}"), BlankScope(1))?;
+        builder.push_quad(set, row_predicate, row_node, None)?;
         for (column, cell) in row.iter().enumerate() {
             if let Some(value) = cell {
                 let binding_node =
-                    builder.intern_blank(&format!("binding{row_index}_{column}"), BlankScope(1));
-                let name = builder.intern_literal(literal(variables[column].clone()));
+                    builder.intern_blank(&format!("binding{row_index}_{column}"), BlankScope(1))?;
+                let name = builder.intern_literal(literal(variables[column].clone()))?;
                 let mapped = identities.map("result", value);
-                let value = builder.intern_value(&mapped);
-                builder.push_quad(row_node, binding, binding_node, None);
-                builder.push_quad(binding_node, variable, name, None);
-                builder.push_quad(binding_node, value_predicate, value, None);
+                let value = builder.intern_value(&mapped)?;
+                builder.push_quad(row_node, binding, binding_node, None)?;
+                builder.push_quad(binding_node, variable, name, None)?;
+                builder.push_quad(binding_node, value_predicate, value, None)?;
             }
         }
         if ordered {
-            let ordinal = builder.intern_literal(literal(row_index.to_string()));
-            builder.push_quad(row_node, index, ordinal, None);
+            let ordinal = builder.intern_literal(literal(row_index.to_string()))?;
+            builder.push_quad(row_node, index, ordinal, None)?;
         }
     }
-    let dataset = builder
-        .freeze()
-        .map_err(|error| GradeError::Malformed(error.to_string()))?;
+    let dataset = builder.freeze().map_err(GradeError::from)?;
     purrdf_core::try_canonicalize(&dataset)
         .map(|canonical| canonical.nquads)
-        .map_err(|error| GradeError::Canonicalization(error.to_string()))
+        .map_err(GradeError::from)
 }
 
 /// Compare complete result sets by variable name, retaining row multiplicity.

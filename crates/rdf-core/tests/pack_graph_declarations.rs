@@ -39,28 +39,28 @@ fn blank(label: &str) -> TermValue {
 /// own nothing: `ex:empty` (IRI-named) and `_:bg` (blank-named).
 fn declared_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let g1 = b.intern_iri("http://example.org/g1");
-    b.push_quad(s, p, o, None);
-    b.push_quad(s, p, o, Some(g1));
-    let empty = b.intern_iri("http://example.org/empty");
-    b.declare_named_graph(empty);
-    let bg = b.intern_blank("bg", BlankScope::DEFAULT);
-    b.declare_named_graph(bg);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    b.push_quad(s, p, o, Some(g1)).unwrap();
+    let empty = b.intern_iri("http://example.org/empty").unwrap();
+    b.declare_named_graph(empty).unwrap();
+    let bg = b.intern_blank("bg", BlankScope::DEFAULT).unwrap();
+    b.declare_named_graph(bg).unwrap();
     b.freeze().expect("declared fixture freezes")
 }
 
 /// The same rows as [`declared_fixture`] with no declaration-only graph.
 fn undeclared_twin() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let g1 = b.intern_iri("http://example.org/g1");
-    b.push_quad(s, p, o, None);
-    b.push_quad(s, p, o, Some(g1));
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    b.push_quad(s, p, o, Some(g1)).unwrap();
     b.freeze().expect("undeclared twin freezes")
 }
 
@@ -188,44 +188,47 @@ fn a_declaration_pack_keeps_the_v1_frame() {
 /// row: neither is declaration-only, so neither may gain a partition.
 fn side_only_graphs_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    b.push_quad(s, p, o, None);
-    let triple = b.intern_triple(s, p, o);
-    let r = b.intern_iri("http://example.org/r");
-    let g_reifier = b.intern_iri("http://example.org/g-reifier");
-    b.push_reifier_in_graph(r, triple, Some(g_reifier));
-    let ap = b.intern_iri("http://example.org/ap");
-    let ao = b.intern_literal(RdfLiteral {
-        lexical_form: "x".to_owned(),
-        datatype: None,
-        language: Some("en".to_owned()),
-        direction: None,
-    });
-    let g_annotation = b.intern_blank("ga", BlankScope::DEFAULT);
-    b.push_annotation_in_graph(r, ap, ao, Some(g_annotation));
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_iri("http://example.org/r").unwrap();
+    let g_reifier = b.intern_iri("http://example.org/g-reifier").unwrap();
+    b.push_reifier_in_graph(r, triple, Some(g_reifier)).unwrap();
+    let ap = b.intern_iri("http://example.org/ap").unwrap();
+    let ao = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "x".to_owned(),
+            datatype: None,
+            language: Some("en".to_owned()),
+            direction: None,
+        })
+        .unwrap();
+    let g_annotation = b.intern_blank("ga", BlankScope::DEFAULT).unwrap();
+    b.push_annotation_in_graph(r, ap, ao, Some(g_annotation))
+        .unwrap();
     b.freeze().expect("side-only fixture freezes")
 }
 
 fn default_only_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_blank("o", BlankScope::DEFAULT);
-    b.push_quad(s, p, o, None);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_blank("o", BlankScope::DEFAULT).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("default-only fixture freezes")
 }
 
 /// A graph that is declared AND owns a row is not declaration-only.
 fn declared_with_rows_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let bg = b.intern_blank("bg", BlankScope::DEFAULT);
-    b.push_quad(s, p, o, Some(bg));
-    b.declare_named_graph(bg);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let bg = b.intern_blank("bg", BlankScope::DEFAULT).unwrap();
+    b.push_quad(s, p, o, Some(bg)).unwrap();
+    b.declare_named_graph(bg).unwrap();
     b.freeze().expect("declared-with-rows fixture freezes")
 }
 
@@ -309,21 +312,21 @@ fn a_pack_view_enumerates_graphs_that_own_only_statement_layer_rows() {
 #[test]
 fn a_pack_view_merges_every_graph_source_once_in_ascending_order() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let triple = b.intern_triple(s, p, o);
-    let r = b.intern_iri("http://example.org/r");
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_iri("http://example.org/r").unwrap();
     for n in 0..6 {
-        let g = b.intern_iri(&format!("http://example.org/g{n}"));
+        let g = b.intern_iri(&format!("http://example.org/g{n}")).unwrap();
         match n % 3 {
-            0 => b.push_quad(s, p, o, Some(g)),
-            1 => b.push_reifier_in_graph(r, triple, Some(g)),
-            _ => b.declare_named_graph(g),
+            0 => b.push_quad(s, p, o, Some(g)).unwrap(),
+            1 => b.push_reifier_in_graph(r, triple, Some(g)).unwrap(),
+            _ => b.declare_named_graph(g).unwrap(),
         }
         if n == 3 {
             // A graph with rows of both kinds.
-            b.push_reifier_in_graph(r, triple, Some(g));
+            b.push_reifier_in_graph(r, triple, Some(g)).unwrap();
         }
     }
     let dataset = b.freeze().expect("freezes");

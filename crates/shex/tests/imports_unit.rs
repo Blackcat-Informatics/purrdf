@@ -39,13 +39,13 @@ fn missing_or(
 fn dataset() -> Arc<RdfDataset> {
     // n1 <p1> n2 ; n2 <p2> "X"
     let mut b = RdfDatasetBuilder::new();
-    let n1 = b.intern_iri("http://a.example/n1");
-    let n2 = b.intern_iri("http://a.example/n2");
-    let p1 = b.intern_iri("http://a.example/p1");
-    let p2 = b.intern_iri("http://a.example/p2");
-    let x = b.intern_literal(RdfLiteral::simple("X"));
-    b.push_quad(n1, p1, n2, None);
-    b.push_quad(n2, p2, x, None);
+    let n1 = b.intern_iri("http://a.example/n1").unwrap();
+    let n2 = b.intern_iri("http://a.example/n2").unwrap();
+    let p1 = b.intern_iri("http://a.example/p1").unwrap();
+    let p2 = b.intern_iri("http://a.example/p2").unwrap();
+    let x = b.intern_literal(RdfLiteral::simple("X")).unwrap();
+    b.push_quad(n1, p1, n2, None).unwrap();
+    b.push_quad(n2, p2, x, None).unwrap();
     b.freeze().expect("freeze")
 }
 

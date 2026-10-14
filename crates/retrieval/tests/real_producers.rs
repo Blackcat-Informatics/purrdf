@@ -728,18 +728,22 @@ fn independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion() {
 fn field_membership_precedes_each_real_stratum_depth_in_both_schedules() {
     const FROM: &str = "https://example.org/from";
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
-    let from = builder.intern_iri(FROM);
-    let a = builder.intern_iri(&ex("a"));
-    let b = builder.intern_iri(&ex("b"));
-    let high = builder.intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"));
-    let low = builder.intern_literal(RdfLiteral::simple("alpha"));
-    let padding = builder.intern_literal(RdfLiteral::simple(
-        "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
-    ));
-    builder.push_quad(a, note, high, None);
-    builder.push_quad(b, note, padding, None);
-    builder.push_quad(b, from, low, None);
+    let note = builder.intern_iri(NOTE).unwrap();
+    let from = builder.intern_iri(FROM).unwrap();
+    let a = builder.intern_iri(&ex("a")).unwrap();
+    let b = builder.intern_iri(&ex("b")).unwrap();
+    let high = builder
+        .intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"))
+        .unwrap();
+    let low = builder.intern_literal(RdfLiteral::simple("alpha")).unwrap();
+    let padding = builder
+        .intern_literal(RdfLiteral::simple(
+            "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        ))
+        .unwrap();
+    builder.push_quad(a, note, high, None).unwrap();
+    builder.push_quad(b, note, padding, None).unwrap();
+    builder.push_quad(b, from, low, None).unwrap();
     let data = builder.freeze().unwrap();
     let index = Arc::new(
         TextIndex::from_dataset(
@@ -857,14 +861,16 @@ fn dataset() -> Arc<RdfDataset> {
 /// refuses to declare a ranked order over.
 fn dataset_of(rows: &[(&str, &str, Option<&str>)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for &(local, text, language) in rows {
-        let subject = builder.intern_iri(&ex(local));
-        let literal = builder.intern_literal(language.map_or_else(
-            || RdfLiteral::simple(text),
-            |tag| RdfLiteral::language_tagged(text, tag),
-        ));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder.intern_iri(&ex(local)).unwrap();
+        let literal = builder
+            .intern_literal(language.map_or_else(
+                || RdfLiteral::simple(text),
+                |tag| RdfLiteral::language_tagged(text, tag),
+            ))
+            .unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset is valid")
 }
@@ -2302,7 +2308,7 @@ impl PropertyFunction for CountingTextRelation {
         self.inner.rows_per_invocation(mode)
     }
 
-    purrdf_sparql_eval::resident_property_open!();
+    purrdf_sparql_eval::resident_property_open! {}
 }
 
 struct PrefixRefusalCursor {

@@ -296,10 +296,10 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
     // The dataset holds an ordinary triple under the LONGER, unregistered IRI —
     // it merely shares the short IRI's characters as a prefix.
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}subject"));
-    let p = builder.intern_iri(&long_predicate);
-    let o = builder.intern_iri(&format!("{EX}object"));
-    builder.push_quad(s, p, o, None);
+    let s = builder.intern_iri(&format!("{EX}subject")).unwrap();
+    let p = builder.intern_iri(&long_predicate).unwrap();
+    let o = builder.intern_iri(&format!("{EX}object")).unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
     let dataset = builder.freeze().expect("freeze fixture");
 
     let query = format!("SELECT ?s ?o WHERE {{ ?s <{long_predicate}> ?o }}");

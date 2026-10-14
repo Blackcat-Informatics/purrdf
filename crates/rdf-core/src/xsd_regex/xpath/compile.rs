@@ -766,6 +766,7 @@ impl<'a> Parser<'a, '_> {
     fn node(&mut self, node: Node) -> Result<usize, Error> {
         self.budget.charge(Resource::CompileSteps, 1)?;
         self.budget.charge(Resource::ProgramNodes, 1)?;
+        super::Refusal::u32_representation(Resource::ProgramNodes, self.nodes.len() as u128 + 1)?;
         grow(&mut self.budget, &mut self.nodes, 6)?;
         let properties = super::pike::node_properties(&node, |child| self.properties[child]);
         grow(&mut self.budget, &mut self.properties, 1)?;
@@ -963,6 +964,10 @@ impl<'a> Parser<'a, '_> {
             let ranges = self.scalars(set)?;
             let held = ranges.capacity() as u64 * 2;
             if !ranges.is_empty() {
+                let end = super::Refusal::u32_representation(
+                    Resource::CompileSlots,
+                    flat.ranges.len() as u128 + ranges.len() as u128,
+                )?;
                 if flat.spans.is_empty() {
                     let missing = self.sets.len();
                     self.budget
@@ -977,8 +982,9 @@ impl<'a> Parser<'a, '_> {
                     grow(&mut self.budget, &mut flat.ranges, 2)?;
                     flat.ranges.push(range);
                 }
-                let span = |at: usize| u32::try_from(at).expect("admitted ranges fit u32");
-                flat.spans[set] = Some((span(start), span(flat.ranges.len())));
+                // The start is no greater than the checked endpoint; growth
+                // and publication happen only after that representation check.
+                flat.spans[set] = Some((start as u32, end));
             }
             self.budget.release_vec(ranges)?;
             self.budget.release_compile_slots(held);

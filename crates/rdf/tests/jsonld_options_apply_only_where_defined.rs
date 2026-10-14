@@ -24,10 +24,14 @@ use purrdf_rdf::{
 /// One quad, so every format has something to emit.
 fn dataset() -> std::sync::Arc<purrdf_core::RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_owned_term(&RdfTerm::iri("https://example.org/s"));
-    let p = builder.intern_iri("https://example.org/p");
-    let o = builder.intern_owned_term(&RdfTerm::iri("https://example.org/o"));
-    builder.push_quad(s, p, o, None);
+    let s = builder
+        .intern_owned_term(&RdfTerm::iri("https://example.org/s"))
+        .unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
+    let o = builder
+        .intern_owned_term(&RdfTerm::iri("https://example.org/o"))
+        .unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
     builder.freeze().expect("dataset freezes")
 }
 

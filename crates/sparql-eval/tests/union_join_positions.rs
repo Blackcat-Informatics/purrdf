@@ -31,29 +31,31 @@ fn controls() -> Arc<RdfDataset> {
         "target",
         "connected",
     ]
-    .map(|name| b.intern_iri(&format!("{EX}{name}")));
-    let voltage = b.intern_iri(&format!("{EX}Voltage"));
-    let yes = b.intern_literal(RdfLiteral::typed(
-        "true".to_owned(),
-        purrdf_xsd::datatype::XSD_BOOLEAN.to_owned(),
-    ));
+    .map(|name| b.intern_iri(&format!("{EX}{name}")).unwrap());
+    let voltage = b.intern_iri(&format!("{EX}Voltage")).unwrap();
+    let yes = b
+        .intern_literal(RdfLiteral::typed(
+            "true".to_owned(),
+            purrdf_xsd::datatype::XSD_BOOLEAN.to_owned(),
+        ))
+        .unwrap();
     for i in 0..COUNT {
-        let terminal = b.intern_iri(&format!("{EX}terminal{i}"));
-        let control = b.intern_iri(&format!("{EX}control{i}"));
+        let terminal = b.intern_iri(&format!("{EX}terminal{i}")).unwrap();
+        let control = b.intern_iri(&format!("{EX}control{i}")).unwrap();
         let subject = if i == 0 {
-            b.intern_blank("s0", BlankScope::DEFAULT)
+            b.intern_blank("s0", BlankScope::DEFAULT).unwrap()
         } else {
-            b.intern_iri(&format!("{EX}s{i}"))
+            b.intern_iri(&format!("{EX}s{i}")).unwrap()
         };
-        b.push_quad(terminal, predicates[0], subject, None);
-        b.push_quad(control, predicates[1], terminal, None);
-        b.push_quad(control, predicates[2], terminal, None);
-        b.push_quad(control, predicates[3], voltage, None);
-        b.push_quad(control, predicates[4], yes, None);
-        b.push_quad(terminal, predicates[6], yes, None);
+        b.push_quad(terminal, predicates[0], subject, None).unwrap();
+        b.push_quad(control, predicates[1], terminal, None).unwrap();
+        b.push_quad(control, predicates[2], terminal, None).unwrap();
+        b.push_quad(control, predicates[3], voltage, None).unwrap();
+        b.push_quad(control, predicates[4], yes, None).unwrap();
+        b.push_quad(terminal, predicates[6], yes, None).unwrap();
         for suffix in ["a", "b"] {
-            let target = b.intern_iri(&format!("{EX}target{i}{suffix}"));
-            b.push_quad(control, predicates[5], target, None);
+            let target = b.intern_iri(&format!("{EX}target{i}{suffix}")).unwrap();
+            b.push_quad(control, predicates[5], target, None).unwrap();
         }
     }
     b.freeze().expect("control fixture freezes")
@@ -181,17 +183,17 @@ fn independent_union_factors_run_once_and_preserve_cartesian_bags_and_cuts() {
     use purrdf_sparql_eval::{ChargePoint, PartialAnswers};
 
     let mut b = RdfDatasetBuilder::new();
-    let edge = b.intern_iri(&format!("{EX}edge"));
-    let attr = b.intern_iri(&format!("{EX}attr"));
+    let edge = b.intern_iri(&format!("{EX}edge")).unwrap();
+    let attr = b.intern_iri(&format!("{EX}attr")).unwrap();
     for index in 0..3 {
-        let s = b.intern_iri(&format!("{EX}s{index}"));
-        let o = b.intern_iri(&format!("{EX}o{index}"));
-        b.push_quad(s, edge, o, None);
+        let s = b.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let o = b.intern_iri(&format!("{EX}o{index}")).unwrap();
+        b.push_quad(s, edge, o, None).unwrap();
     }
     for index in 0..5 {
-        let x = b.intern_iri(&format!("{EX}x{index}"));
-        let value = b.intern_iri(&format!("{EX}v{index}"));
-        b.push_quad(x, attr, value, None);
+        let x = b.intern_iri(&format!("{EX}x{index}")).unwrap();
+        let value = b.intern_iri(&format!("{EX}v{index}")).unwrap();
+        b.push_quad(x, attr, value, None).unwrap();
     }
     let dataset = b.freeze().expect("independent factor fixture freezes");
     let query = format!(
@@ -336,15 +338,15 @@ fn retained_unit_order_preserves_the_structural_override_and_ordinary_cache_path
     };
 
     let mut builder = RdfDatasetBuilder::new();
-    let common = builder.intern_iri(&format!("{EX}common"));
-    let rare = builder.intern_iri(&format!("{EX}rare"));
+    let common = builder.intern_iri(&format!("{EX}common")).unwrap();
+    let rare = builder.intern_iri(&format!("{EX}rare")).unwrap();
     let mut chosen = None;
     for index in 0..8 {
-        let subject = builder.intern_iri(&format!("{EX}s{index}"));
-        let object = builder.intern_iri(&format!("{EX}o{index}"));
-        builder.push_quad(subject, common, object, None);
+        let subject = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let object = builder.intern_iri(&format!("{EX}o{index}")).unwrap();
+        builder.push_quad(subject, common, object, None).unwrap();
         if index == 0 {
-            builder.push_quad(subject, rare, object, None);
+            builder.push_quad(subject, rare, object, None).unwrap();
             chosen = Some((subject, object));
         }
     }
@@ -416,18 +418,19 @@ fn retained_unit_order_preserves_the_structural_override_and_ordinary_cache_path
 fn tiny_union_drives_large_attributes_without_changing_the_ceiling() {
     const POPULATION: usize = 4096;
     let mut b = RdfDatasetBuilder::new();
-    let left_p = b.intern_iri(&format!("{EX}left"));
-    let right_p = b.intern_iri(&format!("{EX}right"));
-    let a = b.intern_iri(&format!("{EX}a"));
-    let bb = b.intern_iri(&format!("{EX}b"));
+    let left_p = b.intern_iri(&format!("{EX}left")).unwrap();
+    let right_p = b.intern_iri(&format!("{EX}right")).unwrap();
+    let a = b.intern_iri(&format!("{EX}a")).unwrap();
+    let bb = b.intern_iri(&format!("{EX}b")).unwrap();
     for i in 0..POPULATION {
-        let left = b.intern_iri(&format!("{EX}left{i}"));
-        let right = b.intern_iri(&format!("{EX}right{i}"));
-        let value = b.intern_iri(&format!("{EX}value{i}"));
-        b.push_quad(left, left_p, value, None);
-        b.push_quad(right, right_p, value, None);
+        let left = b.intern_iri(&format!("{EX}left{i}")).unwrap();
+        let right = b.intern_iri(&format!("{EX}right{i}")).unwrap();
+        let value = b.intern_iri(&format!("{EX}value{i}")).unwrap();
+        b.push_quad(left, left_p, value, None).unwrap();
+        b.push_quad(right, right_p, value, None).unwrap();
         if i < 2 {
-            b.push_quad(left, if i == 0 { a } else { bb }, right, None);
+            b.push_quad(left, if i == 0 { a } else { bb }, right, None)
+                .unwrap();
         }
     }
     let dataset = b.freeze().expect("tiny connector fixture freezes");
@@ -471,18 +474,19 @@ fn tiny_union_drives_large_attributes_without_changing_the_ceiling() {
 #[test]
 fn tiny_attributes_drive_large_union_without_changing_the_ceiling() {
     let mut b = RdfDatasetBuilder::new();
-    let left_p = b.intern_iri(&format!("{EX}left"));
-    let right_p = b.intern_iri(&format!("{EX}right"));
-    let a = b.intern_iri(&format!("{EX}a"));
-    let bb = b.intern_iri(&format!("{EX}b"));
+    let left_p = b.intern_iri(&format!("{EX}left")).unwrap();
+    let right_p = b.intern_iri(&format!("{EX}right")).unwrap();
+    let a = b.intern_iri(&format!("{EX}a")).unwrap();
+    let bb = b.intern_iri(&format!("{EX}b")).unwrap();
     for i in 0..4096 {
-        let left = b.intern_iri(&format!("{EX}left{i}"));
-        let right = b.intern_iri(&format!("{EX}right{i}"));
-        let value = b.intern_iri(&format!("{EX}value{i}"));
-        b.push_quad(left, if i % 2 == 0 { a } else { bb }, right, None);
+        let left = b.intern_iri(&format!("{EX}left{i}")).unwrap();
+        let right = b.intern_iri(&format!("{EX}right{i}")).unwrap();
+        let value = b.intern_iri(&format!("{EX}value{i}")).unwrap();
+        b.push_quad(left, if i % 2 == 0 { a } else { bb }, right, None)
+            .unwrap();
         if i < 2 {
-            b.push_quad(left, left_p, value, None);
-            b.push_quad(right, right_p, value, None);
+            b.push_quad(left, left_p, value, None).unwrap();
+            b.push_quad(right, right_p, value, None).unwrap();
         }
     }
     let dataset = b.freeze().expect("mirror freezes");
@@ -523,15 +527,19 @@ fn tiny_attributes_drive_large_union_without_changing_the_ceiling() {
 fn selective_attribute_components_connect_before_their_product() {
     let mut builder = RdfDatasetBuilder::new();
     let predicates =
-        ["left", "right", "a", "b"].map(|name| builder.intern_iri(&format!("{EX}{name}")));
+        ["left", "right", "a", "b"].map(|name| builder.intern_iri(&format!("{EX}{name}")).unwrap());
     for index in 0..10_000 {
-        let left = builder.intern_iri(&format!("{EX}left{index}"));
-        let right = builder.intern_iri(&format!("{EX}right{index}"));
-        let value = builder.intern_iri(&format!("{EX}value{index}"));
-        builder.push_quad(left, predicates[2 + index % 2], right, None);
+        let left = builder.intern_iri(&format!("{EX}left{index}")).unwrap();
+        let right = builder.intern_iri(&format!("{EX}right{index}")).unwrap();
+        let value = builder.intern_iri(&format!("{EX}value{index}")).unwrap();
+        builder
+            .push_quad(left, predicates[2 + index % 2], right, None)
+            .unwrap();
         if index < 100 {
-            builder.push_quad(left, predicates[0], value, None);
-            builder.push_quad(right, predicates[1], value, None);
+            builder.push_quad(left, predicates[0], value, None).unwrap();
+            builder
+                .push_quad(right, predicates[1], value, None)
+                .unwrap();
         }
     }
     let data = builder.freeze().expect("selective components fixture");
@@ -574,20 +582,20 @@ fn selective_attribute_components_connect_before_their_product() {
 #[test]
 fn heterogeneous_union_bindings_choose_native_probes_per_row() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("{EX}s"));
-    let left = b.intern_iri(&format!("{EX}left"));
-    let right = b.intern_iri(&format!("{EX}right"));
-    let attr = b.intern_iri(&format!("{EX}attr"));
-    let tag = b.intern_iri(&format!("{EX}tag"));
+    let s = b.intern_iri(&format!("{EX}s")).unwrap();
+    let left = b.intern_iri(&format!("{EX}left")).unwrap();
+    let right = b.intern_iri(&format!("{EX}right")).unwrap();
+    let attr = b.intern_iri(&format!("{EX}attr")).unwrap();
+    let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
     for i in 0..3 {
-        let object = b.intern_iri(&format!("{EX}o{i}"));
-        let value = b.intern_iri(&format!("{EX}v{i}"));
-        b.push_quad(object, attr, value, None);
+        let object = b.intern_iri(&format!("{EX}o{i}")).unwrap();
+        let value = b.intern_iri(&format!("{EX}v{i}")).unwrap();
+        b.push_quad(object, attr, value, None).unwrap();
         if i == 0 {
-            b.push_quad(s, left, object, None);
+            b.push_quad(s, left, object, None).unwrap();
         }
     }
-    b.push_quad(s, right, tag, None);
+    b.push_quad(s, right, tag, None).unwrap();
     let dataset = b.freeze().expect("mask fixture freezes");
     let ordinary = "{ ?s ex:left ?o } UNION { ?s ex:right ?tag } ?o ex:attr ?value";
     let control =
@@ -619,21 +627,21 @@ fn heterogeneous_union_bindings_choose_native_probes_per_row() {
 #[test]
 fn all_eight_spo_masks_preserve_union_bags() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("{EX}s"));
-    let p = b.intern_iri(&format!("{EX}p"));
-    let o = b.intern_iri(&format!("{EX}o"));
-    b.push_quad(s, p, o, None);
-    let marker =
-        ["subject", "predicate", "object"].map(|name| b.intern_iri(&format!("{EX}{name}")));
-    let present = b.intern_iri(&format!("{EX}present"));
-    let zero = b.intern_iri(&format!("{EX}zero"));
+    let s = b.intern_iri(&format!("{EX}s")).unwrap();
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let o = b.intern_iri(&format!("{EX}o")).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    let marker = ["subject", "predicate", "object"]
+        .map(|name| b.intern_iri(&format!("{EX}{name}")).unwrap());
+    let present = b.intern_iri(&format!("{EX}present")).unwrap();
+    let zero = b.intern_iri(&format!("{EX}zero")).unwrap();
     let mut arms = Vec::new();
     for mask in 0..8 {
-        let arm = b.intern_iri(&format!("{EX}arm{mask}"));
+        let arm = b.intern_iri(&format!("{EX}arm{mask}")).unwrap();
         let mut patterns = Vec::new();
         for (axis, (name, value)) in ["s", "p", "o"].into_iter().zip([s, p, o]).enumerate() {
             if mask & (1 << axis) != 0 {
-                b.push_quad(arm, marker[axis], value, None);
+                b.push_quad(arm, marker[axis], value, None).unwrap();
                 patterns.push(format!(
                     "ex:arm{mask} ex:{} ?{name} .",
                     ["subject", "predicate", "object"][axis]
@@ -641,7 +649,7 @@ fn all_eight_spo_masks_preserve_union_bags() {
             }
         }
         if patterns.is_empty() {
-            b.push_quad(arm, zero, present, None);
+            b.push_quad(arm, zero, present, None).unwrap();
             patterns.push(format!("ex:arm{mask} ex:zero ex:present ."));
         }
         arms.push(patterns.join(" "));
@@ -686,23 +694,23 @@ fn all_eight_spo_masks_preserve_union_bags() {
 #[test]
 fn four_arm_connector_keeps_twenty_ambient_attributes_connected() {
     let mut b = RdfDatasetBuilder::new();
-    let edges = ["a", "b", "c", "d"].map(|name| b.intern_iri(&format!("{EX}{name}")));
+    let edges = ["a", "b", "c", "d"].map(|name| b.intern_iri(&format!("{EX}{name}")).unwrap());
     let left = (0..10)
-        .map(|i| b.intern_iri(&format!("{EX}left{i}")))
+        .map(|i| b.intern_iri(&format!("{EX}left{i}")).unwrap())
         .collect::<Vec<_>>();
     let right = (0..10)
-        .map(|i| b.intern_iri(&format!("{EX}right{i}")))
+        .map(|i| b.intern_iri(&format!("{EX}right{i}")).unwrap())
         .collect::<Vec<_>>();
     for i in 0..16 {
-        let l = b.intern_iri(&format!("{EX}l{i}"));
-        let r = b.intern_iri(&format!("{EX}r{i}"));
-        let value = b.intern_iri(&format!("{EX}v{i}"));
+        let l = b.intern_iri(&format!("{EX}l{i}")).unwrap();
+        let r = b.intern_iri(&format!("{EX}r{i}")).unwrap();
+        let value = b.intern_iri(&format!("{EX}v{i}")).unwrap();
         for (&lp, &rp) in left.iter().zip(&right) {
-            b.push_quad(l, lp, value, None);
-            b.push_quad(r, rp, value, None);
+            b.push_quad(l, lp, value, None).unwrap();
+            b.push_quad(r, rp, value, None).unwrap();
         }
         for &edge in &edges {
-            b.push_quad(l, edge, r, None);
+            b.push_quad(l, edge, r, None).unwrap();
         }
     }
     let dataset = b.freeze().expect("wide fixture freezes");
@@ -790,17 +798,17 @@ fn exact_report_having_alias_keeps_its_normative_empty_bag() {
 fn every_fuel_cut_is_a_complete_binding_lower_bound() {
     use purrdf_sparql_eval::PartialAnswers;
     let mut b = RdfDatasetBuilder::new();
-    let predicates =
-        ["left", "extra", "right", "a", "b"].map(|name| b.intern_iri(&format!("{EX}{name}")));
+    let predicates = ["left", "extra", "right", "a", "b"]
+        .map(|name| b.intern_iri(&format!("{EX}{name}")).unwrap());
     for i in 0..32 {
-        let l = b.intern_iri(&format!("{EX}l{i}"));
-        let r = b.intern_iri(&format!("{EX}r{i}"));
-        let value = b.intern_iri(&format!("{EX}v{i}"));
-        b.push_quad(l, predicates[0], value, None);
-        b.push_quad(l, predicates[1], value, None);
-        b.push_quad(r, predicates[2], value, None);
+        let l = b.intern_iri(&format!("{EX}l{i}")).unwrap();
+        let r = b.intern_iri(&format!("{EX}r{i}")).unwrap();
+        let value = b.intern_iri(&format!("{EX}v{i}")).unwrap();
+        b.push_quad(l, predicates[0], value, None).unwrap();
+        b.push_quad(l, predicates[1], value, None).unwrap();
+        b.push_quad(r, predicates[2], value, None).unwrap();
         if i < 2 {
-            b.push_quad(l, predicates[3 + i], r, None);
+            b.push_quad(l, predicates[3 + i], r, None).unwrap();
         }
     }
     let dataset = b.freeze().expect("fuel fixture");
@@ -872,10 +880,10 @@ fn raw_projectless_select_does_not_restore_hidden_columns() {
     };
     use purrdf_sparql_eval::{EvalCtx, Outcome, evaluate_query};
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("{EX}s"));
-    let p = b.intern_iri(&format!("{EX}p"));
-    let o = b.intern_iri(&format!("{EX}o"));
-    b.push_quad(s, p, o, None);
+    let s = b.intern_iri(&format!("{EX}s")).unwrap();
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let o = b.intern_iri(&format!("{EX}o")).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let data = b.freeze().expect("raw hidden fixture");
     let leaf = GraphPattern::Bgp {
         patterns: vec![TriplePattern {
@@ -908,13 +916,13 @@ fn projectless_raw_local_blank_slots_do_not_reappear_after_a_positive_join() {
     use purrdf_sparql_eval::{EvalCtx, Outcome, PreparedQuery, evaluate_query};
 
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri(&format!("{EX}subject"));
-    let value = builder.intern_iri(&format!("{EX}value"));
-    let object = builder.intern_iri(&format!("{EX}object"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
-    builder.push_quad(subject, p, value, None);
-    builder.push_quad(value, q, object, None);
+    let subject = builder.intern_iri(&format!("{EX}subject")).unwrap();
+    let value = builder.intern_iri(&format!("{EX}value")).unwrap();
+    let object = builder.intern_iri(&format!("{EX}object")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
+    builder.push_quad(subject, p, value, None).unwrap();
+    builder.push_quad(value, q, object, None).unwrap();
     let data = builder.freeze().expect("raw local blank fixture");
     let mut query = SparqlParser::new().parse_query(&format!(
         "PREFIX ex: <{EX}> SELECT * WHERE {{ {{ _:left ex:p ?value }} UNION {{ _:right ex:p ?value }} ?value ex:q ?object }}"
@@ -971,10 +979,10 @@ fn projectless_raw_local_blank_slots_do_not_reappear_after_a_positive_join() {
 #[test]
 fn local_blank_working_width_is_refused_before_work_without_exposing_the_slot() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri(&format!("{EX}subject"));
-    let predicate = builder.intern_iri(&format!("{EX}p"));
-    let value = builder.intern_iri(&format!("{EX}value"));
-    builder.push_quad(subject, predicate, value, None);
+    let subject = builder.intern_iri(&format!("{EX}subject")).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let value = builder.intern_iri(&format!("{EX}value")).unwrap();
+    builder.push_quad(subject, predicate, value, None).unwrap();
     let data = builder.freeze().expect("local blank width fixture");
     let query = format!("PREFIX ex: <{EX}> SELECT ?value WHERE {{ _:local ex:p ?value }}");
     let request = SparqlRequest {
@@ -1050,10 +1058,10 @@ fn local_blank_working_width_is_refused_before_work_without_exposing_the_slot() 
 #[test]
 fn empty_native_seed_does_not_charge_a_unit_row() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri(&format!("{EX}s"));
-    let present = builder.intern_iri(&format!("{EX}present"));
-    let value = builder.intern_iri(&format!("{EX}value"));
-    builder.push_quad(subject, present, value, None);
+    let subject = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let present = builder.intern_iri(&format!("{EX}present")).unwrap();
+    let value = builder.intern_iri(&format!("{EX}value")).unwrap();
+    builder.push_quad(subject, present, value, None).unwrap();
     let data = builder.freeze().expect("empty seed fixture");
     let query = format!(
         "PREFIX ex: <{EX}> SELECT ?s ?o ?v WHERE {{ {{ ?s ex:absent ?o }} UNION {{ ?s ex:absent ?o }} ?s ex:present ?v }}"
@@ -1118,30 +1126,38 @@ fn both_reported_alternatives_preserve_focus_and_duplicate_bags() {
     let predicates = [
         "tableOfA", "tableOfB", "pointOfA", "pointOfB", "low", "high", "step",
     ]
-    .map(|name| builder.intern_iri(&format!("{EX}{name}")));
+    .map(|name| builder.intern_iri(&format!("{EX}{name}")).unwrap());
     let numbers = [10, 20, 0].map(|number| {
-        builder.intern_literal(RdfLiteral::typed(
-            number.to_string(),
-            purrdf_xsd::datatype::XSD_INTEGER.to_owned(),
-        ))
+        builder
+            .intern_literal(RdfLiteral::typed(
+                number.to_string(),
+                purrdf_xsd::datatype::XSD_INTEGER.to_owned(),
+            ))
+            .unwrap()
     });
     for index in 0..COUNT {
         let focus = if index == 0 {
-            builder.intern_blank("this0", BlankScope::DEFAULT)
+            builder.intern_blank("this0", BlankScope::DEFAULT).unwrap()
         } else {
-            builder.intern_iri(&format!("{EX}this{index}"))
+            builder.intern_iri(&format!("{EX}this{index}")).unwrap()
         };
-        let changer = builder.intern_iri(&format!("{EX}changer{index}"));
-        let point = builder.intern_iri(&format!("{EX}point{index}"));
+        let changer = builder.intern_iri(&format!("{EX}changer{index}")).unwrap();
+        let point = builder.intern_iri(&format!("{EX}point{index}")).unwrap();
         for predicate in &predicates[..2] {
-            builder.push_quad(changer, *predicate, focus, None);
+            builder.push_quad(changer, *predicate, focus, None).unwrap();
         }
         for predicate in &predicates[2..4] {
-            builder.push_quad(point, *predicate, focus, None);
+            builder.push_quad(point, *predicate, focus, None).unwrap();
         }
-        builder.push_quad(changer, predicates[4], numbers[0], None);
-        builder.push_quad(changer, predicates[5], numbers[1], None);
-        builder.push_quad(point, predicates[6], numbers[2], None);
+        builder
+            .push_quad(changer, predicates[4], numbers[0], None)
+            .unwrap();
+        builder
+            .push_quad(changer, predicates[5], numbers[1], None)
+            .unwrap();
+        builder
+            .push_quad(point, predicates[6], numbers[2], None)
+            .unwrap();
     }
     let data = builder.freeze().expect("two alternative fixture");
     let original = "$this (^ex:tableOfA)|(^ex:tableOfB) ?changer . ?changer ex:low ?low . ?changer ex:high ?high . $this ^ex:pointOfA|^ex:pointOfB ?point . ?point ex:step ?step .";

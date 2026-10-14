@@ -2280,11 +2280,15 @@ mod tests {
     /// size has a size that could not have come from anywhere else.
     fn dataset_with_two_triples() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let predicate = builder.intern_iri(EX_VAL);
-        let object = builder.intern_literal(RdfLiteral::typed("1", XSD_INTEGER));
+        let predicate = builder.intern_iri(EX_VAL).unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::typed("1", XSD_INTEGER))
+            .unwrap();
         for local in ["a", "b"] {
-            let subject = builder.intern_iri(&format!("{EX_SUBJECT_PREFIX}{local}"));
-            builder.push_quad(subject, predicate, object, None);
+            let subject = builder
+                .intern_iri(&format!("{EX_SUBJECT_PREFIX}{local}"))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         builder.freeze().expect("freeze")
     }
@@ -2341,11 +2345,13 @@ mod tests {
     /// property `1..=n`.
     fn scored_dataset(n: usize) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri(EX_VAL);
+        let val_pred = b.intern_iri(EX_VAL).unwrap();
         for i in 1..=n {
-            let s = b.intern_iri(&format!("{EX_SUBJECT_PREFIX}{i}"));
-            let v = b.intern_literal(RdfLiteral::typed(i.to_string(), XSD_INTEGER.to_owned()));
-            b.push_quad(s, val_pred, v, None);
+            let s = b.intern_iri(&format!("{EX_SUBJECT_PREFIX}{i}")).unwrap();
+            let v = b
+                .intern_literal(RdfLiteral::typed(i.to_string(), XSD_INTEGER.to_owned()))
+                .unwrap();
+            b.push_quad(s, val_pred, v, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -3060,16 +3066,18 @@ mod tests {
     /// minted for the test.
     fn envelope_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri(&format!("{ENV}p"));
-        let a = b.intern_iri(&format!("{ENV}a"));
-        let second = b.intern_iri(&format!("{ENV}b"));
-        let x = b.intern_iri(&format!("{ENV}x"));
-        let y = b.intern_iri(&format!("{ENV}y"));
-        let z = b.intern_iri(&format!("{ENV}z"));
-        let blank = b.intern_blank("bn", purrdf_core::BlankScope::DEFAULT);
-        b.push_quad(a, p, x, None);
-        b.push_quad(second, p, y, None);
-        b.push_quad(blank, p, z, None);
+        let p = b.intern_iri(&format!("{ENV}p")).unwrap();
+        let a = b.intern_iri(&format!("{ENV}a")).unwrap();
+        let second = b.intern_iri(&format!("{ENV}b")).unwrap();
+        let x = b.intern_iri(&format!("{ENV}x")).unwrap();
+        let y = b.intern_iri(&format!("{ENV}y")).unwrap();
+        let z = b.intern_iri(&format!("{ENV}z")).unwrap();
+        let blank = b
+            .intern_blank("bn", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(a, p, x, None).unwrap();
+        b.push_quad(second, p, y, None).unwrap();
+        b.push_quad(blank, p, z, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -4678,12 +4686,14 @@ mod tests {
     #[test]
     fn native_score_order_by_is_total_over_nan() {
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri(EX_VAL);
+        let val_pred = b.intern_iri(EX_VAL).unwrap();
         let vals: Vec<i64> = (-5..=5).collect();
         for v in &vals {
-            let s = b.intern_iri(&format!("{EX_SUBJECT_PREFIX}{v}"));
-            let lit = b.intern_literal(RdfLiteral::typed(v.to_string(), XSD_INTEGER.to_owned()));
-            b.push_quad(s, val_pred, lit, None);
+            let s = b.intern_iri(&format!("{EX_SUBJECT_PREFIX}{v}")).unwrap();
+            let lit = b
+                .intern_literal(RdfLiteral::typed(v.to_string(), XSD_INTEGER.to_owned()))
+                .unwrap();
+            b.push_quad(s, val_pred, lit, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 

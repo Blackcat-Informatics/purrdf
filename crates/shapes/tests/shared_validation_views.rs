@@ -18,12 +18,12 @@ const VALUE: &str = "https://example.org/value";
 
 fn data() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank("same", BlankScope(7));
-    let p = b.intern_iri(VALUE);
-    let o = b.intern_literal(RdfLiteral::simple("good"));
-    let g = b.intern_iri("https://example.org/graph");
-    b.push_quad(s, p, o, Some(g));
-    b.push_annotation_in_graph(s, p, o, Some(g));
+    let s = b.intern_blank("same", BlankScope(7)).unwrap();
+    let p = b.intern_iri(VALUE).unwrap();
+    let o = b.intern_literal(RdfLiteral::simple("good")).unwrap();
+    let g = b.intern_iri("https://example.org/graph").unwrap();
+    b.push_quad(s, p, o, Some(g)).unwrap();
+    b.push_annotation_in_graph(s, p, o, Some(g)).unwrap();
     b.freeze().expect("data")
 }
 
@@ -122,26 +122,32 @@ fn independently_scoped_composite_targets_remain_distinct() {
 #[test]
 fn same_document_blank_target_and_current_shape_keep_their_identity() {
     let mut b = RdfDatasetBuilder::new();
-    let shape = b.intern_blank("shape", BlankScope(9));
-    let focus = b.intern_blank("focus", BlankScope(9));
-    let constraint = b.intern_blank("constraint", BlankScope(9));
-    let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-    let node_shape = b.intern_iri("http://www.w3.org/ns/shacl#NodeShape");
-    b.push_quad(shape, ty, node_shape, None);
+    let shape = b.intern_blank("shape", BlankScope(9)).unwrap();
+    let focus = b.intern_blank("focus", BlankScope(9)).unwrap();
+    let constraint = b.intern_blank("constraint", BlankScope(9)).unwrap();
+    let ty = b
+        .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+        .unwrap();
+    let node_shape = b
+        .intern_iri("http://www.w3.org/ns/shacl#NodeShape")
+        .unwrap();
+    b.push_quad(shape, ty, node_shape, None).unwrap();
     // The blank focus is reached through a subjects-of target: SHACL makes a
     // blank sh:targetNode value a node expression (a blank node with no triples
     // is the empty one, which targets nothing), so the blank node has to be
     // selected by the data it carries.
-    let marker = b.intern_iri("https://example.org/marker");
-    let marked = b.intern_literal(RdfLiteral::simple("x"));
-    b.push_quad(focus, marker, marked, None);
-    let target = b.intern_iri("http://www.w3.org/ns/shacl#targetSubjectsOf");
-    b.push_quad(shape, target, marker, None);
-    let sparql = b.intern_iri("http://www.w3.org/ns/shacl#sparql");
-    b.push_quad(shape, sparql, constraint, None);
-    let select = b.intern_iri("http://www.w3.org/ns/shacl#select");
-    let query = b.intern_literal(RdfLiteral::simple("SELECT $this WHERE { GRAPH $shapesGraph { $currentShape <http://www.w3.org/ns/shacl#targetSubjectsOf> ?p . $this ?p ?o } }"));
-    b.push_quad(constraint, select, query, None);
+    let marker = b.intern_iri("https://example.org/marker").unwrap();
+    let marked = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+    b.push_quad(focus, marker, marked, None).unwrap();
+    let target = b
+        .intern_iri("http://www.w3.org/ns/shacl#targetSubjectsOf")
+        .unwrap();
+    b.push_quad(shape, target, marker, None).unwrap();
+    let sparql = b.intern_iri("http://www.w3.org/ns/shacl#sparql").unwrap();
+    b.push_quad(shape, sparql, constraint, None).unwrap();
+    let select = b.intern_iri("http://www.w3.org/ns/shacl#select").unwrap();
+    let query = b.intern_literal(RdfLiteral::simple("SELECT $this WHERE { GRAPH $shapesGraph { $currentShape <http://www.w3.org/ns/shacl#targetSubjectsOf> ?p . $this ?p ?o } }")).unwrap();
+    b.push_quad(constraint, select, query, None).unwrap();
     let source = b.freeze().expect("source");
     let shapes = Arc::new(purrdf_shapes::shapes::from_dataset(&source).expect("shapes"));
     let prepared = PreparedShapes::new(shapes);
@@ -199,19 +205,25 @@ fn sparql_statement_projection_deduplicates_without_flattening_shapes_graph() {
 
 fn property_pair_views() -> (Arc<RdfDataset>, Vec<(&'static str, Arc<ShaclDatasetView>)>) {
     let mut builder = RdfDatasetBuilder::new();
-    let focus = builder.intern_iri("https://example.org/focus");
-    let left = builder.intern_iri("https://example.org/left");
-    let right = builder.intern_iri("https://example.org/right");
-    let graph = builder.intern_iri("https://example.org/original");
+    let focus = builder.intern_iri("https://example.org/focus").unwrap();
+    let left = builder.intern_iri("https://example.org/left").unwrap();
+    let right = builder.intern_iri("https://example.org/right").unwrap();
+    let graph = builder.intern_iri("https://example.org/original").unwrap();
     for (predicate, values) in [(left, &[1, 2, 4][..]), (right, &[2, 3][..])] {
         for value in values {
-            let object = builder.intern_literal(RdfLiteral::typed(
-                value.to_string(),
-                "http://www.w3.org/2001/XMLSchema#integer",
-            ));
-            builder.push_quad(focus, predicate, object, Some(graph));
+            let object = builder
+                .intern_literal(RdfLiteral::typed(
+                    value.to_string(),
+                    "http://www.w3.org/2001/XMLSchema#integer",
+                ))
+                .unwrap();
+            builder
+                .push_quad(focus, predicate, object, Some(graph))
+                .unwrap();
             // Duplicate statement metadata must still represent one projected value.
-            builder.push_annotation_in_graph(focus, predicate, object, Some(graph));
+            builder
+                .push_annotation_in_graph(focus, predicate, object, Some(graph))
+                .unwrap();
         }
     }
     let source = builder.freeze().expect("pair data");

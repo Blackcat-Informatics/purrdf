@@ -66,10 +66,10 @@ fn ex(suffix: &str) -> String {
 fn dataset_of(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for (subject, predicate, object) in triples {
-        let s = builder.intern_iri(subject);
-        let p = builder.intern_iri(predicate);
-        let o = builder.intern_iri(object);
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(subject).unwrap();
+        let p = builder.intern_iri(predicate).unwrap();
+        let o = builder.intern_iri(object).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder
         .freeze()
@@ -1681,15 +1681,19 @@ fn graph() -> String {
 /// its own and a bound of one is invisible against a single row.
 fn two_graphs() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let mentions = builder.intern_iri(&ex("mentions"));
-    let fox = builder.intern_iri(&ex("topic/fox"));
-    let plain = builder.intern_iri(&ex("doc/plain"));
-    let first = builder.intern_iri(&ex("doc/graphed-1"));
-    let second = builder.intern_iri(&ex("doc/graphed-2"));
-    let named = builder.intern_iri(&graph());
-    builder.push_quad(plain, mentions, fox, None);
-    builder.push_quad(first, mentions, fox, Some(named));
-    builder.push_quad(second, mentions, fox, Some(named));
+    let mentions = builder.intern_iri(&ex("mentions")).unwrap();
+    let fox = builder.intern_iri(&ex("topic/fox")).unwrap();
+    let plain = builder.intern_iri(&ex("doc/plain")).unwrap();
+    let first = builder.intern_iri(&ex("doc/graphed-1")).unwrap();
+    let second = builder.intern_iri(&ex("doc/graphed-2")).unwrap();
+    let named = builder.intern_iri(&graph()).unwrap();
+    builder.push_quad(plain, mentions, fox, None).unwrap();
+    builder
+        .push_quad(first, mentions, fox, Some(named))
+        .unwrap();
+    builder
+        .push_quad(second, mentions, fox, Some(named))
+        .unwrap();
     builder
         .freeze()
         .expect("the fixture dataset is structurally valid")

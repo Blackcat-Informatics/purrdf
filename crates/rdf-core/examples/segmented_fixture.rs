@@ -72,7 +72,7 @@ mod host {
             return Err("fixture row count must be between 1000 and 1000000".into());
         }
         let limits = SegmentedBuildLimits::new(2100, 200_000, rows + 1, 8192, 128)?;
-        let mut builder = SegmentedBuilder::new(limits);
+        let mut builder = SegmentedBuilder::new(limits)?;
         let mut values = vec![
             TermValue::iri("http://example.org/noise"),
             TermValue::iri("http://example.org/link"),

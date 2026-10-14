@@ -227,7 +227,7 @@ pub(crate) fn run_rules(
         }
     };
 
-    let inferred = inference.inferred_dataset().map_err(CliError::Runtime)?;
+    let inferred = inference.inferred_dataset()?;
     let ledger = sink::write_rdf(
         &*inferred,
         options.output,

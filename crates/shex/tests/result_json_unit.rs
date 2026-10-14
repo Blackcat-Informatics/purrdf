@@ -19,13 +19,15 @@ const S: &str = "http://a.example/S";
 /// s1 <p1> o1 (IRI object) ; s2 <p1> "x" (literal object)
 fn data() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s1 = b.intern_iri("http://a.example/s1");
-    let s2 = b.intern_iri("http://a.example/s2");
-    let p1 = b.intern_iri("http://a.example/p1");
-    let o1 = b.intern_iri("http://a.example/o1");
-    let x = b.intern_literal(purrdf_core::RdfLiteral::simple("x"));
-    b.push_quad(s1, p1, o1, None);
-    b.push_quad(s2, p1, x, None);
+    let s1 = b.intern_iri("http://a.example/s1").unwrap();
+    let s2 = b.intern_iri("http://a.example/s2").unwrap();
+    let p1 = b.intern_iri("http://a.example/p1").unwrap();
+    let o1 = b.intern_iri("http://a.example/o1").unwrap();
+    let x = b
+        .intern_literal(purrdf_core::RdfLiteral::simple("x"))
+        .unwrap();
+    b.push_quad(s1, p1, o1, None).unwrap();
+    b.push_quad(s2, p1, x, None).unwrap();
     b.freeze().expect("freeze")
 }
 

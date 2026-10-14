@@ -50,14 +50,17 @@ impl Write for Forwards {
 fn a_line_writer_forwards_per_window_not_per_line() {
     let rows = 4_000;
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/predicate");
+    let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
     for i in 0..rows {
-        let subject =
-            builder.intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")));
-        let object = builder.intern_literal(RdfLiteral::simple(format!(
-            "value {i}, padded out so the document spans many drain windows"
-        )));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder
+            .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")))
+            .unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::simple(format!(
+                "value {i}, padded out so the document spans many drain windows"
+            )))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     let dataset = builder.freeze().expect("dataset freezes");
 

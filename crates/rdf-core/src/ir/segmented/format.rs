@@ -453,11 +453,11 @@ pub(super) fn encode_quad(quad: QuadIds<GlobalTermId>, out: &mut Vec<u8>) {
 pub(super) fn decode_quad(bytes: &[u8]) -> Result<QuadIds<GlobalTermId>, SegmentedError> {
     let mut input = Reader::at(bytes, 0);
     let (s, p, o) = (input.id()?, input.id()?, input.id()?);
-    let graph = input.u64()?;
+    let graph: u64 = input.u64()?;
     let g = if graph == 0 {
         None
     } else {
-        Some(GlobalTermId::from_index(graph - 1))
+        Some(GlobalTermId::from_index(graph - 1).expect("stored term index is representable"))
     };
     Ok(QuadIds { s, p, o, g })
 }

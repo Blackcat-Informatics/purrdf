@@ -233,18 +233,19 @@ impl std::error::Error for ImportKeyError {}
 /// use purrdf_core::imports::ImportMap;
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let ontology = b.intern_iri("http://example.org/o");
-/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let owl_ontology = b.intern_iri("http://www.w3.org/2002/07/owl#Ontology");
-/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-/// let other = b.intern_iri("http://example.org/other");
-/// b.push_quad(ontology, rdf_type, owl_ontology, None);
-/// b.push_quad(ontology, imports, other, None);
+/// let ontology = b.intern_iri("http://example.org/o")?;
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let owl_ontology = b.intern_iri("http://www.w3.org/2002/07/owl#Ontology")?;
+/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+/// let other = b.intern_iri("http://example.org/other")?;
+/// b.push_quad(ontology, rdf_type, owl_ontology, None)?;
+/// b.push_quad(ontology, imports, other, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// // An import nobody supplied is named.
 /// let closure = ImportMap::default().closure(&graph);
 /// assert_eq!(closure.unresolved(), ["http://example.org/other".to_owned()]);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct ImportMap {
@@ -407,10 +408,10 @@ impl ImportMap {
     /// use purrdf_core::imports::ImportMap;
     ///
     /// let mut b = RdfDatasetBuilder::new();
-    /// let node = b.intern_iri("http://example.org/node");
-    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-    /// let lib = b.intern_iri("http://example.org/lib");
-    /// b.push_quad(node, imports, lib, None);
+    /// let node = b.intern_iri("http://example.org/node")?;
+    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+    /// let lib = b.intern_iri("http://example.org/lib")?;
+    /// b.push_quad(node, imports, lib, None)?;
     /// let graph = b.freeze().expect("freeze");
     ///
     /// let listed = ImportMap::default().unanchored_imports(&graph);
@@ -422,6 +423,7 @@ impl ImportMap {
     /// let mut map = ImportMap::default();
     /// map.declare_loaded("http://example.org/node");
     /// assert!(map.unanchored_imports(&graph).is_empty());
+    /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
     /// ```
     #[must_use]
     pub fn unanchored_imports(&self, graph: &RdfDataset) -> Vec<UnanchoredImport> {
@@ -528,10 +530,10 @@ impl ImportMap {
     /// use purrdf_core::imports::ImportMap;
     ///
     /// let mut b = RdfDatasetBuilder::new();
-    /// let ontology = b.intern_iri("http://example.org/o");
-    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-    /// let other = b.intern_iri("http://example.org/other");
-    /// b.push_quad(ontology, imports, other, None);
+    /// let ontology = b.intern_iri("http://example.org/o")?;
+    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+    /// let other = b.intern_iri("http://example.org/other")?;
+    /// b.push_quad(ontology, imports, other, None)?;
     /// let graph = b.freeze().expect("freeze");
     ///
     /// // Read under `ex:o`, the graph imports `ex:other`, and nothing supplies it.
@@ -543,6 +545,7 @@ impl ImportMap {
     /// );
     /// // Read under no IRI, `ex:o` is no anchor and the triple imports nothing.
     /// assert!(ImportMap::default().unresolved_imports(&graph).is_empty());
+    /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
     /// ```
     #[must_use]
     pub fn unresolved_imports(&self, graph: &RdfDataset) -> Vec<String> {
@@ -800,19 +803,20 @@ fn version_conflicts(
 /// use purrdf_core::imports::declared_import_targets;
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let shapes_graph = b.intern_iri("http://www.w3.org/ns/shacl#ShapesGraph");
-/// let version_iri = b.intern_iri("http://www.w3.org/2002/07/owl#versionIRI");
-/// let g = b.intern_iri("http://example.org/g");
-/// let v1 = b.intern_iri("http://example.org/g/1");
-/// b.push_quad(g, rdf_type, shapes_graph, None);
-/// b.push_quad(g, version_iri, v1, None);
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let shapes_graph = b.intern_iri("http://www.w3.org/ns/shacl#ShapesGraph")?;
+/// let version_iri = b.intern_iri("http://www.w3.org/2002/07/owl#versionIRI")?;
+/// let g = b.intern_iri("http://example.org/g")?;
+/// let v1 = b.intern_iri("http://example.org/g/1")?;
+/// b.push_quad(g, rdf_type, shapes_graph, None)?;
+/// b.push_quad(g, version_iri, v1, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// let targets = declared_import_targets(&graph);
 /// assert!(targets.contains("http://example.org/g"));
 /// assert!(targets.contains("http://example.org/g/1"));
 /// assert_eq!(targets.len(), 2);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn declared_import_targets(graph: &RdfDataset) -> BTreeSet<String> {
@@ -879,22 +883,21 @@ impl ImportClosure {
     ///
     /// # Errors
     ///
-    /// The merged dataset fails to freeze, which a merge of frozen datasets cannot cause.
+    /// Retains the original typed storage/capacity cause when copying or assigning
+    /// fresh blank scopes is refused; validation failures remain RDF diagnostics.
     pub fn merge(&self, graph: &RdfDataset) -> Result<Option<Arc<RdfDataset>>, RdfDiagnostic> {
         if self.documents.is_empty() {
             return Ok(None);
         }
         let mut b = RdfDatasetBuilder::new();
-        copy_scoped(&mut b, graph, &mut ScopeMap::Identity);
-        let mut next = max_scope(graph)
-            .checked_add(1)
-            .expect("blank-node scope counter exceeded u32::MAX");
+        copy_scoped(&mut b, graph, &mut ScopeMap::Identity)?;
+        let mut next = u64::from(max_scope(graph)) + 1;
         for (_, document) in &self.documents {
             let mut rescope = ScopeMap::Fresh {
                 assigned: BTreeMap::new(),
                 next: &mut next,
             };
-            copy_scoped(&mut b, document, &mut rescope);
+            copy_scoped(&mut b, document, &mut rescope)?;
         }
         b.freeze().map(Some)
     }
@@ -937,19 +940,20 @@ pub fn unresolved_imports(graph: &RdfDataset, loaded: &[&str]) -> Vec<String> {
 /// use purrdf_core::imports::imported_iris;
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let doc = b.intern_iri("http://example.org/doc");
-/// let other = b.intern_iri("http://example.org/other");
-/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-/// let lib = b.intern_iri("http://example.org/lib");
-/// let data = b.intern_iri("http://example.org/data");
-/// b.push_quad(doc, imports, lib, None);
-/// b.push_quad(other, imports, data, None);
+/// let doc = b.intern_iri("http://example.org/doc")?;
+/// let other = b.intern_iri("http://example.org/other")?;
+/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+/// let lib = b.intern_iri("http://example.org/lib")?;
+/// let data = b.intern_iri("http://example.org/data")?;
+/// b.push_quad(doc, imports, lib, None)?;
+/// b.push_quad(other, imports, data, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// // Read under `doc`, the document imports `lib`; `other`'s triple is data.
 /// assert_eq!(imported_iris(&graph, &["http://example.org/doc"]), ["http://example.org/lib"]);
 /// // Read under no IRI, and with no ontology header, it imports nothing.
 /// assert!(imported_iris(&graph, &[]).is_empty());
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn imported_iris<D: DatasetView<ReadError = Infallible>>(
@@ -998,17 +1002,18 @@ pub fn try_imported_iris<D: DatasetView>(
 /// use purrdf_core::imports::unanchored_import_triples;
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let data_graph = b.intern_iri("http://www.w3.org/ns/shacl#DataGraph");
-/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
-/// let data = b.intern_iri("http://example.org/data");
-/// let lib = b.intern_iri("http://example.org/lib");
-/// b.push_quad(data, rdf_type, data_graph, None);
-/// b.push_quad(data, imports, lib, None);
+/// let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let data_graph = b.intern_iri("http://www.w3.org/ns/shacl#DataGraph")?;
+/// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports")?;
+/// let data = b.intern_iri("http://example.org/data")?;
+/// let lib = b.intern_iri("http://example.org/lib")?;
+/// b.push_quad(data, rdf_type, data_graph, None)?;
+/// b.push_quad(data, imports, lib, None)?;
 /// let graph = b.freeze().expect("freeze");
 ///
 /// // A node whose only graph role is sh:DataGraph anchors no import.
 /// assert_eq!(unanchored_import_triples(graph.as_ref(), &[]), [(data, lib)]);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn unanchored_import_triples<D: DatasetView<ReadError = Infallible>>(
@@ -1149,59 +1154,72 @@ enum ScopeMap<'a> {
         /// The document's own scope → the scope it was given here.
         assigned: BTreeMap<u32, BlankScope>,
         /// The next unused scope.
-        next: &'a mut u32,
+        next: &'a mut u64,
     },
 }
 
 impl ScopeMap<'_> {
     /// The scope `scope` is written under.
-    fn map(&mut self, scope: BlankScope) -> BlankScope {
+    fn map(
+        &mut self,
+        scope: BlankScope,
+    ) -> Result<BlankScope, purrdf_lex::allocation::StorageError> {
         match self {
-            Self::Identity => scope,
+            Self::Identity => Ok(scope),
             Self::Fresh { assigned, next } => {
                 if let Some(&given) = assigned.get(&scope.ordinal()) {
-                    return given;
+                    return Ok(given);
                 }
-                let given = BlankScope(**next);
-                **next = next
-                    .checked_add(1)
-                    .expect("blank-node scope counter exceeded u32::MAX");
+                use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+                CapacityError::check(
+                    CapacitySpace::ImportBlankScopes,
+                    u128::from(**next),
+                    u128::from(u32::MAX),
+                )?;
+                let given =
+                    BlankScope(u32::try_from(**next).map_err(|_| StorageError::SizeOverflow)?);
+                **next += 1;
                 assigned.insert(scope.ordinal(), given);
-                given
+                Ok(given)
             }
         }
     }
 }
 
 /// Copy every table of `graph` into `b`, rewriting blank-node scopes through `rescope`.
-fn copy_scoped(b: &mut RdfDatasetBuilder, graph: &RdfDataset, rescope: &mut ScopeMap<'_>) {
+fn copy_scoped(
+    b: &mut RdfDatasetBuilder,
+    graph: &RdfDataset,
+    rescope: &mut ScopeMap<'_>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
     let term = |b: &mut RdfDatasetBuilder, id: TermId, rescope: &mut ScopeMap<'_>| {
         intern_scoped(b, &graph.term_value(id), rescope)
     };
     for quad in graph.quads() {
-        let s = term(b, quad.s, rescope);
-        let p = term(b, quad.p, rescope);
-        let o = term(b, quad.o, rescope);
-        let g = quad.g.map(|g| term(b, g, rescope));
-        b.push_quad(s, p, o, g);
+        let s = term(b, quad.s, rescope)?;
+        let p = term(b, quad.p, rescope)?;
+        let o = term(b, quad.o, rescope)?;
+        let g = quad.g.map(|g| term(b, g, rescope)).transpose()?;
+        b.push_quad(s, p, o, g)?;
     }
     for (reifier, triple, graph_name) in graph.reifiers_with_graph() {
-        let reifier = term(b, reifier, rescope);
-        let triple = term(b, triple, rescope);
-        let graph_name = graph_name.map(|g| term(b, g, rescope));
-        b.push_reifier_in_graph(reifier, triple, graph_name);
+        let reifier = term(b, reifier, rescope)?;
+        let triple = term(b, triple, rescope)?;
+        let graph_name = graph_name.map(|g| term(b, g, rescope)).transpose()?;
+        b.push_reifier_in_graph(reifier, triple, graph_name)?;
     }
     for (reifier, predicate, object, graph_name) in graph.annotations_with_graph() {
-        let reifier = term(b, reifier, rescope);
-        let predicate = term(b, predicate, rescope);
-        let object = term(b, object, rescope);
-        let graph_name = graph_name.map(|g| term(b, g, rescope));
-        b.push_annotation_in_graph(reifier, predicate, object, graph_name);
+        let reifier = term(b, reifier, rescope)?;
+        let predicate = term(b, predicate, rescope)?;
+        let object = term(b, object, rescope)?;
+        let graph_name = graph_name.map(|g| term(b, g, rescope)).transpose()?;
+        b.push_annotation_in_graph(reifier, predicate, object, graph_name)?;
     }
     for graph_name in graph.named_graphs() {
-        let g = term(b, graph_name, rescope);
-        b.declare_named_graph(g);
+        let g = term(b, graph_name, rescope)?;
+        b.declare_named_graph(g)?;
     }
+    Ok(())
 }
 
 /// Intern `value` into `b`, rewriting every blank-node scope through `rescope`.
@@ -1212,29 +1230,30 @@ fn intern_scoped(
     b: &mut RdfDatasetBuilder,
     value: &TermValue,
     rescope: &mut ScopeMap<'_>,
-) -> TermId {
-    let interned = try_fold_nested(
+) -> Result<TermId, purrdf_lex::allocation::StorageError> {
+    try_fold_nested(
         value,
         &mut (b, rescope),
         |(b, rescope), value| {
-            Ok::<_, Infallible>(match value {
+            Ok::<_, purrdf_lex::allocation::StorageError>(match value {
                 TermValue::Triple { s, p, o } => Nested::Triple(&**s, &**p, &**o),
-                leaf => Nested::Leaf(intern_leaf(b, leaf, rescope)),
+                leaf => Nested::Leaf(intern_leaf(b, leaf, rescope)?),
             })
         },
-        |(b, _), _, s, p, o| Ok(b.intern_triple(s, p, o)),
-    );
-    match interned {
-        Ok(id) => id,
-    }
+        |(b, _), _, s, p, o| b.intern_triple(s, p, o),
+    )
 }
 
 /// Intern a term that is not a triple term, rewriting a blank node's scope through
 /// `rescope`.
-fn intern_leaf(b: &mut RdfDatasetBuilder, value: &TermValue, rescope: &mut ScopeMap<'_>) -> TermId {
+fn intern_leaf(
+    b: &mut RdfDatasetBuilder,
+    value: &TermValue,
+    rescope: &mut ScopeMap<'_>,
+) -> Result<TermId, purrdf_lex::allocation::StorageError> {
     match value {
         TermValue::Iri(iri) => b.intern_iri(iri),
-        TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope)),
+        TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope)?),
         TermValue::Literal {
             lexical_form,
             datatype,
@@ -1262,6 +1281,100 @@ mod tests {
     };
     use crate::ir::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
+    #[test]
+    fn public_import_closure_preserves_exact_scope_capacity_and_original_inputs() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        let imported = document("imported", "http://example.org/value", &[]);
+        let mut map = ImportMap::default();
+        map.try_insert(LIB, Arc::clone(&imported)).unwrap();
+        for scope in [u32::MAX, u32::MAX - 1] {
+            let mut builder = RdfDatasetBuilder::new();
+            let subject = builder.intern_blank("original", BlankScope(scope)).unwrap();
+            let predicate = builder.intern_iri("http://example.org/p").unwrap();
+            let object = builder.intern_iri("http://example.org/original").unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
+            let original = builder.freeze().unwrap();
+            let closure = map.closure_with_links(&original, &[LIB.to_owned(), LIB.to_owned()]);
+            assert_eq!(closure.documents().len(), 1);
+            for _ in 0..3 {
+                if scope == u32::MAX {
+                    let error = closure.merge(&original).unwrap_err();
+                    assert_eq!(
+                        error.storage_error(),
+                        Some(StorageError::Capacity(CapacityError::new(
+                            CapacitySpace::ImportBlankScopes,
+                            u128::from(u32::MAX) + 1,
+                            u128::from(u32::MAX)
+                        )))
+                    );
+                } else {
+                    let merged = closure.merge(&original).unwrap().unwrap();
+                    assert!(
+                        merged
+                            .term_id_by_blank("imported", BlankScope(u32::MAX))
+                            .is_some()
+                    );
+                    assert!(
+                        merged
+                            .term_id_by_blank("original", BlankScope(scope))
+                            .is_some()
+                    );
+                }
+                assert_eq!(original.quad_count(), 1);
+                assert_eq!(
+                    original.term_id_by_blank("original", BlankScope(scope)),
+                    Some(subject)
+                );
+                assert!(
+                    imported
+                        .term_id_by_blank("imported", BlankScope::DEFAULT)
+                        .is_some()
+                );
+            }
+            let mut plain = ImportMap::default();
+            plain
+                .try_insert(
+                    LIB,
+                    triples(&[(
+                        "http://example.org/s",
+                        "http://example.org/p",
+                        "http://example.org/o",
+                    )]),
+                )
+                .unwrap();
+            let closure = plain.closure_with_links(&original, &[LIB.to_owned()]);
+            assert_eq!(closure.merge(&original).unwrap().unwrap().quad_count(), 2);
+        }
+    }
+
+    #[test]
+    fn fresh_import_scope_last_slot_keeps_duplicate_and_prior_assignment() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        let mut next = u64::from(u32::MAX);
+        let mut scopes = super::ScopeMap::Fresh {
+            assigned: std::collections::BTreeMap::new(),
+            next: &mut next,
+        };
+        assert_eq!(scopes.map(BlankScope(4)).unwrap(), BlankScope(u32::MAX));
+        for _ in 0..3 {
+            assert_eq!(scopes.map(BlankScope(4)).unwrap(), BlankScope(u32::MAX));
+            assert_eq!(
+                scopes.map(BlankScope(5)),
+                Err(StorageError::Capacity(CapacityError::new(
+                    CapacitySpace::ImportBlankScopes,
+                    u128::from(u32::MAX) + 1,
+                    u128::from(u32::MAX)
+                )))
+            );
+        }
+        let super::ScopeMap::Fresh { assigned, next } = scopes else {
+            unreachable!()
+        };
+        assert_eq!(*next, u64::from(u32::MAX) + 1);
+        assert_eq!(assigned.len(), 1);
+        assert_eq!(assigned[&4], BlankScope(u32::MAX));
+    }
+
     /// The empty answer, spelled once for `assert_eq!`.
     const NONE: [String; 0] = [];
     /// No unanchored `owl:imports`, spelled once for `assert_eq!`.
@@ -1281,10 +1394,10 @@ mod tests {
     fn triples(rows: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in rows {
-            let s = b.intern_iri(s);
-            let p = b.intern_iri(p);
-            let o = b.intern_iri(o);
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri(s).unwrap();
+            let p = b.intern_iri(p).unwrap();
+            let o = b.intern_iri(o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -1293,18 +1406,18 @@ mod tests {
     /// `ex:self a owl:Ontology` importing each target.
     fn document(label: &str, object: &str, imports: &[&str]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_blank(label, BlankScope::DEFAULT);
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri(object);
-        b.push_quad(s, p, o, None);
-        let header = b.intern_iri("http://example.org/self");
-        let rdf_type = b.intern_iri(RDF_TYPE);
-        let ontology = b.intern_iri(OWL_ONTOLOGY);
-        b.push_quad(header, rdf_type, ontology, None);
+        let s = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri(object).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        let header = b.intern_iri("http://example.org/self").unwrap();
+        let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+        let ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+        b.push_quad(header, rdf_type, ontology, None).unwrap();
         for target in imports {
-            let predicate = b.intern_iri(OWL_IMPORTS);
-            let target = b.intern_iri(target);
-            b.push_quad(header, predicate, target, None);
+            let predicate = b.intern_iri(OWL_IMPORTS).unwrap();
+            let target = b.intern_iri(target).unwrap();
+            b.push_quad(header, predicate, target, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -1455,17 +1568,19 @@ mod tests {
     fn a_blank_node_header_imports_and_an_untyped_blank_node_does_not() {
         let with_header = |typed: bool| {
             let mut b = RdfDatasetBuilder::new();
-            let header = b.intern_blank("h", BlankScope::DEFAULT);
-            let imports = b.intern_iri(OWL_IMPORTS);
-            let lib = b.intern_iri(LIB);
-            b.push_quad(header, imports, lib, None);
-            let rdf_type = b.intern_iri(RDF_TYPE);
-            let class = b.intern_iri(if typed {
-                OWL_ONTOLOGY
-            } else {
-                "http://example.org/Thing"
-            });
-            b.push_quad(header, rdf_type, class, None);
+            let header = b.intern_blank("h", BlankScope::DEFAULT).unwrap();
+            let imports = b.intern_iri(OWL_IMPORTS).unwrap();
+            let lib = b.intern_iri(LIB).unwrap();
+            b.push_quad(header, imports, lib, None).unwrap();
+            let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+            let class = b
+                .intern_iri(if typed {
+                    OWL_ONTOLOGY
+                } else {
+                    "http://example.org/Thing"
+                })
+                .unwrap();
+            b.push_quad(header, rdf_type, class, None).unwrap();
             b.freeze().expect("freeze")
         };
         assert_eq!(
@@ -1969,24 +2084,28 @@ mod term_walk_tests {
         rescope: &mut ScopeMap<'_>,
     ) -> TermId {
         match value {
-            TermValue::Iri(iri) => b.intern_iri(iri),
-            TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope)),
+            TermValue::Iri(iri) => b.intern_iri(iri).unwrap(),
+            TermValue::Blank { label, scope } => {
+                b.intern_blank(label, rescope.map(*scope).unwrap()).unwrap()
+            }
             TermValue::Literal {
                 lexical_form,
                 datatype,
                 language,
                 direction,
-            } => b.intern_literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
+            } => b
+                .intern_literal(RdfLiteral {
+                    lexical_form: lexical_form.clone(),
+                    datatype: Some(datatype.clone()),
+                    language: language.clone(),
+                    direction: *direction,
+                })
+                .unwrap(),
             TermValue::Triple { s, p, o } => {
                 let s = reference_intern(b, s, rescope);
                 let p = reference_intern(b, p, rescope);
                 let o = reference_intern(b, o, rescope);
-                b.intern_triple(s, p, o)
+                b.intern_triple(s, p, o).unwrap()
             }
         }
     }
@@ -2016,7 +2135,7 @@ mod term_walk_tests {
             assert_eq!(scope_of(&value), reference_scope(&value), "seed {seed}");
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
-                intern_scoped(&mut found, &value, &mut ScopeMap::Identity),
+                intern_scoped(&mut found, &value, &mut ScopeMap::Identity).unwrap(),
                 reference_intern(&mut expected, &value, &mut ScopeMap::Identity),
                 "seed {seed}"
             );
@@ -2031,7 +2150,7 @@ mod term_walk_tests {
             };
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
-                intern_scoped(&mut found, &value, &mut map),
+                intern_scoped(&mut found, &value, &mut map).unwrap(),
                 reference_intern(&mut expected, &value, &mut expected_map),
                 "seed {seed}"
             );
@@ -2064,7 +2183,9 @@ mod term_walk_tests {
             };
             let mut builder = RdfDatasetBuilder::new();
             assert_eq!(
-                intern_scoped(&mut builder, &value, &mut map).index(),
+                intern_scoped(&mut builder, &value, &mut map)
+                    .unwrap()
+                    .index(),
                 LEVELS + 2
             );
             assert_eq!(assigned(&map).map(|assigned| assigned.len()), Some(1));

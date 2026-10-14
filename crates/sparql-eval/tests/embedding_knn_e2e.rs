@@ -251,10 +251,10 @@ fn a_neighbour_joins_back_to_the_graph_by_basic_graph_pattern() {
     // The retrieved term is a real RDF term, not an opaque handle: it unifies with the
     // dataset. This is the whole reason the surface returns terms rather than row numbers.
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri(&format!("{EX}b"));
-    let predicate = builder.intern_iri(&format!("{EX}label"));
-    let object = builder.intern_iri(&format!("{EX}beta"));
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri(&format!("{EX}b")).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}label")).unwrap();
+    let object = builder.intern_iri(&format!("{EX}beta")).unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
     let graph = builder.freeze().expect("freeze");
 
     let query = "PREFIX knn: <https://example.org/space/>\n\

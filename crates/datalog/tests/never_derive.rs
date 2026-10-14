@@ -139,20 +139,24 @@ fn unrelated_deception_structure_executes_and_asserted_intent_stays_readable() {
             "<https://example.org/statement>",
         ),
     ] {
-        input.insert(
-            "<https://example.org/alice>",
-            &format!("<{predicate}>"),
-            object,
-            RelationStore::DEFAULT_GRAPH,
-        );
+        input
+            .insert(
+                "<https://example.org/alice>",
+                &format!("<{predicate}>"),
+                object,
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
     }
     for predicate in [FLAGGED, INTENT] {
-        input.insert(
-            "<https://example.org/alice>",
-            &format!("<{predicate}>"),
-            "<https://example.org/statement>",
-            RelationStore::DEFAULT_GRAPH,
-        );
+        input
+            .insert(
+                "<https://example.org/alice>",
+                &format!("<{predicate}>"),
+                "<https://example.org/statement>",
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
     }
     let outcome = evaluate(&program, input).unwrap();
     for predicate in [
@@ -357,12 +361,14 @@ fn scheduled_and_chase_safe_programs_really_produce_structural_witnesses() {
         .unwrap();
     assert_eq!(program.declarations(), Some(&policy));
     let mut input = RelationStore::new();
-    input.insert(
-        "<https://example.org/alice>",
-        &format!("<{FLAGGED}>"),
-        "<https://example.org/statement>",
-        RelationStore::DEFAULT_GRAPH,
-    );
+    input
+        .insert(
+            "<https://example.org/alice>",
+            &format!("<{FLAGGED}>"),
+            "<https://example.org/statement>",
+            RelationStore::DEFAULT_GRAPH,
+        )
+        .unwrap();
     let scheduled = evaluate_scheduled(
         &program,
         input.clone(),

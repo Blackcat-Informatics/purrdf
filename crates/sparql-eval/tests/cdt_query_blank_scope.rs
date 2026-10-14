@@ -65,10 +65,10 @@ fn empty() -> Arc<RdfDataset> {
 /// `object` is either a bare blank label or a `(lexical, datatype)` composite.
 fn document(object: Object<'_>) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
     let o = match object {
-        Object::Blank(label) => b.intern_blank(label, BlankScope::DEFAULT),
+        Object::Blank(label) => b.intern_blank(label, BlankScope::DEFAULT).unwrap(),
         Object::Composite { lexical, datatype } => b
             .intern_literal_bound(
                 RdfLiteral {
@@ -81,7 +81,7 @@ fn document(object: Object<'_>) -> Arc<RdfDataset> {
             )
             .expect("the fixture composite literal is well formed"),
     };
-    b.push_quad(s, p, o, None);
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("freeze fixture")
 }
 
@@ -269,10 +269,10 @@ fn distinct_labels_in_one_query_stay_distinct() {
 #[test]
 fn the_datas_own_bare_and_embedded_labels_still_agree() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p1 = b.intern_iri("http://example.org/p1");
-    let p2 = b.intern_iri("http://example.org/p2");
-    let bare = b.intern_blank("b", BlankScope::DEFAULT);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p1 = b.intern_iri("http://example.org/p1").unwrap();
+    let p2 = b.intern_iri("http://example.org/p2").unwrap();
+    let bare = b.intern_blank("b", BlankScope::DEFAULT).unwrap();
     let composite = b
         .intern_literal_bound(
             RdfLiteral {
@@ -284,8 +284,8 @@ fn the_datas_own_bare_and_embedded_labels_still_agree() {
             BlankBinding::Decoded(LabelAlphabet::BlankNodeLabel),
         )
         .expect("well formed");
-    b.push_quad(s, p1, composite, None);
-    b.push_quad(s, p2, bare, None);
+    b.push_quad(s, p1, composite, None).unwrap();
+    b.push_quad(s, p2, bare, None).unwrap();
     let ds = b.freeze().expect("freeze");
 
     assert!(ask(

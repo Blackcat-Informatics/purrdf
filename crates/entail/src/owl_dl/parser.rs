@@ -1976,24 +1976,27 @@ mod tests {
         datatype: &str,
     ) -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE_IRI);
-        let class = b.intern_iri(OWL_CLASS_IRI);
-        let objp = b.intern_iri(OWL_OBJECTPROPERTY_IRI);
-        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI);
-        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI);
-        let on_property = b.intern_iri(OWL_ONPROPERTY_IRI);
-        let facet = b.intern_iri(facet);
-        let big_a = b.intern_iri(&format!("{NS}A"));
-        let p = b.intern_iri(&format!("{NS}p"));
-        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
-        let bound = b.intern_literal(RdfLiteral::typed(lexical, datatype));
+        let ty = b.intern_iri(RDF_TYPE_IRI).unwrap();
+        let class = b.intern_iri(OWL_CLASS_IRI).unwrap();
+        let objp = b.intern_iri(OWL_OBJECTPROPERTY_IRI).unwrap();
+        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI).unwrap();
+        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI).unwrap();
+        let on_property = b.intern_iri(OWL_ONPROPERTY_IRI).unwrap();
+        let facet = b.intern_iri(facet).unwrap();
+        let big_a = b.intern_iri(&format!("{NS}A")).unwrap();
+        let p = b.intern_iri(&format!("{NS}p")).unwrap();
+        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
+        let bound = b
+            .intern_literal(RdfLiteral::typed(lexical, datatype))
+            .unwrap();
 
-        b.push_quad(big_a, ty, class, None);
-        b.push_quad(p, ty, objp, None);
-        b.push_quad(restriction, ty, restriction_class, None);
-        b.push_quad(restriction, on_property, p, None);
-        b.push_quad(restriction, facet, bound, None);
-        b.push_quad(big_a, subclass_of, restriction, None);
+        b.push_quad(big_a, ty, class, None).unwrap();
+        b.push_quad(p, ty, objp, None).unwrap();
+        b.push_quad(restriction, ty, restriction_class, None)
+            .unwrap();
+        b.push_quad(restriction, on_property, p, None).unwrap();
+        b.push_quad(restriction, facet, bound, None).unwrap();
+        b.push_quad(big_a, subclass_of, restriction, None).unwrap();
 
         b.freeze().expect("freeze")
     }

@@ -850,14 +850,14 @@ mod effect_free_gate_tests {
     /// and evaluated, not skipped for want of a candidate row.
     fn ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let outer_p = b.intern_iri(&format!("{EX}outer"));
-        let s1 = b.intern_iri(&format!("{EX}s1"));
-        let dummy = b.intern_iri(&format!("{EX}dummy"));
-        let q = b.intern_iri(&format!("{EX}q"));
-        let o1 = b.intern_iri(&format!("{EX}o1"));
-        let w1 = b.intern_iri(&format!("{EX}w1"));
-        b.push_quad(s1, outer_p, dummy, None);
-        b.push_quad(o1, q, w1, None);
+        let outer_p = b.intern_iri(&format!("{EX}outer")).unwrap();
+        let s1 = b.intern_iri(&format!("{EX}s1")).unwrap();
+        let dummy = b.intern_iri(&format!("{EX}dummy")).unwrap();
+        let q = b.intern_iri(&format!("{EX}q")).unwrap();
+        let o1 = b.intern_iri(&format!("{EX}o1")).unwrap();
+        let w1 = b.intern_iri(&format!("{EX}w1")).unwrap();
+        b.push_quad(s1, outer_p, dummy, None).unwrap();
+        b.push_quad(o1, q, w1, None).unwrap();
         b.freeze().expect("freeze")
     }
 

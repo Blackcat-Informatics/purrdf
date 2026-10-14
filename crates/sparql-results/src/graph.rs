@@ -91,13 +91,15 @@ mod tests {
     #[test]
     fn default_graph_quad_emits_the_bare_ntriples_line() {
         let mut builder = RdfDatasetBuilder::new();
-        builder.push_owned_quad(&RdfQuad {
-            subject: RdfTerm::iri("http://example.org/s"),
-            predicate: "http://example.org/p".to_string(),
-            object: RdfTerm::iri("http://example.org/o"),
-            graph_name: None,
-            location: None,
-        });
+        builder
+            .push_owned_quad(&RdfQuad {
+                subject: RdfTerm::iri("http://example.org/s"),
+                predicate: "http://example.org/p".to_string(),
+                object: RdfTerm::iri("http://example.org/o"),
+                graph_name: None,
+                location: None,
+            })
+            .unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
 
         let nt = dataset_to_nquads(&dataset);
@@ -121,13 +123,15 @@ mod tests {
         // a plain triple-term object that way would silently grow the re-parsed
         // graph by one quad instead of preserving a single non-asserting term.
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_iri("http://example.org/o");
-        let statement = builder.intern_triple(s, p, o);
-        let outer_subject = builder.intern_iri("http://example.org/outer");
-        let outer_predicate = builder.intern_iri("http://example.org/concludes");
-        builder.push_quad(outer_subject, outer_predicate, statement, None);
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder.intern_iri("http://example.org/o").unwrap();
+        let statement = builder.intern_triple(s, p, o).unwrap();
+        let outer_subject = builder.intern_iri("http://example.org/outer").unwrap();
+        let outer_predicate = builder.intern_iri("http://example.org/concludes").unwrap();
+        builder
+            .push_quad(outer_subject, outer_predicate, statement, None)
+            .unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
 
         let nt = dataset_to_nquads(&dataset);
@@ -145,19 +149,23 @@ mod tests {
     #[test]
     fn borrowed_writer_is_byte_identical_to_owned_emitter() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_blank("subject", BlankScope(7));
-        let predicate = builder.intern_iri("http://example.org/predicate");
-        let object = builder.intern_literal(RdfLiteral {
-            lexical_form: "quoted \"text\"".to_owned(),
-            datatype: None,
-            language: Some("en".to_owned()),
-            direction: Some(purrdf_core::RdfTextDirection::Ltr),
-        });
-        let statement = builder.intern_triple(subject, predicate, object);
-        let reifier = builder.intern_iri("http://example.org/reifier");
-        builder.push_quad(subject, predicate, statement, None);
-        builder.push_reifier(reifier, statement);
-        builder.push_annotation(reifier, predicate, object);
+        let subject = builder.intern_blank("subject", BlankScope(7)).unwrap();
+        let predicate = builder.intern_iri("http://example.org/predicate").unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "quoted \"text\"".to_owned(),
+                datatype: None,
+                language: Some("en".to_owned()),
+                direction: Some(purrdf_core::RdfTextDirection::Ltr),
+            })
+            .unwrap();
+        let statement = builder.intern_triple(subject, predicate, object).unwrap();
+        let reifier = builder.intern_iri("http://example.org/reifier").unwrap();
+        builder
+            .push_quad(subject, predicate, statement, None)
+            .unwrap();
+        builder.push_reifier(reifier, statement).unwrap();
+        builder.push_annotation(reifier, predicate, object).unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
 
         let mut expected = String::new();
@@ -185,16 +193,20 @@ mod tests {
     #[test]
     fn every_layer_carries_its_named_graph() {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_iri("http://example.org/o");
-        let g1 = builder.intern_iri("http://example.org/g1");
-        let g2 = builder.intern_iri("http://example.org/g2");
-        let reifier = builder.intern_iri("http://example.org/r");
-        let statement = builder.intern_triple(s, p, o);
-        builder.push_quad(s, p, o, Some(g1));
-        builder.push_reifier_in_graph(reifier, statement, Some(g2));
-        builder.push_annotation_in_graph(reifier, p, o, Some(g2));
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder.intern_iri("http://example.org/o").unwrap();
+        let g1 = builder.intern_iri("http://example.org/g1").unwrap();
+        let g2 = builder.intern_iri("http://example.org/g2").unwrap();
+        let reifier = builder.intern_iri("http://example.org/r").unwrap();
+        let statement = builder.intern_triple(s, p, o).unwrap();
+        builder.push_quad(s, p, o, Some(g1)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, statement, Some(g2))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(reifier, p, o, Some(g2))
+            .unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
 
         assert_eq!(

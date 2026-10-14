@@ -274,13 +274,15 @@ fn starred_graph() -> SparqlResult {
         language: None,
         direction: None,
     });
-    builder.push_owned_quad(&RdfQuad {
-        subject: RdfTerm::iri("http://example.org/book/book6"),
-        predicate: "http://purl.org/dc/elements/1.1/title".to_string(),
-        object: title_lit.clone(),
-        graph_name: None,
-        location: None,
-    });
+    builder
+        .push_owned_quad(&RdfQuad {
+            subject: RdfTerm::iri("http://example.org/book/book6"),
+            predicate: "http://purl.org/dc/elements/1.1/title".to_string(),
+            object: title_lit.clone(),
+            graph_name: None,
+            location: None,
+        })
+        .unwrap();
 
     // Reifier: <stmt1> rdf:reifies <<( book6 dc:title "…" )>>.
     let statement = RdfTriple {
@@ -291,9 +293,11 @@ fn starred_graph() -> SparqlResult {
     };
     let reifier_term = RdfTerm::iri("http://example.org/stmt/stmt1");
     let reifier = RdfReifier::new(reifier_term.clone(), statement.clone());
-    let reifier_id = builder.intern_owned_term(&reifier.reifier);
-    let triple_id = builder.intern_owned_term(&RdfTerm::triple(statement));
-    builder.push_reifier(reifier_id, triple_id);
+    let reifier_id = builder.intern_owned_term(&reifier.reifier).unwrap();
+    let triple_id = builder
+        .intern_owned_term(&RdfTerm::triple(statement))
+        .unwrap();
+    builder.push_reifier(reifier_id, triple_id).unwrap();
 
     // Annotation on the reifier: <stmt1> ex:source <wikipedia>.
     let annotation = RdfAnnotation::new(
@@ -301,10 +305,12 @@ fn starred_graph() -> SparqlResult {
         "http://example.org/vocab#source",
         RdfTerm::iri("https://en.wikipedia.org/wiki/Half-Blood_Prince"),
     );
-    let ann_reifier_id = builder.intern_owned_term(&annotation.reifier);
-    let ann_pred_id = builder.intern_iri(&annotation.predicate);
-    let ann_obj_id = builder.intern_owned_term(&annotation.object);
-    builder.push_annotation(ann_reifier_id, ann_pred_id, ann_obj_id);
+    let ann_reifier_id = builder.intern_owned_term(&annotation.reifier).unwrap();
+    let ann_pred_id = builder.intern_iri(&annotation.predicate).unwrap();
+    let ann_obj_id = builder.intern_owned_term(&annotation.object).unwrap();
+    builder
+        .push_annotation(ann_reifier_id, ann_pred_id, ann_obj_id)
+        .unwrap();
 
     let dataset = builder.freeze().expect("starred dataset freezes");
     SparqlResult::Graph(dataset.into())

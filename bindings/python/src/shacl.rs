@@ -1188,9 +1188,10 @@ impl PyValidationReport {
     }
 
     /// Serialize the report to canonical N-Triples (runs detached — GIL released).
-    fn to_ntriples(&self, py: Python<'_>) -> String {
+    fn to_ntriples(&self, py: Python<'_>) -> PyResult<String> {
         let report = &self.inner;
         py.detach(|| report.to_ntriples())
+            .map_err(|error| shapes_error(py, error))
     }
 
     /// Serialize the report to a SARIF 2.1.0 JSON string (runs detached — GIL
@@ -1859,6 +1860,7 @@ create_exception!(
 /// `.kind` and `.iris` always present, and `ValueError` for anything else.
 fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
     match error {
+        purrdf_validate::ShapesError::Storage(error) => crate::py_store::storage_value_error(error),
         purrdf_validate::ShapesError::Imports(error) => import_error(py, &error),
         purrdf_validate::ShapesError::Invalid(message) => {
             pyo3::exceptions::PyValueError::new_err(message)

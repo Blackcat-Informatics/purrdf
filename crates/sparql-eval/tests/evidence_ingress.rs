@@ -55,13 +55,13 @@ fn verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities()
         }
     }
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/item");
-    let value = builder.intern_iri("https://example.org/value");
-    let positive = builder.intern_iri("https://example.org/positive");
-    let opposed = builder.intern_iri("https://example.org/opposed");
-    let poison = builder.intern_iri("https://example.org/poison");
+    let subject = builder.intern_iri("https://example.org/item").unwrap();
+    let value = builder.intern_iri("https://example.org/value").unwrap();
+    let positive = builder.intern_iri("https://example.org/positive").unwrap();
+    let opposed = builder.intern_iri("https://example.org/opposed").unwrap();
+    let poison = builder.intern_iri("https://example.org/poison").unwrap();
     for predicate in [positive, opposed, poison] {
-        builder.push_quad(subject, predicate, value, None);
+        builder.push_quad(subject, predicate, value, None).unwrap();
     }
     let dataset = builder.freeze().unwrap();
     let mut source = CountedClaims {
@@ -250,10 +250,10 @@ fn actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified
     )
     .expect("original independent facets");
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri("https://example.org/item");
-    let p = builder.intern_iri("https://example.org/p");
-    let o = builder.intern_iri("https://example.org/value");
-    builder.push_quad(s, p, o, None);
+    let s = builder.intern_iri("https://example.org/item").unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
+    let o = builder.intern_iri("https://example.org/value").unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
     let dataset = builder.freeze().expect("original claim");
     let engine = NativeSparqlEngine::new();
     let query = "SELECT ?s WHERE { ?s <https://example.org/p> ?o }";
@@ -703,10 +703,12 @@ fn sparql_function_suspensions_retain_original_select_ask_and_nested_body_eviden
     use std::sync::Arc;
 
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/subject");
-    let predicate = builder.intern_iri("https://example.org/p");
-    let negative = builder.intern_iri("https://example.org/negative");
-    builder.push_quad(subject, predicate, negative, None);
+    let subject = builder.intern_iri("https://example.org/subject").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let negative = builder.intern_iri("https://example.org/negative").unwrap();
+    builder
+        .push_quad(subject, predicate, negative, None)
+        .unwrap();
     let dataset = builder.freeze().unwrap();
     let source = Claims {
         negative,
@@ -821,12 +823,16 @@ fn sparql_function_suspensions_retain_original_select_ask_and_nested_body_eviden
 
 fn distinct_coalesces_both_polarities_without_changing_binding_identity() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/subject");
-    let predicate = builder.intern_iri("https://example.org/p");
-    let positive = builder.intern_iri("https://example.org/positive");
-    let negative = builder.intern_iri("https://example.org/negative");
-    builder.push_quad(subject, predicate, positive, None);
-    builder.push_quad(subject, predicate, negative, None);
+    let subject = builder.intern_iri("https://example.org/subject").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let positive = builder.intern_iri("https://example.org/positive").unwrap();
+    let negative = builder.intern_iri("https://example.org/negative").unwrap();
+    builder
+        .push_quad(subject, predicate, positive, None)
+        .unwrap();
+    builder
+        .push_quad(subject, predicate, negative, None)
+        .unwrap();
     let dataset = builder.freeze().expect("frozen native view");
     let source = Claims {
         negative,
@@ -881,8 +887,8 @@ fn distinct_coalesces_both_polarities_without_changing_binding_identity() {
 
 fn source_refusal_never_publishes_partial_or_undetermined_rows() {
     let mut builder = RdfDatasetBuilder::new();
-    let term = builder.intern_iri("https://example.org/item");
-    builder.push_quad(term, term, term, None);
+    let term = builder.intern_iri("https://example.org/item").unwrap();
+    builder.push_quad(term, term, term, None).unwrap();
     let dataset = builder.freeze().expect("frozen native view");
     let source = Claims {
         negative: term,
@@ -911,10 +917,10 @@ fn source_refusal_never_publishes_partial_or_undetermined_rows() {
 
 fn unmatched_optional_preserves_information_and_declared_missing_scope() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/subject");
-    let predicate = builder.intern_iri("https://example.org/p");
-    let object = builder.intern_iri("https://example.org/object");
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri("https://example.org/subject").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let object = builder.intern_iri("https://example.org/object").unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
     let dataset = builder.freeze().expect("frozen native view");
     let engine = NativeSparqlEngine::new();
     for completeness in [
@@ -948,7 +954,7 @@ fn unmatched_optional_preserves_information_and_declared_missing_scope() {
 fn group_bounds_follow_whole_scope_and_declared_sum_domain() {
     use purrdf_core::evidence::{AggregateBound, aggregate_column_identity};
     let mut builder = RdfDatasetBuilder::new();
-    let unused = builder.intern_iri("https://example.org/unused");
+    let unused = builder.intern_iri("https://example.org/unused").unwrap();
     let dataset = builder.freeze().expect("frozen native view");
     let engine = NativeSparqlEngine::new();
     for (completeness, nonnegative, values) in [
@@ -1024,7 +1030,7 @@ fn group_bounds_follow_whole_scope_and_declared_sum_domain() {
 fn nested_projection_retains_only_visible_aggregate_aliases() {
     use purrdf_core::evidence::{AggregateBound, aggregate_column_identity};
     let mut builder = RdfDatasetBuilder::new();
-    let unused = builder.intern_iri("https://example.org/unused");
+    let unused = builder.intern_iri("https://example.org/unused").unwrap();
     let dataset = builder.freeze().expect("frozen native view");
     let source = Claims {
         negative: unused,
@@ -1116,14 +1122,14 @@ impl EvidenceSource<TermId> for Gaps {
 fn gap_dataset() -> (std::sync::Arc<purrdf_core::RdfDataset>, Gaps) {
     use purrdf_core::{TermBox, TermValue};
     let mut builder = RdfDatasetBuilder::new();
-    let missing = builder.intern_iri("https://example.org/missing");
-    let known = builder.intern_iri("https://example.org/known");
-    let kind = builder.intern_iri("https://example.org/kind");
-    let value = builder.intern_iri("https://example.org/value");
-    let two = builder.intern_iri("https://example.org/two");
-    builder.push_quad(missing, kind, kind, None);
-    builder.push_quad(known, kind, kind, None);
-    builder.push_quad(known, value, two, None);
+    let missing = builder.intern_iri("https://example.org/missing").unwrap();
+    let known = builder.intern_iri("https://example.org/known").unwrap();
+    let kind = builder.intern_iri("https://example.org/kind").unwrap();
+    let value = builder.intern_iri("https://example.org/value").unwrap();
+    let two = builder.intern_iri("https://example.org/two").unwrap();
+    builder.push_quad(missing, kind, kind, None).unwrap();
+    builder.push_quad(known, kind, kind, None).unwrap();
+    builder.push_quad(known, value, two, None).unwrap();
     let dataset = builder.freeze().expect("original native input");
     let cause = TermValue::iri("https://example.org/missing-value");
     let concern = TermValue::Triple {
@@ -1456,7 +1462,7 @@ fn all_query_forms_publish_original_unknown_status_at_requested_count_tiers() {
 
 fn minus_absence_requires_closure_but_disjoint_domains_are_decidable() {
     let mut builder = RdfDatasetBuilder::new();
-    let unused = builder.intern_iri("https://example.org/unused");
+    let unused = builder.intern_iri("https://example.org/unused").unwrap();
     let dataset = builder.freeze().expect("original empty input");
     let engine = NativeSparqlEngine::new();
     for (completeness, closure_declared) in [
@@ -1523,10 +1529,12 @@ fn minus_absence_requires_closure_but_disjoint_domains_are_decidable() {
 
 fn minus_negates_all_original_witnesses_under_declared_closure() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/item");
-    let predicate = builder.intern_iri("https://example.org/p");
-    let negative = builder.intern_iri("https://example.org/negative");
-    builder.push_quad(subject, predicate, negative, None);
+    let subject = builder.intern_iri("https://example.org/item").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let negative = builder.intern_iri("https://example.org/negative").unwrap();
+    builder
+        .push_quad(subject, predicate, negative, None)
+        .unwrap();
     let dataset = builder.freeze().expect("original matched claim");
     let engine = NativeSparqlEngine::new();
     let query = "SELECT ?s WHERE { VALUES ?s { <https://example.org/item> } MINUS { ?s <https://example.org/p> ?o } }";
@@ -1602,12 +1610,16 @@ fn minus_negates_all_original_witnesses_under_declared_closure() {
         }
     }
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/item");
-    let predicate = builder.intern_iri("https://example.org/p");
-    let positive = builder.intern_iri("https://example.org/positive");
-    let negative = builder.intern_iri("https://example.org/negative");
-    builder.push_quad(subject, predicate, positive, None);
-    builder.push_quad(subject, predicate, negative, None);
+    let subject = builder.intern_iri("https://example.org/item").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let positive = builder.intern_iri("https://example.org/positive").unwrap();
+    let negative = builder.intern_iri("https://example.org/negative").unwrap();
+    builder
+        .push_quad(subject, predicate, positive, None)
+        .unwrap();
+    builder
+        .push_quad(subject, predicate, negative, None)
+        .unwrap();
     let dataset = builder.freeze().expect("opposing original witness bag");
     let mut source = Claims {
         negative,
@@ -1660,10 +1672,12 @@ fn minus_negates_all_original_witnesses_under_declared_closure() {
 
 fn exists_transports_original_witnesses_through_vm_memos_and_deferred_sites() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/item");
-    let predicate = builder.intern_iri("https://example.org/p");
-    let negative = builder.intern_iri("https://example.org/negative");
-    builder.push_quad(subject, predicate, negative, None);
+    let subject = builder.intern_iri("https://example.org/item").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let negative = builder.intern_iri("https://example.org/negative").unwrap();
+    builder
+        .push_quad(subject, predicate, negative, None)
+        .unwrap();
     let dataset = builder.freeze().expect("original existential claim");
     let engine = NativeSparqlEngine::new();
     for information in [
@@ -1762,12 +1776,14 @@ fn exists_transports_original_witnesses_through_vm_memos_and_deferred_sites() {
         }
     }
     let mut mixed = RdfDatasetBuilder::new();
-    let subject = mixed.intern_iri("https://example.org/item");
-    let predicate = mixed.intern_iri("https://example.org/p");
-    let positive = mixed.intern_iri("https://example.org/positive");
-    let mixed_negative = mixed.intern_iri("https://example.org/negative");
-    mixed.push_quad(subject, predicate, positive, None);
-    mixed.push_quad(subject, predicate, mixed_negative, None);
+    let subject = mixed.intern_iri("https://example.org/item").unwrap();
+    let predicate = mixed.intern_iri("https://example.org/p").unwrap();
+    let positive = mixed.intern_iri("https://example.org/positive").unwrap();
+    let mixed_negative = mixed.intern_iri("https://example.org/negative").unwrap();
+    mixed.push_quad(subject, predicate, positive, None).unwrap();
+    mixed
+        .push_quad(subject, predicate, mixed_negative, None)
+        .unwrap();
     let mixed = mixed
         .freeze()
         .expect("original conflicting existential witnesses");
@@ -2091,13 +2107,13 @@ fn acceptance_merges_original_order_without_replaying_cells_or_losing_scores() {
 
 fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
     let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri("https://example.org/a");
-    let b = builder.intern_iri("https://example.org/b");
-    let c = builder.intern_iri("https://example.org/c");
-    let z = builder.intern_iri("https://example.org/z");
-    let end = builder.intern_iri("https://example.org/end");
-    let p = builder.intern_iri("https://example.org/p");
-    let q = builder.intern_iri("https://example.org/q");
+    let a = builder.intern_iri("https://example.org/a").unwrap();
+    let b = builder.intern_iri("https://example.org/b").unwrap();
+    let c = builder.intern_iri("https://example.org/c").unwrap();
+    let z = builder.intern_iri("https://example.org/z").unwrap();
+    let end = builder.intern_iri("https://example.org/end").unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
+    let q = builder.intern_iri("https://example.org/q").unwrap();
     for (s, predicate, o) in [
         (a, p, b),
         (a, p, c),
@@ -2108,7 +2124,7 @@ fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
         (b, q, end),
         (c, q, end),
     ] {
-        builder.push_quad(s, predicate, o, None);
+        builder.push_quad(s, predicate, o, None).unwrap();
     }
     let dataset = builder.freeze().expect("native cyclic path dataset");
     let source = Claims {
@@ -2690,7 +2706,9 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
     // closed absence is a false EXISTS witness and a true NOT EXISTS witness;
     // neither an open producer nor an open external scope grants that polarity.
     let mut scope_terms = RdfDatasetBuilder::new();
-    let unused_claim = scope_terms.intern_iri("https://example.org/unused-claim");
+    let unused_claim = scope_terms
+        .intern_iri("https://example.org/unused-claim")
+        .unwrap();
     for (completeness, unclosed_search) in [
         (SearchCompleteness::Complete, false),
         (SearchCompleteness::Complete, true),

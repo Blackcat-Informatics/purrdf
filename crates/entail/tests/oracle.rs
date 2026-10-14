@@ -5694,15 +5694,15 @@ const CLASH_CORPUS: &[Fixture] = &[
 /// Intern one fixture object term into `builder`.
 fn intern_object(builder: &mut RdfDatasetBuilder, term: Term) -> TermId {
     match term {
-        Term::Iri(iri) => builder.intern_iri(iri),
-        Term::Literal { lexical, datatype } => {
-            builder.intern_literal(RdfLiteral::typed(lexical, datatype))
-        }
+        Term::Iri(iri) => builder.intern_iri(iri).unwrap(),
+        Term::Literal { lexical, datatype } => builder
+            .intern_literal(RdfLiteral::typed(lexical, datatype))
+            .unwrap(),
         Term::Quoted(s, p, o) => {
-            let s = builder.intern_iri(s);
-            let p = builder.intern_iri(p);
-            let o = builder.intern_iri(o);
-            builder.intern_triple(s, p, o)
+            let s = builder.intern_iri(s).unwrap();
+            let p = builder.intern_iri(p).unwrap();
+            let o = builder.intern_iri(o).unwrap();
+            builder.intern_triple(s, p, o).unwrap()
         }
     }
 }
@@ -5711,11 +5711,11 @@ fn intern_object(builder: &mut RdfDatasetBuilder, term: Term) -> TermId {
 fn build(fixture: &Fixture) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for quad in fixture.quads {
-        let s = builder.intern_iri(quad.s);
-        let p = builder.intern_iri(quad.p);
+        let s = builder.intern_iri(quad.s).unwrap();
+        let p = builder.intern_iri(quad.p).unwrap();
         let o = intern_object(&mut builder, quad.o);
-        let g = quad.g.map(|g| builder.intern_iri(g));
-        builder.push_quad(s, p, o, g);
+        let g = quad.g.map(|g| builder.intern_iri(g).unwrap());
+        builder.push_quad(s, p, o, g).unwrap();
     }
     builder.freeze().expect("fixture dataset freezes")
 }
@@ -8030,17 +8030,17 @@ fn a_reifier_range_conclusion_over_a_triple_term_is_abandoned_and_reported() {
 #[test]
 fn a_reifier_side_table_round_trips_through_materialize() {
     let mut b = RdfDatasetBuilder::new();
-    let reifier = b.intern_iri(EX_REIFIER);
-    let s = b.intern_iri(EX_A);
-    let p = b.intern_iri(RDFS_SUBCLASSOF);
-    let o = b.intern_iri(EX_B);
-    let triple = b.intern_triple(s, p, o);
-    let says = b.intern_iri(EX_SAYS);
-    let x = b.intern_iri(EX_X);
-    b.push_quad(s, p, o, None);
-    b.push_quad(x, says, triple, None);
-    b.push_reifier(reifier, triple);
-    b.push_annotation(reifier, says, x);
+    let reifier = b.intern_iri(EX_REIFIER).unwrap();
+    let s = b.intern_iri(EX_A).unwrap();
+    let p = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let o = b.intern_iri(EX_B).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let says = b.intern_iri(EX_SAYS).unwrap();
+    let x = b.intern_iri(EX_X).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    b.push_quad(x, says, triple, None).unwrap();
+    b.push_reifier(reifier, triple).unwrap();
+    b.push_annotation(reifier, says, x).unwrap();
     let ds = b.freeze().expect("freeze");
 
     /// The sentinel rows `purrdf_core::canonicalize` writes for the two side tables.
@@ -8073,16 +8073,18 @@ fn a_reifier_side_table_round_trips_through_materialize() {
     // assigns the label, and the closure's quad set is not the input's, so the label may
     // legitimately differ. What may not differ is that the rows are still there.
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(EX_A);
-    let p = b.intern_iri(RDFS_SUBCLASSOF);
-    let o = b.intern_iri(EX_B);
-    let triple = b.intern_triple(s, p, o);
-    let says = b.intern_iri(EX_SAYS);
-    let x = b.intern_iri(EX_X);
-    let blank = b.intern_blank("r", purrdf_core::BlankScope::DEFAULT);
-    b.push_quad(x, says, triple, None);
-    b.push_reifier(blank, triple);
-    b.push_annotation(blank, says, x);
+    let s = b.intern_iri(EX_A).unwrap();
+    let p = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let o = b.intern_iri(EX_B).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let says = b.intern_iri(EX_SAYS).unwrap();
+    let x = b.intern_iri(EX_X).unwrap();
+    let blank = b
+        .intern_blank("r", purrdf_core::BlankScope::DEFAULT)
+        .unwrap();
+    b.push_quad(x, says, triple, None).unwrap();
+    b.push_reifier(blank, triple).unwrap();
+    b.push_annotation(blank, says, x).unwrap();
     let ds = b.freeze().expect("freeze");
     for (plan, name) in ORACLE_REGIMES {
         let (closed, _) = materialize(&ds, plan).expect("the five oracle regimes run");

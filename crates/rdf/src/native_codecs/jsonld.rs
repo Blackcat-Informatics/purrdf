@@ -1984,7 +1984,7 @@ pub fn jsonld_to_statement_metadata_nquads(
 
     // `out` holds only the downcast-flat statement-metadata cells (no object-position
     // quoted triples), so the native N-Quads serializer applies.
-    let ir = crate::dataset_from_quads(&out).map_err(|e| decode(format!("quads → IR: {e}")))?;
+    let ir = crate::dataset_from_quads(&out)?;
     let buf = crate::serialize_dataset(&ir, "application/n-quads", SerializeGraph::Dataset)
         .map_err(|e| decode(format!("serialize N-Quads: {e}")))?;
     String::from_utf8(buf).map_err(|e| decode(format!("N-Quads are not UTF-8: {e}")))
@@ -2309,11 +2309,13 @@ mod parse_residency {
         let mut builder = RdfDatasetBuilder::new();
         for i in 0..20_000 {
             let subject = builder
-                .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")));
-            let predicate = builder.intern_iri("https://example.org/predicate");
-            let object =
-                builder.intern_literal(RdfLiteral::simple(format!("value {i} padded out a bit")));
-            builder.push_quad(subject, predicate, object, None);
+                .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")))
+                .unwrap();
+            let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+            let object = builder
+                .intern_literal(RdfLiteral::simple(format!("value {i} padded out a bit")))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         let dataset = builder.freeze().expect("dataset freezes");
         let document = serialize_dataset_to_jsonld(&*dataset).expect("a JSON-LD document");
@@ -2356,19 +2358,21 @@ mod list_depth {
     /// `levels` deep, each level a blank cell referenced exactly once.
     fn list_of_lists(levels: usize) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let first = builder.intern_iri(&format!("{RDF_NS}first"));
-        let rest = builder.intern_iri(&format!("{RDF_NS}rest"));
-        let nil = builder.intern_iri(&format!("{RDF_NS}nil"));
-        let subject = builder.intern_iri("https://example.org/s");
-        let predicate = builder.intern_iri("https://example.org/p");
-        let mut inner = builder.intern_literal(RdfLiteral::simple("x"));
+        let first = builder.intern_iri(&format!("{RDF_NS}first")).unwrap();
+        let rest = builder.intern_iri(&format!("{RDF_NS}rest")).unwrap();
+        let nil = builder.intern_iri(&format!("{RDF_NS}nil")).unwrap();
+        let subject = builder.intern_iri("https://example.org/s").unwrap();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let mut inner = builder.intern_literal(RdfLiteral::simple("x")).unwrap();
         for level in 0..levels {
-            let cell = builder.intern_blank(&format!("c{level}"), BlankScope(0));
-            builder.push_quad(cell, first, inner, None);
-            builder.push_quad(cell, rest, nil, None);
+            let cell = builder
+                .intern_blank(&format!("c{level}"), BlankScope(0))
+                .unwrap();
+            builder.push_quad(cell, first, inner, None).unwrap();
+            builder.push_quad(cell, rest, nil, None).unwrap();
             inner = cell;
         }
-        builder.push_quad(subject, predicate, inner, None);
+        builder.push_quad(subject, predicate, inner, None).unwrap();
         builder.freeze().expect("the list dataset freezes")
     }
 

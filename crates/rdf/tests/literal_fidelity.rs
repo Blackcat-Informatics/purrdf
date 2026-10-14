@@ -73,7 +73,7 @@ fn dataset_with_literal(lexical: &str, datatype: &str) -> std::sync::Arc<purrdf_
         PREDICATE.to_owned(),
         RdfTerm::literal(RdfLiteral::typed(lexical.to_owned(), datatype.to_owned())),
     );
-    b.push_owned_quad(&quad);
+    b.push_owned_quad(&quad).unwrap();
     b.freeze().expect("fidelity dataset must freeze")
 }
 

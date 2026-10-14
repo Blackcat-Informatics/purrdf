@@ -15,15 +15,18 @@ pub(crate) fn eager(
 ) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for row in rows {
-        let s = builder.intern_value(&row.s);
-        let p = builder.intern_value(&row.p);
-        let o = builder.intern_value(&row.o);
-        let g = row.g.as_ref().map(|value| builder.intern_value(value));
-        builder.push_quad(s, p, o, g);
+        let s = builder.intern_value(&row.s).unwrap();
+        let p = builder.intern_value(&row.p).unwrap();
+        let o = builder.intern_value(&row.o).unwrap();
+        let g = row
+            .g
+            .as_ref()
+            .map(|value| builder.intern_value(value).unwrap());
+        builder.push_quad(s, p, o, g).unwrap();
     }
     for graph in graphs {
-        let id = builder.intern_value(graph);
-        builder.declare_named_graph(id);
+        let id = builder.intern_value(graph).unwrap();
+        builder.declare_named_graph(id).unwrap();
     }
     builder.freeze().expect("valid eager consumer input")
 }

@@ -18,6 +18,7 @@
 //! repository-hygiene check that keeps tooling and tests in Rust, run by the
 //! pre-commit hook, `make check` and CI.
 
+mod capacity;
 mod census;
 mod glossary;
 mod layout;

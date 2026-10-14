@@ -13,9 +13,10 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 fn row(width: usize) -> Solution {
     (0..width)
         .map(|index| {
-            Some(SolutionTerm::Existing(TermId::from_index(
-                u32::try_from(index).expect("fixture index"),
-            )))
+            Some(SolutionTerm::Existing(
+                TermId::from_index(u32::try_from(index).expect("fixture index"))
+                    .expect("stored term index is representable"),
+            ))
         })
         .collect()
 }
@@ -113,7 +114,9 @@ fn copy_from_slice_has_exact_allocation_budget() {
 fn clone_then_push_allocation_count_is_explicit() {
     for (width, expected_allocations) in [(4, 1), (9, 2)] {
         let source = row(width);
-        let cell = Some(SolutionTerm::Existing(TermId::from_index(100)));
+        let cell = Some(SolutionTerm::Existing(
+            TermId::from_index(100).expect("stored term index is representable"),
+        ));
         let window = CurrentThreadWindow::open();
         let mut cloned = std::hint::black_box(&source).clone();
         cloned.push(cell);

@@ -140,8 +140,11 @@ impl Interner {
 ///
 /// The builder's own value interning ([`TermFactory::intern_value`]), which takes a
 /// triple term apart over a work list rather than the machine stack.
-pub(crate) fn intern_into(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    b.intern_value(v)
+pub(crate) fn intern_into(
+    b: &mut RdfDatasetBuilder,
+    v: &TermValue,
+) -> Result<TermId, crate::EntailError> {
+    Ok(b.intern_value(v)?)
 }
 
 #[cfg(test)]
@@ -208,10 +211,10 @@ mod tests {
     /// derived triple.
     fn round_trip(value: &TermValue) -> TermValue {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(EX_S);
-        let p = b.intern_iri(EX_HOLDS);
-        let o = intern_into(&mut b, value);
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri(EX_S).unwrap();
+        let p = b.intern_iri(EX_HOLDS).unwrap();
+        let o = intern_into(&mut b, value).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("the round-trip dataset freezes");
         let quad = ds.quads().next().expect("one quad");
         ds.term_value(quad.o)
@@ -282,14 +285,14 @@ mod tests {
         assert_ne!(ltr, none);
 
         let mut b = RdfDatasetBuilder::new();
-        let ltr_id = intern_into(&mut b, &ltr);
-        let rtl_id = intern_into(&mut b, &rtl);
-        let none_id = intern_into(&mut b, &none);
+        let ltr_id = intern_into(&mut b, &ltr).unwrap();
+        let rtl_id = intern_into(&mut b, &rtl).unwrap();
+        let none_id = intern_into(&mut b, &none).unwrap();
         assert_ne!(ltr_id, rtl_id, "ltr and rtl collapsed into one term");
         assert_ne!(ltr_id, none_id, "ltr collapsed into the undirected literal");
         assert_eq!(
             ltr_id,
-            intern_into(&mut b, &ltr),
+            intern_into(&mut b, &ltr).unwrap(),
             "re-interning the same literal must be idempotent"
         );
     }
@@ -300,7 +303,10 @@ mod tests {
     fn intern_into_is_idempotent_for_a_triple_term() {
         let value = quoted(EX_S, EX_P, EX_O);
         let mut b = RdfDatasetBuilder::new();
-        assert_eq!(intern_into(&mut b, &value), intern_into(&mut b, &value));
+        assert_eq!(
+            intern_into(&mut b, &value).unwrap(),
+            intern_into(&mut b, &value).unwrap()
+        );
     }
 
     /// The subject guard: only IRIs and blank nodes may occupy subject position. A literal
@@ -334,24 +340,26 @@ mod term_walk_tests {
 
     fn reference(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
         match v {
-            TermValue::Iri(iri) => b.intern_iri(iri),
-            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
+            TermValue::Iri(iri) => b.intern_iri(iri).unwrap(),
+            TermValue::Blank { label, scope } => b.intern_blank(label, *scope).unwrap(),
             TermValue::Literal {
                 lexical_form,
                 datatype,
                 language,
                 direction,
-            } => b.intern_literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
+            } => b
+                .intern_literal(RdfLiteral {
+                    lexical_form: lexical_form.clone(),
+                    datatype: Some(datatype.clone()),
+                    language: language.clone(),
+                    direction: *direction,
+                })
+                .unwrap(),
             TermValue::Triple { s, p, o } => {
                 let s = reference(b, s);
                 let p = reference(b, p);
                 let o = reference(b, o);
-                b.intern_triple(s, p, o)
+                b.intern_triple(s, p, o).unwrap()
             }
         }
     }
@@ -371,14 +379,14 @@ mod term_walk_tests {
             );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
-                intern_into(&mut found, &value),
+                intern_into(&mut found, &value).unwrap(),
                 reference(&mut expected, &value),
                 "seed {seed}"
             );
             let sentinel = "http://example.org/sentinel";
             assert_eq!(
-                found.intern_iri(sentinel),
-                expected.intern_iri(sentinel),
+                found.intern_iri(sentinel).unwrap(),
+                expected.intern_iri(sentinel).unwrap(),
                 "seed {seed}"
             );
         }
@@ -392,7 +400,10 @@ mod term_walk_tests {
         purrdf_stack::on_stack(128 * 1024, || {
             let value = purrdf_core::term_fixture::triple_chain(LEVELS);
             let mut builder = RdfDatasetBuilder::new();
-            assert_eq!(intern_into(&mut builder, &value).index(), LEVELS + 2);
+            assert_eq!(
+                intern_into(&mut builder, &value).unwrap().index(),
+                LEVELS + 2
+            );
         })
         .expect("the thread starts");
     }

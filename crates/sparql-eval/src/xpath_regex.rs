@@ -739,7 +739,7 @@ mod native_program_owner_fixtures {
 
     fn account() -> (SegmentedSession, QueryWorkspace<SegmentedError>, u64) {
         let limits = SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap();
-        let image = SegmentedBuilder::new(limits).seal().unwrap();
+        let image = SegmentedBuilder::new(limits).unwrap().seal().unwrap();
         let source = SegmentedSession::open(
             Arc::new(image.provider()),
             image.receipt(),

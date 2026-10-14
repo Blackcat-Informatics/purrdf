@@ -93,7 +93,7 @@ fn mutate(dataset: &RdfDataset, mut edit: impl FnMut(&mut RdfQuad) -> bool) -> A
     for (index, statement) in dataset.quads().enumerate() {
         let mut statement = dataset.to_owned_quad(index, statement);
         if edit(&mut statement) {
-            builder.push_owned_quad(&statement);
+            builder.push_owned_quad(&statement).unwrap();
         }
     }
     builder.freeze().unwrap()
@@ -427,8 +427,10 @@ fn explicit_selection_isolates_source_revisions_in_a_merged_dataset() {
     .unwrap();
     let mut builder = RdfDatasetBuilder::new();
     assert_ne!(first, second.id());
-    builder.push_dataset(&dataset);
-    builder.push_dataset(&project(&second, &profile).unwrap());
+    builder.push_dataset(&dataset).unwrap();
+    builder
+        .push_dataset(&project(&second, &profile).unwrap())
+        .unwrap();
     let merged = builder.freeze().unwrap();
     assert_eq!(
         decode_document(&merged, &first, &profile).unwrap(),
@@ -522,12 +524,14 @@ fn conflicting_metadata_never_uses_first_or_last_value() {
     let leaf = format!("{document}#v1");
     for replacement in ["2", "0"] {
         let mut builder = RdfDatasetBuilder::new();
-        builder.push_dataset(&dataset);
-        builder.push_owned_quad(&RdfQuad::new(
-            RdfTerm::Iri(leaf.clone()),
-            format!("{BASE}byteStart"),
-            integer(replacement),
-        ));
+        builder.push_dataset(&dataset).unwrap();
+        builder
+            .push_owned_quad(&RdfQuad::new(
+                RdfTerm::Iri(leaf.clone()),
+                format!("{BASE}byteStart"),
+                integer(replacement),
+            ))
+            .unwrap();
         assert!(decode_document(&builder.freeze().unwrap(), &document, &profile).is_err());
     }
 }
@@ -548,12 +552,14 @@ fn rejects_changed_ownership_named_graphs_and_unexpected_predicates() {
     });
     assert!(decode_document(&named, &document, &profile).is_err());
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&dataset);
-    builder.push_owned_quad(&RdfQuad::new(
-        RdfTerm::Iri(empty),
-        "https://example.org/unexpected",
-        literal("extra"),
-    ));
+    builder.push_dataset(&dataset).unwrap();
+    builder
+        .push_owned_quad(&RdfQuad::new(
+            RdfTerm::Iri(empty),
+            "https://example.org/unexpected",
+            literal("extra"),
+        ))
+        .unwrap();
     assert!(decode_document(&builder.freeze().unwrap(), &document, &profile).is_err());
 }
 
@@ -596,66 +602,78 @@ fn rdf12_side_tables_cannot_hide_conflicting_metadata_or_ownership() {
     let (profile, document, dataset) = encoded("[1]");
     let leaf = format!("{document}#v1");
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&dataset);
-    builder.push_owned_annotation(&purrdf_core::RdfAnnotation::new(
-        RdfTerm::Iri(leaf.clone()),
-        format!("{BASE}path"),
-        literal("/invented"),
-    ));
+    builder.push_dataset(&dataset).unwrap();
+    builder
+        .push_owned_annotation(&purrdf_core::RdfAnnotation::new(
+            RdfTerm::Iri(leaf.clone()),
+            format!("{BASE}path"),
+            literal("/invented"),
+        ))
+        .unwrap();
     assert!(decode_document(&builder.freeze().unwrap(), &document, &profile).is_err());
 
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&dataset);
-    builder.push_owned_annotation(&purrdf_core::RdfAnnotation::new(
-        RdfTerm::Iri("https://example.org/hidden-owner".to_owned()),
-        format!("{BASE}document"),
-        RdfTerm::Iri(document.clone()),
-    ));
+    builder.push_dataset(&dataset).unwrap();
+    builder
+        .push_owned_annotation(&purrdf_core::RdfAnnotation::new(
+            RdfTerm::Iri("https://example.org/hidden-owner".to_owned()),
+            format!("{BASE}document"),
+            RdfTerm::Iri(document.clone()),
+        ))
+        .unwrap();
     assert!(decode_document(&builder.freeze().unwrap(), &document, &profile).is_err());
 
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&dataset);
-    builder.push_owned_reifier(&purrdf_core::RdfReifier::new(
-        RdfTerm::Iri(leaf),
-        purrdf_core::RdfTriple::new(
-            RdfTerm::Iri("https://example.org/s".to_owned()),
-            "https://example.org/p",
-            literal("o"),
-        ),
-    ));
+    builder.push_dataset(&dataset).unwrap();
+    builder
+        .push_owned_reifier(&purrdf_core::RdfReifier::new(
+            RdfTerm::Iri(leaf),
+            purrdf_core::RdfTriple::new(
+                RdfTerm::Iri("https://example.org/s".to_owned()),
+                "https://example.org/p",
+                literal("o"),
+            ),
+        ))
+        .unwrap();
     assert!(decode_document(&builder.freeze().unwrap(), &document, &profile).is_err());
 
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&dataset);
-    let graph = builder.intern_iri(&document);
-    builder.declare_named_graph(graph);
+    builder.push_dataset(&dataset).unwrap();
+    let graph = builder.intern_iri(&document).unwrap();
+    builder.declare_named_graph(graph).unwrap();
     assert!(decode_document(&builder.freeze().unwrap(), &document, &profile).is_err());
 }
 
 fn equivalent_rdf12_metadata_and_unrelated_statement_layers_coexist() {
     let (profile, document, dataset) = encoded("[1]");
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&dataset);
+    builder.push_dataset(&dataset).unwrap();
     // An identical assertion in a side table is the same RDF fact.
-    builder.push_owned_annotation(&purrdf_core::RdfAnnotation::new(
-        RdfTerm::Iri(format!("{document}#v1")),
-        format!("{BASE}path"),
-        literal("/0"),
-    ));
+    builder
+        .push_owned_annotation(&purrdf_core::RdfAnnotation::new(
+            RdfTerm::Iri(format!("{document}#v1")),
+            format!("{BASE}path"),
+            literal("/0"),
+        ))
+        .unwrap();
     let unrelated = RdfTerm::Iri("https://example.org/unrelated".to_owned());
-    builder.push_owned_reifier(&purrdf_core::RdfReifier::new(
-        unrelated.clone(),
-        purrdf_core::RdfTriple::new(
-            RdfTerm::Iri(document.clone()),
-            "https://example.org/quoted",
-            literal("unasserted"),
-        ),
-    ));
-    builder.push_owned_annotation(&purrdf_core::RdfAnnotation::new(
-        unrelated,
-        "https://example.org/note",
-        literal("external"),
-    ));
+    builder
+        .push_owned_reifier(&purrdf_core::RdfReifier::new(
+            unrelated.clone(),
+            purrdf_core::RdfTriple::new(
+                RdfTerm::Iri(document.clone()),
+                "https://example.org/quoted",
+                literal("unasserted"),
+            ),
+        ))
+        .unwrap();
+    builder
+        .push_owned_annotation(&purrdf_core::RdfAnnotation::new(
+            unrelated,
+            "https://example.org/note",
+            literal("external"),
+        ))
+        .unwrap();
     assert_eq!(
         decode_document(&builder.freeze().unwrap(), &document, &profile).unwrap(),
         "[1]"
@@ -675,14 +693,16 @@ fn document_profile_and_length_refuse_before_owned_subgraph_collection() {
             true
         });
         let mut builder = RdfDatasetBuilder::new();
-        builder.push_dataset(&damaged);
+        builder.push_dataset(&damaged).unwrap();
         // This invalid ownership subject would fail if the decoder traversed the
         // owned subgraph before checking the document's bounded admission facts.
-        builder.push_owned_quad(&RdfQuad::new(
-            RdfTerm::BlankNode("invalid-owner".to_owned()),
-            format!("{BASE}document"),
-            RdfTerm::Iri(document.clone()),
-        ));
+        builder
+            .push_owned_quad(&RdfQuad::new(
+                RdfTerm::BlankNode("invalid-owner".to_owned()),
+                format!("{BASE}document"),
+                RdfTerm::Iri(document.clone()),
+            ))
+            .unwrap();
         let error = decode_document(&builder.freeze().unwrap(), &document, &profile).unwrap_err();
         if field == "profile" {
             assert!(matches!(error, JsonError::ProfileMismatch));

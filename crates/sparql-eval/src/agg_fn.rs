@@ -1125,12 +1125,12 @@ impl AggregateRegistry {
     /// registry.register("https://example.org/agg#total", Arc::new(TotalAggregate));
     ///
     /// let mut b = RdfDatasetBuilder::new();
-    /// let s = b.intern_iri("https://example.org/s");
-    /// let n = b.intern_iri("https://example.org/n");
-    /// let v1 = b.intern_literal(RdfLiteral::typed("3", "http://www.w3.org/2001/XMLSchema#integer"));
-    /// let v2 = b.intern_literal(RdfLiteral::typed("4", "http://www.w3.org/2001/XMLSchema#integer"));
-    /// b.push_quad(s, n, v1, None);
-    /// b.push_quad(s, n, v2, None);
+    /// let s = b.intern_iri("https://example.org/s")?;
+    /// let n = b.intern_iri("https://example.org/n")?;
+    /// let v1 = b.intern_literal(RdfLiteral::typed("3", "http://www.w3.org/2001/XMLSchema#integer"))?;
+    /// let v2 = b.intern_literal(RdfLiteral::typed("4", "http://www.w3.org/2001/XMLSchema#integer"))?;
+    /// b.push_quad(s, n, v1, None)?;
+    /// b.push_quad(s, n, v2, None)?;
     /// let ds = b.freeze().expect("freeze");
     ///
     /// let engine = NativeSparqlEngine::new();
@@ -1153,6 +1153,7 @@ impl AggregateRegistry {
     /// if let SparqlResult::Solutions { rows, .. } = result {
     ///     assert_eq!(rows.len(), 1);
     /// }
+    /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
     /// ```
     pub fn register(&mut self, iri: impl Into<String>, aggregate: Arc<dyn CustomAggregate>) {
         let iri = iri.into();

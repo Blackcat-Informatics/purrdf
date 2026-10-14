@@ -77,6 +77,7 @@ fn request(query: &str) -> SparqlRequest<'_> {
 
 fn int_literal(b: &mut RdfDatasetBuilder, n: i64) -> purrdf_core::TermId {
     b.intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER.to_owned()))
+        .unwrap()
 }
 
 /// `(cat1, s1, 1)`, `(cat1, s2, 2)`, `(cat1, s2, 2)` [duplicate value, distinct subject],
@@ -85,42 +86,42 @@ fn int_literal(b: &mut RdfDatasetBuilder, n: i64) -> purrdf_core::TermId {
 /// dedup fixture, `s3`→2).
 fn dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let cat = b.intern_iri(&format!("{EX}cat"));
-    let val = b.intern_iri(&format!("{EX}val"));
-    let weight = b.intern_iri(&format!("{EX}weight"));
-    let cat1 = b.intern_iri(&format!("{EX}cat1"));
-    let cat2 = b.intern_iri(&format!("{EX}cat2"));
+    let cat = b.intern_iri(&format!("{EX}cat")).unwrap();
+    let val = b.intern_iri(&format!("{EX}val")).unwrap();
+    let weight = b.intern_iri(&format!("{EX}weight")).unwrap();
+    let cat1 = b.intern_iri(&format!("{EX}cat1")).unwrap();
+    let cat2 = b.intern_iri(&format!("{EX}cat2")).unwrap();
 
-    let s1 = b.intern_iri(&format!("{EX}s1"));
-    b.push_quad(s1, cat, cat1, None);
+    let s1 = b.intern_iri(&format!("{EX}s1")).unwrap();
+    b.push_quad(s1, cat, cat1, None).unwrap();
     let v1 = int_literal(&mut b, 1);
-    b.push_quad(s1, val, v1, None);
+    b.push_quad(s1, val, v1, None).unwrap();
     let w1 = int_literal(&mut b, 5);
-    b.push_quad(s1, weight, w1, None);
+    b.push_quad(s1, weight, w1, None).unwrap();
 
-    let s2 = b.intern_iri(&format!("{EX}s2"));
-    b.push_quad(s2, cat, cat1, None);
+    let s2 = b.intern_iri(&format!("{EX}s2")).unwrap();
+    b.push_quad(s2, cat, cat1, None).unwrap();
     let v2 = int_literal(&mut b, 2);
-    b.push_quad(s2, val, v2, None);
+    b.push_quad(s2, val, v2, None).unwrap();
     let w2 = int_literal(&mut b, 5);
-    b.push_quad(s2, weight, w2, None);
+    b.push_quad(s2, weight, w2, None).unwrap();
 
-    let s2b = b.intern_iri(&format!("{EX}s2b"));
-    b.push_quad(s2b, cat, cat1, None);
+    let s2b = b.intern_iri(&format!("{EX}s2b")).unwrap();
+    b.push_quad(s2b, cat, cat1, None).unwrap();
     // Same `?val` as s2 (2) — exercises single-column DISTINCT.
     let v2b = int_literal(&mut b, 2);
-    b.push_quad(s2b, val, v2b, None);
+    b.push_quad(s2b, val, v2b, None).unwrap();
     // Different `?weight` from s2 (7, not 5) — same `?val`, different `?weight`: the
     // (val, weight) TUPLE differs from s2's, so a full-tuple DISTINCT must keep BOTH.
     let w2b = int_literal(&mut b, 7);
-    b.push_quad(s2b, weight, w2b, None);
+    b.push_quad(s2b, weight, w2b, None).unwrap();
 
-    let s3 = b.intern_iri(&format!("{EX}s3"));
-    b.push_quad(s3, cat, cat2, None);
+    let s3 = b.intern_iri(&format!("{EX}s3")).unwrap();
+    b.push_quad(s3, cat, cat2, None).unwrap();
     let v3 = int_literal(&mut b, 10);
-    b.push_quad(s3, val, v3, None);
+    b.push_quad(s3, val, v3, None).unwrap();
     let w3 = int_literal(&mut b, 2);
-    b.push_quad(s3, weight, w3, None);
+    b.push_quad(s3, weight, w3, None).unwrap();
 
     b.freeze().expect("freeze")
 }
@@ -365,14 +366,14 @@ fn the_canonical_empty_registry_and_a_freshly_built_empty_registry_answer_identi
 /// `n` subjects, each `ex:group<i % groups>` / `ex:val i`.
 fn scaled_dataset(n: usize, groups: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let group_pred = b.intern_iri(&format!("{EX}group"));
-    let val_pred = b.intern_iri(&format!("{EX}val"));
+    let group_pred = b.intern_iri(&format!("{EX}group")).unwrap();
+    let val_pred = b.intern_iri(&format!("{EX}val")).unwrap();
     for i in 0..n {
-        let s = b.intern_iri(&format!("{EX}row{i}"));
-        let g = b.intern_iri(&format!("{EX}group{}", i % groups));
-        b.push_quad(s, group_pred, g, None);
+        let s = b.intern_iri(&format!("{EX}row{i}")).unwrap();
+        let g = b.intern_iri(&format!("{EX}group{}", i % groups)).unwrap();
+        b.push_quad(s, group_pred, g, None).unwrap();
         let v = int_literal(&mut b, i as i64);
-        b.push_quad(s, val_pred, v, None);
+        b.push_quad(s, val_pred, v, None).unwrap();
     }
     b.freeze().expect("freeze")
 }
@@ -460,22 +461,22 @@ fn stat_lex(row: &[Option<TermValue>], index: usize) -> String {
 /// has values {10, 10, 20} (a repeat, for `MODE`/`DISTINCT`).
 fn stat_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let cat = b.intern_iri(&format!("{EX}cat"));
-    let val = b.intern_iri(&format!("{EX}val"));
-    let g1 = b.intern_iri(&format!("{EX}g1"));
-    let g2 = b.intern_iri(&format!("{EX}g2"));
+    let cat = b.intern_iri(&format!("{EX}cat")).unwrap();
+    let val = b.intern_iri(&format!("{EX}val")).unwrap();
+    let g1 = b.intern_iri(&format!("{EX}g1")).unwrap();
+    let g2 = b.intern_iri(&format!("{EX}g2")).unwrap();
 
     for (i, v) in [1, 2, 3, 4].into_iter().enumerate() {
-        let s = b.intern_iri(&format!("{EX}g1s{i}"));
-        b.push_quad(s, cat, g1, None);
+        let s = b.intern_iri(&format!("{EX}g1s{i}")).unwrap();
+        b.push_quad(s, cat, g1, None).unwrap();
         let vt = int_literal(&mut b, v);
-        b.push_quad(s, val, vt, None);
+        b.push_quad(s, val, vt, None).unwrap();
     }
     for (i, v) in [10, 10, 20].into_iter().enumerate() {
-        let s = b.intern_iri(&format!("{EX}g2s{i}"));
-        b.push_quad(s, cat, g2, None);
+        let s = b.intern_iri(&format!("{EX}g2s{i}")).unwrap();
+        b.push_quad(s, cat, g2, None).unwrap();
         let vt = int_literal(&mut b, v);
-        b.push_quad(s, val, vt, None);
+        b.push_quad(s, val, vt, None).unwrap();
     }
     b.freeze().expect("freeze")
 }
@@ -524,11 +525,11 @@ fn group_by_query_computes_several_statistical_members_per_group() {
 fn mode_finds_the_genuine_repeat_not_a_coincidental_stand_in() {
     let reg = statistical_registry();
     let mut b = RdfDatasetBuilder::new();
-    let val = b.intern_iri(&format!("{EX}val"));
+    let val = b.intern_iri(&format!("{EX}val")).unwrap();
     for (i, v) in [10, 20, 20, 30].into_iter().enumerate() {
-        let s = b.intern_iri(&format!("{EX}g3s{i}"));
+        let s = b.intern_iri(&format!("{EX}g3s{i}")).unwrap();
         let vt = int_literal(&mut b, v);
-        b.push_quad(s, val, vt, None);
+        b.push_quad(s, val, vt, None).unwrap();
     }
     let ds = b.freeze().expect("freeze");
     let query = format!("SELECT (AGG(<{STAT_NS}MODE>, ?v) AS ?mode) WHERE {{ ?s <{EX}val> ?v }}");
@@ -687,11 +688,11 @@ fn distinct_interacts_with_a_statistical_member() {
 /// denom 4 → `VARIANCE = 2.5`.
 fn moments_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let mval = b.intern_iri(&format!("{EX}mval"));
+    let mval = b.intern_iri(&format!("{EX}mval")).unwrap();
     for (i, v) in [1, 2, 3, 4, 5].into_iter().enumerate() {
-        let s = b.intern_iri(&format!("{EX}m{i}"));
+        let s = b.intern_iri(&format!("{EX}m{i}")).unwrap();
         let vt = int_literal(&mut b, v);
-        b.push_quad(s, mval, vt, None);
+        b.push_quad(s, mval, vt, None).unwrap();
     }
     b.freeze().expect("freeze")
 }

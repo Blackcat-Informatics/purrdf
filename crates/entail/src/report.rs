@@ -1861,21 +1861,23 @@ mod tests {
 
         for (what, object) in [("blank node", None), ("literal", Some("not-an-iri"))] {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri(&format!("{NS}o"));
-            let rdf_type = b.intern_iri(RDF_TYPE);
-            let ontology = b.intern_iri(OWL_ONTOLOGY);
-            b.push_quad(s, rdf_type, ontology, None);
-            let imports = b.intern_iri(OWL_IMPORTS);
+            let s = b.intern_iri(&format!("{NS}o")).unwrap();
+            let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+            let ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+            b.push_quad(s, rdf_type, ontology, None).unwrap();
+            let imports = b.intern_iri(OWL_IMPORTS).unwrap();
             let o = match object {
-                None => b.intern_blank("target", BlankScope::DEFAULT),
-                Some(lexical) => b.intern_literal(RdfLiteral {
-                    lexical_form: lexical.to_owned(),
-                    datatype: None,
-                    language: None,
-                    direction: None,
-                }),
+                None => b.intern_blank("target", BlankScope::DEFAULT).unwrap(),
+                Some(lexical) => b
+                    .intern_literal(RdfLiteral {
+                        lexical_form: lexical.to_owned(),
+                        datatype: None,
+                        language: None,
+                        direction: None,
+                    })
+                    .unwrap(),
             };
-            b.push_quad(s, imports, o, None);
+            b.push_quad(s, imports, o, None).unwrap();
             let ds = b.freeze().expect("freeze");
             assert!(
                 !DatasetSurvey::of(&ds)
@@ -1888,13 +1890,13 @@ mod tests {
         // …and the IRI object that DOES name one is still found, so the guard narrowed the
         // question rather than answering it `false`.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(&format!("{NS}o"));
-        let rdf_type = b.intern_iri(RDF_TYPE);
-        let ontology = b.intern_iri(OWL_ONTOLOGY);
-        b.push_quad(s, rdf_type, ontology, None);
-        let imports = b.intern_iri(OWL_IMPORTS);
-        let o = b.intern_iri(&format!("{NS}other"));
-        b.push_quad(s, imports, o, None);
+        let s = b.intern_iri(&format!("{NS}o")).unwrap();
+        let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+        let ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+        b.push_quad(s, rdf_type, ontology, None).unwrap();
+        let imports = b.intern_iri(OWL_IMPORTS).unwrap();
+        let o = b.intern_iri(&format!("{NS}other")).unwrap();
+        b.push_quad(s, imports, o, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert!(
             DatasetSurvey::of(&ds)
@@ -1931,36 +1933,36 @@ mod tests {
             for triple_term in [false, true] {
                 for ontology_import in [false, true] {
                     let mut b = RdfDatasetBuilder::new();
-                    let s = b.intern_iri(&format!("{NS}s"));
-                    let o = b.intern_iri(&format!("{NS}o"));
-                    let plain_pred = b.intern_iri(&format!("{NS}plain"));
+                    let s = b.intern_iri(&format!("{NS}s")).unwrap();
+                    let o = b.intern_iri(&format!("{NS}o")).unwrap();
+                    let plain_pred = b.intern_iri(&format!("{NS}plain")).unwrap();
                     let graph = if named_graph {
-                        Some(b.intern_iri(&format!("{NS}g")))
+                        Some(b.intern_iri(&format!("{NS}g")).unwrap())
                     } else {
                         None
                     };
 
                     // Every combination carries this quad, so the all-false case still
                     // walks the loop instead of surveying an empty dataset.
-                    b.push_quad(s, plain_pred, o, graph);
+                    b.push_quad(s, plain_pred, o, graph).unwrap();
 
                     if triple_term {
                         // A quoted triple may sit in an asserted quad's OBJECT position
                         // (an asserted statement's own SUBJECT and PREDICATE must be an
                         // IRI/blank node and an IRI respectively — `RdfDatasetBuilder`
                         // rejects a quoted-triple subject with `rdf-ir-triple-subject`).
-                        let inner = b.intern_triple(s, plain_pred, o);
-                        let holds = b.intern_iri(&format!("{NS}holds"));
-                        b.push_quad(s, holds, inner, graph);
+                        let inner = b.intern_triple(s, plain_pred, o).unwrap();
+                        let holds = b.intern_iri(&format!("{NS}holds")).unwrap();
+                        b.push_quad(s, holds, inner, graph).unwrap();
                     }
 
                     if ontology_import {
-                        let rdf_type = b.intern_iri(RDF_TYPE);
-                        let ontology = b.intern_iri(OWL_ONTOLOGY);
-                        b.push_quad(s, rdf_type, ontology, graph);
-                        let imports = b.intern_iri(OWL_IMPORTS);
-                        let other_doc = b.intern_iri(&format!("{NS}other-ontology"));
-                        b.push_quad(s, imports, other_doc, graph);
+                        let rdf_type = b.intern_iri(RDF_TYPE).unwrap();
+                        let ontology = b.intern_iri(OWL_ONTOLOGY).unwrap();
+                        b.push_quad(s, rdf_type, ontology, graph).unwrap();
+                        let imports = b.intern_iri(OWL_IMPORTS).unwrap();
+                        let other_doc = b.intern_iri(&format!("{NS}other-ontology")).unwrap();
+                        b.push_quad(s, imports, other_doc, graph).unwrap();
                     }
 
                     let ds = b.freeze().expect("freeze");

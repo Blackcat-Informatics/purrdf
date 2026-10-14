@@ -1771,24 +1771,32 @@ mod tests {
 
     fn query_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let predicate = builder.intern_iri("http://example.org/p");
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
         for index in 0..3 {
-            let subject = builder.intern_iri(&format!("http://example.org/s{index}"));
-            let object = builder.intern_iri(&format!("http://example.org/o{index}"));
-            builder.push_quad(subject, predicate, object, None);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/s{index}"))
+                .unwrap();
+            let object = builder
+                .intern_iri(&format!("http://example.org/o{index}"))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
     fn entailment_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let subclass = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-        let cat = builder.intern_iri("http://example.org/Cat");
-        let animal = builder.intern_iri("http://example.org/Animal");
-        let tom = builder.intern_iri("http://example.org/tom");
-        builder.push_quad(cat, subclass, animal, None);
-        builder.push_quad(tom, rdf_type, cat, None);
+        let rdf_type = builder
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let subclass = builder
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+            .unwrap();
+        let cat = builder.intern_iri("http://example.org/Cat").unwrap();
+        let animal = builder.intern_iri("http://example.org/Animal").unwrap();
+        let tom = builder.intern_iri("http://example.org/tom").unwrap();
+        builder.push_quad(cat, subclass, animal, None).unwrap();
+        builder.push_quad(tom, rdf_type, cat, None).unwrap();
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
@@ -1938,16 +1946,24 @@ mod tests {
     /// An importing dataset: `ex:o a owl:Ontology ; owl:imports ex:schema . ex:tom a ex:Cat .`
     fn importing_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let ontology = builder.intern_iri("http://example.org/o");
-        let owl_ontology = builder.intern_iri("http://www.w3.org/2002/07/owl#Ontology");
-        let imports = builder.intern_iri("http://www.w3.org/2002/07/owl#imports");
-        let schema = builder.intern_iri("http://example.org/schema");
-        let cat = builder.intern_iri("http://example.org/Cat");
-        let tom = builder.intern_iri("http://example.org/tom");
-        builder.push_quad(ontology, rdf_type, owl_ontology, None);
-        builder.push_quad(ontology, imports, schema, None);
-        builder.push_quad(tom, rdf_type, cat, None);
+        let rdf_type = builder
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let ontology = builder.intern_iri("http://example.org/o").unwrap();
+        let owl_ontology = builder
+            .intern_iri("http://www.w3.org/2002/07/owl#Ontology")
+            .unwrap();
+        let imports = builder
+            .intern_iri("http://www.w3.org/2002/07/owl#imports")
+            .unwrap();
+        let schema = builder.intern_iri("http://example.org/schema").unwrap();
+        let cat = builder.intern_iri("http://example.org/Cat").unwrap();
+        let tom = builder.intern_iri("http://example.org/tom").unwrap();
+        builder
+            .push_quad(ontology, rdf_type, owl_ontology, None)
+            .unwrap();
+        builder.push_quad(ontology, imports, schema, None).unwrap();
+        builder.push_quad(tom, rdf_type, cat, None).unwrap();
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
@@ -2179,20 +2195,28 @@ mod tests {
     /// folds to `2`.
     fn entailed_median_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let subclass = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-        let weight = builder.intern_iri("http://example.org/weight");
-        let cat = builder.intern_iri("http://example.org/Cat");
-        let animal = builder.intern_iri("http://example.org/Animal");
-        builder.push_quad(cat, subclass, animal, None);
+        let rdf_type = builder
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let subclass = builder
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+            .unwrap();
+        let weight = builder.intern_iri("http://example.org/weight").unwrap();
+        let cat = builder.intern_iri("http://example.org/Cat").unwrap();
+        let animal = builder.intern_iri("http://example.org/Animal").unwrap();
+        builder.push_quad(cat, subclass, animal, None).unwrap();
         for (name, value) in [("tom", 1_i64), ("felix", 2), ("garfield", 3)] {
-            let subject = builder.intern_iri(&format!("http://example.org/{name}"));
-            builder.push_quad(subject, rdf_type, cat, None);
-            let literal = builder.intern_literal(RdfLiteral::typed(
-                value.to_string(),
-                "http://www.w3.org/2001/XMLSchema#integer",
-            ));
-            builder.push_quad(subject, weight, literal, None);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/{name}"))
+                .unwrap();
+            builder.push_quad(subject, rdf_type, cat, None).unwrap();
+            let literal = builder
+                .intern_literal(RdfLiteral::typed(
+                    value.to_string(),
+                    "http://www.w3.org/2001/XMLSchema#integer",
+                ))
+                .unwrap();
+            builder.push_quad(subject, weight, literal, None).unwrap();
         }
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
@@ -2374,14 +2398,18 @@ mod tests {
     /// the fixture `MEDIAN` folds to the value `2`.
     fn median_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let predicate = builder.intern_iri("http://example.org/value");
+        let predicate = builder.intern_iri("http://example.org/value").unwrap();
         for value in [1_i64, 2, 3] {
-            let subject = builder.intern_iri(&format!("http://example.org/s{value}"));
-            let object = builder.intern_literal(RdfLiteral::typed(
-                value.to_string(),
-                "http://www.w3.org/2001/XMLSchema#integer",
-            ));
-            builder.push_quad(subject, predicate, object, None);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/s{value}"))
+                .unwrap();
+            let object = builder
+                .intern_literal(RdfLiteral::typed(
+                    value.to_string(),
+                    "http://www.w3.org/2001/XMLSchema#integer",
+                ))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }

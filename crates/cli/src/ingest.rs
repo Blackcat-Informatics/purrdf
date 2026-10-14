@@ -177,7 +177,7 @@ pub(crate) fn ingest(
 
     let [only] = datasets.as_slice() else {
         let borrowed: Vec<&RdfDataset> = datasets.iter().map(Arc::as_ref).collect();
-        return Ok((Arc::new(RdfDataset::union(&borrowed)), ledger));
+        return Ok((Arc::new(RdfDataset::union(&borrowed)?), ledger));
     };
     Ok((Arc::clone(only), ledger))
 }

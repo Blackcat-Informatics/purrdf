@@ -46,7 +46,7 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
         .unwrap()
         .with_first_term_index((1_u64 << 53) + 1)
         .unwrap();
-    let mut builder = SegmentedBuilder::new(limits);
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut ids: Vec<GlobalTermId> = Vec::new();
     for (index, value) in semantic_values().iter().enumerate() {
         builder

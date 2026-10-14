@@ -2924,10 +2924,10 @@ mod tests {
     fn graph_of(edges: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in edges {
-            let s = b.intern_iri(&iri(s));
-            let p = b.intern_iri(&iri(p));
-            let o = b.intern_iri(&iri(o));
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri(&iri(s)).unwrap();
+            let p = b.intern_iri(&iri(p)).unwrap();
+            let o = b.intern_iri(&iri(o)).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -3674,13 +3674,13 @@ mod tests {
     fn wildcard_any_and_namespace_scoped() {
         // Two predicate namespaces: http://ex/ and http://other/.
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri(&iri("a"));
-        let p = b.intern_iri(&iri("p"));
-        let other_p = b.intern_iri("http://other/p");
-        let x = b.intern_iri(&iri("x"));
-        let y = b.intern_iri(&iri("y"));
-        b.push_quad(a, p, x, None);
-        b.push_quad(a, other_p, y, None);
+        let a = b.intern_iri(&iri("a")).unwrap();
+        let p = b.intern_iri(&iri("p")).unwrap();
+        let other_p = b.intern_iri("http://other/p").unwrap();
+        let x = b.intern_iri(&iri("x")).unwrap();
+        let y = b.intern_iri(&iri("y")).unwrap();
+        b.push_quad(a, p, x, None).unwrap();
+        b.push_quad(a, other_p, y, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         // <any> → both objects.
@@ -4495,10 +4495,16 @@ mod recursion_free_tests {
         let edges = 1 + state.below(8);
         let mut builder = RdfDatasetBuilder::new();
         for _ in 0..edges {
-            let s = builder.intern_iri(&iri(&format!("n{}", state.below(nodes))));
-            let p = builder.intern_iri(&iri(&format!("p{}", state.below(predicates))));
-            let o = builder.intern_iri(&iri(&format!("n{}", state.below(nodes))));
-            builder.push_quad(s, p, o, None);
+            let s = builder
+                .intern_iri(&iri(&format!("n{}", state.below(nodes))))
+                .unwrap();
+            let p = builder
+                .intern_iri(&iri(&format!("p{}", state.below(predicates))))
+                .unwrap();
+            let o = builder
+                .intern_iri(&iri(&format!("n{}", state.below(nodes))))
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
         }
         builder.freeze().expect("the generated dataset freezes")
     }
@@ -4747,12 +4753,12 @@ mod recursion_free_tests {
     /// `:a :p :b . :b :p :c`.
     fn two_hop_dataset() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri(&iri("a"));
-        let b = builder.intern_iri(&iri("b"));
-        let c = builder.intern_iri(&iri("c"));
-        let p = builder.intern_iri(&iri("p"));
-        builder.push_quad(a, p, b, None);
-        builder.push_quad(b, p, c, None);
+        let a = builder.intern_iri(&iri("a")).unwrap();
+        let b = builder.intern_iri(&iri("b")).unwrap();
+        let c = builder.intern_iri(&iri("c")).unwrap();
+        let p = builder.intern_iri(&iri("p")).unwrap();
+        builder.push_quad(a, p, b, None).unwrap();
+        builder.push_quad(b, p, c, None).unwrap();
         builder.freeze().expect("the two-hop dataset freezes")
     }
 

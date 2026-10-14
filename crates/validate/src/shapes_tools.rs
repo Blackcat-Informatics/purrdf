@@ -219,9 +219,7 @@ pub struct RulesOutcome {
 /// passed; a SPARQL 1.2 RL `IMPORTS` the import table does not supply, or a table
 /// entry its import closure never names.
 pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
-    apply_rules_with(request, |source, data, limits, knobs| {
-        run_rules(source, data, limits, knobs).map_err(ShapesError::from)
-    })
+    apply_rules_with(request, run_rules)
 }
 
 /// [`apply_rules_to_ntriples`] under the dated XPath law `xpath_regex` selects, with the

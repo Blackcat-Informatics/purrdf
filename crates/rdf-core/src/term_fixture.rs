@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::ir::{QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef};
 use crate::{
-    BlankScope, DatasetView, GraphMatch, RdfStoreCapabilities, RdfTextDirection, TermBox,
-    TermValue, ViewOperationStatus,
+    BlankScope, DatasetView, GraphMatch, RdfDiagnostic, RdfStoreCapabilities, RdfTextDirection,
+    TermBox, TermValue, ViewOperationStatus,
 };
 
 /// Which positions of a generated triple term [`term_value`] may fill with which terms.
@@ -119,35 +119,33 @@ pub type Triple = (TermValue, TermValue, TermValue);
 
 /// Intern one dataset-independent value into `builder`, triple terms included: the
 /// by-value inverse every paged and packed fixture builds its pages with.
-pub fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
+///
+/// # Errors
+/// Returns the original typed capacity or allocation refusal.
+pub fn intern_value(
+    builder: &mut RdfDatasetBuilder,
+    value: &TermValue,
+) -> Result<TermId, purrdf_lex::allocation::StorageError> {
     use purrdf_lex::allocation::{Memory, Resident};
     let mut resident = Resident;
-    let mut memory = Memory::resume(
-        &mut resident,
-        builder
-            .interner_buffer_bytes()
-            .expect("resident interner layout"),
-    );
+    let mut memory = Memory::resume(&mut resident, builder.interner_buffer_bytes()?);
     intern_value_with_memory(builder, value, &mut memory)
-        .expect("resident term interning allocation failed")
 }
 
 /// Freeze one page (or a single reference dataset) from `triples`, all in the
 /// default graph.
 ///
-/// # Panics
-///
-/// If the builder refuses to freeze the triples.
-#[must_use]
-pub fn build_page(triples: &[Triple]) -> Arc<RdfDataset> {
+/// # Errors
+/// Returns the original capacity, allocation or RDF validation diagnostic.
+pub fn build_page(triples: &[Triple]) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
     for (s, p, o) in triples {
-        let s = intern_value(&mut builder, s);
-        let p = intern_value(&mut builder, p);
-        let o = intern_value(&mut builder, o);
-        builder.push_quad(s, p, o, None);
+        let s = intern_value(&mut builder, s)?;
+        let p = intern_value(&mut builder, p)?;
+        let o = intern_value(&mut builder, o)?;
+        builder.push_quad(s, p, o, None)?;
     }
-    builder.freeze().expect("page freeze")
+    builder.freeze()
 }
 
 /// The pack bytes of `dataset`: the fixture-to-pack path every pack test builds
@@ -177,8 +175,14 @@ pub fn empty_dataset() -> Arc<RdfDataset> {
 
 /// A dataset holding the one default-graph quad `subject predicate object`, each
 /// an absolute IRI: the smallest dataset a query can match a row in.
-#[must_use]
-pub fn one_quad(subject: &str, predicate: &str, object: &str) -> Arc<RdfDataset> {
+///
+/// # Errors
+/// Returns the original capacity, allocation or RDF validation diagnostic.
+pub fn one_quad(
+    subject: &str,
+    predicate: &str,
+    object: &str,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     build_page(&[(
         TermValue::iri(subject),
         TermValue::iri(predicate),
@@ -191,25 +195,21 @@ pub fn one_quad(subject: &str, predicate: &str, object: &str) -> Arc<RdfDataset>
 /// under `http://example.org/`. `phantom{tag}` is a term that names no graph; `tag`
 /// keeps several such datasets' graphs apart.
 ///
-/// # Panics
-///
-/// Never: every term is an absolute IRI in a valid position.
-#[must_use]
-pub fn graph_slots(tag: &str) -> Arc<RdfDataset> {
+/// # Errors
+/// Returns the original capacity, allocation or RDF validation diagnostic.
+pub fn graph_slots(tag: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
-    let [s, p, o, phantom, graph, empty] = [
-        "s".to_owned(),
-        "p".to_owned(),
-        "o".to_owned(),
-        format!("phantom{tag}"),
-        format!("g{tag}"),
-        format!("empty{tag}"),
-    ]
-    .map(|name| intern_value(&mut builder, &iri(&name)));
-    builder.push_quad(s, p, phantom, None);
-    builder.push_quad(s, p, o, Some(graph));
-    builder.declare_named_graph(empty);
-    builder.freeze().expect("graph-slot fixture freezes")
+    let mut term = |name: &str| intern_value(&mut builder, &iri(name));
+    let s = term("s")?;
+    let p = term("p")?;
+    let o = term("o")?;
+    let phantom = term(&format!("phantom{tag}"))?;
+    let graph = term(&format!("g{tag}"))?;
+    let empty = term(&format!("empty{tag}"))?;
+    builder.push_quad(s, p, phantom, None)?;
+    builder.push_quad(s, p, o, Some(graph))?;
+    builder.declare_named_graph(empty)?;
+    builder.freeze()
 }
 
 /// The graph-addressing corpus the constant-`GRAPH` benches share: `graphs` named
@@ -218,30 +218,42 @@ pub fn graph_slots(tag: &str) -> Arc<RdfDataset> {
 /// names no graph. A `LATERAL { GRAPH ?o { ... } }` over the default graph therefore
 /// addresses every graph by constant, once per row.
 ///
-/// # Panics
-///
-/// Never: every term is an absolute IRI in a valid position.
-#[must_use]
-pub fn graph_membership_corpus(tag: &str, graphs: usize) -> Arc<RdfDataset> {
+/// # Errors
+/// Returns the original capacity, allocation or RDF validation diagnostic.
+pub fn graph_membership_corpus(tag: &str, graphs: usize) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut builder = RdfDatasetBuilder::new();
     let mut term = |name: String| intern_value(&mut builder, &iri(&name));
-    let [s, p, phantom] = ["s", "p", "phantom"].map(|name| term(name.to_owned()));
+    let s = term("s".to_owned())?;
+    let p = term("p".to_owned())?;
+    let phantom = term("phantom".to_owned())?;
     let mut rows = vec![(s, p, phantom, None)];
     for i in 0..graphs {
-        let graph = term(format!("g{tag}{i}"));
-        rows.push((term(format!("s{i}")), p, graph, None));
-        rows.push((s, p, term(format!("o{tag}{i}")), Some(graph)));
+        let graph = term(format!("g{tag}{i}"))?;
+        rows.push((term(format!("s{i}"))?, p, graph, None));
+        rows.push((s, p, term(format!("o{tag}{i}"))?, Some(graph)));
     }
     for (s, p, o, g) in rows {
-        builder.push_quad(s, p, o, g);
+        builder.push_quad(s, p, o, g)?;
     }
-    builder.freeze().expect("graph-membership corpus freezes")
+    builder.freeze()
 }
 
 /// Split `triples` round-robin across `page_count` quad-disjoint pages, so
 /// consecutive triples land on different pages.
-#[must_use]
-pub fn split_pages(triples: &[Triple], page_count: usize) -> Vec<Arc<RdfDataset>> {
+///
+/// # Errors
+/// Refuses nonempty input with no destination page, or returns the original
+/// page construction diagnostic. Empty input may produce zero pages.
+pub fn split_pages(
+    triples: &[Triple],
+    page_count: usize,
+) -> Result<Vec<Arc<RdfDataset>>, RdfDiagnostic> {
+    if page_count == 0 && !triples.is_empty() {
+        return Err(RdfDiagnostic::error(
+            "fixture-page-count",
+            "nonempty triples require at least one destination page",
+        ));
+    }
     let mut buckets: Vec<Vec<Triple>> = vec![Vec::new(); page_count];
     for (index, triple) in triples.iter().enumerate() {
         buckets[index % page_count].push(triple.clone());

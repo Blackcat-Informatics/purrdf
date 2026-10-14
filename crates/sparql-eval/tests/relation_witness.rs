@@ -181,11 +181,11 @@ fn registry(mode_code: &str, declares: Declares) -> ExtensionEnv {
 /// Three ordinary triples, so a driving pattern has three rows to lateral over.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     for local in ["ada", "brian", "chen"] {
-        let s = builder.intern_iri(&format!("{EX}{local}"));
-        let o = builder.intern_iri(&format!("{EX}team"));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}{local}")).unwrap();
+        let o = builder.intern_iri(&format!("{EX}team")).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("freeze fixture")
 }
@@ -902,11 +902,11 @@ const WIDE_ROWS: u64 = PARALLEL_ROW_FLOOR as u64 + 100;
 /// genuinely reached.
 fn wide_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let o = builder.intern_iri(&format!("{EX}team"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let o = builder.intern_iri(&format!("{EX}team")).unwrap();
     for index in 0..WIDE_ROWS {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("freeze wide fixture")
 }

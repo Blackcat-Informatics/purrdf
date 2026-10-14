@@ -30,14 +30,16 @@ const NOTE: &str = "https://example.org/note";
 /// Build an index over `(subject, lexical form, language tag)` rows.
 fn index_of(rows: &[(&str, &str, Option<&str>)]) -> TextIndex {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for &(subject, text, language) in rows {
-        let s = builder.intern_iri(subject);
-        let literal = builder.intern_literal(match language {
-            Some(tag) => RdfLiteral::language_tagged(text, tag),
-            None => RdfLiteral::simple(text),
-        });
-        builder.push_quad(s, note, literal, None);
+        let s = builder.intern_iri(subject).unwrap();
+        let literal = builder
+            .intern_literal(match language {
+                Some(tag) => RdfLiteral::language_tagged(text, tag),
+                None => RdfLiteral::simple(text),
+            })
+            .unwrap();
+        builder.push_quad(s, note, literal, None).unwrap();
     }
     let dataset: Arc<RdfDataset> = builder.freeze().expect("the fixture must validate");
     TextIndex::from_dataset(
@@ -61,18 +63,22 @@ fn everything() -> PartitionFilter {
 fn predicate_scope_precedes_depth_without_changing_score_weights() {
     let from = "https://example.org/from";
     let mut builder = RdfDatasetBuilder::new();
-    let note_id = builder.intern_iri(NOTE);
-    let from_id = builder.intern_iri(from);
-    let a = builder.intern_iri("https://example.org/a");
-    let b = builder.intern_iri("https://example.org/b");
-    let a_text = builder.intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"));
-    let b_text = builder.intern_literal(RdfLiteral::simple(
-        "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
-    ));
-    let b_from = builder.intern_literal(RdfLiteral::simple("alpha"));
-    builder.push_quad(a, note_id, a_text, None);
-    builder.push_quad(b, note_id, b_text, None);
-    builder.push_quad(b, from_id, b_from, None);
+    let note_id = builder.intern_iri(NOTE).unwrap();
+    let from_id = builder.intern_iri(from).unwrap();
+    let a = builder.intern_iri("https://example.org/a").unwrap();
+    let b = builder.intern_iri("https://example.org/b").unwrap();
+    let a_text = builder
+        .intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"))
+        .unwrap();
+    let b_text = builder
+        .intern_literal(RdfLiteral::simple(
+            "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        ))
+        .unwrap();
+    let b_from = builder.intern_literal(RdfLiteral::simple("alpha")).unwrap();
+    builder.push_quad(a, note_id, a_text, None).unwrap();
+    builder.push_quad(b, note_id, b_text, None).unwrap();
+    builder.push_quad(b, from_id, b_from, None).unwrap();
     let dataset = builder.freeze().unwrap();
     let predicate = TermValue::iri(from);
     let index = TextIndex::from_dataset(

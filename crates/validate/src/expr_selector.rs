@@ -89,6 +89,8 @@ pub struct SelectedExpression {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExprSelectorError {
+    /// The native expression graph could not admit its original storage.
+    Storage(purrdf_lex::allocation::StorageError),
     /// A term the selector spells is not one: `role` names it (`expr`, `expr-at`,
     /// `expr-via 2`), `message` says why.
     Term {
@@ -147,6 +149,7 @@ pub enum ExprSelectorError {
 impl fmt::Display for ExprSelectorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::Term { role, message } => write!(f, "{role}: {message}"),
             Self::StartNotANode { node } => write!(
                 f,
@@ -197,11 +200,16 @@ impl fmt::Display for ExprSelectorError {
     }
 }
 
-impl std::error::Error for ExprSelectorError {}
+purrdf_lex::error_source!(ExprSelectorError { Storage });
+
+purrdf_lex::variant_from!(ExprSelectorError { Storage(purrdf_lex::allocation::StorageError) });
 
 impl From<ExprSelectorError> for ShapesError {
     fn from(error: ExprSelectorError) -> Self {
-        Self::Invalid(error.to_string())
+        match error {
+            ExprSelectorError::Storage(error) => Self::Storage(error),
+            error => Self::Invalid(error.to_string()),
+        }
     }
 }
 
@@ -419,17 +427,17 @@ fn inline(
 
     let mut builder = RdfDatasetBuilder::new();
     for quad in shapes.owned_quads() {
-        builder.push_owned_quad(&quad);
+        builder.push_owned_quad(&quad)?;
     }
     for reifier in shapes.owned_reifiers() {
-        builder.push_owned_reifier(&reifier);
+        builder.push_owned_reifier(&reifier)?;
     }
     for annotation in shapes.owned_annotations() {
-        builder.push_owned_annotation(&annotation);
+        builder.push_owned_annotation(&annotation)?;
     }
     for graph in shapes.owned_named_graphs() {
-        let id = builder.intern_owned_term_scoped(&graph, purrdf_core::BlankScope::DEFAULT);
-        builder.declare_named_graph(id);
+        let id = builder.intern_owned_term_scoped(&graph, purrdf_core::BlankScope::DEFAULT)?;
+        builder.declare_named_graph(id)?;
     }
     for quad in &quads {
         builder.push_owned_quad(&RdfQuad {
@@ -438,7 +446,7 @@ fn inline(
             object: rename(&quad.object),
             graph_name: quad.graph_name.as_ref().map(rename),
             location: None,
-        });
+        })?;
     }
     for reifier in &reifiers {
         let mut renamed = reifier.clone();
@@ -446,7 +454,7 @@ fn inline(
         renamed.statement = relabel_triple(&reifier.statement, &prefix);
         renamed.graph = reifier.graph.as_ref().map(rename);
         renamed.location = None;
-        builder.push_owned_reifier(&renamed);
+        builder.push_owned_reifier(&renamed)?;
     }
     for annotation in &annotations {
         let mut renamed = annotation.clone();
@@ -454,13 +462,16 @@ fn inline(
         renamed.object = rename(&annotation.object);
         renamed.graph = annotation.graph.as_ref().map(rename);
         renamed.location = None;
-        builder.push_owned_annotation(&renamed);
+        builder.push_owned_annotation(&renamed)?;
     }
-    let merged = builder
-        .freeze()
-        .map_err(|error| ExprSelectorError::Turtle {
-            errors: vec![error.to_string()],
-        })?;
+    let merged = builder.freeze().map_err(|error| {
+        error.storage_error().map_or_else(
+            || ExprSelectorError::Turtle {
+                errors: vec![error.to_string()],
+            },
+            ExprSelectorError::Storage,
+        )
+    })?;
     Ok(SelectedExpression {
         shapes: merged,
         root: Term::blank(format!("{prefix}{root}")),

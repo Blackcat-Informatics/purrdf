@@ -1502,10 +1502,12 @@ mod term_walk_tests {
     #[test]
     fn a_present_empty_literal_resolves_to_the_empty_string() {
         let mut builder = RdfDatasetBuilder::new();
-        let holder = builder.intern_iri("http://example.org/holder");
+        let holder = builder.intern_iri("http://example.org/holder").unwrap();
         let datatype = "http://example.org/geo#wktLiteral";
-        let value = builder.intern_value(&TermValue::typed_literal("", datatype));
-        builder.push_quad(holder, holder, value, None);
+        let value = builder
+            .intern_value(&TermValue::typed_literal("", datatype))
+            .unwrap();
+        builder.push_quad(holder, holder, value, None).unwrap();
         let dataset = builder.freeze().expect("one literal freezes");
         let object = dataset.quads().next().expect("one quad").o;
         assert_eq!(
@@ -1575,9 +1577,9 @@ mod term_walk_tests {
             reference_feed(&mut expected, &value);
             assert_eq!(found.finish(), expected.finish(), "seed {seed}");
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let ds = builder.freeze().expect("a generated term freezes");
             let object = ds.quads().next().expect("one quad").o;
             assert_eq!(

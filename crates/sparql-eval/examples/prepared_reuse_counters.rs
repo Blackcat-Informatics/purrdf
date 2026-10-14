@@ -49,11 +49,13 @@ fn measure(name: &str, engine: &NativeSparqlEngine, operation: impl FnOnce()) {
 
 fn main() {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let value = builder.intern_iri("http://example.org/value");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let value = builder.intern_iri("http://example.org/value").unwrap();
     for index in 0..64 {
-        let subject = builder.intern_iri(&format!("http://example.org/s{index}"));
-        builder.push_quad(subject, predicate, value, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, value, None).unwrap();
     }
     let data = builder.freeze().unwrap();
     println!(

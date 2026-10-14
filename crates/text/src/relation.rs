@@ -2517,13 +2517,17 @@ mod tests {
     fn dataset_of(rows: &[(&str, &str, Option<&str>)]) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         for &(subject, text, language) in rows {
-            let note = builder.intern_iri(NOTE);
-            let s = builder.intern_iri(&format!("https://example.org/{subject}"));
-            let literal = builder.intern_literal(match language {
-                Some(tag) => RdfLiteral::language_tagged(text, tag),
-                None => RdfLiteral::simple(text),
-            });
-            builder.push_quad(s, note, literal, None);
+            let note = builder.intern_iri(NOTE).unwrap();
+            let s = builder
+                .intern_iri(&format!("https://example.org/{subject}"))
+                .unwrap();
+            let literal = builder
+                .intern_literal(match language {
+                    Some(tag) => RdfLiteral::language_tagged(text, tag),
+                    None => RdfLiteral::simple(text),
+                })
+                .unwrap();
+            builder.push_quad(s, note, literal, None).unwrap();
         }
         builder.freeze().expect("the fixture must validate")
     }
@@ -3403,7 +3407,7 @@ mod tests {
         for active in [0, 1, 3] {
             let build = |auxiliary: bool| {
                 let mut builder = RdfDatasetBuilder::new();
-                let predicate = builder.intern_iri(NOTE);
+                let predicate = builder.intern_iri(NOTE).unwrap();
                 for (language, graph) in [
                     ("en", None),
                     ("en", Some("https://example.org/graph")),
@@ -3413,11 +3417,14 @@ mod tests {
                 .take(active)
                 {
                     for name in ["a", "b", "c"] {
-                        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
-                        let text =
-                            builder.intern_literal(RdfLiteral::language_tagged("alpha", language));
-                        let graph = graph.map(|iri| builder.intern_iri(iri));
-                        builder.push_quad(subject, predicate, text, graph);
+                        let subject = builder
+                            .intern_iri(&format!("https://example.org/{name}"))
+                            .unwrap();
+                        let text = builder
+                            .intern_literal(RdfLiteral::language_tagged("alpha", language))
+                            .unwrap();
+                        let graph = graph.map(|iri| builder.intern_iri(iri).unwrap());
+                        builder.push_quad(subject, predicate, text, graph).unwrap();
                     }
                 }
                 if auxiliary {
@@ -3429,11 +3436,14 @@ mod tests {
                             Some("https://example.org/auxiliary-graph"),
                         ),
                     ] {
-                        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
-                        let text =
-                            builder.intern_literal(RdfLiteral::language_tagged("---", language));
-                        let graph = graph.map(|iri| builder.intern_iri(iri));
-                        builder.push_quad(subject, predicate, text, graph);
+                        let subject = builder
+                            .intern_iri(&format!("https://example.org/{name}"))
+                            .unwrap();
+                        let text = builder
+                            .intern_literal(RdfLiteral::language_tagged("---", language))
+                            .unwrap();
+                        let graph = graph.map(|iri| builder.intern_iri(iri).unwrap());
+                        builder.push_quad(subject, predicate, text, graph).unwrap();
                     }
                 }
                 let dataset = builder

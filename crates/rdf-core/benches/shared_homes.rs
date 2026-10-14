@@ -73,15 +73,17 @@ fn bench_escape_scan(c: &mut Bench) {
 /// thousand entries, so adjacent records share tens of bytes.
 fn dictionary_dataset(count: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/o");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/o").unwrap();
     for i in 0..count {
-        let subject = builder.intern_iri(&format!(
-            "http://example.org/data/section-{:04}/records/entity-{:08}",
-            i / 1_000,
-            i
-        ));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder
+            .intern_iri(&format!(
+                "http://example.org/data/section-{:04}/records/entity-{:08}",
+                i / 1_000,
+                i
+            ))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     builder.freeze().expect("the dictionary fixture is valid")
 }

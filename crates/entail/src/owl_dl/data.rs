@@ -466,13 +466,14 @@ mod tests {
         }
 
         fn iri(&mut self, iri: &str) -> TermId {
-            self.builder.intern_iri(iri)
+            self.builder.intern_iri(iri).unwrap()
         }
 
         fn blank(&mut self) -> TermId {
             self.blanks += 1;
             self.builder
                 .intern_blank(&format!("n{}", self.blanks), BlankScope::DEFAULT)
+                .unwrap()
         }
 
         fn literal(&mut self, lexical: &str, datatype: &str) -> TermId {
@@ -480,6 +481,7 @@ mod tests {
                 &mut self.builder,
                 &TermValue::typed_literal(lexical, datatype),
             )
+            .unwrap()
         }
 
         fn lang_literal(&mut self, lexical: &str, language: &str) -> TermId {
@@ -487,10 +489,11 @@ mod tests {
                 &mut self.builder,
                 &TermValue::lang_literal(lexical, language),
             )
+            .unwrap()
         }
 
         fn quad(&mut self, s: TermId, p: TermId, o: TermId) {
-            self.builder.push_quad(s, p, o, None);
+            self.builder.push_quad(s, p, o, None).unwrap();
         }
 
         /// Write `members` as an RDF collection, returning its head.
@@ -502,7 +505,8 @@ mod tests {
                 self.cells += 1;
                 let cell = self
                     .builder
-                    .intern_blank(&format!("cell{}", self.cells), BlankScope::DEFAULT);
+                    .intern_blank(&format!("cell{}", self.cells), BlankScope::DEFAULT)
+                    .unwrap();
                 self.quad(cell, first, member);
                 self.quad(cell, rest, head);
                 head = cell;

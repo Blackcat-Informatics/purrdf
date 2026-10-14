@@ -415,10 +415,10 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     // predicate over a plain IRI object, not a triple term) is still refused,
     // typed, under the flat presentation exactly as under the overlay.
     let mut b = RdfDatasetBuilder::new();
-    let r = b.intern_iri("http://example.org/r");
-    let reifies = b.intern_iri("urn:purrdf:rdfc:reifies");
-    let o = b.intern_iri("http://example.org/o");
-    b.push_quad(r, reifies, o, None);
+    let r = b.intern_iri("http://example.org/r").unwrap();
+    let reifies = b.intern_iri("urn:purrdf:rdfc:reifies").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    b.push_quad(r, reifies, o, None).unwrap();
     let near_miss = b.freeze().expect("valid");
     match try_canonicalize_flat_view(&*near_miss, CanonHash::Sha256) {
         Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(err))) => {
@@ -431,13 +431,13 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     // Its neighbouring VALID case: the same subject/object but a TRIPLE-TERM object
     // instead of a plain IRI — the exact folded shape — is ADMITTED and lowers.
     let mut b = RdfDatasetBuilder::new();
-    let r = b.intern_iri("http://example.org/r");
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let triple = b.intern_triple(s, p, o);
-    let reifies = b.intern_iri("urn:purrdf:rdfc:reifies");
-    b.push_quad(r, reifies, triple, None);
+    let r = b.intern_iri("http://example.org/r").unwrap();
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let reifies = b.intern_iri("urn:purrdf:rdfc:reifies").unwrap();
+    b.push_quad(r, reifies, triple, None).unwrap();
     let neighbour = b.freeze().expect("valid");
     let admitted = try_canonicalize_flat_view(&*neighbour, CanonHash::Sha256)
         .expect("the exact folded shape must be admitted, not refused");
@@ -456,10 +456,10 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
 #[test]
 fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    b.push_annotation(s, p, o);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    b.push_annotation(s, p, o).unwrap();
     let native = b.freeze().expect("valid dataset");
     let lowered = try_canonicalize_flat_view(&*native, CanonHash::Sha256)
         .expect("a genuine annotation canonicalizes under the flat presentation")
@@ -583,15 +583,16 @@ fn flat_view_leaves_an_ordinary_quad_unchanged() {
 #[test]
 fn a_named_graph_reifier_lowers_to_flat_rdf_reifies_in_its_declaring_graph() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let r = b.intern_iri("http://example.org/r");
-    let g_asserted = b.intern_iri("http://example.org/g-asserted");
-    let g_declared = b.intern_iri("http://example.org/g-declared");
-    b.push_quad(s, p, o, Some(g_asserted));
-    let triple = b.intern_triple(s, p, o);
-    b.push_reifier_in_graph(r, triple, Some(g_declared));
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let r = b.intern_iri("http://example.org/r").unwrap();
+    let g_asserted = b.intern_iri("http://example.org/g-asserted").unwrap();
+    let g_declared = b.intern_iri("http://example.org/g-declared").unwrap();
+    b.push_quad(s, p, o, Some(g_asserted)).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    b.push_reifier_in_graph(r, triple, Some(g_declared))
+        .unwrap();
     let dataset = b.freeze().expect("valid dataset");
     let flat = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
         .expect("a named-graph reifier canonicalizes under the flat presentation")
@@ -626,11 +627,11 @@ fn a_named_graph_reifier_lowers_to_flat_rdf_reifies_in_its_declaring_graph() {
 #[test]
 fn a_named_graph_annotation_lowers_to_a_flat_row_in_its_own_graph() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let g = b.intern_iri("http://example.org/g");
-    b.push_annotation_in_graph(s, p, o, Some(g));
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    b.push_annotation_in_graph(s, p, o, Some(g)).unwrap();
     let dataset = b.freeze().expect("valid dataset");
     let flat = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
         .expect("a named-graph annotation canonicalizes under the flat presentation")
@@ -654,26 +655,28 @@ fn a_named_graph_annotation_lowers_to_a_flat_row_in_its_own_graph() {
 #[test]
 fn a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation() {
     let mut only_native = RdfDatasetBuilder::new();
-    let s = only_native.intern_iri("http://example.org/s");
-    let p = only_native.intern_iri("http://example.org/p");
-    let o = only_native.intern_iri("http://example.org/o");
-    let r = only_native.intern_iri("http://example.org/r");
-    let triple = only_native.intern_triple(s, p, o);
-    only_native.push_reifier(r, triple);
+    let s = only_native.intern_iri("http://example.org/s").unwrap();
+    let p = only_native.intern_iri("http://example.org/p").unwrap();
+    let o = only_native.intern_iri("http://example.org/o").unwrap();
+    let r = only_native.intern_iri("http://example.org/r").unwrap();
+    let triple = only_native.intern_triple(s, p, o).unwrap();
+    only_native.push_reifier(r, triple).unwrap();
     let dataset = only_native.freeze().expect("valid dataset");
     let single = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
         .expect("a genuine reifier canonicalizes under the flat presentation")
         .nquads;
 
     let mut doubly_spelled = RdfDatasetBuilder::new();
-    let s2 = doubly_spelled.intern_iri("http://example.org/s");
-    let p2 = doubly_spelled.intern_iri("http://example.org/p");
-    let o2 = doubly_spelled.intern_iri("http://example.org/o");
-    let r2 = doubly_spelled.intern_iri("http://example.org/r");
-    let triple2 = doubly_spelled.intern_triple(s2, p2, o2);
-    doubly_spelled.push_reifier(r2, triple2);
-    let rdf_reifies = doubly_spelled.intern_iri(RDF_REIFIES);
-    doubly_spelled.push_quad(r2, rdf_reifies, triple2, None);
+    let s2 = doubly_spelled.intern_iri("http://example.org/s").unwrap();
+    let p2 = doubly_spelled.intern_iri("http://example.org/p").unwrap();
+    let o2 = doubly_spelled.intern_iri("http://example.org/o").unwrap();
+    let r2 = doubly_spelled.intern_iri("http://example.org/r").unwrap();
+    let triple2 = doubly_spelled.intern_triple(s2, p2, o2).unwrap();
+    doubly_spelled.push_reifier(r2, triple2).unwrap();
+    let rdf_reifies = doubly_spelled.intern_iri(RDF_REIFIES).unwrap();
+    doubly_spelled
+        .push_quad(r2, rdf_reifies, triple2, None)
+        .unwrap();
     let dataset2 = doubly_spelled.freeze().expect("valid dataset");
     let doubled = try_canonicalize_flat_view(&*dataset2, CanonHash::Sha256)
         .expect("a reifier binding spelled both ways still canonicalizes")

@@ -220,7 +220,7 @@ fn purrdf_refusal(input: &Input) -> Option<String> {
         &ShapesImports::new(),
     )
     .err()
-    .map(String::from)
+    .map(|error| error.to_string())
 }
 
 /// One `sh:Violation` result of `shacl-shacl.ttl`: `(component, result path, source

@@ -536,22 +536,32 @@ fn configured_context_preserves_named_graphs_and_rdf_1_2_statement_structures() 
 #[test]
 fn configured_context_preserves_many_to_many_reifier_bindings() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/s");
-    let predicate = builder.intern_iri("https://example.org/p");
-    let first_object = builder.intern_iri("https://example.org/o1");
-    let second_object = builder.intern_iri("https://example.org/o2");
-    let first = builder.intern_triple(subject, predicate, first_object);
-    let second = builder.intern_triple(subject, predicate, second_object);
-    let shared = builder.intern_iri("https://example.org/shared");
-    let alternate = builder.intern_iri("https://example.org/alternate");
-    let confidence = builder.intern_iri("https://example.org/confidence");
-    let high = builder.intern_literal(RdfLiteral::simple("high"));
-    builder.push_quad(subject, predicate, first_object, None);
-    builder.push_quad(subject, predicate, second_object, None);
-    builder.push_reifier(shared, first);
-    builder.push_reifier(shared, second);
-    builder.push_reifier(alternate, first);
-    builder.push_annotation(shared, confidence, high);
+    let subject = builder.intern_iri("https://example.org/s").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let first_object = builder.intern_iri("https://example.org/o1").unwrap();
+    let second_object = builder.intern_iri("https://example.org/o2").unwrap();
+    let first = builder
+        .intern_triple(subject, predicate, first_object)
+        .unwrap();
+    let second = builder
+        .intern_triple(subject, predicate, second_object)
+        .unwrap();
+    let shared = builder.intern_iri("https://example.org/shared").unwrap();
+    let alternate = builder.intern_iri("https://example.org/alternate").unwrap();
+    let confidence = builder
+        .intern_iri("https://example.org/confidence")
+        .unwrap();
+    let high = builder.intern_literal(RdfLiteral::simple("high")).unwrap();
+    builder
+        .push_quad(subject, predicate, first_object, None)
+        .unwrap();
+    builder
+        .push_quad(subject, predicate, second_object, None)
+        .unwrap();
+    builder.push_reifier(shared, first).unwrap();
+    builder.push_reifier(shared, second).unwrap();
+    builder.push_reifier(alternate, first).unwrap();
+    builder.push_annotation(shared, confidence, high).unwrap();
     let dataset = builder.freeze().expect("freeze many-to-many reifiers");
 
     let compiled = CompiledJsonLdContext::compile(

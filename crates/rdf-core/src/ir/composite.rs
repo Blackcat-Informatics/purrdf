@@ -257,9 +257,10 @@ impl CompositeSource {
         };
         (0..dense)
             .map(|i| {
-                LocalId::Base(TermId::from_index(
-                    u32::try_from(i).expect("source index fits u32"),
-                ))
+                LocalId::Base(
+                    TermId::from_index(u32::try_from(i).expect("source index fits u32"))
+                        .expect("stored term index is representable"),
+                )
             })
             .chain(
                 self.delta_ref()
@@ -841,7 +842,8 @@ impl SelectedGraphs {
             .map(|(local, &id)| {
                 (
                     id,
-                    TermId::from_index(u32::try_from(local).expect("checked against u32 above")),
+                    TermId::from_index(u32::try_from(local).expect("checked against u32 above"))
+                        .expect("stored term index is representable"),
                 )
             })
             .collect();
@@ -1611,9 +1613,9 @@ impl Prefix {
         let mut graph_count = 0_usize;
         for source in &sources {
             let id = match &source.placement {
-                GraphPlacement::Named(TermValue::Iri(iri)) => Some(graph_builder.intern_iri(iri)),
+                GraphPlacement::Named(TermValue::Iri(iri)) => Some(graph_builder.intern_iri(iri)?),
                 GraphPlacement::Named(TermValue::Blank { label, scope }) => {
-                    Some(graph_builder.intern_blank(label, *scope))
+                    Some(graph_builder.intern_blank(label, *scope)?)
                 }
                 GraphPlacement::Named(_) => {
                     return Err(RdfDiagnostic::error(
@@ -1624,7 +1626,7 @@ impl Prefix {
                 _ => None,
             };
             if let Some(id) = id {
-                graph_builder.declare_named_graph(id);
+                graph_builder.declare_named_graph(id)?;
                 graph_count += 1;
             }
             graph_ids.push(id);

@@ -72,7 +72,7 @@ fn canonicalize_turtle(
 ) -> PyResult<Vec<u8>> {
     py.detach(|| crate::turtle_normalize::canonical_turtle(turtle_bytes, &extra_prefixes))
         .map(String::into_bytes)
-        .map_err(PyValueError::new_err)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 /// Register the `purrdf` surface on a Python module.

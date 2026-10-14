@@ -322,19 +322,19 @@ mod tests {
 
     fn arm_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(&format!("{EX}knows"));
-        let member = b.intern_iri(&format!("{EX}member"));
-        let club = b.intern_iri(&format!("{EX}club"));
-        let s1 = b.intern_iri(&format!("{EX}s1"));
-        let s2 = b.intern_iri(&format!("{EX}s2"));
-        let o1 = b.intern_iri(&format!("{EX}o1"));
-        let g1 = b.intern_iri(ARM_GRAPH);
-        b.push_quad(s1, knows, o1, None);
-        b.push_quad(s2, knows, o1, None);
-        b.push_quad(s2, member, club, None);
+        let knows = b.intern_iri(&format!("{EX}knows")).unwrap();
+        let member = b.intern_iri(&format!("{EX}member")).unwrap();
+        let club = b.intern_iri(&format!("{EX}club")).unwrap();
+        let s1 = b.intern_iri(&format!("{EX}s1")).unwrap();
+        let s2 = b.intern_iri(&format!("{EX}s2")).unwrap();
+        let o1 = b.intern_iri(&format!("{EX}o1")).unwrap();
+        let g1 = b.intern_iri(ARM_GRAPH).unwrap();
+        b.push_quad(s1, knows, o1, None).unwrap();
+        b.push_quad(s2, knows, o1, None).unwrap();
+        b.push_quad(s2, member, club, None).unwrap();
         // The same `s2`-only fact again, but inside a NAMED graph — the fixture the
         // `graph_*` arm tests read from (default-graph triples above are untouched).
-        b.push_quad(s2, member, club, Some(g1));
+        b.push_quad(s2, member, club, Some(g1)).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -614,23 +614,23 @@ mod tests {
         // `current_row_vars` is intersected with the real outer schema first, so
         // `?nx`/`?ny` — never a column of it — no longer trip the refusal.
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(&format!("{EX}knows"));
-        let member = b.intern_iri(&format!("{EX}member"));
-        let club = b.intern_iri(&format!("{EX}club"));
-        let s1 = b.intern_iri(&format!("{EX}s1"));
-        let s2 = b.intern_iri(&format!("{EX}s2"));
-        let o1 = b.intern_iri(&format!("{EX}o1"));
-        let witness = b.intern_iri(&format!("{EX}witness"));
-        let anyone = b.intern_iri(&format!("{EX}anyone"));
-        b.push_quad(s1, knows, o1, None);
-        b.push_quad(s2, knows, o1, None);
+        let knows = b.intern_iri(&format!("{EX}knows")).unwrap();
+        let member = b.intern_iri(&format!("{EX}member")).unwrap();
+        let club = b.intern_iri(&format!("{EX}club")).unwrap();
+        let s1 = b.intern_iri(&format!("{EX}s1")).unwrap();
+        let s2 = b.intern_iri(&format!("{EX}s2")).unwrap();
+        let o1 = b.intern_iri(&format!("{EX}o1")).unwrap();
+        let witness = b.intern_iri(&format!("{EX}witness")).unwrap();
+        let anyone = b.intern_iri(&format!("{EX}anyone")).unwrap();
+        b.push_quad(s1, knows, o1, None).unwrap();
+        b.push_quad(s2, knows, o1, None).unwrap();
         // Only `s2` has the `:member` fact — the correlation channel, matching
         // `arm_ds`'s own `s1`/`s2` split.
-        b.push_quad(s2, member, club, None);
+        b.push_quad(s2, member, club, None).unwrap();
         // A witness fact totally unrelated to `?s`/`?o`, making the nested EXISTS
         // unconditionally true — its own variables (`?nx`, `?ny`) never appear
         // anywhere else in this shape.
-        b.push_quad(witness, club, anyone, None);
+        b.push_quad(witness, club, anyone, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}knows"), tvar("o"));
@@ -760,18 +760,18 @@ mod tests {
         // EMPTY unconstrained bag and answering FALSE for every outer row, including
         // `other`, where the correct answer is TRUE.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let base = b.intern_iri(&format!("{EX}base"));
-        let excluded = b.intern_iri(&format!("{EX}excluded"));
-        let one = b.intern_literal(RdfLiteral::simple("1"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let z1 = b.intern_iri(&format!("{EX}z1"));
-        let ca = b.intern_iri(&format!("{EX}cA"));
-        let other = b.intern_iri(&format!("{EX}other"));
-        b.push_quad(ca, tag, anything, None);
-        b.push_quad(other, tag, anything, None);
-        b.push_quad(z1, base, one, None);
-        b.push_quad(z1, excluded, ca, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let base = b.intern_iri(&format!("{EX}base")).unwrap();
+        let excluded = b.intern_iri(&format!("{EX}excluded")).unwrap();
+        let one = b.intern_literal(RdfLiteral::simple("1")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let z1 = b.intern_iri(&format!("{EX}z1")).unwrap();
+        let ca = b.intern_iri(&format!("{EX}cA")).unwrap();
+        let other = b.intern_iri(&format!("{EX}other")).unwrap();
+        b.push_quad(ca, tag, anything, None).unwrap();
+        b.push_quad(other, tag, anything, None).unwrap();
+        b.push_quad(z1, base, one, None).unwrap();
+        b.push_quad(z1, excluded, ca, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -827,19 +827,19 @@ mod tests {
         // the FULL (both variables) unconstrained bag, not against the up-to-3-row
         // per-value slice the correct definition computes.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let item = b.intern_iri(&format!("{EX}item"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let za = b.intern_iri(&format!("{EX}zA"));
-        let zb = b.intern_iri(&format!("{EX}zB"));
-        let zc = b.intern_iri(&format!("{EX}zC"));
-        let ca = b.intern_iri(&format!("{EX}cA"));
-        let cb = b.intern_iri(&format!("{EX}cB"));
-        b.push_quad(ca, tag, anything, None);
-        b.push_quad(cb, tag, anything, None);
-        b.push_quad(za, item, ca, None);
-        b.push_quad(zb, item, ca, None);
-        b.push_quad(zc, item, cb, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let item = b.intern_iri(&format!("{EX}item")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let za = b.intern_iri(&format!("{EX}zA")).unwrap();
+        let zb = b.intern_iri(&format!("{EX}zB")).unwrap();
+        let zc = b.intern_iri(&format!("{EX}zC")).unwrap();
+        let ca = b.intern_iri(&format!("{EX}cA")).unwrap();
+        let cb = b.intern_iri(&format!("{EX}cB")).unwrap();
+        b.push_quad(ca, tag, anything, None).unwrap();
+        b.push_quad(cb, tag, anything, None).unwrap();
+        b.push_quad(za, item, ca, None).unwrap();
+        b.push_quad(zb, item, ca, None).unwrap();
+        b.push_quad(zc, item, cb, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -907,19 +907,19 @@ mod tests {
         // too — leaving an EMPTY unconstrained bag that answers FALSE for every outer
         // row, including `cA`, where the correct answer is TRUE.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let item = b.intern_iri(&format!("{EX}item"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let za = b.intern_iri(&format!("{EX}zA"));
-        let zb = b.intern_iri(&format!("{EX}zB"));
-        let zc = b.intern_iri(&format!("{EX}zC"));
-        let ca = b.intern_iri(&format!("{EX}cA"));
-        let cb = b.intern_iri(&format!("{EX}cB"));
-        b.push_quad(ca, tag, anything, None);
-        b.push_quad(cb, tag, anything, None);
-        b.push_quad(za, item, ca, None);
-        b.push_quad(zb, item, ca, None);
-        b.push_quad(zc, item, cb, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let item = b.intern_iri(&format!("{EX}item")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let za = b.intern_iri(&format!("{EX}zA")).unwrap();
+        let zb = b.intern_iri(&format!("{EX}zB")).unwrap();
+        let zc = b.intern_iri(&format!("{EX}zC")).unwrap();
+        let ca = b.intern_iri(&format!("{EX}cA")).unwrap();
+        let cb = b.intern_iri(&format!("{EX}cB")).unwrap();
+        b.push_quad(ca, tag, anything, None).unwrap();
+        b.push_quad(cb, tag, anything, None).unwrap();
+        b.push_quad(za, item, ca, None).unwrap();
+        b.push_quad(zb, item, ca, None).unwrap();
+        b.push_quad(zc, item, cb, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -1000,19 +1000,19 @@ mod tests {
         // is ALWAYS empty regardless of outer value — the unconstrained bag is empty,
         // and the probe answers FALSE for every outer row, including `cA`.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let item = b.intern_iri(&format!("{EX}item"));
-        let base = b.intern_iri(&format!("{EX}base"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let one = b.intern_literal(RdfLiteral::simple("1"));
-        let za = b.intern_iri(&format!("{EX}zA"));
-        let z1 = b.intern_iri(&format!("{EX}z1"));
-        let ca = b.intern_iri(&format!("{EX}cA"));
-        let cz = b.intern_iri(&format!("{EX}cZ"));
-        b.push_quad(ca, tag, anything, None);
-        b.push_quad(cz, tag, anything, None);
-        b.push_quad(za, item, ca, None);
-        b.push_quad(z1, base, one, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let item = b.intern_iri(&format!("{EX}item")).unwrap();
+        let base = b.intern_iri(&format!("{EX}base")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let one = b.intern_literal(RdfLiteral::simple("1")).unwrap();
+        let za = b.intern_iri(&format!("{EX}zA")).unwrap();
+        let z1 = b.intern_iri(&format!("{EX}z1")).unwrap();
+        let ca = b.intern_iri(&format!("{EX}cA")).unwrap();
+        let cz = b.intern_iri(&format!("{EX}cZ")).unwrap();
+        b.push_quad(ca, tag, anything, None).unwrap();
+        b.push_quad(cz, tag, anything, None).unwrap();
+        b.push_quad(za, item, ca, None).unwrap();
+        b.push_quad(z1, base, one, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("otag"));
@@ -1115,12 +1115,12 @@ mod tests {
         // `crate::governor::soundness::exists_row_collision` catches the collision
         // before either strategy runs, so both give way to a single hard error.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let ca = b.intern_iri(&format!("{EX}cA"));
-        let other = b.intern_iri(&format!("{EX}other"));
-        b.push_quad(ca, tag, anything, None);
-        b.push_quad(other, tag, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let ca = b.intern_iri(&format!("{EX}cA")).unwrap();
+        let other = b.intern_iri(&format!("{EX}other")).unwrap();
+        b.push_quad(ca, tag, anything, None).unwrap();
+        b.push_quad(other, tag, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -1146,13 +1146,13 @@ mod tests {
         // collision before either strategy runs, so both give way to a single hard
         // error.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let holder_a = b.intern_iri(&format!("{EX}holderA"));
-        let holder_b = b.intern_iri(&format!("{EX}holderB"));
-        let fixed = b.intern_literal(RdfLiteral::simple("fixed"));
-        let other = b.intern_literal(RdfLiteral::simple("other"));
-        b.push_quad(holder_a, tag, fixed, None);
-        b.push_quad(holder_b, tag, other, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let holder_a = b.intern_iri(&format!("{EX}holderA")).unwrap();
+        let holder_b = b.intern_iri(&format!("{EX}holderB")).unwrap();
+        let fixed = b.intern_literal(RdfLiteral::simple("fixed")).unwrap();
+        let other = b.intern_literal(RdfLiteral::simple("other")).unwrap();
+        b.push_quad(holder_a, tag, fixed, None).unwrap();
+        b.push_quad(holder_b, tag, other, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         // `?s` is the OBJECT here (not the subject, as in the other fixtures above):
@@ -1188,12 +1188,12 @@ mod tests {
     #[test]
     fn exists_hard_errors_on_non_adjacent_group_extend_collision() {
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let holder_a = b.intern_iri(&format!("{EX}holderA"));
-        let holder_b = b.intern_iri(&format!("{EX}holderB"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        b.push_quad(holder_a, tag, anything, None);
-        b.push_quad(holder_b, tag, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let holder_a = b.intern_iri(&format!("{EX}holderA")).unwrap();
+        let holder_b = b.intern_iri(&format!("{EX}holderB")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        b.push_quad(holder_a, tag, anything, None).unwrap();
+        b.push_quad(holder_b, tag, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         // `?s` is the OBJECT here, same reasoning as
@@ -1270,10 +1270,10 @@ mod tests {
         // for every row (see `exists_hard_errors_on_extend_collision_regardless_of_strategy`'s
         // doc). Through the public engine it must now hard-error instead.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let holder = b.intern_iri(&format!("{EX}npHolder"));
-        b.push_quad(holder, tag, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let holder = b.intern_iri(&format!("{EX}npHolder")).unwrap();
+        b.push_quad(holder, tag, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let inner = GraphPattern::Extend {
@@ -1302,10 +1302,10 @@ mod tests {
         // `EXISTS { VALUES ?x { :fixed } }` collides with the outer row's own `?x`
         // the same way a `BIND` target does.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let holder = b.intern_iri(&format!("{EX}npHolder"));
-        b.push_quad(holder, tag, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let holder = b.intern_iri(&format!("{EX}npHolder")).unwrap();
+        b.push_quad(holder, tag, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let inner = GraphPattern::Values {
@@ -1335,10 +1335,10 @@ mod tests {
         // not touch this shape at all — it still evaluates through the SAME public
         // engine entry point used by the two collision tests above.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let holder = b.intern_iri(&format!("{EX}npHolder"));
-        b.push_quad(holder, tag, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let holder = b.intern_iri(&format!("{EX}npHolder")).unwrap();
+        b.push_quad(holder, tag, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let inner = GraphPattern::Extend {
@@ -1390,21 +1390,21 @@ mod tests {
         let o = nn(&format!("{EX}dblO"));
         let o1 = nn(&format!("{EX}dblO1"));
         let o2 = nn(&format!("{EX}dblO2"));
-        let p_id = b.intern_iri(p.as_str());
-        let o_id = b.intern_iri(o.as_str());
-        let o1_id = b.intern_iri(o1.as_str());
-        let o2_id = b.intern_iri(o2.as_str());
-        let s1 = b.intern_iri(&format!("{EX}dblS1"));
-        let s2 = b.intern_iri(&format!("{EX}dblS2"));
+        let p_id = b.intern_iri(p.as_str()).unwrap();
+        let o_id = b.intern_iri(o.as_str()).unwrap();
+        let o1_id = b.intern_iri(o1.as_str()).unwrap();
+        let o2_id = b.intern_iri(o2.as_str()).unwrap();
+        let s1 = b.intern_iri(&format!("{EX}dblS1")).unwrap();
+        let s2 = b.intern_iri(&format!("{EX}dblS2")).unwrap();
         // `s1` has BOTH `:dblO1` and `:dblO2` — the nested EXISTS is true, so the
         // outer FILTER keeps `?s ?p :dblO1`, and the outer EXISTS is true.
-        b.push_quad(s1, p_id, o_id, None);
-        b.push_quad(s1, p_id, o1_id, None);
-        b.push_quad(s1, p_id, o2_id, None);
+        b.push_quad(s1, p_id, o_id, None).unwrap();
+        b.push_quad(s1, p_id, o1_id, None).unwrap();
+        b.push_quad(s1, p_id, o2_id, None).unwrap();
         // `s2` has `:dblO1` but NOT `:dblO2` — the nested EXISTS is false, the outer
         // FILTER drops every candidate, and the outer EXISTS is false.
-        b.push_quad(s2, p_id, o_id, None);
-        b.push_quad(s2, p_id, o1_id, None);
+        b.push_quad(s2, p_id, o_id, None).unwrap();
+        b.push_quad(s2, p_id, o1_id, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp(vec![TriplePattern {
@@ -1464,20 +1464,20 @@ mod tests {
         // `shared` set — makes the probe answer TRUE for literally every outer value,
         // FABRICATING existence for `?s = c1`, where the correct answer is FALSE.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let base = b.intern_iri(&format!("{EX}base"));
-        let cand = b.intern_iri(&format!("{EX}cand"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let one = b.intern_literal(RdfLiteral::simple("1"));
-        let z1 = b.intern_iri(&format!("{EX}z1"));
-        let c1 = b.intern_iri(&format!("{EX}c1"));
-        let c2 = b.intern_iri(&format!("{EX}c2"));
-        let other = b.intern_iri(&format!("{EX}other"));
-        b.push_quad(c1, tag, anything, None);
-        b.push_quad(other, tag, anything, None);
-        b.push_quad(z1, base, one, None);
-        b.push_quad(z1, cand, c1, None);
-        b.push_quad(z1, cand, c2, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let base = b.intern_iri(&format!("{EX}base")).unwrap();
+        let cand = b.intern_iri(&format!("{EX}cand")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let one = b.intern_literal(RdfLiteral::simple("1")).unwrap();
+        let z1 = b.intern_iri(&format!("{EX}z1")).unwrap();
+        let c1 = b.intern_iri(&format!("{EX}c1")).unwrap();
+        let c2 = b.intern_iri(&format!("{EX}c2")).unwrap();
+        let other = b.intern_iri(&format!("{EX}other")).unwrap();
+        b.push_quad(c1, tag, anything, None).unwrap();
+        b.push_quad(other, tag, anything, None).unwrap();
+        b.push_quad(z1, base, one, None).unwrap();
+        b.push_quad(z1, cand, c1, None).unwrap();
+        b.push_quad(z1, cand, c2, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -1628,12 +1628,12 @@ mod tests {
         };
 
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let ca = b.intern_iri(&format!("{EX}cA"));
-        let other = b.intern_iri(&format!("{EX}other"));
-        b.push_quad(ca, tag, anything, None);
-        b.push_quad(other, tag, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let ca = b.intern_iri(&format!("{EX}cA")).unwrap();
+        let other = b.intern_iri(&format!("{EX}other")).unwrap();
+        b.push_quad(ca, tag, anything, None).unwrap();
+        b.push_quad(other, tag, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -1711,15 +1711,15 @@ mod tests {
         // pass, with the outer row genuinely absent, systematically takes the WRONG one
         // (whichever an unbound comparison resolves to — always "neither").
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let val = b.intern_iri(&format!("{EX}val"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let trigger = b.intern_iri(&format!("{EX}trigger"));
-        let safe = b.intern_iri(&format!("{EX}safe"));
-        let z1 = b.intern_iri(&format!("{EX}z1"));
-        b.push_quad(trigger, tag, anything, None);
-        b.push_quad(safe, tag, anything, None);
-        b.push_quad(z1, val, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let val = b.intern_iri(&format!("{EX}val")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let trigger = b.intern_iri(&format!("{EX}trigger")).unwrap();
+        let safe = b.intern_iri(&format!("{EX}safe")).unwrap();
+        let z1 = b.intern_iri(&format!("{EX}z1")).unwrap();
+        b.push_quad(trigger, tag, anything, None).unwrap();
+        b.push_quad(safe, tag, anything, None).unwrap();
+        b.push_quad(z1, val, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -1815,12 +1815,12 @@ mod tests {
         // not per-row, so no divergence is observable here — which is exactly what this
         // test pins.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let sa = b.intern_iri(&format!("{EX}sA"));
-        let sb = b.intern_iri(&format!("{EX}sB"));
-        b.push_quad(sa, tag, anything, None);
-        b.push_quad(sb, tag, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let sa = b.intern_iri(&format!("{EX}sA")).unwrap();
+        let sb = b.intern_iri(&format!("{EX}sB")).unwrap();
+        b.push_quad(sa, tag, anything, None).unwrap();
+        b.push_quad(sb, tag, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -1896,15 +1896,15 @@ mod tests {
         // doc).
         let ds = {
             let mut b = RdfDatasetBuilder::new();
-            let base = b.intern_iri(&format!("{EX}base"));
-            let tag = b.intern_iri(&format!("{EX}tag"));
-            let anything = b.intern_literal(RdfLiteral::simple("x"));
-            let z1 = b.intern_iri(&format!("{EX}z1"));
-            let z2 = b.intern_iri(&format!("{EX}z2"));
-            b.push_quad(z1, base, anything, None);
-            b.push_quad(z2, base, anything, None);
-            b.push_quad(z1, tag, anything, None);
-            b.push_quad(z2, tag, anything, None);
+            let base = b.intern_iri(&format!("{EX}base")).unwrap();
+            let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+            let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+            let z1 = b.intern_iri(&format!("{EX}z1")).unwrap();
+            let z2 = b.intern_iri(&format!("{EX}z2")).unwrap();
+            b.push_quad(z1, base, anything, None).unwrap();
+            b.push_quad(z2, base, anything, None).unwrap();
+            b.push_quad(z1, tag, anything, None).unwrap();
+            b.push_quad(z2, tag, anything, None).unwrap();
             b.freeze().expect("freeze")
         };
         let outer = bgp1(tvar("s"), &format!("{EX}tag"), tvar("w"));
@@ -1973,24 +1973,24 @@ mod tests {
         // shortcut also requires statelessness, so the nested site's `RAND()` correctly
         // forces it onto the per-row definition too — see the ledger assertions below.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let q = b.intern_iri(&format!("{EX}q"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let z1 = b.intern_literal(RdfLiteral::simple("z1"));
-        let e = b.intern_iri(&format!("{EX}e"));
-        let y1 = b.intern_iri(&format!("{EX}y1"));
-        let sa = b.intern_iri(&format!("{EX}sA"));
-        let sb = b.intern_iri(&format!("{EX}sB"));
-        b.push_quad(sa, tag, anything, None);
-        b.push_quad(sb, tag, anything, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let q = b.intern_iri(&format!("{EX}q")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let z1 = b.intern_literal(RdfLiteral::simple("z1")).unwrap();
+        let e = b.intern_iri(&format!("{EX}e")).unwrap();
+        let y1 = b.intern_iri(&format!("{EX}y1")).unwrap();
+        let sa = b.intern_iri(&format!("{EX}sA")).unwrap();
+        let sb = b.intern_iri(&format!("{EX}sB")).unwrap();
+        b.push_quad(sa, tag, anything, None).unwrap();
+        b.push_quad(sb, tag, anything, None).unwrap();
         // Only `sA` has a `?s :q ?z` witness — `sB`'s row never reaches the nested
         // EXISTS at all (its own `Bgp` is already empty), so the OUTER-site component
         // of the ledger assertion below (2 of the 3 `exists-definition-answered`
         // charges) proves the per-row definition is charged even for a row whose inner
         // never touches the stateful builtin; the THIRD charge is the nested site's own
         // single reach, via `sA` alone.
-        b.push_quad(sa, q, z1, None);
-        b.push_quad(e, q, y1, None);
+        b.push_quad(sa, q, z1, None).unwrap();
+        b.push_quad(e, q, y1, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let nested = GraphPattern::Filter {
@@ -2080,16 +2080,16 @@ mod tests {
     #[test]
     fn nested_exists_definition_path_attributes_depth_two_ledger_charges() {
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let q = b.intern_iri(&format!("{EX}q"));
-        let r = b.intern_iri(&format!("{EX}r"));
-        let w = b.intern_literal(RdfLiteral::simple("w"));
-        let sa = b.intern_iri(&format!("{EX}sA"));
-        let za = b.intern_iri(&format!("{EX}zA"));
-        let va = b.intern_iri(&format!("{EX}vA"));
-        b.push_quad(sa, tag, w, None);
-        b.push_quad(sa, q, za, None);
-        b.push_quad(za, r, va, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let q = b.intern_iri(&format!("{EX}q")).unwrap();
+        let r = b.intern_iri(&format!("{EX}r")).unwrap();
+        let w = b.intern_literal(RdfLiteral::simple("w")).unwrap();
+        let sa = b.intern_iri(&format!("{EX}sA")).unwrap();
+        let za = b.intern_iri(&format!("{EX}zA")).unwrap();
+        let va = b.intern_iri(&format!("{EX}vA")).unwrap();
+        b.push_quad(sa, tag, w, None).unwrap();
+        b.push_quad(sa, q, za, None).unwrap();
+        b.push_quad(za, r, va, None).unwrap();
         // No `:nope1`/`:nope2` facts at all — both `MINUS` right operands are empty,
         // so neither removes anything, and both witnesses (`?z`, `?v`) survive.
         let ds = b.freeze().expect("freeze");
@@ -2210,22 +2210,22 @@ mod tests {
     /// see [`GRAPH_IRI`]) for the widened alphabet's `Graph` unary operator.
     fn generator_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}outerTag"));
-        let p1 = b.intern_iri(&format!("{EX}p1"));
-        let p2 = b.intern_iri(&format!("{EX}p2"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let sa = b.intern_iri(&format!("{EX}sA"));
-        let sb = b.intern_iri(&format!("{EX}sB"));
-        let sc = b.intern_iri(&format!("{EX}sC"));
-        let g1 = b.intern_iri(GRAPH_IRI);
-        b.push_quad(sa, tag, anything, None);
-        b.push_quad(sb, tag, anything, None);
-        b.push_quad(sc, tag, anything, None);
-        b.push_quad(sa, p1, anything, None);
-        b.push_quad(sb, p2, anything, None);
+        let tag = b.intern_iri(&format!("{EX}outerTag")).unwrap();
+        let p1 = b.intern_iri(&format!("{EX}p1")).unwrap();
+        let p2 = b.intern_iri(&format!("{EX}p2")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let sa = b.intern_iri(&format!("{EX}sA")).unwrap();
+        let sb = b.intern_iri(&format!("{EX}sB")).unwrap();
+        let sc = b.intern_iri(&format!("{EX}sC")).unwrap();
+        let g1 = b.intern_iri(GRAPH_IRI).unwrap();
+        b.push_quad(sa, tag, anything, None).unwrap();
+        b.push_quad(sb, tag, anything, None).unwrap();
+        b.push_quad(sc, tag, anything, None).unwrap();
+        b.push_quad(sa, p1, anything, None).unwrap();
+        b.push_quad(sb, p2, anything, None).unwrap();
         // `sc` has neither `:p1` nor `:p2` — the "matches nothing" outer row.
-        b.push_quad(sa, p1, anything, Some(g1));
-        b.push_quad(sb, p2, anything, Some(g1));
+        b.push_quad(sa, p1, anything, Some(g1)).unwrap();
+        b.push_quad(sb, p2, anything, Some(g1)).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -2499,14 +2499,14 @@ mod tests {
         // proves this holds at whichever fuel level actually trips INSIDE the `Filter`'s
         // `EXISTS` child, since the exact charge schedule is not this test's concern.
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri(&format!("{EX}tag"));
-        let base = b.intern_iri(&format!("{EX}base"));
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let one = b.intern_literal(RdfLiteral::simple("1"));
-        let z1 = b.intern_iri(&format!("{EX}z1"));
-        let ca = b.intern_iri(&format!("{EX}cA"));
-        b.push_quad(ca, tag, anything, None);
-        b.push_quad(z1, base, one, None);
+        let tag = b.intern_iri(&format!("{EX}tag")).unwrap();
+        let base = b.intern_iri(&format!("{EX}base")).unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let one = b.intern_literal(RdfLiteral::simple("1")).unwrap();
+        let z1 = b.intern_iri(&format!("{EX}z1")).unwrap();
+        let ca = b.intern_iri(&format!("{EX}cA")).unwrap();
+        b.push_quad(ca, tag, anything, None).unwrap();
+        b.push_quad(z1, base, one, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = format!(

@@ -1838,12 +1838,24 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
     }
     if let Some(error) = certificate.storage_refusal() {
         let kind = match error {
+            purrdf_lex::allocation::StorageError::Capacity(error) => {
+                let _ = writeln!(
+                    out,
+                    "storage-refusal capacity {} {} {}",
+                    error.space,
+                    error.attempted(),
+                    error.limit()
+                );
+                ""
+            }
             purrdf_lex::allocation::StorageError::SizeOverflow => "size-overflow",
             purrdf_lex::allocation::StorageError::AllocationFailed => "allocation-failed",
             purrdf_lex::allocation::StorageError::AdmissionFailed => "admission-failed",
             purrdf_lex::allocation::StorageError::FormattingFailed => "formatting-failed",
         };
-        let _ = writeln!(out, "storage-refusal {kind}");
+        if !kind.is_empty() {
+            let _ = writeln!(out, "storage-refusal {kind}");
+        }
     }
     for boundary in certificate.boundaries() {
         let _ = writeln!(
@@ -4380,6 +4392,26 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
                 "allocation-failed" => StorageError::AllocationFailed,
                 "admission-failed" => StorageError::AdmissionFailed,
                 "formatting-failed" => StorageError::FormattingFailed,
+                value if value.starts_with("capacity ") => {
+                    use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+                    let mut fields = value.split_whitespace().skip(1);
+                    let space = fields
+                        .next()
+                        .and_then(CapacitySpace::of_name)
+                        .ok_or_else(|| "unknown DL capacity space".to_owned())?;
+                    let attempted = fields
+                        .next()
+                        .and_then(|v| v.parse::<u128>().ok())
+                        .ok_or_else(|| "invalid DL capacity attempted count".to_owned())?;
+                    let limit = fields
+                        .next()
+                        .and_then(|v| v.parse::<u128>().ok())
+                        .ok_or_else(|| "invalid DL capacity limit".to_owned())?;
+                    if fields.next().is_some() || attempted <= limit {
+                        return Err("invalid DL capacity refusal".to_owned());
+                    }
+                    StorageError::Capacity(CapacityError::new(space, attempted, limit))
+                }
                 other => return Err(format!("unknown DL storage refusal \"{other}\"")),
             };
             if storage_refusal.replace(error).is_some() {
@@ -5086,9 +5118,19 @@ mod tests {
 
     #[test]
     fn physical_dl_refusals_round_trip_without_a_decided_certificate() {
-        use purrdf_lex::allocation::StorageError;
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
         let healthy = DlCertificate::stated(false, false, Vec::new(), 0, 0, 0, 0, 0, 0, 0, 0);
         for error in [
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogTerms,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX),
+            )),
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::GlobalTerms,
+                u128::MAX,
+                u128::MAX - 1,
+            )),
             StorageError::SizeOverflow,
             StorageError::AllocationFailed,
             StorageError::AdmissionFailed,

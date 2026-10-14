@@ -88,6 +88,7 @@ fn eval_error(data_ttl: &str, shapes_ttl: &str, focus: &str) -> String {
     let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &ex_term(focus), &expr, &mut guard)
         .expect_err("the expression must be refused")
+        .to_string()
 }
 
 /// A `ShaclData` over `data_ttl`, data graph and SPARQL graph alike.
@@ -103,8 +104,9 @@ fn data_of(data_ttl: &str) -> Arc<RdfDataset> {
 
 /// Validate `data_ttl` against `shapes_ttl` through the production entry point.
 fn validate(data_ttl: &str, shapes_ttl: &str) -> Result<ValidationReport, String> {
-    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)?;
-    validate_with(&store_of(data_ttl), &shapes).map_err(Into::into)
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
+        .map_err(|error| error.to_string())?;
+    validate_with(&store_of(data_ttl), &shapes).map_err(|error| error.to_string())
 }
 
 /// The canonical rendering of an `xsd:integer` literal.

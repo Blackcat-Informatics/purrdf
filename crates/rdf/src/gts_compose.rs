@@ -1962,7 +1962,8 @@ mod tests {
             crate::gts::dataset_from_gts_graph(&purrdf_gts::reader::read(&bytes, true, None))
                 .unwrap();
         let expected =
-            crate::RdfDataset::union(&sources.iter().map(AsRef::as_ref).collect::<Vec<_>>());
+            crate::RdfDataset::union(&sources.iter().map(AsRef::as_ref).collect::<Vec<_>>())
+                .unwrap();
         // LAW: `actual`/`expected` are round-tripped from the test's own self-built
         // `sources` fixture — never caller-supplied and never reachable through a
         // binding, so the panicking wrapper is sound here.

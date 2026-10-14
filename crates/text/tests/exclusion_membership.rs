@@ -99,11 +99,13 @@ const NEEDLES: [&str; 5] = [
 
 fn corpus() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, text) in ROWS {
-        let subject = builder.intern_iri(&format!("http://example.org/{local}"));
-        let object = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, note, object, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/{local}"))
+            .unwrap();
+        let object = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, note, object, None).unwrap();
     }
     builder.freeze().expect("the fixture must validate")
 }
@@ -555,11 +557,13 @@ fn membership_is_admitted_from_an_exhaustive_host_and_from_a_lossy_one() {
 /// candidate set a ranking would have to score.
 fn grown_index(filler: usize) -> Arc<TextIndex> {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     let mut push = |local: &str, text: &str| {
-        let subject = builder.intern_iri(&format!("http://example.org/{local}"));
-        let object = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, note, object, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/{local}"))
+            .unwrap();
+        let object = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, note, object, None).unwrap();
     };
     for (local, text) in ROWS {
         push(local, text);
@@ -886,22 +890,26 @@ fn the_engine_reports_a_lone_blank_as_unobserved_and_nothing_else() {
 /// The fixture plus `ex:slot ex:at 1 … 6`: a triple pattern that binds a rank.
 fn corpus_with_rank_slots() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, text) in ROWS {
-        let subject = builder.intern_iri(&format!("http://example.org/{local}"));
-        let object = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, note, object, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/{local}"))
+            .unwrap();
+        let object = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, note, object, None).unwrap();
     }
-    let slot = builder.intern_iri("http://example.org/slot");
-    let at = builder.intern_iri("http://example.org/at");
+    let slot = builder.intern_iri("http://example.org/slot").unwrap();
+    let at = builder.intern_iri("http://example.org/at").unwrap();
     for rank in 1..=ROWS.len() {
-        let rank = builder.intern_literal(RdfLiteral {
-            lexical_form: rank.to_string(),
-            datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
-            language: None,
-            direction: None,
-        });
-        builder.push_quad(slot, at, rank, None);
+        let rank = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: rank.to_string(),
+                datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        builder.push_quad(slot, at, rank, None).unwrap();
     }
     builder.freeze().expect("the fixture must validate")
 }

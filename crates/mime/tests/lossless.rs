@@ -489,17 +489,24 @@ fn graph_mutations_refuse_before_source_bytes_escape() {
                 object =
                     TermValue::simple_literal(purrdf_core::ContentDigest::of(b"other").to_hex());
             }
-            let s = builder.intern_owned_term(&subject.to_rdf_term().unwrap());
-            let p = builder.intern_owned_term(&predicate.to_rdf_term().unwrap());
-            let o = builder.intern_owned_term(&object.to_rdf_term().unwrap());
-            let graph = (mode == 4).then(|| builder.intern_iri("urn:example:foreign-graph"));
-            builder.push_quad(s, p, o, graph);
+            let s = builder
+                .intern_owned_term(&subject.to_rdf_term().unwrap())
+                .unwrap();
+            let p = builder
+                .intern_owned_term(&predicate.to_rdf_term().unwrap())
+                .unwrap();
+            let o = builder
+                .intern_owned_term(&object.to_rdf_term().unwrap())
+                .unwrap();
+            let graph =
+                (mode == 4).then(|| builder.intern_iri("urn:example:foreign-graph").unwrap());
+            builder.push_quad(s, p, o, graph).unwrap();
         }
         if mode == 5 {
-            let s = builder.intern_iri(model.id());
-            let p = builder.intern_iri("https://example.org/invented");
-            let o = builder.intern_iri("urn:example:unexpected");
-            builder.push_quad(s, p, o, None);
+            let s = builder.intern_iri(model.id()).unwrap();
+            let p = builder.intern_iri("https://example.org/invented").unwrap();
+            let o = builder.intern_iri("urn:example:unexpected").unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
         }
         let altered = builder.freeze().unwrap();
         assert!(

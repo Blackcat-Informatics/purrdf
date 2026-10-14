@@ -43,23 +43,27 @@ const ROWS: u32 = 500;
 /// - full scan (`_`, `_`, `_`) — every quad.
 fn build_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let g = b.intern_iri("http://example.org/g");
-    let common = b.intern_iri("http://example.org/common");
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    let common = b.intern_iri("http://example.org/common").unwrap();
 
     for n in 0..ROWS {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 4));
-        let lit = b.intern_literal(RdfLiteral::language_tagged(format!("value {n}"), "en"));
-        let typed = b.intern_literal(RdfLiteral::typed(
-            format!("{n}"),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 4)).unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral::language_tagged(format!("value {n}"), "en"))
+            .unwrap();
+        let typed = b
+            .intern_literal(RdfLiteral::typed(
+                format!("{n}"),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
 
-        b.push_quad(s, p, bnode, None);
-        b.push_quad(s, p, lit, Some(g));
-        b.push_quad(bnode, p, typed, None);
-        b.push_quad(s, p, common, None);
+        b.push_quad(s, p, bnode, None).unwrap();
+        b.push_quad(s, p, lit, Some(g)).unwrap();
+        b.push_quad(bnode, p, typed, None).unwrap();
+        b.push_quad(s, p, common, None).unwrap();
     }
 
     b.freeze()
@@ -84,37 +88,47 @@ const DICT_ROWS: u32 = 2_000;
 /// nothing.
 fn build_literal_heavy_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let q = b.intern_iri("http://example.org/q");
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let q = b.intern_iri("http://example.org/q").unwrap();
 
     for n in 0..DICT_ROWS {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let plain = b.intern_literal(RdfLiteral::simple(format!("plain value {n}")));
-        let typed = b.intern_literal(RdfLiteral::typed(
-            format!("{n}.5"),
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        let tagged = b.intern_literal(RdfLiteral::language_tagged(
-            format!("tagged value {n}"),
-            "en-gb",
-        ));
-        let directional = b.intern_literal(RdfLiteral {
-            lexical_form: format!("directional value {n}"),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        let long = b.intern_literal(RdfLiteral::simple(format!(
-            "a much longer lexical form sharing a long common prefix with its neighbours {n}"
-        )));
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let plain = b
+            .intern_literal(RdfLiteral::simple(format!("plain value {n}")))
+            .unwrap();
+        let typed = b
+            .intern_literal(RdfLiteral::typed(
+                format!("{n}.5"),
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        let tagged = b
+            .intern_literal(RdfLiteral::language_tagged(
+                format!("tagged value {n}"),
+                "en-gb",
+            ))
+            .unwrap();
+        let directional = b
+            .intern_literal(RdfLiteral {
+                lexical_form: format!("directional value {n}"),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        let long = b
+            .intern_literal(RdfLiteral::simple(format!(
+                "a much longer lexical form sharing a long common prefix with its neighbours {n}"
+            )))
+            .unwrap();
 
-        b.push_quad(s, p, plain, None);
-        b.push_quad(s, p, typed, None);
-        b.push_quad(s, p, tagged, None);
-        b.push_quad(s, p, directional, None);
-        b.push_quad(s, p, long, None);
-        let quoted = b.intern_triple(s, p, plain);
-        b.push_quad(s, q, quoted, None);
+        b.push_quad(s, p, plain, None).unwrap();
+        b.push_quad(s, p, typed, None).unwrap();
+        b.push_quad(s, p, tagged, None).unwrap();
+        b.push_quad(s, p, directional, None).unwrap();
+        b.push_quad(s, p, long, None).unwrap();
+        let quoted = b.intern_triple(s, p, plain).unwrap();
+        b.push_quad(s, q, quoted, None).unwrap();
     }
 
     b.freeze()
@@ -129,21 +143,25 @@ const GRAPH_ROWS: u32 = 1_000;
 /// identical rows, so their encode costs differ only by the declaration handling.
 fn build_graph_heavy_dataset(declared: bool) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
     for n in 0..GRAPH_ROWS {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let g = b.intern_iri(&format!("http://example.org/g{n}"));
-        b.push_quad(s, p, o, Some(g));
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let g = b.intern_iri(&format!("http://example.org/g{n}")).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
         if n % 10 == 0 {
-            let triple = b.intern_triple(s, p, o);
-            let r = b.intern_iri(&format!("http://example.org/r{n}"));
-            let side = b.intern_iri(&format!("http://example.org/side{n}"));
-            b.push_reifier_in_graph(r, triple, Some(side));
+            let triple = b.intern_triple(s, p, o).unwrap();
+            let r = b.intern_iri(&format!("http://example.org/r{n}")).unwrap();
+            let side = b
+                .intern_iri(&format!("http://example.org/side{n}"))
+                .unwrap();
+            b.push_reifier_in_graph(r, triple, Some(side)).unwrap();
         }
         if declared {
-            let empty = b.intern_iri(&format!("http://example.org/empty{n}"));
-            b.declare_named_graph(empty);
+            let empty = b
+                .intern_iri(&format!("http://example.org/empty{n}"))
+                .unwrap();
+            b.declare_named_graph(empty).unwrap();
         }
     }
     b.freeze()

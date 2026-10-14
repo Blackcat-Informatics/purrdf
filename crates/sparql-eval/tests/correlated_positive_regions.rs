@@ -17,15 +17,17 @@ const CELLS: u64 = 64;
 
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let [edge_a, edge_b, a, b] =
-        ["edgeA", "edgeB", "a", "b"].map(|local| builder.intern_iri(&format!("{EX}{local}")));
+    let [edge_a, edge_b, a, b] = ["edgeA", "edgeB", "a", "b"]
+        .map(|local| builder.intern_iri(&format!("{EX}{local}")).unwrap());
     for index in 0..256 {
-        let [s, t, av, bv] =
-            ["s", "t", "a", "b"].map(|local| builder.intern_iri(&format!("{EX}{local}{index}")));
-        builder.push_quad(s, a, av, None);
-        builder.push_quad(t, b, bv, None);
+        let [s, t, av, bv] = ["s", "t", "a", "b"]
+            .map(|local| builder.intern_iri(&format!("{EX}{local}{index}")).unwrap());
+        builder.push_quad(s, a, av, None).unwrap();
+        builder.push_quad(t, b, bv, None).unwrap();
         if index < 2 {
-            builder.push_quad(s, if index == 0 { edge_a } else { edge_b }, t, None);
+            builder
+                .push_quad(s, if index == 0 { edge_a } else { edge_b }, t, None)
+                .unwrap();
         }
     }
     builder.freeze().expect("fixture dataset")

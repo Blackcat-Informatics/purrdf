@@ -220,7 +220,7 @@ fn eval(root: &str, focus: &str, scope: &[(&str, &str)]) -> Result<Vec<String>, 
         imports: &purrdf_shapes::ShapesImports::new(),
     })
     .map(|evaluated| evaluated.outputs.iter().map(ToString::to_string).collect())
-    .map_err(String::from)
+    .map_err(|error| error.to_string())
 }
 
 #[test]
@@ -293,11 +293,11 @@ fn a_term_argument_is_an_n_triples_term_or_an_absolute_iri() {
 // ── rules: the inference graph, its proof, and the round limit ─────────────────
 
 fn run_rules(options: &RuleOptions) -> Result<purrdf_shapes::Inference, String> {
-    let shapes =
-        engine::parse_shapes(&format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}{TOOLS}"), None)?;
-    let projected = engine::project_dataset(data().as_ref())?;
+    let shapes = engine::parse_shapes(&format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}{TOOLS}"), None)
+        .map_err(|error| error.to_string())?;
+    let projected = engine::project_dataset(data().as_ref()).map_err(|error| error.to_string())?;
     let holder = ShaclData::new(Arc::clone(&projected), projected, None);
-    infer(&holder, &shapes, options)
+    infer(&holder, &shapes, options).map_err(|error| error.to_string())
 }
 
 #[test]
@@ -386,7 +386,10 @@ fn run_rules_over_a_shapes_graph_is_the_shacl_engine_run() {
         knobs(),
     )
     .expect_err("three rounds are too few");
-    assert!(refused.contains("past the limit of 3"), "{refused}");
+    assert!(
+        refused.to_string().contains("past the limit of 3"),
+        "{refused}"
+    );
 }
 
 /// A SPARQL 1.2 RL rule set through `run_rules` is `srl::infer`'s run, and its limit
@@ -425,5 +428,5 @@ fn run_rules_over_an_srl_rule_set_is_the_srl_engine_run() {
         knobs(),
     )
     .expect_err("one stored fact is too few");
-    assert!(refused.contains("facts"), "{refused}");
+    assert!(refused.to_string().contains("facts"), "{refused}");
 }

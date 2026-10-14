@@ -931,7 +931,7 @@ impl PyQuadStore {
         let native = format.to_native();
         py.detach(|| {
             dump_quads_with_loss(&self.collect_all_quads(), &self.declared_graphs(), native)
-                .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+                .map_err(|e| presentation::value_error(format!("dump error: {e}"), &e))
         })
     }
 }

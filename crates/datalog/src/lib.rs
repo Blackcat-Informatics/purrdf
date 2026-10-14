@@ -292,6 +292,7 @@ pub mod cache;
 pub mod chase;
 pub mod clause;
 pub mod cursor;
+pub mod dictionary;
 pub mod evidence;
 pub mod guard;
 pub mod id;
@@ -323,4 +324,8 @@ pub(crate) mod test_support {
     //! every target: a failure names the seed that produced it.
 
     pub(crate) use purrdf_testkit::rng::permute;
+
+    use crate::{dictionary, seminaive};
+    mod host_dictionary;
+    pub(crate) use host_dictionary::{HostDictionary, SourceLost, evidence_scope};
 }

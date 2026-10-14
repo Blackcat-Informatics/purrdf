@@ -706,7 +706,9 @@ mod tests {
         SolutionSeq {
             schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("s")])),
             rows: vec![purrdf_core::smallvec![Some(
-                crate::scratch::SolutionTerm::Existing(TermId::from_index(0))
+                crate::scratch::SolutionTerm::Existing(
+                    TermId::from_index(0).expect("stored term index is representable")
+                )
             )]]
             .into(),
         }

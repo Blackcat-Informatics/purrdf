@@ -24,7 +24,8 @@ fn assert_original_api_output(source: &RdfDataset, result: &CanonicalRelabeling)
     let output = result.dataset();
     assert_eq!(original.term_count(), output.term_count());
     for index in 0..original.term_count() {
-        let id = TermId::from_index(u32::try_from(index).expect("fixture index"));
+        let id = TermId::from_index(u32::try_from(index).expect("fixture index"))
+            .expect("stored term index is representable");
         assert_eq!(original.resolve(id), output.resolve(id));
     }
     assert_eq!(
@@ -129,30 +130,42 @@ fn assert_mapped_term(source: &RdfDataset, result: &CanonicalRelabeling, id: Ter
 #[test]
 fn mapped_records_preserve_native_identity_and_source_locations() {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(P);
-    let a = builder.intern_blank("shared", BlankScope(2));
-    let b = builder.intern_blank("shared", BlankScope(3));
-    let graph = builder.intern_blank("graph", BlankScope(2));
-    let empty = builder.intern_blank("empty", BlankScope(3));
-    builder.declare_named_graph(empty);
-    let typed = builder.intern_literal(RdfLiteral::typed("01", "https://example.org/datatype"));
-    let language = builder.intern_literal(RdfLiteral::language_tagged("bonjour", "FR"));
-    let directional = builder.intern_literal(RdfLiteral {
-        lexical_form: "مرحبا".into(),
-        datatype: None,
-        language: Some("ar".into()),
-        direction: Some(RdfTextDirection::Rtl),
-    });
-    let inner = builder.intern_triple(b, p, typed);
-    let nested = builder.intern_triple(a, p, inner);
-    let handle = builder.push_quad_with_handle(a, p, nested, Some(graph));
+    let p = builder.intern_iri(P).unwrap();
+    let a = builder.intern_blank("shared", BlankScope(2)).unwrap();
+    let b = builder.intern_blank("shared", BlankScope(3)).unwrap();
+    let graph = builder.intern_blank("graph", BlankScope(2)).unwrap();
+    let empty = builder.intern_blank("empty", BlankScope(3)).unwrap();
+    builder.declare_named_graph(empty).unwrap();
+    let typed = builder
+        .intern_literal(RdfLiteral::typed("01", "https://example.org/datatype"))
+        .unwrap();
+    let language = builder
+        .intern_literal(RdfLiteral::language_tagged("bonjour", "FR"))
+        .unwrap();
+    let directional = builder
+        .intern_literal(RdfLiteral {
+            lexical_form: "مرحبا".into(),
+            datatype: None,
+            language: Some("ar".into()),
+            direction: Some(RdfTextDirection::Rtl),
+        })
+        .unwrap();
+    let inner = builder.intern_triple(b, p, typed).unwrap();
+    let nested = builder.intern_triple(a, p, inner).unwrap();
+    let handle = builder
+        .push_quad_with_handle(a, p, nested, Some(graph))
+        .unwrap();
     builder.attach_location(
         handle,
         RdfLocation::file("source.ttl").with_line(7).with_column(3),
     );
-    builder.push_quad(b, p, language, None);
-    builder.push_reifier_in_graph(a, nested, Some(graph));
-    builder.push_annotation_in_graph(a, p, directional, Some(graph));
+    builder.push_quad(b, p, language, None).unwrap();
+    builder
+        .push_reifier_in_graph(a, nested, Some(graph))
+        .unwrap();
+    builder
+        .push_annotation_in_graph(a, p, directional, Some(graph))
+        .unwrap();
     let source = builder.freeze().expect("valid RDF 1.2 fixture");
     let result = canonical_relabel_with_mapping(&source).expect("admissible");
 
@@ -166,7 +179,8 @@ fn mapped_records_preserve_native_identity_and_source_locations() {
         assert_mapped_term(
             &source,
             &result,
-            TermId::from_index(u32::try_from(index).expect("fixture index")),
+            TermId::from_index(u32::try_from(index).expect("fixture index"))
+                .expect("stored term index is representable"),
         );
     }
     assert_original_api_output(&source, &result);
@@ -178,14 +192,14 @@ fn mapped_records_preserve_native_identity_and_source_locations() {
 #[test]
 fn composite_only_blanks_and_interned_iris_are_mapped() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri("https://example.org/s");
-    let p = builder.intern_iri(P);
-    let embedded = builder.intern_iri("https://example.org/embedded");
-    let unused = builder.intern_iri("https://example.org/unused");
+    let s = builder.intern_iri("https://example.org/s").unwrap();
+    let p = builder.intern_iri(P).unwrap();
+    let embedded = builder.intern_iri("https://example.org/embedded").unwrap();
+    let unused = builder.intern_iri("https://example.org/unused").unwrap();
     let literal = builder.intern_literal(RdfLiteral::typed(
         "[_:hidden, [<https://example.org/embedded>, _:hidden], <https://example.org/lexical-only>]", LIST
-    ));
-    builder.push_quad(s, p, literal, None);
+    )).unwrap();
+    builder.push_quad(s, p, literal, None).unwrap();
     let source = builder.freeze().expect("valid composite fixture");
     assert!(
         source
@@ -225,14 +239,18 @@ fn composite_only_blanks_and_interned_iris_are_mapped() {
 #[test]
 fn unused_dictionary_terms_are_not_fabricated_by_mapping() {
     let mut builder = RdfDatasetBuilder::new();
-    let unused_iri = builder.intern_iri("https://example.org/unused");
-    let unused_blank = builder.intern_blank("unused", BlankScope::DEFAULT);
-    let unused_literal = builder.intern_literal(RdfLiteral::typed(
-        "absent",
-        "https://example.org/unused-type",
-    ));
-    let declared = builder.intern_blank("only declaration", BlankScope(11));
-    builder.declare_named_graph(declared);
+    let unused_iri = builder.intern_iri("https://example.org/unused").unwrap();
+    let unused_blank = builder.intern_blank("unused", BlankScope::DEFAULT).unwrap();
+    let unused_literal = builder
+        .intern_literal(RdfLiteral::typed(
+            "absent",
+            "https://example.org/unused-type",
+        ))
+        .unwrap();
+    let declared = builder
+        .intern_blank("only declaration", BlankScope(11))
+        .unwrap();
+    builder.declare_named_graph(declared).unwrap();
     let source = builder.freeze().expect("valid declaration-only fixture");
     let result = canonical_relabel_with_mapping(&source).expect("admissible");
     for id in [
@@ -246,9 +264,10 @@ fn unused_dictionary_terms_are_not_fabricated_by_mapping() {
         assert_eq!(result.map_term(id), None);
     }
     assert_eq!(
-        result.map_term(TermId::from_index(
-            u32::try_from(source.term_count()).expect("fixture index")
-        )),
+        result.map_term(
+            TermId::from_index(u32::try_from(source.term_count()).expect("fixture index"))
+                .expect("stored term index is representable")
+        ),
         None
     );
     assert_eq!(
@@ -271,14 +290,20 @@ fn mapped_content_ids_and_predecessors_keep_the_configured_scheme() {
         Some("https://example.org/derivedFrom".into()),
     );
     let successor = builder
-        .intern_iri("blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        .intern_iri("blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .unwrap();
     let predecessor = builder
-        .intern_iri("blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-    let derived = builder.intern_iri("https://example.org/derivedFrom");
-    let p = builder.intern_iri(P);
-    let blank = builder.intern_blank("changed", BlankScope(2));
-    builder.push_quad(successor, p, blank, None);
-    builder.push_annotation(successor, derived, predecessor);
+        .intern_iri("blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        .unwrap();
+    let derived = builder
+        .intern_iri("https://example.org/derivedFrom")
+        .unwrap();
+    let p = builder.intern_iri(P).unwrap();
+    let blank = builder.intern_blank("changed", BlankScope(2)).unwrap();
+    builder.push_quad(successor, p, blank, None).unwrap();
+    builder
+        .push_annotation(successor, derived, predecessor)
+        .unwrap();
     let source = builder.freeze().expect("valid configured fixture");
     let result = canonical_relabel_with_mapping(&source).expect("admissible");
     assert_eq!(result.dataset().content_id_scheme(), Some(&scheme));
@@ -301,9 +326,9 @@ fn mapped_content_ids_and_predecessors_keep_the_configured_scheme() {
 #[test]
 fn mapping_does_not_change_admission_refusals() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri("https://example.org/s");
-    let p = builder.intern_iri("urn:purrdf:rdfc:reifies");
-    builder.push_quad(s, p, s, None);
+    let s = builder.intern_iri("https://example.org/s").unwrap();
+    let p = builder.intern_iri("urn:purrdf:rdfc:reifies").unwrap();
+    builder.push_quad(s, p, s, None).unwrap();
     let source = builder
         .freeze()
         .expect("valid RDF with reserved vocabulary");

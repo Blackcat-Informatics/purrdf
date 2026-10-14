@@ -40,15 +40,15 @@ const WALK: &str = "http://example.org/pf#walk";
 /// the whole experiment.
 fn subproperty_chain() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let sub_property_of = b.intern_iri(RDFS_SUBPROPERTY);
-    let sub = b.intern_iri(&format!("{NS}sub"));
-    let p = b.intern_iri(&format!("{NS}p"));
-    let a = b.intern_iri(&format!("{NS}a"));
-    let b_node = b.intern_iri(&format!("{NS}b"));
-    let c = b.intern_iri(&format!("{NS}c"));
-    b.push_quad(sub, sub_property_of, p, None);
-    b.push_quad(a, p, b_node, None);
-    b.push_quad(b_node, sub, c, None);
+    let sub_property_of = b.intern_iri(RDFS_SUBPROPERTY).unwrap();
+    let sub = b.intern_iri(&format!("{NS}sub")).unwrap();
+    let p = b.intern_iri(&format!("{NS}p")).unwrap();
+    let a = b.intern_iri(&format!("{NS}a")).unwrap();
+    let b_node = b.intern_iri(&format!("{NS}b")).unwrap();
+    let c = b.intern_iri(&format!("{NS}c")).unwrap();
+    b.push_quad(sub, sub_property_of, p, None).unwrap();
+    b.push_quad(a, p, b_node, None).unwrap();
+    b.push_quad(b_node, sub, c, None).unwrap();
     b.freeze().expect("the fixture freezes")
 }
 

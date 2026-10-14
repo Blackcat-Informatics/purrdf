@@ -92,28 +92,34 @@ impl Fixture {
 fn build(fixture: &Fixture) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for (s, p, o, g) in &fixture.quads {
-        let s = intern_value(&mut b, s);
-        let p = intern_value(&mut b, p);
-        let o = intern_value(&mut b, o);
-        let g = g.as_ref().map(|g| intern_value(&mut b, g));
-        b.push_quad(s, p, o, g);
+        let s = intern_value(&mut b, s).expect("authored fixture");
+        let p = intern_value(&mut b, p).expect("authored fixture");
+        let o = intern_value(&mut b, o).expect("authored fixture");
+        let g = g
+            .as_ref()
+            .map(|g| intern_value(&mut b, g).expect("authored fixture"));
+        b.push_quad(s, p, o, g).unwrap();
     }
     for g in &fixture.declared_graphs {
-        let g = intern_value(&mut b, g);
-        b.declare_named_graph(g);
+        let g = intern_value(&mut b, g).expect("authored fixture");
+        b.declare_named_graph(g).unwrap();
     }
     for (reifier, triple, g) in &fixture.reifiers {
-        let reifier = intern_value(&mut b, reifier);
-        let triple = intern_value(&mut b, triple);
-        let g = g.as_ref().map(|g| intern_value(&mut b, g));
-        b.push_reifier_in_graph(reifier, triple, g);
+        let reifier = intern_value(&mut b, reifier).expect("authored fixture");
+        let triple = intern_value(&mut b, triple).expect("authored fixture");
+        let g = g
+            .as_ref()
+            .map(|g| intern_value(&mut b, g).expect("authored fixture"));
+        b.push_reifier_in_graph(reifier, triple, g).unwrap();
     }
     for (reifier, p, o, g) in &fixture.annotations {
-        let reifier = intern_value(&mut b, reifier);
-        let p = intern_value(&mut b, p);
-        let o = intern_value(&mut b, o);
-        let g = g.as_ref().map(|g| intern_value(&mut b, g));
-        b.push_annotation_in_graph(reifier, p, o, g);
+        let reifier = intern_value(&mut b, reifier).expect("authored fixture");
+        let p = intern_value(&mut b, p).expect("authored fixture");
+        let o = intern_value(&mut b, o).expect("authored fixture");
+        let g = g
+            .as_ref()
+            .map(|g| intern_value(&mut b, g).expect("authored fixture"));
+        b.push_annotation_in_graph(reifier, p, o, g).unwrap();
     }
     b.freeze().expect("fixture freeze")
 }

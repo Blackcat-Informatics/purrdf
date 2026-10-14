@@ -701,39 +701,42 @@ mod tests {
     #[test]
     fn page_summary_matches_an_independent_recount() {
         let mut b = RdfDatasetBuilder::new();
-        let alice = b.intern_iri("http://example.org/alice");
-        let bob = b.intern_iri("http://example.org/bob");
-        let carol = b.intern_iri("http://example.org/carol");
-        let dave = b.intern_iri("http://example.org/dave");
-        let knows = b.intern_iri("http://example.org/knows");
-        let claims = b.intern_iri("http://example.org/claims");
-        let certainty = b.intern_iri("http://example.org/certainty");
-        let r1 = b.intern_iri("http://example.org/r1");
-        let g1 = b.intern_iri("http://example.org/g1");
-        let g2 = b.intern_iri("http://example.org/g2");
-        let point_nine = b.intern_literal(crate::RdfLiteral {
-            lexical_form: "0.9".to_owned(),
-            datatype: None,
-            language: None,
-            direction: None,
-        });
+        let alice = b.intern_iri("http://example.org/alice").unwrap();
+        let bob = b.intern_iri("http://example.org/bob").unwrap();
+        let carol = b.intern_iri("http://example.org/carol").unwrap();
+        let dave = b.intern_iri("http://example.org/dave").unwrap();
+        let knows = b.intern_iri("http://example.org/knows").unwrap();
+        let claims = b.intern_iri("http://example.org/claims").unwrap();
+        let certainty = b.intern_iri("http://example.org/certainty").unwrap();
+        let r1 = b.intern_iri("http://example.org/r1").unwrap();
+        let g1 = b.intern_iri("http://example.org/g1").unwrap();
+        let g2 = b.intern_iri("http://example.org/g2").unwrap();
+        let point_nine = b
+            .intern_literal(crate::RdfLiteral {
+                lexical_form: "0.9".to_owned(),
+                datatype: None,
+                language: None,
+                direction: None,
+            })
+            .unwrap();
 
         // A term appearing in subject-only, predicate-only, and object-only positions,
         // plus a term (`bob`) in two different positions.
-        b.push_quad(alice, knows, bob, None); // default graph
-        b.push_quad(bob, knows, carol, Some(g1)); // named graph g1
+        b.push_quad(alice, knows, bob, None).unwrap(); // default graph
+        b.push_quad(bob, knows, carol, Some(g1)).unwrap(); // named graph g1
 
         // Declared-empty named graph.
-        b.declare_named_graph(g2);
-
+        b.declare_named_graph(g2).unwrap();
         // A quoted triple used as the object of a base quad.
-        let alice_knows_bob = b.intern_triple(alice, knows, bob);
-        b.push_quad(dave, claims, alice_knows_bob, None); // default graph
+        let alice_knows_bob = b.intern_triple(alice, knows, bob).unwrap();
+        b.push_quad(dave, claims, alice_knows_bob, None).unwrap(); // default graph
 
         // A reifier row (the triple's reification target) and an annotation row,
         // both in g1.
-        b.push_reifier_in_graph(r1, alice_knows_bob, Some(g1));
-        b.push_annotation_in_graph(r1, certainty, point_nine, Some(g1));
+        b.push_reifier_in_graph(r1, alice_knows_bob, Some(g1))
+            .unwrap();
+        b.push_annotation_in_graph(r1, certainty, point_nine, Some(g1))
+            .unwrap();
 
         let page = b.freeze().expect("fixture freezes");
         let summary = PageSummary::seal(&page).expect("fixture seals");
@@ -786,7 +789,8 @@ mod tests {
         assert_eq!(summary.default_rows(PageStream::Annotation), 0);
 
         // -- out-of-range TermId never panics, always reads 0 --------------------
-        let bogus = TermId::from_index(u32::try_from(page.term_count()).expect("fits u32") + 1000);
+        let bogus = TermId::from_index(u32::try_from(page.term_count()).expect("fits u32") + 1000)
+            .expect("stored term index is representable");
         assert_eq!(summary.base_rows_as_subject(bogus), 0);
         assert_eq!(summary.base_rows_as_predicate(bogus), 0);
         assert_eq!(summary.base_rows_as_object(bogus), 0);
@@ -802,15 +806,16 @@ mod tests {
     /// authorizes skipping on.
     fn graph_split_page(second_in_g2: bool) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let alice = b.intern_iri("http://example.org/alice");
-        let bob = b.intern_iri("http://example.org/bob");
-        let carol = b.intern_iri("http://example.org/carol");
-        let knows = b.intern_iri("http://example.org/knows");
-        let g1 = b.intern_iri("http://example.org/g1");
-        let g2 = b.intern_iri("http://example.org/g2");
-        b.push_quad(alice, knows, bob, Some(g1));
-        b.push_quad(bob, knows, carol, Some(if second_in_g2 { g2 } else { g1 }));
-        b.declare_named_graph(g2);
+        let alice = b.intern_iri("http://example.org/alice").unwrap();
+        let bob = b.intern_iri("http://example.org/bob").unwrap();
+        let carol = b.intern_iri("http://example.org/carol").unwrap();
+        let knows = b.intern_iri("http://example.org/knows").unwrap();
+        let g1 = b.intern_iri("http://example.org/g1").unwrap();
+        let g2 = b.intern_iri("http://example.org/g2").unwrap();
+        b.push_quad(alice, knows, bob, Some(g1)).unwrap();
+        b.push_quad(bob, knows, carol, Some(if second_in_g2 { g2 } else { g1 }))
+            .unwrap();
+        b.declare_named_graph(g2).unwrap();
         b.freeze().expect("fixture freezes")
     }
 
@@ -867,25 +872,30 @@ mod tests {
     #[test]
     fn every_under_count_changes_the_digest() {
         let mut b = RdfDatasetBuilder::new();
-        let alice = b.intern_iri("http://example.org/alice");
-        let bob = b.intern_iri("http://example.org/bob");
-        let knows = b.intern_iri("http://example.org/knows");
-        let certainty = b.intern_iri("http://example.org/certainty");
-        let r1 = b.intern_iri("http://example.org/r1");
-        let g1 = b.intern_iri("http://example.org/g1");
-        let nine = b.intern_literal(crate::RdfLiteral {
-            lexical_form: "0.9".to_owned(),
-            datatype: None,
-            language: None,
-            direction: None,
-        });
-        let alice_knows_bob = b.intern_triple(alice, knows, bob);
-        b.push_quad(alice, knows, bob, None);
-        b.push_quad(alice, knows, bob, Some(g1));
-        b.push_reifier_in_graph(r1, alice_knows_bob, None);
-        b.push_reifier_in_graph(r1, alice_knows_bob, Some(g1));
-        b.push_annotation_in_graph(r1, certainty, nine, None);
-        b.push_annotation_in_graph(r1, certainty, nine, Some(g1));
+        let alice = b.intern_iri("http://example.org/alice").unwrap();
+        let bob = b.intern_iri("http://example.org/bob").unwrap();
+        let knows = b.intern_iri("http://example.org/knows").unwrap();
+        let certainty = b.intern_iri("http://example.org/certainty").unwrap();
+        let r1 = b.intern_iri("http://example.org/r1").unwrap();
+        let g1 = b.intern_iri("http://example.org/g1").unwrap();
+        let nine = b
+            .intern_literal(crate::RdfLiteral {
+                lexical_form: "0.9".to_owned(),
+                datatype: None,
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let alice_knows_bob = b.intern_triple(alice, knows, bob).unwrap();
+        b.push_quad(alice, knows, bob, None).unwrap();
+        b.push_quad(alice, knows, bob, Some(g1)).unwrap();
+        b.push_reifier_in_graph(r1, alice_knows_bob, None).unwrap();
+        b.push_reifier_in_graph(r1, alice_knows_bob, Some(g1))
+            .unwrap();
+        b.push_annotation_in_graph(r1, certainty, nine, None)
+            .unwrap();
+        b.push_annotation_in_graph(r1, certainty, nine, Some(g1))
+            .unwrap();
         let page = b.freeze().expect("fixture freezes");
 
         let fresh = || PageCounts::accumulate(&page).expect("fixture accumulates");

@@ -241,8 +241,8 @@ fn two_documents_are_two_scopes() {
     let a = turtle(r#"ex:s ex:p1 "[_:b, 42]"^^cdt:List ."#);
     let b = turtle(r#"ex:s ex:p2 "[_:b, 43]"^^cdt:List ."#);
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&a);
-    builder.push_dataset(&b);
+    builder.push_dataset(&a).unwrap();
+    builder.push_dataset(&b).unwrap();
     let merged = builder.freeze().expect("a valid merge");
 
     assert_ne!(
@@ -259,8 +259,8 @@ fn two_documents_are_two_scopes_across_the_literal_boundary() {
     let a = turtle(r#"ex:s ex:p1 "[_:b, 42]"^^cdt:List ."#);
     let b = turtle(r"ex:s ex:p2 _:b .");
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&a);
-    builder.push_dataset(&b);
+    builder.push_dataset(&a).unwrap();
+    builder.push_dataset(&b).unwrap();
     let merged = builder.freeze().expect("a valid merge");
 
     let bare = merged
@@ -276,7 +276,7 @@ fn two_documents_are_two_scopes_across_the_literal_boundary() {
 fn a_merge_preserves_identity_within_each_source() {
     let a = turtle(r#"_:b ex:p1 "[_:b, 42]"^^cdt:List ."#);
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&a);
+    builder.push_dataset(&a).unwrap();
     let merged = builder.freeze().expect("a valid merge");
     assert_eq!(embedded_ids(&merged, "p1")[0], subject_of(&merged, "p1"));
 }

@@ -15,12 +15,12 @@ fn iri(value: &str) -> TermValue {
 #[test]
 fn prepared_joins_and_computed_terms_share_values_across_snapshot_layers() {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let a = b.intern_iri("https://example.org/a");
-    let shared = b.intern_iri("https://example.org/shared");
-    let empty = b.intern_iri("https://example.org/empty");
-    b.declare_named_graph(empty);
-    b.push_quad(a, p, shared, None);
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let a = b.intern_iri("https://example.org/a").unwrap();
+    let shared = b.intern_iri("https://example.org/shared").unwrap();
+    let empty = b.intern_iri("https://example.org/empty").unwrap();
+    b.declare_named_graph(empty).unwrap();
+    b.push_quad(a, p, shared, None).unwrap();
     let mut mutable = MutableDataset::new(b.freeze().unwrap());
     for (s, o, g) in [
         ("shared", "new", None),

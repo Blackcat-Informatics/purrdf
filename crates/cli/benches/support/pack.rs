@@ -33,18 +33,24 @@ const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 #[must_use]
 pub(crate) fn large_pack() -> (NamedTempFile, Vec<u8>) {
     let mut builder = RdfDatasetBuilder::new();
-    let sub = builder.intern_iri(RDFS_SUBCLASSOF);
-    let ty = builder.intern_iri(RDF_TYPE);
+    let sub = builder.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let ty = builder.intern_iri(RDF_TYPE).unwrap();
 
     let classes: Vec<_> = (0..=HIERARCHY_DEPTH)
-        .map(|i| builder.intern_iri(&format!("http://example.org/c{i}")))
+        .map(|i| {
+            builder
+                .intern_iri(&format!("http://example.org/c{i}"))
+                .unwrap()
+        })
         .collect();
     for window in classes.windows(2) {
-        builder.push_quad(window[0], sub, window[1], None);
+        builder.push_quad(window[0], sub, window[1], None).unwrap();
     }
     for i in 0..INSTANCES {
-        let instance = builder.intern_iri(&format!("http://example.org/inst{i}"));
-        builder.push_quad(instance, ty, classes[0], None);
+        let instance = builder
+            .intern_iri(&format!("http://example.org/inst{i}"))
+            .unwrap();
+        builder.push_quad(instance, ty, classes[0], None).unwrap();
     }
 
     let dataset = builder.freeze().expect("freeze bench dataset");

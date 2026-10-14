@@ -41,7 +41,7 @@ fn bench_graph_membership(c: &mut Bench) {
             None,
         )
         .expect("prepares");
-    let source = graph_membership_corpus("", GRAPHS);
+    let source = graph_membership_corpus("", GRAPHS).expect("authored fixture");
     let mut mutable = MutableDataset::new(Arc::clone(&source));
     mutable
         .insert(QuadValues {

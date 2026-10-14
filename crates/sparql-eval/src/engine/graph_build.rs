@@ -557,17 +557,27 @@ fn publish(
     let staged_payload_bytes = staged.payload_bytes();
     let copied_payload_bytes = if original.workspace().is_bounded() {
         let mut publication = crate::workspace::LexicalFrame::new(original.workspace());
-        let copied = {
+        let copied = (|| {
             let mut memory = purrdf_lex::allocation::Memory::new(&mut publication);
+            // Publication adopts the complete resident destination for this
+            // transient workspace, as the former copied destination did. Its
+            // existing buffers must be admitted before in-place growth/refund.
+            memory.add_bytes(destination.native_buffer_bytes()?)?;
             destination.append_validated_with_memory(&staged, &mut memory)
-        };
+        })();
         copied.map_err(|error| {
             GraphBuildError::Evaluation(
                 publication.storage_error(error, "transactional graph append"),
             )
         })?
     } else {
-        destination.append_validated(staged)
+        destination.append_validated(staged).map_err(|error| {
+            GraphBuildError::Evaluation(
+                original
+                    .workspace()
+                    .storage_error(error, "transactional graph append"),
+            )
+        })?
     };
     Ok(GraphBuildStats {
         statements,

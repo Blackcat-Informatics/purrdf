@@ -1301,9 +1301,9 @@ mod term_walk_tests {
                 purrdf_core::term_fixture::TermShape::WellFormed,
             );
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let ds = builder.freeze().expect("a generated term freezes");
             let object = ds.quads().next().expect("one quad").o;
             let (mut found, mut expected) = (BTreeSet::new(), BTreeSet::new());

@@ -161,12 +161,14 @@ fn lost_connections_and_early_projection_have_independently_distinct_bags() {
 #[test]
 fn copied_raw_blank_sites_keep_independent_graph_owners() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri(&format!("{EX}s"));
-    let predicate = builder.intern_iri(&format!("{EX}p"));
-    let graph = builder.intern_iri(&format!("{EX}g"));
+    let subject = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let graph = builder.intern_iri(&format!("{EX}g")).unwrap();
     for object in ["a", "b"] {
-        let object = builder.intern_iri(&format!("{EX}{object}"));
-        builder.push_quad(subject, predicate, object, Some(graph));
+        let object = builder.intern_iri(&format!("{EX}{object}")).unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
     }
     let dataset = builder.freeze().expect("two named-graph edges");
     let engine = NativeSparqlEngine::new();
@@ -374,15 +376,15 @@ fn raw_relation_join() -> Query {
 #[test]
 fn concrete_blank_prebindings_preserve_scope_and_never_become_existentials() {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(&format!("{EX}p"));
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
     for (scope, object) in [(7, "a"), (8, "b")] {
-        let subject = builder.intern_blank("same", BlankScope(scope));
-        let object = builder.intern_iri(&format!("{EX}{object}"));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_blank("same", BlankScope(scope)).unwrap();
+        let object = builder.intern_iri(&format!("{EX}{object}")).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
-    let subject = builder.intern_iri(&format!("{EX}s"));
-    let object = builder.intern_iri(&format!("{EX}c"));
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let object = builder.intern_iri(&format!("{EX}c")).unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
     let dataset = builder.freeze().expect("concrete-identity data");
     let text = format!("{PREFIX}SELECT ?focus ?o WHERE {{ ?focus ex:p ?o }}");
     let engine = NativeSparqlEngine::new();
@@ -541,14 +543,14 @@ fn federation_names_preserve_caller_lookalikes_and_zero_column_bags() {
 #[test]
 fn concrete_blank_identity_inside_rdf12_triple_terms_is_structural() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_blank("same", BlankScope(7));
-    let predicate = builder.intern_iri(&format!("{EX}p"));
-    let object = builder.intern_iri(&format!("{EX}a"));
-    let triple = builder.intern_triple(subject, predicate, object);
-    let report = builder.intern_iri(&format!("{EX}report"));
-    let said = builder.intern_iri(&format!("{EX}said"));
-    builder.push_quad(report, said, triple, None);
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_blank("same", BlankScope(7)).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let object = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let triple = builder.intern_triple(subject, predicate, object).unwrap();
+    let report = builder.intern_iri(&format!("{EX}report")).unwrap();
+    let said = builder.intern_iri(&format!("{EX}said")).unwrap();
+    builder.push_quad(report, said, triple, None).unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
     let dataset = builder.freeze().expect("blank-bearing triple-term data");
     let text = format!("{PREFIX}SELECT ?o WHERE {{ ex:report ex:said <<( ?focus ex:p ?o )>> }}");
     let engine = NativeSparqlEngine::new();
@@ -660,11 +662,11 @@ fn template_partition(
 #[test]
 fn construct_and_insert_allocate_per_duplicate_row_and_per_execution() {
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(&witness_data());
-    let seed = builder.intern_iri(&format!("{EX}seed"));
-    let has = builder.intern_iri(&format!("{EX}has"));
-    let data_blank = builder.intern_blank("c1", BlankScope::DEFAULT);
-    builder.push_quad(seed, has, data_blank, None);
+    builder.push_dataset(&witness_data()).unwrap();
+    let seed = builder.intern_iri(&format!("{EX}seed")).unwrap();
+    let has = builder.intern_iri(&format!("{EX}has")).unwrap();
+    let data_blank = builder.intern_blank("c1", BlankScope::DEFAULT).unwrap();
+    builder.push_quad(seed, has, data_blank, None).unwrap();
     let dataset = builder.freeze().expect("template input");
     let engine = NativeSparqlEngine::new();
     let construct = format!(
@@ -716,7 +718,7 @@ fn construct_and_insert_allocate_per_duplicate_row_and_per_execution() {
     // A shared publication builder gives repeated CONSTRUCT executions one
     // identity space, so freshness across calls can be observed directly.
     let mut accumulated = RdfDatasetBuilder::new();
-    accumulated.push_dataset(&dataset);
+    accumulated.push_dataset(&dataset).unwrap();
     for _ in 0..3 {
         engine
             .construct_prepared_into_view(
@@ -760,10 +762,12 @@ fn construct_and_insert_allocate_per_duplicate_row_and_per_execution() {
 #[test]
 fn bnode_allocation_is_fresh_against_default_scope_dataset_blank() {
     let mut builder = RdfDatasetBuilder::new();
-    let existing = builder.intern_blank("bnode1", BlankScope::DEFAULT);
-    let predicate = builder.intern_iri(&format!("{EX}p"));
-    let object = builder.intern_iri(&format!("{EX}o"));
-    builder.push_quad(existing, predicate, object, None);
+    let existing = builder.intern_blank("bnode1", BlankScope::DEFAULT).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let object = builder.intern_iri(&format!("{EX}o")).unwrap();
+    builder
+        .push_quad(existing, predicate, object, None)
+        .unwrap();
     let dataset = builder.freeze().expect("existing default-scope blank");
     let engine = NativeSparqlEngine::new();
     let text = format!(
@@ -801,12 +805,12 @@ fn bnode_memo_and_prepared_reuse_preserve_scoped_identity_partitions() {
     for prefix in [None, Some("caller_")] {
         for scope in [BlankScope::DEFAULT, BlankScope(7)] {
             let mut builder = RdfDatasetBuilder::new();
-            let predicate = builder.intern_iri(&format!("{EX}p"));
-            let object = builder.intern_iri(&format!("{EX}o"));
+            let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+            let object = builder.intern_iri(&format!("{EX}o")).unwrap();
             for ordinal in [1, 2] {
                 let label = format!("{}bnode{ordinal}", prefix.unwrap_or_default());
-                let blank = builder.intern_blank(&label, scope);
-                builder.push_quad(blank, predicate, object, None);
+                let blank = builder.intern_blank(&label, scope).unwrap();
+                builder.push_quad(blank, predicate, object, None).unwrap();
             }
             let dataset = builder.freeze().expect("occupied mint spellings");
             let mut previous = None;
@@ -888,14 +892,15 @@ fn bnode_allocation_avoids_dataset_blanks_retained_only_inside_triple_terms() {
     for prefix in [None, Some("caller_")] {
         for scope in [BlankScope::DEFAULT, BlankScope(7)] {
             let mut builder = RdfDatasetBuilder::new();
-            let blank =
-                builder.intern_blank(&format!("{}bnode1", prefix.unwrap_or_default()), scope);
-            let predicate = builder.intern_iri(&format!("{EX}p"));
-            let object = builder.intern_iri(&format!("{EX}o"));
-            let quoted = builder.intern_triple(blank, predicate, object);
-            let holder = builder.intern_iri(&format!("{EX}holder"));
-            let term = builder.intern_iri(&format!("{EX}term"));
-            builder.push_quad(holder, term, quoted, None);
+            let blank = builder
+                .intern_blank(&format!("{}bnode1", prefix.unwrap_or_default()), scope)
+                .unwrap();
+            let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+            let object = builder.intern_iri(&format!("{EX}o")).unwrap();
+            let quoted = builder.intern_triple(blank, predicate, object).unwrap();
+            let holder = builder.intern_iri(&format!("{EX}holder")).unwrap();
+            let term = builder.intern_iri(&format!("{EX}term")).unwrap();
+            builder.push_quad(holder, term, quoted, None).unwrap();
             let dataset = builder.freeze().expect("quoted dataset blank");
             let (_, rows) = solutions(
                 engine
@@ -991,10 +996,12 @@ fn raw_late_values_cannot_capture_an_earlier_bnode_allocation() {
 #[test]
 fn ordinary_construct_allocation_is_distinct_from_a_carried_dataset_blank() {
     let mut builder = RdfDatasetBuilder::new();
-    let existing = builder.intern_blank("c1", BlankScope::DEFAULT);
-    let predicate = builder.intern_iri(&format!("{EX}p"));
-    let object = builder.intern_iri(&format!("{EX}o"));
-    builder.push_quad(existing, predicate, object, None);
+    let existing = builder.intern_blank("c1", BlankScope::DEFAULT).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let object = builder.intern_iri(&format!("{EX}o")).unwrap();
+    builder
+        .push_quad(existing, predicate, object, None)
+        .unwrap();
     let dataset = builder
         .freeze()
         .expect("existing default-scope template spelling");
@@ -1066,8 +1073,8 @@ fn update_allocations_avoid_reserved_namespaces_and_honor_caller_prefix() {
     let engine = NativeSparqlEngine::new();
     for prefix in [None, Some("caller_")] {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri(&format!("{EX}seed"));
-        let predicate = builder.intern_iri(&format!("{EX}retained"));
+        let subject = builder.intern_iri(&format!("{EX}seed")).unwrap();
+        let predicate = builder.intern_iri(&format!("{EX}retained")).unwrap();
         let namespace = prefix.unwrap_or_default();
         let retained: BTreeSet<_> = [
             "c1".to_owned(),
@@ -1080,8 +1087,8 @@ fn update_allocations_avoid_reserved_namespaces_and_honor_caller_prefix() {
         .into_iter()
         .collect();
         for label in &retained {
-            let blank = builder.intern_blank(label, BlankScope::DEFAULT);
-            builder.push_quad(subject, predicate, blank, None);
+            let blank = builder.intern_blank(label, BlankScope::DEFAULT).unwrap();
+            builder.push_quad(subject, predicate, blank, None).unwrap();
         }
         let initial = builder.freeze().expect("retained destination namespaces");
         for body in [
@@ -1207,20 +1214,24 @@ fn load_then_insert_preserves_a_nested_identity_without_advancing_the_mint_count
     let engine = NativeSparqlEngine::new();
     for composite in [false, true] {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri(&format!("{EX}holder"));
-        let predicate = builder.intern_iri(&format!("{EX}term"));
+        let subject = builder.intern_iri(&format!("{EX}holder")).unwrap();
+        let predicate = builder.intern_iri(&format!("{EX}term")).unwrap();
         let object = if composite {
-            builder.intern_literal(purrdf_core::RdfLiteral::typed(
-                "[_:c1]",
-                purrdf_cdt::CDT_LIST,
-            ))
+            builder
+                .intern_literal(purrdf_core::RdfLiteral::typed(
+                    "[_:c1]",
+                    purrdf_cdt::CDT_LIST,
+                ))
+                .unwrap()
         } else {
-            let blank = builder.intern_blank("c1", BlankScope::DEFAULT);
-            let nested_predicate = builder.intern_iri(&format!("{EX}p"));
-            let nested_object = builder.intern_iri(&format!("{EX}o"));
-            builder.intern_triple(blank, nested_predicate, nested_object)
+            let blank = builder.intern_blank("c1", BlankScope::DEFAULT).unwrap();
+            let nested_predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+            let nested_object = builder.intern_iri(&format!("{EX}o")).unwrap();
+            builder
+                .intern_triple(blank, nested_predicate, nested_object)
+                .unwrap()
         };
-        builder.push_quad(subject, predicate, object, None);
+        builder.push_quad(subject, predicate, object, None).unwrap();
         let document = Document(builder.freeze().expect("nested source document"));
         let held = document.0.term_value(object);
         let mut target = RdfDatasetBuilder::new().freeze().expect("empty target");

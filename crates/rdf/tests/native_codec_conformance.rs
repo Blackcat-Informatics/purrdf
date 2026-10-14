@@ -406,10 +406,12 @@ fn lexical_form_preserved_verbatim() {
     ];
     for (lexical, datatype) in cases {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let lit = b.intern_literal(RdfLiteral::typed(lexical, datatype));
-        b.push_quad(s, p, lit, None);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral::typed(lexical, datatype))
+            .unwrap();
+        b.push_quad(s, p, lit, None).unwrap();
         let ds: Arc<RdfDataset> = b.freeze().expect("freeze");
         let bytes = serialize_dataset(&ds, "application/n-triples", SerializeGraph::Dataset)
             .expect("serialize");

@@ -97,17 +97,17 @@ where
             graph,
         } = row;
         if is_reifies && let FoldNode::Triple { s, p, o } = object {
-            let triple_term = builder.intern_triple(s, p, o);
+            let triple_term = builder.intern_triple(s, p, o)?;
             // Capture the reifier declaration's OWN graph (TriG `GRAPH g { … }`),
             // so `GRAPH ?g { << … >> … }` binds `?g` to it. Turtle / the default
             // graph carry `graph == None`, byte-identical to the old fold.
-            builder.push_reifier_in_graph(subject, triple_term, graph);
+            builder.push_reifier_in_graph(subject, triple_term, graph)?;
             reifier_ids.insert((graph, subject));
             continue;
         }
         let object_id = match object {
             FoldNode::Term(id) => id,
-            FoldNode::Triple { s, p, o } => builder.intern_triple(s, p, o),
+            FoldNode::Triple { s, p, o } => builder.intern_triple(s, p, o)?,
         };
         pending.push((subject, predicate, object_id, graph));
     }
@@ -116,9 +116,9 @@ where
     // annotations (carrying that graph); the rest base quads.
     for (subject, predicate, object, graph) in pending {
         if reifier_ids.contains(&(graph, subject)) {
-            builder.push_annotation_in_graph(subject, predicate, object, graph);
+            builder.push_annotation_in_graph(subject, predicate, object, graph)?;
         } else {
-            builder.push_quad(subject, predicate, object, graph);
+            builder.push_quad(subject, predicate, object, graph)?;
         }
     }
     Ok(())
@@ -608,7 +608,7 @@ fn dataset_from_ser_graph_impl(
     if !flatten_to_default_graph {
         for &name in &graph.named_graphs {
             let id = interner.intern(&mut builder, name)?;
-            builder.declare_named_graph(id);
+            builder.declare_named_graph(id)?;
         }
     }
 
@@ -630,7 +630,7 @@ fn dataset_from_ser_graph_impl(
             continue;
         }
         let subject = interner.intern(&mut builder, reifier_id)?;
-        let predicate = builder.intern_iri(RDF_REIFIES);
+        let predicate = builder.intern_iri(RDF_REIFIES)?;
         let s = interner.intern(&mut builder, s)?;
         let p = interner.intern(&mut builder, p)?;
         let o = interner.intern(&mut builder, o)?;
@@ -741,7 +741,7 @@ impl SerInterner<'_> {
             gts_id,
             builder,
             |builder, gts_id| self.resolve_node(builder, gts_id),
-            |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
+            |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)?),
         )
     }
 
@@ -789,7 +789,7 @@ impl SerInterner<'_> {
                             "GTS IRI term requires a non-empty value",
                         )
                     })?;
-                Ok(Nested::Leaf(builder.intern_iri(iri)))
+                Ok(Nested::Leaf(builder.intern_iri(iri)?))
             }
             SerTermKind::Bnode => {
                 // The label is only ever read through `&label`: borrow the table's
@@ -799,9 +799,9 @@ impl SerInterner<'_> {
                     .as_deref()
                     .map_or_else(|| Cow::Owned(format!("gts_bnode_{gts_id}")), Cow::Borrowed);
                 Ok(Nested::Leaf(match self.blanks {
-                    BlankIngress::Opaque => builder.intern_blank(&label, BlankScope::DEFAULT),
+                    BlankIngress::Opaque => builder.intern_blank(&label, BlankScope::DEFAULT)?,
                     BlankIngress::TextDecoded(alphabet) => {
-                        builder.intern_text_blank(&label, alphabet)
+                        builder.intern_text_blank(&label, alphabet)?
                     }
                 }))
             }
@@ -1404,7 +1404,7 @@ mod term_walk_tests {
                 let s = reference_intern(interner, builder, s)?;
                 let p = reference_intern(interner, builder, p)?;
                 let o = reference_intern(interner, builder, o)?;
-                Ok(builder.intern_triple(s, p, o))
+                Ok(builder.intern_triple(s, p, o).unwrap())
             }
         }
     }
@@ -1439,8 +1439,8 @@ mod term_walk_tests {
             // Ids are dense, so one more term's id counts the terms before it.
             let sentinel = "http://example.org/sentinel";
             assert_eq!(
-                interned.intern_iri(sentinel),
-                expected.intern_iri(sentinel),
+                interned.intern_iri(sentinel).unwrap(),
+                expected.intern_iri(sentinel).unwrap(),
                 "seed {seed}"
             );
         }
@@ -1467,7 +1467,10 @@ mod term_walk_tests {
                 .expect("a lowered chain interns");
             // Ids are dense, so one more term's id counts the terms before it.
             assert_eq!(
-                builder.intern_iri("http://example.org/sentinel").index(),
+                builder
+                    .intern_iri("http://example.org/sentinel")
+                    .unwrap()
+                    .index(),
                 LEVELS + 3
             );
         })

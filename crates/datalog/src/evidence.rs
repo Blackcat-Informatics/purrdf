@@ -54,7 +54,7 @@ impl<S: Admission> DerivationEvidence<S> {
     pub fn record(&self, row: RowId) -> Result<&EvidenceRecord, EvidenceWorkspaceError> {
         let id = self
             .rows
-            .get(row.index())
+            .get(row.address()?)
             .map_err(EvidenceWorkspaceError::Column)?;
         self.workspace.get(id)
     }
@@ -69,10 +69,10 @@ impl<S: Admission> DerivationEvidence<S> {
         factory: impl FnOnce(&mut Memory<'_, S>) -> Result<EvidenceRecord, EvidenceRecordError>,
     ) -> Result<EvidenceId, EvidenceWorkspaceError> {
         self.rows
-            .get(row.index())
+            .get(row.address()?)
             .map_err(EvidenceWorkspaceError::Column)?;
         let id = self.workspace.intern(factory)?;
-        self.workspace.set_row(&mut self.rows, row.index(), id)?;
+        self.workspace.set_row(&mut self.rows, row.address()?, id)?;
         Ok(id)
     }
 
@@ -88,7 +88,7 @@ impl<S: Admission> DerivationEvidence<S> {
         for source in sources {
             let id = self
                 .rows
-                .get(source.index())
+                .get(source.address()?)
                 .map_err(EvidenceWorkspaceError::Column)?;
             combined = self
                 .workspace
@@ -106,7 +106,7 @@ impl<S: Admission> DerivationEvidence<S> {
         row: RowId,
         id: EvidenceId,
     ) -> Result<(), EvidenceWorkspaceError> {
-        if row.index() != self.rows.len() {
+        if row.address()? != self.rows.len() {
             return Err(EvidenceWorkspaceError::Column(
                 EvidenceColumnError::RowOutOfBounds,
             ));
@@ -129,7 +129,7 @@ impl<S: Admission> DerivationEvidence<S> {
     ) -> Result<bool, EvidenceWorkspaceError> {
         let previous = self
             .rows
-            .get(row.index())
+            .get(row.address()?)
             .map_err(EvidenceWorkspaceError::Column)?;
         let combined =
             self.workspace
@@ -138,7 +138,7 @@ impl<S: Admission> DerivationEvidence<S> {
             return Ok(false);
         }
         self.workspace
-            .set_row(&mut self.rows, row.index(), combined)?;
+            .set_row(&mut self.rows, row.address()?, combined)?;
         Ok(true)
     }
 
@@ -219,7 +219,7 @@ mod tests {
     fn contradictory_derivations_change_existing_fact_without_losing_witnesses() {
         let mut evidence = DerivationEvidence::with_admission(2, Resident);
         let opposed = evidence
-            .seed(RowId::from_index(1), |memory| {
+            .seed(RowId::from_index(1).unwrap(), |memory| {
                 EvidenceRecord::from_parts(
                     &InformationMap::uniform(Information::Opposed),
                     SearchCompleteness::Undetermined,
@@ -231,13 +231,15 @@ mod tests {
             })
             .unwrap();
         let joined = evidence
-            .conjunction([RowId::from_index(0), RowId::from_index(1)])
+            .conjunction([RowId::from_index(0).unwrap(), RowId::from_index(1).unwrap()])
             .unwrap();
         assert_eq!(joined, opposed);
-        evidence.push_derived(RowId::from_index(2), joined).unwrap();
+        evidence
+            .push_derived(RowId::from_index(2).unwrap(), joined)
+            .unwrap();
         assert_eq!(
             evidence
-                .record(RowId::from_index(2))
+                .record(RowId::from_index(2).unwrap())
                 .unwrap()
                 .information()
                 .fallback(),
@@ -245,20 +247,24 @@ mod tests {
         );
         assert_eq!(
             evidence
-                .record(RowId::from_index(2))
+                .record(RowId::from_index(2).unwrap())
                 .unwrap()
                 .completeness(),
             SearchCompleteness::Undetermined
         );
         assert!(
             evidence
-                .coalesce(RowId::from_index(2), EvidenceId::DEFAULT)
+                .coalesce(RowId::from_index(2).unwrap(), EvidenceId::DEFAULT)
                 .unwrap()
         );
-        let both = evidence.record(RowId::from_index(2)).unwrap();
+        let both = evidence.record(RowId::from_index(2).unwrap()).unwrap();
         assert_eq!(both.information().fallback(), Information::Both);
         assert_eq!(both.completeness(), SearchCompleteness::Complete);
-        assert!(!evidence.coalesce(RowId::from_index(2), opposed).unwrap());
+        assert!(
+            !evidence
+                .coalesce(RowId::from_index(2).unwrap(), opposed)
+                .unwrap()
+        );
         assert_eq!(evidence.row_count(), 3);
     }
 
@@ -277,23 +283,27 @@ mod tests {
         }
         let mut evidence = DerivationEvidence::with_admission(10_000, NoCapacity);
         let default = evidence
-            .conjunction((0..10_000).map(RowId::from_index))
+            .conjunction((0..10_000).map(|index| RowId::from_index(index).unwrap()))
             .unwrap();
         assert_eq!(default, EvidenceId::DEFAULT);
         evidence
-            .push_derived(RowId::from_index(10_000), default)
+            .push_derived(RowId::from_index(10_000).unwrap(), default)
             .unwrap();
-        assert!(!evidence.coalesce(RowId::from_index(3), default).unwrap());
+        assert!(
+            !evidence
+                .coalesce(RowId::from_index(3).unwrap(), default)
+                .unwrap()
+        );
         assert!(evidence.rows().is_uniform_default());
         assert!(matches!(
-            evidence.push_derived(RowId::from_index(10_002), default),
+            evidence.push_derived(RowId::from_index(10_002).unwrap(), default),
             Err(EvidenceWorkspaceError::Column(
                 EvidenceColumnError::RowOutOfBounds
             ))
         ));
         assert_eq!(evidence.row_count(), 10_001);
         assert!(matches!(
-            evidence.record(RowId::from_index(10_001)),
+            evidence.record(RowId::from_index(10_001).unwrap()),
             Err(EvidenceWorkspaceError::Column(
                 EvidenceColumnError::RowOutOfBounds
             ))

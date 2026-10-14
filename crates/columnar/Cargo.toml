@@ -27,6 +27,7 @@ name = "purrdf_columnar"
 
 [dependencies]
 purrdf-core = { workspace = true }
+purrdf-lex.workspace = true
 structured-zstd = { workspace = true }
 
 [dev-dependencies]

@@ -492,9 +492,11 @@ fn admission_reorders_a_binding_before_a_bound_only_relation() {
     let typed = engine.prepare_algebra(raw, options).unwrap();
     assert_eq!(typed.query(), rewritten.query());
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/value");
-    let predicate = builder.intern_iri("http://example.org/binding");
-    builder.push_quad(subject, predicate, subject, None);
+    let subject = builder.intern_iri("http://example.org/value").unwrap();
+    let predicate = builder.intern_iri("http://example.org/binding").unwrap();
+    builder
+        .push_quad(subject, predicate, subject, None)
+        .unwrap();
     let data = builder.freeze().unwrap();
     assert!(matches!(
         engine
@@ -532,9 +534,11 @@ fn aggregate_sort_keys_reorder_a_binding_before_a_bound_only_relation() {
                  ?s <http://example.org/binding> ?bound \
                  })) AS ?list) WHERE { VALUES ?v { 1 } }";
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/value");
-    let predicate = builder.intern_iri("http://example.org/binding");
-    builder.push_quad(subject, predicate, subject, None);
+    let subject = builder.intern_iri("http://example.org/value").unwrap();
+    let predicate = builder.intern_iri("http://example.org/binding").unwrap();
+    builder
+        .push_quad(subject, predicate, subject, None)
+        .unwrap();
     let data = builder.freeze().unwrap();
     let engine = NativeSparqlEngine::new();
     let prepared = engine
@@ -623,11 +627,11 @@ fn duplicate_projection_and_group_keys_preserve_parsed_and_compiler_results() {
     use purrdf_core::TermValue;
     let engine = NativeSparqlEngine::new();
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/s");
-    let predicate = builder.intern_iri("http://example.org/p");
+    let subject = builder.intern_iri("http://example.org/s").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
     for object in ["http://example.org/a", "http://example.org/b"] {
-        let object = builder.intern_iri(object);
-        builder.push_quad(subject, predicate, object, None);
+        let object = builder.intern_iri(object).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     let data = builder.freeze().unwrap();
     for (text, columns, expected_rows) in [

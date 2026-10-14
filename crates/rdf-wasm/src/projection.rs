@@ -72,7 +72,7 @@ impl ProjectionLift {
 impl Dataset {
     /// Project this dataset into a deterministic graph, tabular, or research-object USTAR package.
     #[wasm_bindgen(js_name = project)]
-    pub fn project(&self, profile: &str, config_json: &str) -> Result<ProjectionPackage, JsError> {
+    pub fn project(&self, profile: &str, config_json: &str) -> Result<ProjectionPackage, JsValue> {
         let profile = profile
             .parse::<ProjectionProfile>()
             .map_err(|error| JsError::new(&error.to_string()))?;
@@ -94,7 +94,7 @@ impl Dataset {
         profile: &str,
         config_json: &str,
         assets_archive: &[u8],
-    ) -> Result<ProjectionPackage, JsError> {
+    ) -> Result<ProjectionPackage, JsValue> {
         let profile = profile
             .parse::<ProjectionProfile>()
             .map_err(|error| JsError::new(&error.to_string()))?;
@@ -118,7 +118,7 @@ pub fn lift_projection(
     archive: &[u8],
     profile: &str,
     config_json: &str,
-) -> Result<ProjectionLift, JsError> {
+) -> Result<ProjectionLift, JsValue> {
     let profile = profile
         .parse::<LiftProfile>()
         .map_err(|error| JsError::new(&error.to_string()))?;

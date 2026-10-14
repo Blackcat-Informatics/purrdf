@@ -9,7 +9,8 @@ use purrdf_core::blank_label::{
     LabelAlphabet, decode_blank_label, decode_blank_label_with_memory, encode_blank_label,
 };
 use purrdf_core::cdt_blank::{
-    BlankBinding, bind_cdt_blank_labels_unchecked, bind_cdt_blank_labels_unchecked_with_memory,
+    BlankBinding, CdtBlankError, bind_cdt_blank_labels, bind_cdt_blank_labels_unchecked,
+    bind_cdt_blank_labels_unchecked_with_memory, bind_cdt_blank_labels_with_memory,
 };
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use std::borrow::Cow;
@@ -55,6 +56,90 @@ fn nested_fixture() -> String {
         "[_:root, '{quoted}'^^<{}>, <<( _:s <urn:p> _:o )>>]",
         purrdf_cdt::CDT_LIST.replace("List", "Li\\u0073t"),
     )
+}
+
+#[test]
+fn checked_nested_binding_accounts_for_grammar_and_only_retains_output() {
+    let input = nested_fixture();
+    let binding = BlankBinding::Ambient(BlankScope(7));
+    let expected = bind_cdt_blank_labels(&input, purrdf_cdt::CDT_LIST, binding).unwrap();
+    let mut account = Account::new(2_000_000);
+    let mut memory = Memory::new(&mut account);
+    let window = CurrentThreadWindow::open();
+    let output =
+        bind_cdt_blank_labels_with_memory(&input, purrdf_cdt::CDT_LIST, binding, &mut memory)
+            .unwrap();
+    let measured = window.close();
+    assert_eq!(output, expected);
+    assert_eq!(
+        usize::try_from(measured.retained_bytes).unwrap(),
+        memory.admitted_bytes()
+    );
+    let Cow::Owned(output) = output else {
+        panic!("ambient binding changes labels")
+    };
+    assert_eq!(memory.admitted_bytes(), output.capacity());
+    memory.release_string(output).unwrap();
+    assert_eq!(memory.admitted_bytes(), 0);
+    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
+
+    for limit in [0, 1, 32, 128, 512, 1024] {
+        let mut account = Account::new(limit);
+        let mut memory = Memory::new(&mut account);
+        let window = CurrentThreadWindow::open();
+        let result =
+            bind_cdt_blank_labels_with_memory(&input, purrdf_cdt::CDT_LIST, binding, &mut memory);
+        let measured = window.close();
+        assert!(matches!(
+            result,
+            Err(CdtBlankError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert_eq!(memory.admitted_bytes(), 0);
+        assert_eq!(measured.retained_bytes, 0);
+        if limit == 0 {
+            assert_eq!(measured.allocations, 0);
+        }
+    }
+}
+
+#[test]
+fn checked_malformed_payload_keeps_exact_original_grant_until_drop() {
+    let nested = format!("['[<relative>]'^^<{}>]", purrdf_cdt::CDT_LIST);
+    for (input, datatype) in [
+        ("[<relative>]", purrdf_cdt::CDT_LIST),
+        ("{\"a\": 1, \"a\": 2}", purrdf_cdt::CDT_MAP),
+        (nested.as_str(), purrdf_cdt::CDT_LIST),
+    ] {
+        let mut account = Account::new(2_000_000);
+        let mut memory = Memory::new(&mut account);
+        let window = CurrentThreadWindow::open();
+        let error = bind_cdt_blank_labels_with_memory(
+            input,
+            datatype,
+            BlankBinding::Ambient(BlankScope(7)),
+            &mut memory,
+        )
+        .unwrap_err();
+        let measured = window.close();
+        assert!(matches!(
+            &error,
+            CdtBlankError::Malformed {
+                source: purrdf_cdt::CdtError::NotAbsoluteIri { .. }
+                    | purrdf_cdt::CdtError::DuplicateMapKey { .. },
+                ..
+            }
+        ));
+        let bytes = error.owned_bytes().unwrap();
+        assert!(
+            bytes > 0,
+            "the original lexical diagnostic owns its payload"
+        );
+        assert_eq!(memory.admitted_bytes(), bytes);
+        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), bytes);
+        drop(error);
+        memory.release_bytes(bytes).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
 }
 
 #[test]
@@ -164,7 +249,7 @@ fn physical_refusals_never_become_unmodified_composite_success() {
 }
 
 #[test]
-fn decoder_image_scratch_dies_before_publication_and_refusal_is_typed() {
+fn decoder_image_check_is_allocation_free_and_refusal_is_typed() {
     let token = encode_blank_label(
         &"x é._".repeat(512),
         BlankScope(u32::MAX),
@@ -187,22 +272,42 @@ fn decoder_image_scratch_dies_before_publication_and_refusal_is_typed() {
         usize::try_from(measured.retained_bytes).unwrap(),
         label.capacity()
     );
+    let required = label.capacity();
     memory.release_string(label).unwrap();
     assert_eq!(memory.admitted_bytes(), 0);
     assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
-    for limit in [0, token.len() / 2, token.len(), account.peak - 1] {
+    assert_eq!(
+        account.peak, required,
+        "canonical image validation needs no encoded copy"
+    );
+    for limit in [
+        0,
+        token.len() / 2,
+        token.len(),
+        account.peak - 1,
+        account.peak,
+    ] {
         let mut account = Account::new(limit);
         let window = CurrentThreadWindow::open();
-        let failure = decode_blank_label_with_memory(
-            &token,
-            LabelAlphabet::BlankNodeLabel,
-            &mut Memory::new(&mut account),
-        )
-        .unwrap_err();
+        let mut memory = Memory::new(&mut account);
+        let result =
+            decode_blank_label_with_memory(&token, LabelAlphabet::BlankNodeLabel, &mut memory);
         let measured = window.close();
-        assert_eq!(failure, StorageError::AdmissionFailed);
+        if limit < required {
+            assert_eq!(result.unwrap_err(), StorageError::AdmissionFailed);
+            assert_eq!(measured.retained_bytes, 0);
+        } else {
+            let (label, scope) = result.unwrap();
+            assert_eq!((label.as_ref(), scope), (expected.0.as_ref(), expected.1));
+            assert_eq!(memory.admitted_bytes(), required);
+            assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), required);
+            let Cow::Owned(label) = label else {
+                panic!("escaped canonical envelope owns decoded bytes")
+            };
+            memory.release_string(label).unwrap();
+        }
+        assert_eq!(memory.admitted_bytes(), 0);
         assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
-        assert_eq!(measured.retained_bytes, 0);
     }
 }
 

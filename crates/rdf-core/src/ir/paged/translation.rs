@@ -22,6 +22,13 @@
 
 use super::summary::{PageSummary, SummaryDefect};
 use crate::ir::{GlobalDictionary, GlobalTermId, RdfDataset, TermId};
+use purrdf_lex::allocation::StorageError;
+
+pub(crate) enum TranslationError {
+    Storage(StorageError),
+    Summary(SummaryDefect),
+}
+purrdf_lex::variant_from!(TranslationError { Storage(StorageError), Summary(SummaryDefect) });
 
 /// The local↔global term-id map for a single page of a
 /// [`PagedDataset`](super::PagedDataset).
@@ -67,11 +74,11 @@ impl PageTranslation {
     /// producer is `RdfDatasetBuilder::freeze`. Callers holding PROVIDER-supplied
     /// content use `try_build` instead and report the typed refusal on their own
     /// surface.
-    #[must_use]
-    pub fn build(page: &RdfDataset, dict: &mut GlobalDictionary) -> Self {
+    pub fn build(page: &RdfDataset, dict: &mut GlobalDictionary) -> Result<Self, StorageError> {
         match Self::try_build(page, dict) {
-            Ok(translation) => translation,
-            Err(defect) => panic!("page_translation: {defect}"),
+            Ok(translation) => Ok(translation),
+            Err(TranslationError::Storage(error)) => Err(error),
+            Err(TranslationError::Summary(defect)) => panic!("page_translation: {defect}"),
         }
     }
 
@@ -83,12 +90,13 @@ impl PageTranslation {
     pub(crate) fn try_build(
         page: &RdfDataset,
         dict: &mut GlobalDictionary,
-    ) -> Result<Self, SummaryDefect> {
+    ) -> Result<Self, TranslationError> {
         let term_count = page.term_count();
         let mut local_to_global: Vec<GlobalTermId> = Vec::with_capacity(term_count);
         let mut global_to_local: Vec<(GlobalTermId, TermId)> = Vec::with_capacity(term_count);
         for i in 0..term_count {
-            let local = TermId::from_index(u32::try_from(i).expect("page term index fits u32"));
+            let local = TermId::from_index(u32::try_from(i).expect("page term index fits u32"))
+                .expect("stored term index is representable");
             // The by-value re-intern boundary: resolve to a dataset-INDEPENDENT value,
             // then intern that value into the shared dictionary. Equal values across
             // pages collapse to one GlobalTermId.
@@ -97,9 +105,9 @@ impl PageTranslation {
             // `RdfDatasetBuilder::freeze`, which refuses a relative IRI. Every value
             // here therefore already satisfies the IR-boundary absoluteness invariant,
             // so this walk re-interns without re-parsing — see
-            // `GlobalDictionary::reintern_validated` for why that entry point exists
+            // `GlobalDictionary::try_reintern_validated` for why that entry point exists
             // and why a new caller must not use it.
-            let global = dict.reintern_validated(&value);
+            let global = dict.try_reintern_validated(&value)?;
             local_to_global.push(global);
             global_to_local.push((global, local));
         }
@@ -168,7 +176,8 @@ impl PageTranslation {
             .map(|(i, &g)| {
                 (
                     g,
-                    TermId::from_index(u32::try_from(i).expect("page term index fits u32")),
+                    TermId::from_index(u32::try_from(i).expect("page term index fits u32"))
+                        .expect("stored term index is representable"),
                 )
             })
             .collect();

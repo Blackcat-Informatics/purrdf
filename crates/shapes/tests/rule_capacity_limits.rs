@@ -83,8 +83,11 @@ fn chain(n: usize) -> String {
 
 /// Run a SHACL shapes graph's rules and return the number of inferred triples.
 fn shacl(data: &ShaclData, rules: &str, options: &RuleOptions) -> Result<usize, String> {
-    let shapes = parse_shapes(&format!("{PREFIXES}\n{rules}"), None).map_err(String::from)?;
-    infer(data, &shapes, options).map(|inference| inference.inferred().len())
+    let shapes =
+        parse_shapes(&format!("{PREFIXES}\n{rules}"), None).map_err(|error| error.to_string())?;
+    infer(data, &shapes, options)
+        .map(|inference| inference.inferred().len())
+        .map_err(|error| error.to_string())
 }
 
 /// Run a SPARQL 1.2 RL rule set and return the number of inferred triples.
@@ -314,7 +317,9 @@ fn a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_jo
     };
     let (shapes, data) = load(fixture);
     let run = |options: &RuleOptions| {
-        infer(&data, &shapes, options).map(|inference| inference.inferred().len())
+        infer(&data, &shapes, options)
+            .map(|inference| inference.inferred().len())
+            .map_err(|error| error.to_string())
     };
     for options in [
         RuleOptions::default(),

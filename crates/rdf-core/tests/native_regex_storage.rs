@@ -49,6 +49,41 @@ impl Admission for Account {
 }
 
 #[test]
+fn escaped_owned_blank_duplicate_retains_identity_without_allocating() {
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfTerm};
+    use purrdf_lex::allocation::Memory;
+
+    for count in [1, 4, 257, 4096] {
+        let label = "purrdfesc_π.雪".repeat(count);
+        let scope = BlankScope(u32::MAX);
+        let token = RdfTerm::BlankNode(scope.qualify_label(&label).into_owned());
+        let mut account = Account::new(usize::MAX);
+        let mut memory = Memory::new(&mut account);
+        let mut builder = RdfDatasetBuilder::new();
+        let id = builder
+            .intern_blank_with_memory(&label, scope, &mut memory)
+            .unwrap();
+        memory.admission_mut().limit = memory.admitted_bytes();
+        let window = CurrentThreadWindow::open();
+        for _ in 0..32 {
+            assert_eq!(
+                builder
+                    .intern_owned_term_scoped_with_memory(&token, BlankScope::DEFAULT, &mut memory)
+                    .unwrap(),
+                id
+            );
+        }
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(measured.requested_bytes, 0);
+        assert_eq!(measured.retained_bytes, 0);
+        assert_eq!(memory.admission_mut().refused, None);
+        builder.discard_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
+}
+
+#[test]
 fn percent_output_retains_exact_original_buffer_and_refuses_before_birth() {
     use purrdf_lex::allocation::Memory;
     use purrdf_lex::percent::{NON_ASCII, UNRESERVED, encode_with_memory};
@@ -1232,23 +1267,29 @@ fn native_graph_append_refuses_transactionally_before_copying_the_destination() 
     use purrdf_core::{RdfDatasetBuilder, TermRef};
     use purrdf_lex::allocation::Memory;
     let mut destination = RdfDatasetBuilder::new();
-    let subject = destination.intern_iri("http://example.org/existing");
-    let predicate = destination.intern_iri("http://example.org/p");
-    destination.push_quad(subject, predicate, subject, None);
+    let subject = destination
+        .intern_iri("http://example.org/existing")
+        .unwrap();
+    let predicate = destination.intern_iri("http://example.org/p").unwrap();
+    destination
+        .push_quad(subject, predicate, subject, None)
+        .unwrap();
     let pointer = match destination.resolve(subject) {
         TermRef::Iri(iri) => iri.as_ptr(),
         _ => unreachable!(),
     };
     let mut source = RdfDatasetBuilder::new();
-    let value = source.intern_iri("http://example.org/new");
-    let property = source.intern_iri("http://example.org/p");
-    source.push_quad(value, property, value, None);
+    let value = source.intern_iri("http://example.org/new").unwrap();
+    let property = source.intern_iri("http://example.org/p").unwrap();
+    source.push_quad(value, property, value, None).unwrap();
     let source = source.validate().unwrap();
     let mut account = Account::new(0);
     let mut memory = Memory::new(&mut account);
     let window = CurrentThreadWindow::open();
     assert_eq!(
-        destination.append_validated_with_memory(&source, &mut memory),
+        memory
+            .add_bytes(destination.native_buffer_bytes().unwrap())
+            .and_then(|()| { destination.append_validated_with_memory(&source, &mut memory) }),
         Err(StorageError::AdmissionFailed)
     );
     assert_eq!(window.close().allocations, 0);
@@ -1268,11 +1309,13 @@ fn native_description_symmetric_duplicate_quads_cover_scratch_growth_and_release
     use purrdf_lex::allocation::Memory;
 
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/subject");
-    let predicate = builder.intern_iri("http://example.org/p");
+    let subject = builder.intern_iri("http://example.org/subject").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
     for index in 0..3 {
-        let object = builder.intern_iri(&format!("http://example.org/object{index}"));
-        builder.push_quad(subject, predicate, object, None);
+        let object = builder
+            .intern_iri(&format!("http://example.org/object{index}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     let graph = builder.freeze().unwrap();
     let mut account = Account::new(1_000_000);
@@ -1306,24 +1349,35 @@ fn native_graph_append_and_describe_cover_original_buffers_and_preserve_scoped_b
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLocation, TermRef};
     use purrdf_lex::allocation::Memory;
     let mut destination = RdfDatasetBuilder::new();
-    let original = destination.intern_iri("http://example.org/original");
-    let property = destination.intern_iri("http://example.org/p");
-    destination.push_quad(original, property, original, None);
+    let original = destination
+        .intern_iri("http://example.org/original")
+        .unwrap();
+    let property = destination.intern_iri("http://example.org/p").unwrap();
+    destination
+        .push_quad(original, property, original, None)
+        .unwrap();
     let mut source = RdfDatasetBuilder::new();
-    let blank = source.intern_blank("shared", BlankScope(1));
-    let p = source.intern_iri("http://example.org/p");
-    let subject = source.intern_iri("http://example.org/subject");
-    let reifier = source.intern_iri("http://example.org/reifier");
-    let graph = source.intern_iri("http://example.org/graph");
-    let triple = source.intern_triple(subject, p, blank);
-    let handle = source.next_quad_handle();
-    source.push_quad(subject, p, blank, Some(graph));
+    let blank = source.intern_blank("shared", BlankScope(1)).unwrap();
+    let p = source.intern_iri("http://example.org/p").unwrap();
+    let subject = source.intern_iri("http://example.org/subject").unwrap();
+    let reifier = source.intern_iri("http://example.org/reifier").unwrap();
+    let graph = source.intern_iri("http://example.org/graph").unwrap();
+    let triple = source.intern_triple(subject, p, blank).unwrap();
+    let handle = source.next_quad_handle().unwrap();
+    source.push_quad(subject, p, blank, Some(graph)).unwrap();
     source.attach_location(handle, RdfLocation::file("source.ttl").with_line(12));
-    source.push_reifier_in_graph(reifier, triple, Some(graph));
-    source.push_annotation_in_graph(reifier, p, blank, Some(graph));
+    source
+        .push_reifier_in_graph(reifier, triple, Some(graph))
+        .unwrap();
+    source
+        .push_annotation_in_graph(reifier, p, blank, Some(graph))
+        .unwrap();
     let source = source.validate().unwrap();
     let mut account = Account::new(4_000_000);
     let mut memory = Memory::new(&mut account);
+    memory
+        .add_bytes(destination.native_buffer_bytes().unwrap())
+        .unwrap();
     let window = CurrentThreadWindow::open();
     assert!(
         destination
@@ -1369,14 +1423,14 @@ fn native_append_reserves_explicit_blank_scopes_against_later_caller_merges() {
     use purrdf_core::{BlankScope, RdfDatasetBuilder, TermRef};
     use purrdf_lex::allocation::Memory;
     let mut source = RdfDatasetBuilder::new();
-    let blank = source.intern_blank("same", BlankScope(1));
-    let p = source.intern_iri("http://example.org/p");
-    source.push_quad(blank, p, blank, None);
+    let blank = source.intern_blank("same", BlankScope(1)).unwrap();
+    let p = source.intern_iri("http://example.org/p").unwrap();
+    source.push_quad(blank, p, blank, None).unwrap();
     let source = source.validate().unwrap();
     let mut other = RdfDatasetBuilder::new();
-    let blank = other.intern_blank("same", BlankScope::DEFAULT);
-    let p = other.intern_iri("http://example.org/p");
-    other.push_quad(blank, p, blank, None);
+    let blank = other.intern_blank("same", BlankScope::DEFAULT).unwrap();
+    let p = other.intern_iri("http://example.org/p").unwrap();
+    other.push_quad(blank, p, blank, None).unwrap();
     let other = other.freeze().unwrap();
     let mut destination = RdfDatasetBuilder::new();
     let mut account = Account::new(4_000_000);
@@ -1386,7 +1440,7 @@ fn native_append_reserves_explicit_blank_scopes_against_later_caller_merges() {
             .append_validated_with_memory(&source, &mut memory)
             .unwrap();
     }
-    destination.push_dataset(&other);
+    destination.push_dataset(&other).unwrap();
     let graph = destination.freeze().unwrap();
     let mut scopes = graph
         .quads()

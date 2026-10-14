@@ -34,10 +34,10 @@ fn dataset() -> Arc<RdfDataset> {
         ("a", "q", "x"),
         ("b", "q", "y"),
     ] {
-        let s = builder.intern_iri(&format!("{EX}{s}"));
-        let p = builder.intern_iri(&format!("{EX}{p}"));
-        let o = builder.intern_iri(&format!("{EX}{o}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}{s}")).unwrap();
+        let p = builder.intern_iri(&format!("{EX}{p}")).unwrap();
+        let o = builder.intern_iri(&format!("{EX}{o}")).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("a dataset")
 }

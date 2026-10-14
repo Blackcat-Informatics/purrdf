@@ -96,11 +96,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     black_box(matches?);
     report("substring_selective", 1, memory);
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/allocation/text");
+    let predicate = builder
+        .intern_iri("https://example.org/allocation/text")
+        .unwrap();
     for (id, text) in rows.iter().enumerate() {
-        let subject = builder.intern_iri(&format!("https://example.org/allocation/doc/{id}"));
-        let literal = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, predicate, literal, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/allocation/doc/{id}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder
+            .push_quad(subject, predicate, literal, None)
+            .unwrap();
     }
     let dataset = builder.freeze()?;
     let config = TextIndexConfig::new(

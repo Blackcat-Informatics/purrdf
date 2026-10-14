@@ -92,12 +92,17 @@ fn a_sparql_constraint_copies_the_bound_variable_and_the_control_carries_nothing
     );
     assert_eq!(annotations(&control), vec![Vec::<(String, String)>::new()]);
     // The report graph carries the triple; the control's does not.
-    let nt = annotated.to_ntriples();
+    let nt = annotated.to_ntriples().expect("report serializes");
     assert!(
         nt.contains(&format!("{} \"urgent\"", ex("label"))),
         "the annotation reaches the report graph: {nt}"
     );
-    assert!(!control.to_ntriples().contains(&ex("label")));
+    assert!(
+        !control
+            .to_ntriples()
+            .expect("report serializes")
+            .contains(&ex("label"))
+    );
 }
 
 /// Without `sh:annotationVarName` the local name of the property is the variable:
@@ -215,6 +220,7 @@ fn a_prepared_product_keeps_the_annotations() {
             .validate()
             .expect("validates")
             .to_ntriples()
+            .expect("report serializes")
     };
     let restored_nt = report(&restored);
     assert_eq!(report(&fresh), restored_nt);

@@ -89,6 +89,7 @@ fn iri(local: &str) -> String {
 
 fn int_literal(b: &mut RdfDatasetBuilder, n: i64) -> purrdf_core::TermId {
     b.intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER))
+        .unwrap()
 }
 
 /// The fixture dataset described in the module doc.
@@ -99,66 +100,66 @@ fn dataset() -> Arc<RdfDataset> {
     // `:aOa` carries `:aP` but NOT `:aQ`; `:aOb` carries `:aQ` but NOT `:aP` —
     // deliberately crossed, so a test that (wrongly) thought the `OPTIONAL`
     // mattered would predict the OPPOSITE of the correct, `OPTIONAL`-blind answer.
-    let a_anchor = b.intern_iri(&iri("aAnchor"));
-    let a_p = b.intern_iri(&iri("aP"));
-    let a_q = b.intern_iri(&iri("aQ"));
-    let a_oa = b.intern_iri(&iri("aOa"));
-    let a_ob = b.intern_iri(&iri("aOb"));
-    let a_p_obj = b.intern_iri(&iri("aPObj"));
-    let a_q_obj = b.intern_iri(&iri("aQObj"));
-    let yes = b.intern_literal(RdfLiteral::simple("yes"));
-    b.push_quad(a_oa, a_anchor, yes, None);
-    b.push_quad(a_oa, a_p, a_p_obj, None);
-    b.push_quad(a_ob, a_anchor, yes, None);
-    b.push_quad(a_ob, a_q, a_q_obj, None);
+    let a_anchor = b.intern_iri(&iri("aAnchor")).unwrap();
+    let a_p = b.intern_iri(&iri("aP")).unwrap();
+    let a_q = b.intern_iri(&iri("aQ")).unwrap();
+    let a_oa = b.intern_iri(&iri("aOa")).unwrap();
+    let a_ob = b.intern_iri(&iri("aOb")).unwrap();
+    let a_p_obj = b.intern_iri(&iri("aPObj")).unwrap();
+    let a_q_obj = b.intern_iri(&iri("aQObj")).unwrap();
+    let yes = b.intern_literal(RdfLiteral::simple("yes")).unwrap();
+    b.push_quad(a_oa, a_anchor, yes, None).unwrap();
+    b.push_quad(a_oa, a_p, a_p_obj, None).unwrap();
+    b.push_quad(a_ob, a_anchor, yes, None).unwrap();
+    b.push_quad(a_ob, a_q, a_q_obj, None).unwrap();
 
     // ---- Group B: nested `NOT EXISTS`, tests 5-6 -------------------------------
-    let b_n = b.intern_iri(&iri("bN"));
-    let b_q = b.intern_iri(&iri("bQ"));
-    let b_na = b.intern_iri(&iri("bNa"));
-    let b_nb = b.intern_iri(&iri("bNb"));
-    let b_q_obj = b.intern_iri(&iri("bQObj"));
-    let one = b.intern_literal(RdfLiteral::simple("1"));
-    b.push_quad(b_na, b_n, one, None);
-    b.push_quad(b_na, b_q, b_q_obj, None);
-    b.push_quad(b_nb, b_n, one, None);
+    let b_n = b.intern_iri(&iri("bN")).unwrap();
+    let b_q = b.intern_iri(&iri("bQ")).unwrap();
+    let b_na = b.intern_iri(&iri("bNa")).unwrap();
+    let b_nb = b.intern_iri(&iri("bNb")).unwrap();
+    let b_q_obj = b.intern_iri(&iri("bQObj")).unwrap();
+    let one = b.intern_literal(RdfLiteral::simple("1")).unwrap();
+    b.push_quad(b_na, b_n, one, None).unwrap();
+    b.push_quad(b_na, b_q, b_q_obj, None).unwrap();
+    b.push_quad(b_nb, b_n, one, None).unwrap();
 
     // ---- Group C: correlated `GRAPH ?g`, test 4 --------------------------------
     // `:cR1`/`:cR2` point at the two IRI-named graphs; `:cR3` points at a BLANK
     // node that is ALSO used as a graph name below — the only way a query can
     // ever bind `?g` to a blank-node graph name, since blank-node identity is
     // never spellable in query text (see the module doc).
-    let c_link = b.intern_iri(&iri("cLink"));
-    let c_flag = b.intern_iri(&iri("cFlag"));
-    let c_r1 = b.intern_iri(&iri("cR1"));
-    let c_r2 = b.intern_iri(&iri("cR2"));
-    let c_r3 = b.intern_iri(&iri("cR3"));
-    let c_g1 = b.intern_iri(&iri("cG1"));
-    let c_g2 = b.intern_iri(&iri("cG2"));
-    let c_bgraph = b.intern_blank("cBg", BlankScope::DEFAULT);
-    let c_marked = b.intern_iri(&iri("cMarked"));
-    let c_other = b.intern_iri(&iri("cOther"));
-    let yes2 = b.intern_literal(RdfLiteral::simple("yes"));
-    let no = b.intern_literal(RdfLiteral::simple("no"));
-    b.push_quad(c_r1, c_link, c_g1, None);
-    b.push_quad(c_r2, c_link, c_g2, None);
-    b.push_quad(c_r3, c_link, c_bgraph, None);
-    b.push_quad(c_marked, c_flag, yes2, Some(c_g1));
-    b.push_quad(c_other, c_flag, no, Some(c_g2));
-    b.push_quad(c_marked, c_flag, yes2, Some(c_bgraph));
+    let c_link = b.intern_iri(&iri("cLink")).unwrap();
+    let c_flag = b.intern_iri(&iri("cFlag")).unwrap();
+    let c_r1 = b.intern_iri(&iri("cR1")).unwrap();
+    let c_r2 = b.intern_iri(&iri("cR2")).unwrap();
+    let c_r3 = b.intern_iri(&iri("cR3")).unwrap();
+    let c_g1 = b.intern_iri(&iri("cG1")).unwrap();
+    let c_g2 = b.intern_iri(&iri("cG2")).unwrap();
+    let c_bgraph = b.intern_blank("cBg", BlankScope::DEFAULT).unwrap();
+    let c_marked = b.intern_iri(&iri("cMarked")).unwrap();
+    let c_other = b.intern_iri(&iri("cOther")).unwrap();
+    let yes2 = b.intern_literal(RdfLiteral::simple("yes")).unwrap();
+    let no = b.intern_literal(RdfLiteral::simple("no")).unwrap();
+    b.push_quad(c_r1, c_link, c_g1, None).unwrap();
+    b.push_quad(c_r2, c_link, c_g2, None).unwrap();
+    b.push_quad(c_r3, c_link, c_bgraph, None).unwrap();
+    b.push_quad(c_marked, c_flag, yes2, Some(c_g1)).unwrap();
+    b.push_quad(c_other, c_flag, no, Some(c_g2)).unwrap();
+    b.push_quad(c_marked, c_flag, yes2, Some(c_bgraph)).unwrap();
 
     // ---- Group D: fresh `BIND` target inside `EXISTS`, test 7 -----------------
-    let d_tag = b.intern_iri(&iri("dTag"));
-    let d_val = b.intern_iri(&iri("dVal"));
-    let d_s1 = b.intern_iri(&iri("dS1"));
-    let d_s2 = b.intern_iri(&iri("dS2"));
-    let go = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(d_s1, d_tag, go, None);
+    let d_tag = b.intern_iri(&iri("dTag")).unwrap();
+    let d_val = b.intern_iri(&iri("dVal")).unwrap();
+    let d_s1 = b.intern_iri(&iri("dS1")).unwrap();
+    let d_s2 = b.intern_iri(&iri("dS2")).unwrap();
+    let go = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(d_s1, d_tag, go, None).unwrap();
     let d_val3 = int_literal(&mut b, 3);
-    b.push_quad(d_s1, d_val, d_val3, None);
-    b.push_quad(d_s2, d_tag, go, None);
+    b.push_quad(d_s1, d_val, d_val3, None).unwrap();
+    b.push_quad(d_s2, d_tag, go, None).unwrap();
     let d_val10 = int_literal(&mut b, 10);
-    b.push_quad(d_s2, d_val, d_val10, None);
+    b.push_quad(d_s2, d_val, d_val10, None).unwrap();
 
     // ---- Group E: the SEP's COUNT worked example, test 8 ----------------------
     // Global `:eProperty` count (across every subject) is 3 (`:eW1`/`:eW2` off
@@ -167,29 +168,29 @@ fn dataset() -> Arc<RdfDataset> {
     // DIVERGE on it (own: 0 < 2 = true; global: 3 < 2 = false), making this
     // fixture empirically decisive about which one the engine implements — see
     // the module doc's "Adjudicated answers".
-    let e_value = b.intern_iri(&iri("eValue"));
-    let e_property = b.intern_iri(&iri("eProperty"));
-    let e_s1 = b.intern_iri(&iri("eS1"));
-    let e_s2 = b.intern_iri(&iri("eS2"));
-    let e_s3 = b.intern_iri(&iri("eS3"));
-    let e_w1 = b.intern_iri(&iri("eW1"));
-    let e_w2 = b.intern_iri(&iri("eW2"));
-    let e_w3 = b.intern_iri(&iri("eW3"));
+    let e_value = b.intern_iri(&iri("eValue")).unwrap();
+    let e_property = b.intern_iri(&iri("eProperty")).unwrap();
+    let e_s1 = b.intern_iri(&iri("eS1")).unwrap();
+    let e_s2 = b.intern_iri(&iri("eS2")).unwrap();
+    let e_s3 = b.intern_iri(&iri("eS3")).unwrap();
+    let e_w1 = b.intern_iri(&iri("eW1")).unwrap();
+    let e_w2 = b.intern_iri(&iri("eW2")).unwrap();
+    let e_w3 = b.intern_iri(&iri("eW3")).unwrap();
     let e_val10a = int_literal(&mut b, 10);
-    b.push_quad(e_s1, e_value, e_val10a, None);
-    b.push_quad(e_s1, e_property, e_w1, None);
-    b.push_quad(e_s1, e_property, e_w2, None);
+    b.push_quad(e_s1, e_value, e_val10a, None).unwrap();
+    b.push_quad(e_s1, e_property, e_w1, None).unwrap();
+    b.push_quad(e_s1, e_property, e_w2, None).unwrap();
     let e_val2 = int_literal(&mut b, 2);
-    b.push_quad(e_s2, e_value, e_val2, None);
+    b.push_quad(e_s2, e_value, e_val2, None).unwrap();
     let e_val10b = int_literal(&mut b, 10);
-    b.push_quad(e_s3, e_value, e_val10b, None);
-    b.push_quad(e_s3, e_property, e_w3, None);
+    b.push_quad(e_s3, e_value, e_val10b, None).unwrap();
+    b.push_quad(e_s3, e_property, e_w3, None).unwrap();
 
     // ---- Group F: the SEP's MINUS disjoint-domain example (Issue 4), test 9 ---
-    let f_sep_p = b.intern_iri(&iri("sepP"));
-    let f_sep_c = b.intern_iri(&iri("sepC"));
-    let f_sep_d = b.intern_iri(&iri("sepD"));
-    b.push_quad(f_sep_d, f_sep_p, f_sep_c, None);
+    let f_sep_p = b.intern_iri(&iri("sepP")).unwrap();
+    let f_sep_c = b.intern_iri(&iri("sepC")).unwrap();
+    let f_sep_d = b.intern_iri(&iri("sepD")).unwrap();
+    b.push_quad(f_sep_d, f_sep_p, f_sep_c, None).unwrap();
 
     // ---- Group G: the SEP's disconnected-variable example (Issue 5), test 10 --
     // `:gD` (the value the outer `BIND` supplies) has NO `:gP :gC` fact of its
@@ -197,10 +198,10 @@ fn dataset() -> Arc<RdfDataset> {
     // TRUE, because `{ SELECT ?y WHERE { ?x :gP :gC } }`'s own `?x` is a fresh,
     // disconnected variable that finds `:gOther`'s fact regardless of what the
     // outer `?x` is bound to.
-    let g_p = b.intern_iri(&iri("gP"));
-    let g_c = b.intern_iri(&iri("gC"));
-    let g_other = b.intern_iri(&iri("gOther"));
-    b.push_quad(g_other, g_p, g_c, None);
+    let g_p = b.intern_iri(&iri("gP")).unwrap();
+    let g_c = b.intern_iri(&iri("gC")).unwrap();
+    let g_other = b.intern_iri(&iri("gOther")).unwrap();
+    b.push_quad(g_other, g_p, g_c, None).unwrap();
     // `:gD` and `:gIrrelevant` are referenced only via `BIND` in the query text
     // below — no triple needed for either.
 
@@ -209,150 +210,150 @@ fn dataset() -> Arc<RdfDataset> {
     // entities (`:hI1`/`:hI2`/`:hI3`) are the SUBJECTS of `:hItem`, pointing AT
     // `:hCa`/`:hCb`/`:hCc` — mirroring `exists_admission_gate.rs`'s
     // `probe_would_diverge_on_slice`/`_group` witness shape.
-    let h_tag = b.intern_iri(&iri("hTag"));
-    let h_item = b.intern_iri(&iri("hItem"));
-    let h_ca = b.intern_iri(&iri("hCa"));
-    let h_cb = b.intern_iri(&iri("hCb"));
-    let h_cc = b.intern_iri(&iri("hCc"));
-    let h_i1 = b.intern_iri(&iri("hI1"));
-    let h_i2 = b.intern_iri(&iri("hI2"));
-    let h_i3 = b.intern_iri(&iri("hI3"));
-    let x_val = b.intern_literal(RdfLiteral::simple("x"));
-    b.push_quad(h_ca, h_tag, x_val, None);
-    b.push_quad(h_i1, h_item, h_ca, None);
-    b.push_quad(h_i2, h_item, h_ca, None);
-    b.push_quad(h_cb, h_tag, x_val, None);
-    b.push_quad(h_i3, h_item, h_cb, None);
-    b.push_quad(h_cc, h_tag, x_val, None);
+    let h_tag = b.intern_iri(&iri("hTag")).unwrap();
+    let h_item = b.intern_iri(&iri("hItem")).unwrap();
+    let h_ca = b.intern_iri(&iri("hCa")).unwrap();
+    let h_cb = b.intern_iri(&iri("hCb")).unwrap();
+    let h_cc = b.intern_iri(&iri("hCc")).unwrap();
+    let h_i1 = b.intern_iri(&iri("hI1")).unwrap();
+    let h_i2 = b.intern_iri(&iri("hI2")).unwrap();
+    let h_i3 = b.intern_iri(&iri("hI3")).unwrap();
+    let x_val = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+    b.push_quad(h_ca, h_tag, x_val, None).unwrap();
+    b.push_quad(h_i1, h_item, h_ca, None).unwrap();
+    b.push_quad(h_i2, h_item, h_ca, None).unwrap();
+    b.push_quad(h_cb, h_tag, x_val, None).unwrap();
+    b.push_quad(h_i3, h_item, h_cb, None).unwrap();
+    b.push_quad(h_cc, h_tag, x_val, None).unwrap();
 
     // ---- Group I: bare, fresh `VALUES` inner, test 16 --------------------------
-    let i_tag = b.intern_iri(&iri("iTag"));
-    let i_s1 = b.intern_iri(&iri("iS1"));
-    let i_s2 = b.intern_iri(&iri("iS2"));
-    let i_s3 = b.intern_iri(&iri("iS3"));
-    let go2 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(i_s1, i_tag, go2, None);
-    let go3 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(i_s2, i_tag, go3, None);
-    let go4 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(i_s3, i_tag, go4, None);
+    let i_tag = b.intern_iri(&iri("iTag")).unwrap();
+    let i_s1 = b.intern_iri(&iri("iS1")).unwrap();
+    let i_s2 = b.intern_iri(&iri("iS2")).unwrap();
+    let i_s3 = b.intern_iri(&iri("iS3")).unwrap();
+    let go2 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(i_s1, i_tag, go2, None).unwrap();
+    let go3 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(i_s2, i_tag, go3, None).unwrap();
+    let go4 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(i_s3, i_tag, go4, None).unwrap();
 
     // ---- Group J: bare, uncorrelated sub-`SELECT` inner, test 17 --------------
-    let j_tag = b.intern_iri(&iri("jTag"));
-    let j_flag = b.intern_iri(&iri("jFlag"));
-    let j_s1 = b.intern_iri(&iri("jS1"));
-    let j_s2 = b.intern_iri(&iri("jS2"));
-    let j_mark = b.intern_iri(&iri("jMark"));
-    let go5 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(j_s1, j_tag, go5, None);
-    let go6 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(j_s2, j_tag, go6, None);
-    let yes3 = b.intern_literal(RdfLiteral::simple("yes"));
-    b.push_quad(j_mark, j_flag, yes3, None);
+    let j_tag = b.intern_iri(&iri("jTag")).unwrap();
+    let j_flag = b.intern_iri(&iri("jFlag")).unwrap();
+    let j_s1 = b.intern_iri(&iri("jS1")).unwrap();
+    let j_s2 = b.intern_iri(&iri("jS2")).unwrap();
+    let j_mark = b.intern_iri(&iri("jMark")).unwrap();
+    let go5 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(j_s1, j_tag, go5, None).unwrap();
+    let go6 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(j_s2, j_tag, go6, None).unwrap();
+    let yes3 = b.intern_literal(RdfLiteral::simple("yes")).unwrap();
+    b.push_quad(j_mark, j_flag, yes3, None).unwrap();
 
     // ---- Group K: unprojected outer variable, the narrowing pin, test 18 -------
-    let k_mark = b.intern_iri(&iri("kMark"));
-    let k_q = b.intern_iri(&iri("q"));
-    let k_m1 = b.intern_iri(&iri("kM1"));
-    let k_m2 = b.intern_iri(&iri("kM2"));
-    let k_qval = b.intern_iri(&iri("qVal"));
-    let keep = b.intern_literal(RdfLiteral::simple("keep"));
-    b.push_quad(k_m1, k_mark, keep, None);
-    b.push_quad(k_m1, k_q, k_qval, None);
-    let keep2 = b.intern_literal(RdfLiteral::simple("keep"));
-    b.push_quad(k_m2, k_mark, keep2, None);
+    let k_mark = b.intern_iri(&iri("kMark")).unwrap();
+    let k_q = b.intern_iri(&iri("q")).unwrap();
+    let k_m1 = b.intern_iri(&iri("kM1")).unwrap();
+    let k_m2 = b.intern_iri(&iri("kM2")).unwrap();
+    let k_qval = b.intern_iri(&iri("qVal")).unwrap();
+    let keep = b.intern_literal(RdfLiteral::simple("keep")).unwrap();
+    b.push_quad(k_m1, k_mark, keep, None).unwrap();
+    b.push_quad(k_m1, k_q, k_qval, None).unwrap();
+    let keep2 = b.intern_literal(RdfLiteral::simple("keep")).unwrap();
+    b.push_quad(k_m2, k_mark, keep2, None).unwrap();
 
     // ---- Group L: the `HAVING`-scope pin, test 19 ------------------------------
-    let l_count = b.intern_iri(&iri("lCount"));
-    let l_item = b.intern_iri(&iri("lItem"));
-    let l_d1 = b.intern_iri(&iri("lD1"));
-    let l_d2 = b.intern_iri(&iri("lD2"));
-    let l_g1 = b.intern_iri(&iri("lG1"));
-    let l_i1 = b.intern_iri(&iri("lI1"));
+    let l_count = b.intern_iri(&iri("lCount")).unwrap();
+    let l_item = b.intern_iri(&iri("lItem")).unwrap();
+    let l_d1 = b.intern_iri(&iri("lD1")).unwrap();
+    let l_d2 = b.intern_iri(&iri("lD2")).unwrap();
+    let l_g1 = b.intern_iri(&iri("lG1")).unwrap();
+    let l_i1 = b.intern_iri(&iri("lI1")).unwrap();
     let l_val1 = int_literal(&mut b, 1);
-    b.push_quad(l_d1, l_count, l_val1, None);
+    b.push_quad(l_d1, l_count, l_val1, None).unwrap();
     let l_val10 = int_literal(&mut b, 10);
-    b.push_quad(l_d2, l_count, l_val10, None);
-    b.push_quad(l_g1, l_item, l_i1, None);
+    b.push_quad(l_d2, l_count, l_val10, None).unwrap();
+    b.push_quad(l_g1, l_item, l_i1, None).unwrap();
 
     // ---- Group M: quoted-triple outer binding, test 20 -------------------------
     // TWO reifiers name the SAME statement (`:mA :mP :mOa`); ONE reifier names a
     // DIFFERENT one, alone — the `true`/`false` split for a `sameTerm` "is there
     // ANOTHER reifier of this exact quoted triple" correlation.
-    let m_p = b.intern_iri(&iri("mP"));
-    let m_a = b.intern_iri(&iri("mA"));
-    let m_b = b.intern_iri(&iri("mB"));
-    let m_oa = b.intern_iri(&iri("mOa"));
-    let m_ob = b.intern_iri(&iri("mOb"));
-    b.push_quad(m_a, m_p, m_oa, None);
-    b.push_quad(m_b, m_p, m_ob, None);
-    let stmt_a = b.intern_triple(m_a, m_p, m_oa);
-    let stmt_b = b.intern_triple(m_b, m_p, m_ob);
-    let reifier_m1a = b.intern_iri(&iri("reifierM1a"));
-    let reifier_m1b = b.intern_iri(&iri("reifierM1b"));
-    let reifier_m2 = b.intern_iri(&iri("reifierM2"));
-    b.push_reifier(reifier_m1a, stmt_a);
-    b.push_reifier(reifier_m1b, stmt_a);
-    b.push_reifier(reifier_m2, stmt_b);
+    let m_p = b.intern_iri(&iri("mP")).unwrap();
+    let m_a = b.intern_iri(&iri("mA")).unwrap();
+    let m_b = b.intern_iri(&iri("mB")).unwrap();
+    let m_oa = b.intern_iri(&iri("mOa")).unwrap();
+    let m_ob = b.intern_iri(&iri("mOb")).unwrap();
+    b.push_quad(m_a, m_p, m_oa, None).unwrap();
+    b.push_quad(m_b, m_p, m_ob, None).unwrap();
+    let stmt_a = b.intern_triple(m_a, m_p, m_oa).unwrap();
+    let stmt_b = b.intern_triple(m_b, m_p, m_ob).unwrap();
+    let reifier_m1a = b.intern_iri(&iri("reifierM1a")).unwrap();
+    let reifier_m1b = b.intern_iri(&iri("reifierM1b")).unwrap();
+    let reifier_m2 = b.intern_iri(&iri("reifierM2")).unwrap();
+    b.push_reifier(reifier_m1a, stmt_a).unwrap();
+    b.push_reifier(reifier_m1b, stmt_a).unwrap();
+    b.push_reifier(reifier_m2, stmt_b).unwrap();
 
     // ---- Group N: blank-node outer binding, test 21 ---------------------------
     // `_:nB1` is reachable via BOTH `:nHasAnon` (from `:nS1`) and `:nAlias` (from
     // `:nLinker`); `_:nB2` (from `:nS2`) is reachable ONLY via `:nHasAnon` — the
     // `true`/`false` split. Both blanks are also SUBJECTS of their own `:nNote`
     // triple (the fixture's blank-node-subject requirement).
-    let n_has_anon = b.intern_iri(&iri("nHasAnon"));
-    let n_alias = b.intern_iri(&iri("nAlias"));
-    let n_note = b.intern_iri(&iri("nNote"));
-    let n_s1 = b.intern_iri(&iri("nS1"));
-    let n_s2 = b.intern_iri(&iri("nS2"));
-    let n_linker = b.intern_iri(&iri("nLinker"));
-    let n_b1 = b.intern_blank("nB1", BlankScope::DEFAULT);
-    let n_b2 = b.intern_blank("nB2", BlankScope::DEFAULT);
-    b.push_quad(n_s1, n_has_anon, n_b1, None);
-    b.push_quad(n_s2, n_has_anon, n_b2, None);
-    b.push_quad(n_linker, n_alias, n_b1, None);
-    let b1note = b.intern_literal(RdfLiteral::simple("b1note"));
-    b.push_quad(n_b1, n_note, b1note, None);
-    let b2note = b.intern_literal(RdfLiteral::simple("b2note"));
-    b.push_quad(n_b2, n_note, b2note, None);
+    let n_has_anon = b.intern_iri(&iri("nHasAnon")).unwrap();
+    let n_alias = b.intern_iri(&iri("nAlias")).unwrap();
+    let n_note = b.intern_iri(&iri("nNote")).unwrap();
+    let n_s1 = b.intern_iri(&iri("nS1")).unwrap();
+    let n_s2 = b.intern_iri(&iri("nS2")).unwrap();
+    let n_linker = b.intern_iri(&iri("nLinker")).unwrap();
+    let n_b1 = b.intern_blank("nB1", BlankScope::DEFAULT).unwrap();
+    let n_b2 = b.intern_blank("nB2", BlankScope::DEFAULT).unwrap();
+    b.push_quad(n_s1, n_has_anon, n_b1, None).unwrap();
+    b.push_quad(n_s2, n_has_anon, n_b2, None).unwrap();
+    b.push_quad(n_linker, n_alias, n_b1, None).unwrap();
+    let b1note = b.intern_literal(RdfLiteral::simple("b1note")).unwrap();
+    b.push_quad(n_b1, n_note, b1note, None).unwrap();
+    let b2note = b.intern_literal(RdfLiteral::simple("b2note")).unwrap();
+    b.push_quad(n_b2, n_note, b2note, None).unwrap();
 
     // ---- Group O: `GRAPH <fixed-iri>` with a correlated body, test 22 ---------
-    let o_marker = b.intern_iri(&iri("oMarker"));
-    let o_item = b.intern_iri(&iri("oItem"));
-    let o_x1 = b.intern_iri(&iri("oX1"));
-    let o_x2 = b.intern_iri(&iri("oX2"));
-    let o_y1 = b.intern_iri(&iri("oY1"));
-    let o_g = b.intern_iri(&iri("oG"));
-    let go7 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(o_x1, o_marker, go7, None);
-    let go8 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(o_x2, o_marker, go8, None);
-    b.push_quad(o_x1, o_item, o_y1, Some(o_g));
+    let o_marker = b.intern_iri(&iri("oMarker")).unwrap();
+    let o_item = b.intern_iri(&iri("oItem")).unwrap();
+    let o_x1 = b.intern_iri(&iri("oX1")).unwrap();
+    let o_x2 = b.intern_iri(&iri("oX2")).unwrap();
+    let o_y1 = b.intern_iri(&iri("oY1")).unwrap();
+    let o_g = b.intern_iri(&iri("oG")).unwrap();
+    let go7 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(o_x1, o_marker, go7, None).unwrap();
+    let go8 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(o_x2, o_marker, go8, None).unwrap();
+    b.push_quad(o_x1, o_item, o_y1, Some(o_g)).unwrap();
 
     // ---- Group P: property-function inner, test 23 ----------------------------
-    let p_marker = b.intern_iri(&iri("pMarker"));
-    let p_s1 = b.intern_iri(&iri("pS1"));
-    let p_s2 = b.intern_iri(&iri("pS2"));
-    let go9 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(p_s1, p_marker, go9, None);
-    let go10 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(p_s2, p_marker, go10, None);
+    let p_marker = b.intern_iri(&iri("pMarker")).unwrap();
+    let p_s1 = b.intern_iri(&iri("pS1")).unwrap();
+    let p_s2 = b.intern_iri(&iri("pS2")).unwrap();
+    let go9 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(p_s1, p_marker, go9, None).unwrap();
+    let go10 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(p_s2, p_marker, go10, None).unwrap();
 
     // ---- Group Q: three-level alternating-polarity nesting, test 24 -----------
-    let q_mid = b.intern_iri(&iri("qMid"));
-    let q_leaf = b.intern_iri(&iri("qLeaf"));
-    let q_anchor = b.intern_iri(&iri("qAnchor"));
-    let t_marker = b.intern_iri(&iri("tMarker"));
-    let t_s1 = b.intern_iri(&iri("tS1"));
-    let t_s2 = b.intern_iri(&iri("tS2"));
-    let t_leaf_obj = b.intern_iri(&iri("tLeafObj"));
-    let one2 = b.intern_literal(RdfLiteral::simple("1"));
-    b.push_quad(q_anchor, q_mid, one2, None);
-    let go11 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(t_s1, t_marker, go11, None);
-    b.push_quad(t_s1, q_leaf, t_leaf_obj, None);
-    let go12 = b.intern_literal(RdfLiteral::simple("go"));
-    b.push_quad(t_s2, t_marker, go12, None);
+    let q_mid = b.intern_iri(&iri("qMid")).unwrap();
+    let q_leaf = b.intern_iri(&iri("qLeaf")).unwrap();
+    let q_anchor = b.intern_iri(&iri("qAnchor")).unwrap();
+    let t_marker = b.intern_iri(&iri("tMarker")).unwrap();
+    let t_s1 = b.intern_iri(&iri("tS1")).unwrap();
+    let t_s2 = b.intern_iri(&iri("tS2")).unwrap();
+    let t_leaf_obj = b.intern_iri(&iri("tLeafObj")).unwrap();
+    let one2 = b.intern_literal(RdfLiteral::simple("1")).unwrap();
+    b.push_quad(q_anchor, q_mid, one2, None).unwrap();
+    let go11 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(t_s1, t_marker, go11, None).unwrap();
+    b.push_quad(t_s1, q_leaf, t_leaf_obj, None).unwrap();
+    let go12 = b.intern_literal(RdfLiteral::simple("go")).unwrap();
+    b.push_quad(t_s2, t_marker, go12, None).unwrap();
 
     b.freeze().expect("freeze fixture")
 }

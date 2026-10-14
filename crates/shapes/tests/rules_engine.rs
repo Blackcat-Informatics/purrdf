@@ -44,7 +44,7 @@ const EX: &str = "http://example.org/ns#";
 use purrdf_xsd::datatype::XSD_INTEGER;
 
 fn shapes(body: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}\n{body}"), None).map_err(String::from)
+    parse_shapes(&format!("{PREFIXES}\n{body}"), None).map_err(|error| error.to_string())
 }
 
 fn data(ttl: &str) -> ShaclData {
@@ -61,7 +61,7 @@ fn run(
     options: &RuleOptions,
 ) -> Result<Vec<(String, String, String)>, String> {
     let shapes = shapes(shapes_body)?;
-    let inference = infer(&data(data_ttl), &shapes, options)?;
+    let inference = infer(&data(data_ttl), &shapes, options).map_err(|error| error.to_string())?;
     Ok(inference
         .inferred()
         .iter()
@@ -368,7 +368,8 @@ fn rules_entailment_runs_the_rules_before_validation() {
     let data_ttl = r#"ex:alice a ex:Person ; ex:first "Alice" ."#;
     let validate = |entailment: &str| -> Result<bool, String> {
         let shapes = shapes(&graph(entailment))?;
-        let report = engine::validate_with(&data(data_ttl), &shapes)?;
+        let report =
+            engine::validate_with(&data(data_ttl), &shapes).map_err(|error| error.to_string())?;
         Ok(report.conforms)
     };
     assert!(validate("sh:entailment sh:RulesEntailment").expect("validates"));

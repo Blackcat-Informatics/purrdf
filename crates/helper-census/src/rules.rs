@@ -500,6 +500,28 @@ macro_rules! scoped_visits {
     )+};
 }
 
+/// Visit only production-reachable items. The custom form shares one body
+/// across syntax node types with the same members; the default form delegates
+/// to syn's original traversal after the same cfg check.
+macro_rules! shipping_visits {
+    ($lt:lifetime; $([$($method:ident($ty:ty)),+ $(,)?] => |$this:ident, $node:ident| $body:block;)+) => {$($(
+        fn $method(&mut self, $node: &$lt $ty) {
+            if !crate::source::is_test_only(&$node.attrs) {
+                let $this = self;
+                $body
+            }
+        }
+    )+)+};
+    ($lt:lifetime; $($method:ident($ty:ty);)+) => {$(
+        fn $method(&mut self, node: &$lt $ty) {
+            if !crate::source::is_test_only(&node.attrs) {
+                syn::visit::$method(self, node);
+            }
+        }
+    )+};
+}
+pub(crate) use shipping_visits;
+
 impl<'ast> Visit<'ast> for StdHashMapRule<'_> {
     fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
         self.check_path(&node.path, true);

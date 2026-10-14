@@ -116,23 +116,27 @@ fn destructive_drop_resumes_uneven_leaf_tails_without_allocation() {
 /// nested triple term — so the iteration genuinely resolves every term variant.
 fn build_dataset() -> std::sync::Arc<purrdf_core::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let g = b.intern_iri("http://example.org/g");
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
 
     for n in 0..64 {
-        let s = b.intern_iri(&format!("http://example.org/s{n}"));
-        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 3));
-        let lit = b.intern_literal(RdfLiteral::language_tagged(format!("v{n}"), "EN"));
-        let typed = b.intern_literal(RdfLiteral::typed(
-            format!("{n}"),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        b.push_quad(s, p, bnode, None);
-        b.push_quad(s, p, lit, Some(g));
-        b.push_quad(bnode, p, typed, None);
+        let s = b.intern_iri(&format!("http://example.org/s{n}")).unwrap();
+        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 3)).unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral::language_tagged(format!("v{n}"), "EN"))
+            .unwrap();
+        let typed = b
+            .intern_literal(RdfLiteral::typed(
+                format!("{n}"),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        b.push_quad(s, p, bnode, None).unwrap();
+        b.push_quad(s, p, lit, Some(g)).unwrap();
+        b.push_quad(bnode, p, typed, None).unwrap();
         // A nested triple term as object, exercising the Triple arm of resolve().
-        let inner = b.intern_triple(s, p, typed);
-        b.push_quad(s, p, inner, Some(g));
+        let inner = b.intern_triple(s, p, typed).unwrap();
+        b.push_quad(s, p, inner, Some(g)).unwrap();
     }
 
     b.freeze().expect("dataset is structurally valid")

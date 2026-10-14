@@ -121,6 +121,7 @@ impl ShapesProductRefusal {
             Self::Shapes(ShapesError::Invalid(message)) => message.as_str().into(),
             Self::Shapes(
                 error @ (ShapesError::Imports(_)
+                | ShapesError::Storage(_)
                 | ShapesError::ShaclJs(_)
                 | ShapesError::IllFormed(_)
                 | ShapesError::Prebinding(_)

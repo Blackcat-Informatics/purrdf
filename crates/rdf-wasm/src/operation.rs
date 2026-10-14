@@ -112,6 +112,8 @@ enum ErrorText {
     Diagnostic,
     /// The diagnostic's message alone: a failure whose words never carried a code.
     Message,
+    /// A host context's existing rendering beside the untouched native diagnostic.
+    ReasoningQuery,
 }
 
 /// Why an operation failed: its kind, and the diagnostic whose code says why.
@@ -206,16 +208,12 @@ impl JobError {
     /// own failure is reported under [`ENTAILMENT_CODE`]; either reads as the reasoning
     /// layer renders it.
     fn reasoning(error: &ReasoningError) -> Self {
-        let (code, presentation) = match error {
-            ReasoningError::Query(diagnostic) => (
-                diagnostic.code.as_str(),
-                diagnostic.presentation().cloned().map(Box::new),
-            ),
-            _ => (ENTAILMENT_CODE, None),
-        };
-        Self {
-            presentation,
-            ..Self::message(code, error.to_string())
+        match error {
+            ReasoningError::Query(diagnostic) => Self {
+                text: ErrorText::ReasoningQuery,
+                ..Self::diagnostic(diagnostic.clone())
+            },
+            _ => Self::message(ENTAILMENT_CODE, error.to_string()),
         }
     }
 
@@ -246,9 +244,10 @@ impl JobError {
             )
             .to_string();
         }
-        match self.text {
+        match &self.text {
             ErrorText::Diagnostic => self.diagnostic.to_string(),
             ErrorText::Message => self.diagnostic.message.clone(),
+            ErrorText::ReasoningQuery => ReasoningError::Query(self.diagnostic.clone()).to_string(),
         }
     }
 
@@ -261,11 +260,27 @@ impl JobError {
             .map(|presentation| presentation.to_json().to_string())
     }
 
+    /// A storage refusal's original diagnostic record. Capacity counts remain decimal
+    /// strings, including values wider than either a JavaScript number or a native ID.
+    pub(crate) fn diagnostic_json(&self) -> Option<String> {
+        self.diagnostic
+            .storage_error()
+            .map(|_| self.diagnostic.to_json().to_string())
+    }
+
     /// The JavaScript error this failure is thrown as: its message, its `code`, and,
     /// when it carries one, its typed `presentation`.
     pub(crate) fn to_js(&self) -> JsValue {
         let error = CodedError::new(&self.rendered());
         error.set_code(self.code());
+        if let Some(record) = self.diagnostic_json() {
+            match json_parse(&record) {
+                Ok(diagnostic) => error.set_diagnostic(&diagnostic),
+                // Match the asynchronous adapter: failure to construct the required
+                // record is thrown, never a successful but incomplete storage error.
+                Err(refusal) => return refusal,
+            }
+        }
         // The record is this crate's own deterministic JSON, so `JSON.parse` accepts it;
         // were it ever refused, the error is still thrown with its message and code.
         if let Some(record) = self.presentation_json()
@@ -288,6 +303,9 @@ extern "C" {
 
     #[wasm_bindgen(method, setter = code)]
     fn set_code(this: &CodedError, code: &str);
+
+    #[wasm_bindgen(method, setter = diagnostic)]
+    fn set_diagnostic(this: &CodedError, diagnostic: &JsValue);
 
     #[wasm_bindgen(method, setter = presentation)]
     fn set_presentation(this: &CodedError, presentation: &JsValue);
@@ -691,11 +709,10 @@ impl OperationInput<'_> {
                         format.as_deref(),
                         provenance.as_ref(),
                         &sparql,
-                    ),
+                    )
+                    .map_err(|message| JobError::message(SERIALIZE_CODE, message)),
                 });
-                Ok(JobOutcome::Raw(text.map_err(|message| {
-                    JobError::message(SERIALIZE_CODE, message)
-                })?))
+                Ok(JobOutcome::Raw(text?))
             }
             AsyncOperationKind::Governed => {
                 let env = governed_env(aggregate_namespace.as_deref())?;
@@ -935,6 +952,33 @@ impl OperationInput<'_> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn reasoning_storage_failure_keeps_original_cause_and_context() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+
+        let cause = StorageError::Capacity(CapacityError::new(
+            CapacitySpace::GlobalTermBytes,
+            u128::MAX,
+            u128::from(u64::MAX) + 1,
+        ));
+        let original = RdfDiagnostic::from(cause);
+        let expected = original.to_json().to_string();
+        let reasoning = ReasoningError::Query(original.clone());
+        for error in [
+            JobError::diagnostic(original.clone()),
+            JobError::reasoning(&reasoning),
+        ] {
+            assert_eq!(error.diagnostic.storage_error(), Some(cause));
+            assert_eq!(error.code(), original.code);
+            assert_eq!(error.diagnostic_json().as_deref(), Some(expected.as_str()));
+            assert!(error.presentation_json().is_none());
+        }
+        assert_eq!(
+            JobError::reasoning(&reasoning).rendered(),
+            reasoning.to_string()
+        );
+    }
+
     /// A parse failure keeps the parser's typed presentation on both the direct and the
     /// entailment lane, with its message unchanged; a failure without one carries none.
     #[test]
@@ -1011,6 +1055,9 @@ mod tests {
             let plain = match error.text {
                 ErrorText::Diagnostic => error.diagnostic.to_string(),
                 ErrorText::Message => error.diagnostic.message.clone(),
+                ErrorText::ReasoningQuery => {
+                    panic!("the stack fixtures do not construct a reasoning failure")
+                }
             };
             assert_eq!(error.rendered(), plain);
         }

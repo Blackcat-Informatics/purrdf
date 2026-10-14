@@ -254,7 +254,9 @@ fn encode_id(id: TermId) -> u32 {
 
 /// Decode a view `term_id` back to a [`TermId`], or `None` for the `0` sentinel.
 fn decode_id(term_id: u32) -> Option<TermId> {
-    term_id.checked_sub(1).map(TermId::from_index)
+    term_id
+        .checked_sub(1)
+        .map(|index| TermId::from_index(index).expect("stored term index is representable"))
 }
 
 /// Render a dataset term (by id) into a borrowed structured view. The view's

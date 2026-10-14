@@ -15,13 +15,13 @@ const S: &str = "https://e/s";
 #[test]
 fn describe_round_trips_through_every_serializer() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(S);
-    let p = b.intern_iri("https://e/p");
-    let o = b.intern_iri("https://e/o");
-    let label = b.intern_iri("https://e/label");
-    let hi = b.intern_literal(RdfLiteral::simple("hi"));
-    b.push_quad(s, p, o, None);
-    b.push_quad(s, label, hi, None);
+    let s = b.intern_iri(S).unwrap();
+    let p = b.intern_iri("https://e/p").unwrap();
+    let o = b.intern_iri("https://e/o").unwrap();
+    let label = b.intern_iri("https://e/label").unwrap();
+    let hi = b.intern_literal(RdfLiteral::simple("hi")).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    b.push_quad(s, label, hi, None).unwrap();
     let ds = b.freeze().expect("freeze");
 
     let scbd = describe(&ds, S).expect("describe");
@@ -59,17 +59,18 @@ fn describe_round_trips_through_every_serializer() {
 #[test]
 fn a_graph_scoped_description_round_trips_through_the_dataset_serializers() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(S);
-    let p = b.intern_iri("https://e/p");
-    let o = b.intern_iri("https://e/o");
-    let g = b.intern_iri("https://e/g");
-    b.push_quad(s, p, o, Some(g));
-    let triple = b.intern_triple(s, p, o);
-    let reifier = b.intern_iri("https://e/r");
-    b.push_reifier_in_graph(reifier, triple, Some(g));
-    let note = b.intern_iri("https://e/note");
-    let n = b.intern_literal(RdfLiteral::simple("n"));
-    b.push_annotation_in_graph(reifier, note, n, Some(g));
+    let s = b.intern_iri(S).unwrap();
+    let p = b.intern_iri("https://e/p").unwrap();
+    let o = b.intern_iri("https://e/o").unwrap();
+    let g = b.intern_iri("https://e/g").unwrap();
+    b.push_quad(s, p, o, Some(g)).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let reifier = b.intern_iri("https://e/r").unwrap();
+    b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+    let note = b.intern_iri("https://e/note").unwrap();
+    let n = b.intern_literal(RdfLiteral::simple("n")).unwrap();
+    b.push_annotation_in_graph(reifier, note, n, Some(g))
+        .unwrap();
     let ds = b.freeze().expect("freeze");
 
     let scbd = describe(&ds, S).expect("describe");

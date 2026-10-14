@@ -78,11 +78,11 @@ impl retrieval::Statistics for NoStatistics {
 /// producer, over the same four entities.
 fn registry() -> PropertyFunctionRegistry {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, body) in ENTITIES {
-        let subject = builder.intern_iri(&entity_iri(local));
-        let literal = builder.intern_literal(RdfLiteral::simple(body));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder.intern_iri(&entity_iri(local)).unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(body)).unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
     let dataset = builder.freeze().expect("the fixture validates");
 
@@ -180,11 +180,11 @@ fn profile() -> retrieval::FusionProfile {
 
 fn search() -> retrieval::SearchResult {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, body) in ENTITIES {
-        let subject = builder.intern_iri(&entity_iri(local));
-        let literal = builder.intern_literal(RdfLiteral::simple(body));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder.intern_iri(&entity_iri(local)).unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(body)).unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
     let dataset = builder.freeze().expect("the fixture validates");
 
@@ -372,11 +372,11 @@ fn the_answer_bounds_each_row_and_names_its_certain_prefix() {
 /// that approximation is what made it so.
 fn text_only_search() -> retrieval::SearchResult {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, body) in ENTITIES {
-        let subject = builder.intern_iri(&entity_iri(local));
-        let literal = builder.intern_literal(RdfLiteral::simple(body));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder.intern_iri(&entity_iri(local)).unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(body)).unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
     let dataset = builder.freeze().expect("the fixture validates");
 

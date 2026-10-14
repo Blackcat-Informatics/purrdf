@@ -325,15 +325,23 @@ fn optional_and_minus_answer_alike_on_every_lane() {
 fn graph_name_only_bindings_are_local_in_optional_and_exists_scopes() {
     let (focus_data, items) = all_kinds();
     let mut builder = RdfDatasetBuilder::new();
-    let graph = builder.intern_iri(&format!("{EX}graph"));
-    let subject = builder.intern_iri(&format!("{EX}s"));
-    let predicate = builder.intern_iri(&format!("{EX}p"));
-    let value = builder.intern_iri(&format!("{EX}present"));
-    builder.push_quad(subject, predicate, value, Some(graph));
-    let blank_good = builder.intern_blank("graph-good", BlankScope::DEFAULT);
-    let blank_bad = builder.intern_blank("graph-bad", BlankScope::DEFAULT);
-    builder.push_quad(subject, predicate, value, Some(blank_good));
-    builder.declare_named_graph(blank_bad);
+    let graph = builder.intern_iri(&format!("{EX}graph")).unwrap();
+    let subject = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let value = builder.intern_iri(&format!("{EX}present")).unwrap();
+    builder
+        .push_quad(subject, predicate, value, Some(graph))
+        .unwrap();
+    let blank_good = builder
+        .intern_blank("graph-good", BlankScope::DEFAULT)
+        .unwrap();
+    let blank_bad = builder
+        .intern_blank("graph-bad", BlankScope::DEFAULT)
+        .unwrap();
+    builder
+        .push_quad(subject, predicate, value, Some(blank_good))
+        .unwrap();
+    builder.declare_named_graph(blank_bad).unwrap();
     let dataset = builder.freeze().expect("named graph");
     let engine = NativeSparqlEngine::new();
     let options = QueryOptions::EMPTY.with_prebinding(ShaclPrebinding::Applied);

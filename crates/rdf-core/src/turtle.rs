@@ -597,13 +597,15 @@ mod tests {
         // asserting* triple — a different, larger graph — so this asserts the
         // exact delimiter rather than only the component IRIs.
         let mut builder = crate::RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_iri("http://example.org/o");
-        let statement = builder.intern_triple(s, p, o);
-        let outer_s = builder.intern_iri("http://example.org/outer");
-        let outer_p = builder.intern_iri("http://example.org/concludes");
-        builder.push_quad(outer_s, outer_p, statement, None);
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder.intern_iri("http://example.org/o").unwrap();
+        let statement = builder.intern_triple(s, p, o).unwrap();
+        let outer_s = builder.intern_iri("http://example.org/outer").unwrap();
+        let outer_p = builder.intern_iri("http://example.org/concludes").unwrap();
+        builder
+            .push_quad(outer_s, outer_p, statement, None)
+            .unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
 
         let mut out = String::new();
@@ -643,15 +645,19 @@ mod tests {
         assert_eq!(owned_literal(&RdfLiteral::typed("a", XSD_STRING)), "\"a\"");
         assert_eq!(owned_literal(&RdfLiteral::simple("a")), "\"a\"");
         let mut builder = crate::RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        let string = builder.intern_literal(RdfLiteral::typed("a", XSD_STRING));
-        let integer = builder.intern_literal(RdfLiteral::typed(
-            "1",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(s, p, string, None);
-        builder.push_quad(s, p, integer, None);
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let string = builder
+            .intern_literal(RdfLiteral::typed("a", XSD_STRING))
+            .unwrap();
+        let integer = builder
+            .intern_literal(RdfLiteral::typed(
+                "1",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        builder.push_quad(s, p, string, None).unwrap();
+        builder.push_quad(s, p, integer, None).unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
         let mut out = String::new();
         write_dataset_term(&dataset, string, &mut out);
@@ -700,9 +706,9 @@ mod tests {
         // A frozen dataset's IRIs are validated at intern time, so its
         // predicate slot goes through the same IRIREF writer as every term.
         let mut builder = crate::RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        builder.push_quad(s, p, s, None);
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        builder.push_quad(s, p, s, None).unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
         let mut line = String::new();
         for quad in dataset.quads() {
@@ -858,10 +864,12 @@ mod tests {
         // legal raw label at the default scope is written verbatim, while a
         // scoped pair or an illegal raw label becomes the envelope.
         let mut builder = crate::RdfDatasetBuilder::new();
-        let good = builder.intern_blank("a.b", crate::BlankScope(4));
-        let bad = builder.intern_blank("a b", crate::BlankScope::DEFAULT);
-        let p = builder.intern_iri("http://example.org/p");
-        builder.push_quad(good, p, bad, None);
+        let good = builder.intern_blank("a.b", crate::BlankScope(4)).unwrap();
+        let bad = builder
+            .intern_blank("a b", crate::BlankScope::DEFAULT)
+            .unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        builder.push_quad(good, p, bad, None).unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
 
         let mut out = String::new();
@@ -1076,9 +1084,9 @@ mod tests {
             );
 
             let mut builder = crate::RdfDatasetBuilder::new();
-            let id = builder.intern_owned_term(&term);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, id, None);
+            let id = builder.intern_owned_term(&term).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, id, None).unwrap();
             let dataset = builder.freeze().expect("a generated term freezes");
             let id = dataset
                 .quads()

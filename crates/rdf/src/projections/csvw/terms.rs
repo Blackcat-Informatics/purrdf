@@ -1871,8 +1871,8 @@ mod tests {
             None,
         );
 
-        let business = builder.intern_iri(&format!("{EX}graph/business"));
-        builder.declare_named_graph(business);
+        let business = builder.intern_iri(&format!("{EX}graph/business")).unwrap();
+        builder.declare_named_graph(business).unwrap();
         push_literal_quad(
             &mut builder,
             &class,
@@ -1885,10 +1885,10 @@ mod tests {
             },
             Some(business),
         );
-        let empty = builder.intern_iri(&format!("{EX}graph/empty"));
-        builder.declare_named_graph(empty);
-        let excluded = builder.intern_iri(&format!("{EX}graph/excluded"));
-        builder.declare_named_graph(excluded);
+        let empty = builder.intern_iri(&format!("{EX}graph/empty")).unwrap();
+        builder.declare_named_graph(empty).unwrap();
+        let excluded = builder.intern_iri(&format!("{EX}graph/excluded")).unwrap();
+        builder.declare_named_graph(excluded).unwrap();
         push_iri_quad(
             &mut builder,
             &format!("{VOCAB}excluded"),
@@ -1897,21 +1897,28 @@ mod tests {
             Some(excluded),
         );
 
-        let blank = builder.intern_blank("row", BlankScope(7));
-        let label = builder.intern_iri(LABEL);
-        let blank_value = builder.intern_literal(RdfLiteral::simple("Blank"));
-        builder.push_quad(blank, label, blank_value, None);
+        let blank = builder.intern_blank("row", BlankScope(7)).unwrap();
+        let label = builder.intern_iri(LABEL).unwrap();
+        let blank_value = builder.intern_literal(RdfLiteral::simple("Blank")).unwrap();
+        builder.push_quad(blank, label, blank_value, None).unwrap();
 
-        let quoted_subject = builder.intern_iri(&class);
-        let quoted_predicate = builder.intern_iri(PARENT);
-        let quoted_object = builder.intern_iri(&format!("{VOCAB}ParentA"));
-        let statement = builder.intern_triple(quoted_subject, quoted_predicate, quoted_object);
-        let reifier = builder.intern_blank("statement", BlankScope(9));
-        builder.push_reifier_in_graph(reifier, statement, Some(business));
-        let confidence = builder.intern_iri(&format!("{EX}confidence"));
-        let confidence_value =
-            builder.intern_literal(RdfLiteral::typed("0.9", format!("{XSD}decimal")));
-        builder.push_annotation_in_graph(reifier, confidence, confidence_value, Some(business));
+        let quoted_subject = builder.intern_iri(&class).unwrap();
+        let quoted_predicate = builder.intern_iri(PARENT).unwrap();
+        let quoted_object = builder.intern_iri(&format!("{VOCAB}ParentA")).unwrap();
+        let statement = builder
+            .intern_triple(quoted_subject, quoted_predicate, quoted_object)
+            .unwrap();
+        let reifier = builder.intern_blank("statement", BlankScope(9)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, statement, Some(business))
+            .unwrap();
+        let confidence = builder.intern_iri(&format!("{EX}confidence")).unwrap();
+        let confidence_value = builder
+            .intern_literal(RdfLiteral::typed("0.9", format!("{XSD}decimal")))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(reifier, confidence, confidence_value, Some(business))
+            .unwrap();
         builder.freeze().expect("fixture")
     }
 
@@ -1922,10 +1929,12 @@ mod tests {
         object: &str,
         graph: Option<purrdf_core::TermId>,
     ) {
-        let subject = builder.intern_iri(subject);
-        let predicate = builder.intern_iri(predicate);
-        let object = builder.intern_iri(object);
-        builder.push_quad(subject, predicate, object, graph);
+        let subject = builder.intern_iri(subject).unwrap();
+        let predicate = builder.intern_iri(predicate).unwrap();
+        let object = builder.intern_iri(object).unwrap();
+        builder
+            .push_quad(subject, predicate, object, graph)
+            .unwrap();
     }
 
     fn push_literal_quad(
@@ -1935,10 +1944,12 @@ mod tests {
         literal: RdfLiteral,
         graph: Option<purrdf_core::TermId>,
     ) {
-        let subject = builder.intern_iri(subject);
-        let predicate = builder.intern_iri(predicate);
-        let object = builder.intern_literal(literal);
-        builder.push_quad(subject, predicate, object, graph);
+        let subject = builder.intern_iri(subject).unwrap();
+        let predicate = builder.intern_iri(predicate).unwrap();
+        let object = builder.intern_literal(literal).unwrap();
+        builder
+            .push_quad(subject, predicate, object, graph)
+            .unwrap();
     }
 
     fn has_iri_quad(dataset: &RdfDataset, subject: &str, predicate: &str, object: &str) -> bool {

@@ -255,7 +255,7 @@ fn pageddataset_key_signatures_are_pinned() {
     let translation: Option<&PageTranslation> = dataset.translation(PageId(0));
     let _view: PagedQueryView<'_> = dataset.query_view(PagedQueryLimits::UNBOUNDED);
 
-    let compacted: PagedDataset = dataset.compact();
+    let compacted: PagedDataset = dataset.compact().unwrap();
     let dropped: PagedDataset = dataset.drop_page(PageId(0));
     let subset: PagedDataset = dataset.with_pages(&[PageId(1)]);
 

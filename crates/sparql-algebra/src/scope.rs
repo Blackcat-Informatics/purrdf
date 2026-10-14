@@ -508,7 +508,7 @@ pub fn spine_leaves_with_memory<'a, S: Admission + ?Sized>(
 ) -> Result<(), StorageError> {
     visit_spine_leaves_with_memory(
         pattern,
-        &mut |leaf, memory| {
+        &mut |leaf, memory| -> Result<bool, StorageError> {
             memory.push(out, leaf)?;
             Ok(false)
         },

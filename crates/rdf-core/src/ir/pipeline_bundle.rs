@@ -85,6 +85,29 @@
 //! invalidation below sound.
 
 use purrdf_hash::Domain;
+
+// Both carrier forms expose the same attach contract. Their graph_digest methods
+// select the backing canonicalizer; the check and publication are declared once.
+macro_rules! pin_handle_method {
+    ($handle:ty; $(#[$meta:meta])*) => {
+        $(#[$meta])*
+        pub fn pin_handle(
+            &mut self,
+            graph: impl Into<HandleKey>,
+            payload: $handle,
+            content_digest: ContentDigest,
+        ) -> Result<(), PipelineBundleError> {
+            let graph = graph.into();
+            let actual = self.graph_digest(&graph)?;
+            BundleCore::<$handle>::verify_pin(&graph, content_digest, actual)?;
+            self.core
+                .handles
+                .insert(graph, HandleEntry::new(payload, content_digest));
+            Ok(())
+        }
+    };
+}
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -266,7 +289,7 @@ pub enum PipelineBundleError {
         /// What was being canonicalized when the refusal was raised.
         scope: CanonScopeName,
         /// The refusal itself.
-        source: CanonError,
+        source: Box<CanonError>,
     },
     /// Composing a contribution onto a view carrier breached that carrier's
     /// [`ViewLimits`]. Admission stays per view and unchanged: the ceilings are
@@ -328,7 +351,7 @@ impl fmt::Display for PipelineBundleError {
 impl std::error::Error for PipelineBundleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Canonicalization { source, .. } => Some(source),
+            Self::Canonicalization { source, .. } => Some(source.as_ref()),
             Self::AdmissionBreach(diagnostic) | Self::Materialization(diagnostic) => {
                 Some(diagnostic)
             }
@@ -973,6 +996,7 @@ impl<H> PipelineBundle<H> {
         iri_named_graphs(&*self.dataset)
     }
 
+    pin_handle_method! { H;
     /// Attach a typed handle for the named graph `graph`, pinning `payload` to the
     /// canonical digest of that graph's subgraph.
     ///
@@ -985,19 +1009,6 @@ impl<H> PipelineBundle<H> {
     ///
     /// [`PipelineBundleError::HandleDigestMismatch`] if the pinned digest disagrees
     /// with the backing graph.
-    pub fn pin_handle(
-        &mut self,
-        graph: impl Into<HandleKey>,
-        payload: H,
-        content_digest: ContentDigest,
-    ) -> Result<(), PipelineBundleError> {
-        let graph = graph.into();
-        let actual = self.graph_digest(&graph);
-        BundleCore::<H>::verify_pin(&graph, content_digest, actual)?;
-        self.core
-            .handles
-            .insert(graph, HandleEntry::new(payload, content_digest));
-        Ok(())
     }
 
     /// Detach the typed handle for `graph`, returning it if present. Detaching does
@@ -1058,7 +1069,10 @@ impl<H> PipelineBundle<H> {
         let prior = self.core.pinned();
         // A CANDIDATE, not a commitment: the union lands in a local and every check
         // below reads it there. `self` is not touched until all of them pass.
-        let candidate = Arc::new(RdfDataset::union(&[&self.dataset, graph_quads]));
+        let candidate = Arc::new(
+            RdfDataset::union(&[&self.dataset, graph_quads])
+                .map_err(PipelineBundleError::Materialization)?,
+        );
         // The per-graph memo this carrier WOULD install. It starts EMPTY rather than
         // from the current one — the long-standing fail-closed reading of this
         // carrier, since a stale entry would hide a disturbed pinned graph — and
@@ -1067,11 +1081,11 @@ impl<H> PipelineBundle<H> {
         let mut seed = BTreeMap::new();
         // Additive invariant: no previously pinned graph may have shifted.
         for (k, pinned) in prior {
-            let actual = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &k);
+            let actual = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &k)?;
             BundleCore::<H>::verify_pin(&k, pinned, actual)?;
         }
         // The new handle's backing digest, from the same candidate.
-        let content_digest = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &graph);
+        let content_digest = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &graph)?;
         // COMMIT. Every check has passed, so the candidate dataset, its memo and the
         // new handle are installed together. RESEATING the memo rather than clearing
         // it is what keeps a clone taken BEFORE this call reading digests of its OWN
@@ -1105,17 +1119,16 @@ impl<H> PipelineBundle<H> {
     /// caller-supplied sources and therefore returns
     /// [`PipelineBundleError::Canonicalization`] instead of panicking — same bytes on
     /// success, different obligation on refusal.
-    #[must_use]
-    pub fn graph_digest(&self, graph: &str) -> ContentDigest {
+    pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
         // Memoized: the frozen dataset makes each graph's canonical digest stable, so
         // the second call in the `pinned = graph_digest(g); pin_handle(g, …, pinned)`
         // pattern reuses the first canonicalization instead of recomputing it.
         if let Some(cached) = self.core.cached(graph) {
-            return cached;
+            return Ok(cached);
         }
-        let digest = flat_graph_digest(&self.dataset, &self.core.work, graph);
+        let digest = flat_graph_digest(&self.dataset, &self.core.work, graph)?;
         self.core.remember(graph, digest);
-        digest
+        Ok(digest)
     }
 
     /// The content [`ContentDigest`] of this bundle: a SHA-256 fold over the
@@ -1144,17 +1157,16 @@ impl<H> PipelineBundle<H> {
     /// See [`PIPELINE_ROOT_DOMAIN`] for the exact bytes and for why this is an
     /// ADDITIONAL identity rather than a replacement for [`digest`](Self::digest).
     /// A [`PipelineViewBundle`] over equal content produces an equal root.
-    #[must_use]
-    pub fn pipeline_root(&self) -> ContentDigest {
+    pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
         let leaves: BTreeMap<HandleKey, ContentDigest> = self
             .named_graph_iris()
             .into_iter()
             .map(|graph| {
-                let digest = self.graph_digest(&graph);
-                (graph, digest)
+                let digest = self.graph_digest(&graph)?;
+                Ok((graph, digest))
             })
-            .collect();
-        self.core.pipeline_root_over(&leaves, self.residue_digest())
+            .collect::<Result<_, PipelineBundleError>>()?;
+        Ok(self.core.pipeline_root_over(&leaves, self.residue_digest()))
     }
 
     /// Carry this bundle's whole state onto a VIEW carrier that retains the same
@@ -1219,7 +1231,7 @@ impl RdfDataset {
     /// snapshot generally differs from the one in `self`, while the graph
     /// structure — including every blank node's co-reference pattern — is
     /// preserved exactly.
-    pub(crate) fn owned_snapshot(&self) -> Self {
+    pub(crate) fn owned_snapshot(&self) -> Result<Self, RdfDiagnostic> {
         Self::union(&[self])
     }
 }
@@ -1586,6 +1598,7 @@ impl<H> PipelineViewBundle<H> {
         Ok(self.core.pipeline_root_over(&leaves, residue))
     }
 
+    pin_handle_method! { H;
     /// Attach a typed handle for the named graph `graph`. See
     /// [`PipelineBundle::pin_handle`] — identical contract, fallible
     /// canonicalization.
@@ -1595,19 +1608,6 @@ impl<H> PipelineViewBundle<H> {
     /// [`PipelineBundleError::HandleDigestMismatch`] if the pinned digest disagrees
     /// with the backing graph; [`PipelineBundleError::Canonicalization`] if that
     /// graph cannot be canonicalized.
-    pub fn pin_handle(
-        &mut self,
-        graph: impl Into<HandleKey>,
-        payload: H,
-        content_digest: ContentDigest,
-    ) -> Result<(), PipelineBundleError> {
-        let graph = graph.into();
-        let actual = self.graph_digest(&graph)?;
-        BundleCore::<H>::verify_pin(&graph, content_digest, actual)?;
-        self.core
-            .handles
-            .insert(graph, HandleEntry::new(payload, content_digest));
-        Ok(())
     }
 
     /// Detach the typed handle for `graph`, returning it if present.
@@ -1802,7 +1802,10 @@ impl<H> PipelineViewBundle<H> {
 
 /// Wrap a canonicalization refusal with what was being canonicalized.
 fn canon_refusal(scope: CanonScopeName, source: CanonError) -> PipelineBundleError {
-    PipelineBundleError::Canonicalization { scope, source }
+    PipelineBundleError::Canonicalization {
+        scope,
+        source: Box::new(source),
+    }
 }
 
 /// The canonical digest of `graph` over one OWNED dataset, charging the
@@ -1812,11 +1815,17 @@ fn canon_refusal(scope: CanonScopeName, source: CanonError) -> PipelineBundleErr
 /// candidate check [`PipelineBundle::accumulate_named_graph`] runs before it
 /// commits, so the digest a refusal was decided on and the digest the committed
 /// carrier answers with are the same bytes by construction.
-fn flat_graph_digest(dataset: &RdfDataset, work: &DigestWorkCounter, graph: &str) -> ContentDigest {
-    let subgraph = dataset.project_named_graph(graph);
+fn flat_graph_digest(
+    dataset: &RdfDataset,
+    work: &DigestWorkCounter,
+    graph: &str,
+) -> Result<ContentDigest, PipelineBundleError> {
+    let subgraph = dataset
+        .project_named_graph(graph)
+        .map_err(PipelineBundleError::Materialization)?;
     let digest = ContentDigest::of(canonicalize(&subgraph).nquads.as_bytes());
     DigestWorkCounter::bump(&work.graph_canonicalizations);
-    digest
+    Ok(digest)
 }
 
 /// The canonical digest of `graph` over a COMPOSED surface and the sole-ownership
@@ -1866,14 +1875,14 @@ fn seeded_flat_digest(
     work: &DigestWorkCounter,
     seed: &mut BTreeMap<HandleKey, ContentDigest>,
     graph: &str,
-) -> ContentDigest {
+) -> Result<ContentDigest, PipelineBundleError> {
     if let Some(hit) = seed.get(graph) {
         DigestWorkCounter::bump(&work.graph_cache_hits);
-        return *hit;
+        return Ok(*hit);
     }
-    let digest = flat_graph_digest(dataset, work, graph);
+    let digest = flat_graph_digest(dataset, work, graph)?;
     seed.insert(graph.to_owned(), digest);
-    digest
+    Ok(digest)
 }
 
 /// [`composed_graph_digest`] memoized into a CANDIDATE seed map. See
@@ -1901,6 +1910,26 @@ fn seeded_composed_digest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_refusal_retains_native_cause_without_large_result_slots() {
+        let cause = CanonError::Storage(purrdf_lex::allocation::StorageError::AdmissionFailed);
+        let error = canon_refusal(CanonScopeName::Carrier, cause.clone());
+        assert!(size_of::<PipelineBundleError>() <= 128);
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<CanonError>(),
+            Some(&cause)
+        );
+        assert!(matches!(
+            error,
+            PipelineBundleError::Canonicalization {
+                scope: CanonScopeName::Carrier,
+                ..
+            }
+        ));
+    }
     use crate::ir::RdfDatasetBuilder;
     use crate::provenance::OriginKind;
     use crate::{RdfLookasideKind, RdfLookasideResource, TermId};
@@ -1914,7 +1943,7 @@ mod tests {
     }
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     /// Build a dataset with one default-graph quad and one quad in named graph `g`.
@@ -1922,9 +1951,9 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
         let go = iri(&mut b, "go");
-        let g = b.intern_iri("http://example.org/graph");
-        b.push_quad(s, p, o, None); // default graph
-        b.push_quad(s, p, go, Some(g)); // named graph
+        let g = b.intern_iri("http://example.org/graph").unwrap();
+        b.push_quad(s, p, o, None).unwrap(); // default graph
+        b.push_quad(s, p, go, Some(g)).unwrap(); // named graph
         b.freeze().expect("valid")
     }
 
@@ -1950,7 +1979,7 @@ mod tests {
     fn pin_handle_matching_digest_succeeds() {
         let mut bundle = empty_bundle();
         let graph = "http://example.org/graph";
-        let digest = bundle.graph_digest(graph);
+        let digest = bundle.graph_digest(graph).unwrap();
         let payload = SyntheticHandle {
             note: "logic-program".to_owned(),
         };
@@ -1988,8 +2017,8 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
         let o = iri(&mut b, obj);
-        let g = b.intern_iri(graph);
-        b.push_quad(s, p, o, Some(g));
+        let g = b.intern_iri(graph).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
         b.freeze().expect("valid")
     }
 
@@ -1998,7 +2027,7 @@ mod tests {
         let mut bundle = empty_bundle();
         // Pin a handle to the existing named graph first.
         let g1 = "http://example.org/graph";
-        let d1 = bundle.graph_digest(g1);
+        let d1 = bundle.graph_digest(g1).unwrap();
         bundle
             .pin_handle(
                 g1,
@@ -2025,8 +2054,8 @@ mod tests {
         assert!(bundle.handle(g2).is_some());
         // The new graph's content actually rides the carrier now.
         assert_ne!(
-            bundle.graph_digest(g2),
-            bundle.graph_digest("http://example.org/absent")
+            bundle.graph_digest(g2).unwrap(),
+            bundle.graph_digest("http://example.org/absent").unwrap()
         );
     }
 
@@ -2034,7 +2063,7 @@ mod tests {
     fn accumulate_disturbing_a_pinned_graph_hard_fails() {
         let mut bundle = empty_bundle();
         let g1 = "http://example.org/graph";
-        let d1 = bundle.graph_digest(g1);
+        let d1 = bundle.graph_digest(g1).unwrap();
         bundle
             .pin_handle(
                 g1,
@@ -2046,7 +2075,7 @@ mod tests {
             .expect("first pin");
         // Everything the refusal must leave exactly where it found it.
         let before_digest = bundle.digest();
-        let before_root = bundle.pipeline_root();
+        let before_root = bundle.pipeline_root().unwrap();
         let before_graphs = bundle.named_graph_iris();
         let before_quads = bundle.dataset().quad_count();
 
@@ -2073,10 +2102,14 @@ mod tests {
             before_digest,
             "the carrier digest is intact"
         );
-        assert_eq!(bundle.pipeline_root(), before_root);
+        assert_eq!(bundle.pipeline_root().unwrap(), before_root);
         assert_eq!(bundle.named_graph_iris(), before_graphs);
         assert_eq!(bundle.dataset().quad_count(), before_quads);
-        assert_eq!(bundle.graph_digest(g1), d1, "the pinned graph never moved");
+        assert_eq!(
+            bundle.graph_digest(g1).unwrap(),
+            d1,
+            "the pinned graph never moved"
+        );
         assert_eq!(bundle.handle(g1).map(|h| h.content_digest), Some(d1));
         assert_eq!(bundle.handles().len(), 1, "no handle was attached");
 
@@ -2093,7 +2126,7 @@ mod tests {
                 },
             )
             .expect("an undisturbing contribution must still be admitted");
-        assert_eq!(bundle.graph_digest(g1), d1);
+        assert_eq!(bundle.graph_digest(g1).unwrap(), d1);
         assert!(bundle.handle("http://example.org/graph2").is_some());
     }
 
@@ -2102,8 +2135,8 @@ mod tests {
         let bundle = empty_bundle();
         // The named graph's projection (one quad) differs from an absent graph
         // (empty projection → canon of "").
-        let present = bundle.graph_digest("http://example.org/graph");
-        let absent = bundle.graph_digest("http://example.org/missing");
+        let present = bundle.graph_digest("http://example.org/graph").unwrap();
+        let absent = bundle.graph_digest("http://example.org/missing").unwrap();
         assert_ne!(present, absent, "present vs empty projection differ");
         // The absent-graph digest is the canon of the empty dataset.
         let empty_ds = RdfDatasetBuilder::new().freeze().expect("empty");
@@ -2129,20 +2162,22 @@ mod tests {
         let source = iri(&mut b, "source");
         let ledger = iri(&mut b, "ledger");
         let elsewhere = iri(&mut b, "elsewhere");
-        let g1 = b.intern_iri("http://example.org/g1");
-        let g2 = b.intern_iri("http://example.org/g2");
+        let g1 = b.intern_iri("http://example.org/g1").unwrap();
+        let g2 = b.intern_iri("http://example.org/g2").unwrap();
 
-        b.push_quad(a, related, bo, Some(g1));
-        b.push_quad(r1, kind, record, Some(g1));
-        let t1 = b.intern_triple(a, related, bo);
-        b.push_reifier_in_graph(r1, t1, Some(g1));
-        b.push_annotation_in_graph(r1, source, ledger, Some(g1));
+        b.push_quad(a, related, bo, Some(g1)).unwrap();
+        b.push_quad(r1, kind, record, Some(g1)).unwrap();
+        let t1 = b.intern_triple(a, related, bo).unwrap();
+        b.push_reifier_in_graph(r1, t1, Some(g1)).unwrap();
+        b.push_annotation_in_graph(r1, source, ledger, Some(g1))
+            .unwrap();
 
         if with_g2 {
-            b.push_quad(a, related, c, Some(g2));
-            let t2 = b.intern_triple(a, related, c);
-            b.push_reifier_in_graph(r1, t2, Some(g2));
-            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2));
+            b.push_quad(a, related, c, Some(g2)).unwrap();
+            let t2 = b.intern_triple(a, related, c).unwrap();
+            b.push_reifier_in_graph(r1, t2, Some(g2)).unwrap();
+            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2))
+                .unwrap();
         }
         b.freeze().expect("valid")
     }
@@ -2166,21 +2201,21 @@ mod tests {
         let with = bundle_over(shared_reifier_dataset(true));
 
         assert_eq!(
-            without.graph_digest("http://example.org/g1"),
-            with.graph_digest("http://example.org/g1"),
+            without.graph_digest("http://example.org/g1").unwrap(),
+            with.graph_digest("http://example.org/g1").unwrap(),
             "<g1>'s digest must not observe statement-layer rows asserted in <g2>"
         );
 
         // Non-vacuity of the fixture: <g2>'s own digest DOES move, and the two graphs
         // do not simply hash alike.
         assert_ne!(
-            without.graph_digest("http://example.org/g2"),
-            with.graph_digest("http://example.org/g2"),
+            without.graph_digest("http://example.org/g2").unwrap(),
+            with.graph_digest("http://example.org/g2").unwrap(),
             "the added rows must be observable somewhere"
         );
         assert_ne!(
-            with.graph_digest("http://example.org/g1"),
-            with.graph_digest("http://example.org/g2")
+            with.graph_digest("http://example.org/g1").unwrap(),
+            with.graph_digest("http://example.org/g2").unwrap()
         );
     }
 
@@ -2190,7 +2225,7 @@ mod tests {
     fn accumulating_a_graphs_statement_layer_leaves_a_pinned_graph_alone() {
         let mut bundle = bundle_over(shared_reifier_dataset(false));
         let g1 = "http://example.org/g1";
-        let pinned = bundle.graph_digest(g1);
+        let pinned = bundle.graph_digest(g1).unwrap();
         bundle
             .pin_handle(
                 g1,
@@ -2211,11 +2246,12 @@ mod tests {
             let r1 = iri(&mut b, "r1");
             let source = iri(&mut b, "source");
             let elsewhere = iri(&mut b, "elsewhere");
-            let g2 = b.intern_iri("http://example.org/g2");
-            b.push_quad(a, related, c, Some(g2));
-            let t2 = b.intern_triple(a, related, c);
-            b.push_reifier_in_graph(r1, t2, Some(g2));
-            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2));
+            let g2 = b.intern_iri("http://example.org/g2").unwrap();
+            b.push_quad(a, related, c, Some(g2)).unwrap();
+            let t2 = b.intern_triple(a, related, c).unwrap();
+            b.push_reifier_in_graph(r1, t2, Some(g2)).unwrap();
+            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2))
+                .unwrap();
             b.freeze().expect("valid")
         };
 
@@ -2228,7 +2264,7 @@ mod tests {
                 },
             )
             .expect("folding <g2> must not disturb the pinned <g1>");
-        assert_eq!(bundle.graph_digest(g1), pinned);
+        assert_eq!(bundle.graph_digest(g1).unwrap(), pinned);
     }
 
     #[test]
@@ -2236,7 +2272,7 @@ mod tests {
         let mut bundle = empty_bundle();
         let before = bundle.digest();
         let graph = "http://example.org/graph";
-        let digest = bundle.graph_digest(graph);
+        let digest = bundle.graph_digest(graph).unwrap();
         bundle
             .pin_handle(
                 graph,
@@ -2269,7 +2305,7 @@ mod tests {
                 iri(&mut bld, "p"),
                 iri(&mut bld, "DIFFERENT"),
             );
-            bld.push_quad(s, p, o, None);
+            bld.push_quad(s, p, o, None).unwrap();
             PipelineBundle::<SyntheticHandle>::new(
                 bld.freeze().expect("valid"),
                 RdfLookaside::default(),
@@ -2329,8 +2365,12 @@ mod tests {
     fn digest_is_sensitive_to_the_public_provenance() {
         let base_digest = empty_bundle().digest();
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("slices/core/epistemics", OriginKind::Source);
-        let artifact = prov.register_artifact("slices/core/epistemics/epistemics.ttl");
+        let unit = prov
+            .register_unit("slices/core/epistemics", OriginKind::Source)
+            .unwrap();
+        let artifact = prov
+            .register_artifact("slices/core/epistemics/epistemics.ttl")
+            .unwrap();
         prov.record_occurrence(
             crate::ir::QuadHandle::from_index(0),
             unit,
@@ -2369,8 +2409,8 @@ mod tests {
             let order: Vec<usize> = if reversed { vec![1, 0] } else { vec![0, 1] };
             for &i in &order {
                 let (uname, apath, loc) = specs[i];
-                let unit = prov.register_unit(uname, OriginKind::Source);
-                let artifact = prov.register_artifact(apath);
+                let unit = prov.register_unit(uname, OriginKind::Source).unwrap();
+                let artifact = prov.register_artifact(apath).unwrap();
                 prov.record_occurrence(
                     crate::ir::QuadHandle::from_index(0),
                     unit,
@@ -2410,7 +2450,7 @@ mod core_tests {
     const G2: &str = "http://example.org/g2";
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     /// Two named graphs, a default-graph quad and a declared-empty named graph, so
@@ -2418,13 +2458,13 @@ mod core_tests {
     fn base() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let g1 = b.intern_iri(G1);
-        let g2 = b.intern_iri(G2);
-        let declared = b.intern_iri("http://example.org/declared");
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, p, o, Some(g1));
-        b.push_quad(o, p, s, Some(g2));
-        b.declare_named_graph(declared);
+        let g1 = b.intern_iri(G1).unwrap();
+        let g2 = b.intern_iri(G2).unwrap();
+        let declared = b.intern_iri("http://example.org/declared").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, p, o, Some(g1)).unwrap();
+        b.push_quad(o, p, s, Some(g2)).unwrap();
+        b.declare_named_graph(declared).unwrap();
         b.freeze().expect("valid")
     }
 
@@ -2443,9 +2483,9 @@ mod core_tests {
         let mut b = RdfDatasetBuilder::new();
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        let anon = b.intern_blank("n", BlankScope::DEFAULT);
-        let g = b.intern_iri(graph);
-        b.push_quad(anon, p, o, Some(g));
+        let anon = b.intern_blank("n", BlankScope::DEFAULT).unwrap();
+        let g = b.intern_iri(graph).unwrap();
+        b.push_quad(anon, p, o, Some(g)).unwrap();
         b.freeze().expect("valid")
     }
 
@@ -2454,7 +2494,7 @@ mod core_tests {
     #[test]
     fn the_pipeline_root_is_frozen() {
         assert_eq!(
-            bundle(base()).pipeline_root().to_hex(),
+            bundle(base()).pipeline_root().unwrap().to_hex(),
             "a04da97c5160a57a7a022ec256205bac9733b0840c65767144cc8240c33c4a98"
         );
     }
@@ -2473,20 +2513,20 @@ mod core_tests {
         );
         // The root is domain-separated from the bundle digest, and it moves when a
         // leaf moves.
-        assert_ne!(carrier.pipeline_root(), carrier.digest());
+        assert_ne!(carrier.pipeline_root().unwrap(), carrier.digest());
 
         let mut grown = bundle(base());
         grown
             .accumulate_named_graph(G2, &contribution(G2), Note("g2"))
             .expect("single-graph accumulate succeeds");
         assert_ne!(
-            grown.pipeline_root(),
-            carrier.pipeline_root(),
+            grown.pipeline_root().unwrap(),
+            carrier.pipeline_root().unwrap(),
             "folding a graph in must move the root"
         );
         assert_eq!(
-            grown.graph_digest(G1),
-            carrier.graph_digest(G1),
+            grown.graph_digest(G1).unwrap(),
+            carrier.graph_digest(G1).unwrap(),
             "and must leave every other leaf alone"
         );
     }
@@ -2499,15 +2539,15 @@ mod core_tests {
         let without = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("valid")
         };
         let with = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let declared = b.intern_iri(G1);
-            b.push_quad(s, p, o, None);
-            b.declare_named_graph(declared);
+            let declared = b.intern_iri(G1).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
+            b.declare_named_graph(declared).unwrap();
             b.freeze().expect("valid")
         };
         assert_eq!(
@@ -2515,8 +2555,8 @@ mod core_tests {
             bundle(with.clone()).digest()
         );
         assert_ne!(
-            bundle(without).pipeline_root(),
-            bundle(with).pipeline_root()
+            bundle(without).pipeline_root().unwrap(),
+            bundle(with).pipeline_root().unwrap()
         );
     }
 
@@ -2527,23 +2567,33 @@ mod core_tests {
         let build = |blank_graph: bool| {
             let mut b = RdfDatasetBuilder::new();
             let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
-            let o = b.intern_literal(RdfLiteral::language_tagged("مرحبا", "ar"));
-            let g = b.intern_blank("anon-graph", BlankScope(3));
-            b.push_quad(s, p, o, blank_graph.then_some(g));
+            let o = b
+                .intern_literal(RdfLiteral::language_tagged("مرحبا", "ar"))
+                .unwrap();
+            let g = b.intern_blank("anon-graph", BlankScope(3)).unwrap();
+            b.push_quad(s, p, o, blank_graph.then_some(g)).unwrap();
             bundle(b.freeze().expect("valid"))
         };
-        assert_ne!(build(false).pipeline_root(), build(true).pipeline_root());
+        assert_ne!(
+            build(false).pipeline_root().unwrap(),
+            build(true).pipeline_root().unwrap()
+        );
         // Non-vacuity: the same content under a differently NUMBERED blank scope is
         // the same carrier, because canonicalization issues the label.
         let renumbered = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
-            let o = b.intern_literal(RdfLiteral::language_tagged("مرحبا", "ar"));
-            let g = b.intern_blank("anon-graph", BlankScope(11));
-            b.push_quad(s, p, o, Some(g));
+            let o = b
+                .intern_literal(RdfLiteral::language_tagged("مرحبا", "ar"))
+                .unwrap();
+            let g = b.intern_blank("anon-graph", BlankScope(11)).unwrap();
+            b.push_quad(s, p, o, Some(g)).unwrap();
             bundle(b.freeze().expect("valid"))
         };
-        assert_eq!(build(true).pipeline_root(), renumbered.pipeline_root());
+        assert_eq!(
+            build(true).pipeline_root().unwrap(),
+            renumbered.pipeline_root().unwrap()
+        );
     }
 
     /// Every layer of the containment rule refuses, and the neighbouring
@@ -2554,41 +2604,41 @@ mod core_tests {
         let stray_default = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let g = b.intern_iri(G2);
-            b.push_quad(s, p, o, Some(g));
-            b.push_quad(o, p, s, None);
+            let g = b.intern_iri(G2).unwrap();
+            b.push_quad(s, p, o, Some(g)).unwrap();
+            b.push_quad(o, p, s, None).unwrap();
             b.freeze().expect("valid")
         };
         let stray_reifier = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
             let r = iri(&mut b, "r");
-            let g = b.intern_iri(G2);
-            let other = b.intern_iri(G1);
-            b.push_quad(s, p, o, Some(g));
-            let t = b.intern_triple(s, p, o);
-            b.push_reifier_in_graph(r, t, Some(other));
+            let g = b.intern_iri(G2).unwrap();
+            let other = b.intern_iri(G1).unwrap();
+            b.push_quad(s, p, o, Some(g)).unwrap();
+            let t = b.intern_triple(s, p, o).unwrap();
+            b.push_reifier_in_graph(r, t, Some(other)).unwrap();
             b.freeze().expect("valid")
         };
         let stray_annotation = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
             let r = iri(&mut b, "r");
-            let g = b.intern_iri(G2);
-            let other = b.intern_iri(G1);
-            b.push_quad(s, p, o, Some(g));
-            let t = b.intern_triple(s, p, o);
-            b.push_reifier_in_graph(r, t, Some(g));
-            b.push_annotation_in_graph(r, p, o, Some(other));
+            let g = b.intern_iri(G2).unwrap();
+            let other = b.intern_iri(G1).unwrap();
+            b.push_quad(s, p, o, Some(g)).unwrap();
+            let t = b.intern_triple(s, p, o).unwrap();
+            b.push_reifier_in_graph(r, t, Some(g)).unwrap();
+            b.push_annotation_in_graph(r, p, o, Some(other)).unwrap();
             b.freeze().expect("valid")
         };
         let stray_declaration = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let g = b.intern_iri(G2);
-            let other = b.intern_iri(G1);
-            b.push_quad(s, p, o, Some(g));
-            b.declare_named_graph(other);
+            let g = b.intern_iri(G2).unwrap();
+            let other = b.intern_iri(G1).unwrap();
+            b.push_quad(s, p, o, Some(g)).unwrap();
+            b.declare_named_graph(other).unwrap();
             b.freeze().expect("valid")
         };
 
@@ -2633,15 +2683,15 @@ mod core_tests {
     #[test]
     fn a_clone_taken_before_accumulate_keeps_its_own_memo() {
         let mut carrier = bundle(base());
-        let before = carrier.graph_digest(G2);
+        let before = carrier.graph_digest(G2).unwrap();
         let snapshot = carrier.clone();
         carrier
             .accumulate_named_graph(G2, &contribution(G2), Note("grown"))
             .expect("accumulate");
-        let after = carrier.graph_digest(G2);
+        let after = carrier.graph_digest(G2).unwrap();
         assert_ne!(before, after, "the fixture must actually move <g2>");
         assert_eq!(
-            snapshot.graph_digest(G2),
+            snapshot.graph_digest(G2).unwrap(),
             before,
             "the pre-accumulate clone must answer for its own content"
         );
@@ -2675,21 +2725,27 @@ mod residue_graph_seam_tests {
     /// sealed into is the only one that can answer for that graph.
     fn side_table_page(tag: &str, graph: Option<&TermValue>) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(&format!("http://example.org/{tag}-s"));
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri(&format!("http://example.org/{tag}-o"));
-        let triple = b.intern_triple(s, p, o);
-        let r = b.intern_iri(&format!("http://example.org/{tag}-r"));
-        let confidence = b.intern_iri(CONFIDENCE);
-        let high = b.intern_iri(HIGH);
+        let s = b
+            .intern_iri(&format!("http://example.org/{tag}-s"))
+            .unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b
+            .intern_iri(&format!("http://example.org/{tag}-o"))
+            .unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let r = b
+            .intern_iri(&format!("http://example.org/{tag}-r"))
+            .unwrap();
+        let confidence = b.intern_iri(CONFIDENCE).unwrap();
+        let high = b.intern_iri(HIGH).unwrap();
         let g = graph.map(|value| match value {
-            TermValue::Iri(value) => b.intern_iri(value),
-            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
+            TermValue::Iri(value) => b.intern_iri(value).unwrap(),
+            TermValue::Blank { label, scope } => b.intern_blank(label, *scope).unwrap(),
             _ => unreachable!("a graph name is an IRI or a blank node"),
         });
-        b.push_quad(s, p, o, g);
-        b.push_reifier_in_graph(r, triple, g);
-        b.push_annotation_in_graph(r, confidence, high, g);
+        b.push_quad(s, p, o, g).unwrap();
+        b.push_reifier_in_graph(r, triple, g).unwrap();
+        b.push_annotation_in_graph(r, confidence, high, g).unwrap();
         b.freeze().expect("statement-layer page freezes")
     }
 
@@ -2880,16 +2936,16 @@ mod residue_graph_seam_tests {
     #[test]
     fn residue_graph_membership_matches_its_enumeration() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        let named = b.intern_iri("http://example.org/named");
-        let blank = b.intern_blank(BLANK_GRAPH, BlankScope::DEFAULT);
-        let empty = b.intern_blank("empty", BlankScope::DEFAULT);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let named = b.intern_iri("http://example.org/named").unwrap();
+        let blank = b.intern_blank(BLANK_GRAPH, BlankScope::DEFAULT).unwrap();
+        let empty = b.intern_blank("empty", BlankScope::DEFAULT).unwrap();
         for graph in [None, Some(named), Some(blank)] {
-            b.push_quad(s, p, o, graph);
+            b.push_quad(s, p, o, graph).unwrap();
         }
-        b.declare_named_graph(empty);
+        b.declare_named_graph(empty).unwrap();
         let dataset = b.freeze().expect("flat fixture freezes");
         let residue = ResidueView(&*dataset);
         let graphs: Vec<_> = residue.named_graphs().collect();
@@ -2905,19 +2961,20 @@ mod residue_graph_seam_tests {
     #[test]
     fn residue_graph_seam_matches_the_filtered_stream_on_a_flat_carrier() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        let triple = b.intern_triple(s, p, o);
-        let r = b.intern_iri("http://example.org/r");
-        let confidence = b.intern_iri(CONFIDENCE);
-        let high = b.intern_iri(HIGH);
-        let named = b.intern_iri("http://example.org/named");
-        let blank = b.intern_blank(BLANK_GRAPH, BlankScope::DEFAULT);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let r = b.intern_iri("http://example.org/r").unwrap();
+        let confidence = b.intern_iri(CONFIDENCE).unwrap();
+        let high = b.intern_iri(HIGH).unwrap();
+        let named = b.intern_iri("http://example.org/named").unwrap();
+        let blank = b.intern_blank(BLANK_GRAPH, BlankScope::DEFAULT).unwrap();
         for graph in [None, Some(named), Some(blank)] {
-            b.push_quad(s, p, o, graph);
-            b.push_reifier_in_graph(r, triple, graph);
-            b.push_annotation_in_graph(r, confidence, high, graph);
+            b.push_quad(s, p, o, graph).unwrap();
+            b.push_reifier_in_graph(r, triple, graph).unwrap();
+            b.push_annotation_in_graph(r, confidence, high, graph)
+                .unwrap();
         }
         let dataset = b.freeze().expect("flat statement-layer fixture freezes");
         let residue = ResidueView(&*dataset);

@@ -60,26 +60,28 @@ const PATH_QUERY: &str = "SELECT ?o WHERE { \
 
 fn join_dataset(rows: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
     for index in 0..rows {
-        let subject = builder.intern_iri(&format!("{EX}s{index}"));
-        let object = builder.intern_iri(&format!("{EX}o{index}"));
-        let joined = builder.intern_iri(&format!("{EX}z{index}"));
-        builder.push_quad(subject, p, object, None);
-        builder.push_quad(subject, q, joined, None);
+        let subject = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let object = builder.intern_iri(&format!("{EX}o{index}")).unwrap();
+        let joined = builder.intern_iri(&format!("{EX}z{index}")).unwrap();
+        builder.push_quad(subject, p, object, None).unwrap();
+        builder.push_quad(subject, q, joined, None).unwrap();
     }
     builder.freeze().expect("freeze governed benchmark dataset")
 }
 
 fn ring_dataset(nodes: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(&format!("{EX}p"));
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
     let ids: Vec<_> = (0..nodes)
-        .map(|index| builder.intern_iri(&format!("{EX}n{index}")))
+        .map(|index| builder.intern_iri(&format!("{EX}n{index}")).unwrap())
         .collect();
     for index in 0..nodes {
-        builder.push_quad(ids[index], predicate, ids[(index + 1) % nodes], None);
+        builder
+            .push_quad(ids[index], predicate, ids[(index + 1) % nodes], None)
+            .unwrap();
     }
     builder.freeze().expect("freeze path-scaling dataset")
 }
@@ -206,18 +208,18 @@ fn bench_linear_paths(c: &mut Bench) {
     let mut group = c.benchmark_group("governed_eval/linear_paths");
     for chains in [16_usize, 64, 256] {
         let mut builder = RdfDatasetBuilder::new();
-        let p = builder.intern_iri(&format!("{EX}p"));
-        let q = builder.intern_iri(&format!("{EX}q"));
-        let rdf_type = builder.intern_iri(TYPE);
-        let kind = builder.intern_iri(&format!("{EX}Kind"));
+        let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+        let q = builder.intern_iri(&format!("{EX}q")).unwrap();
+        let rdf_type = builder.intern_iri(TYPE).unwrap();
+        let kind = builder.intern_iri(&format!("{EX}Kind")).unwrap();
         for index in 0..chains {
-            let subject = builder.intern_iri(&format!("{EX}s{index}"));
-            let middle = builder.intern_iri(&format!("{EX}m{index}"));
-            let object = builder.intern_iri(&format!("{EX}o{index}"));
-            builder.push_quad(subject, p, middle, None);
-            builder.push_quad(middle, q, object, None);
-            builder.push_quad(subject, rdf_type, kind, None);
-            builder.push_quad(object, rdf_type, kind, None);
+            let subject = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+            let middle = builder.intern_iri(&format!("{EX}m{index}")).unwrap();
+            let object = builder.intern_iri(&format!("{EX}o{index}")).unwrap();
+            builder.push_quad(subject, p, middle, None).unwrap();
+            builder.push_quad(middle, q, object, None).unwrap();
+            builder.push_quad(subject, rdf_type, kind, None).unwrap();
+            builder.push_quad(object, rdf_type, kind, None).unwrap();
         }
         let dataset = builder.freeze().expect("freeze linear-path dataset");
         let results = queries.each_ref().map(|(_, prepared)| {
@@ -343,30 +345,32 @@ fn bench_union_positions(c: &mut Bench) {
     let mut group = c.benchmark_group("governed_eval/union_positions");
     for count in [64_usize, 256] {
         let mut builder = RdfDatasetBuilder::new();
-        let node = builder.intern_iri(&format!("{EX}node"));
-        let controls_a = builder.intern_iri(&format!("{EX}controlsA"));
-        let controls_b = builder.intern_iri(&format!("{EX}controlsB"));
-        let target = builder.intern_iri(&format!("{EX}target"));
-        let connected = builder.intern_iri(&format!("{EX}connected"));
-        let yes = builder.intern_iri(&format!("{EX}yes"));
+        let node = builder.intern_iri(&format!("{EX}node")).unwrap();
+        let controls_a = builder.intern_iri(&format!("{EX}controlsA")).unwrap();
+        let controls_b = builder.intern_iri(&format!("{EX}controlsB")).unwrap();
+        let target = builder.intern_iri(&format!("{EX}target")).unwrap();
+        let connected = builder.intern_iri(&format!("{EX}connected")).unwrap();
+        let yes = builder.intern_iri(&format!("{EX}yes")).unwrap();
         for index in 0..count {
-            let terminal = builder.intern_iri(&format!("{EX}terminal{index}"));
-            let control = builder.intern_iri(&format!("{EX}control{index}"));
-            let subject = builder.intern_iri(&format!("{EX}s{index}"));
-            let object = builder.intern_iri(&format!("{EX}target{index}"));
-            builder.push_quad(terminal, node, subject, None);
-            builder.push_quad(
-                control,
-                if index % 2 == 0 {
-                    controls_a
-                } else {
-                    controls_b
-                },
-                terminal,
-                None,
-            );
-            builder.push_quad(control, target, object, None);
-            builder.push_quad(terminal, connected, yes, None);
+            let terminal = builder.intern_iri(&format!("{EX}terminal{index}")).unwrap();
+            let control = builder.intern_iri(&format!("{EX}control{index}")).unwrap();
+            let subject = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+            let object = builder.intern_iri(&format!("{EX}target{index}")).unwrap();
+            builder.push_quad(terminal, node, subject, None).unwrap();
+            builder
+                .push_quad(
+                    control,
+                    if index % 2 == 0 {
+                        controls_a
+                    } else {
+                        controls_b
+                    },
+                    terminal,
+                    None,
+                )
+                .unwrap();
+            builder.push_quad(control, target, object, None).unwrap();
+            builder.push_quad(terminal, connected, yes, None).unwrap();
         }
         let dataset = builder.freeze().expect("UNION position benchmark dataset");
         for (label, before, after) in [
@@ -407,20 +411,21 @@ fn bench_union_selectivity(c: &mut Bench) {
     let mut group = c.benchmark_group("governed_eval/union_selectivity");
     for (label, tiny_attributes) in [("connector", false), ("attributes", true)] {
         let mut b = RdfDatasetBuilder::new();
-        let left_p = b.intern_iri(&format!("{EX}left"));
-        let right_p = b.intern_iri(&format!("{EX}right"));
-        let a = b.intern_iri(&format!("{EX}a"));
-        let bb = b.intern_iri(&format!("{EX}b"));
+        let left_p = b.intern_iri(&format!("{EX}left")).unwrap();
+        let right_p = b.intern_iri(&format!("{EX}right")).unwrap();
+        let a = b.intern_iri(&format!("{EX}a")).unwrap();
+        let bb = b.intern_iri(&format!("{EX}b")).unwrap();
         for i in 0..4096 {
-            let left = b.intern_iri(&format!("{EX}left{i}"));
-            let right = b.intern_iri(&format!("{EX}right{i}"));
-            let value = b.intern_iri(&format!("{EX}value{i}"));
+            let left = b.intern_iri(&format!("{EX}left{i}")).unwrap();
+            let right = b.intern_iri(&format!("{EX}right{i}")).unwrap();
+            let value = b.intern_iri(&format!("{EX}value{i}")).unwrap();
             if !tiny_attributes || i < 2 {
-                b.push_quad(left, left_p, value, None);
-                b.push_quad(right, right_p, value, None);
+                b.push_quad(left, left_p, value, None).unwrap();
+                b.push_quad(right, right_p, value, None).unwrap();
             }
             if tiny_attributes || i < 2 {
-                b.push_quad(left, if i % 2 == 0 { a } else { bb }, right, None);
+                b.push_quad(left, if i % 2 == 0 { a } else { bb }, right, None)
+                    .unwrap();
             }
         }
         let dataset = b.freeze().expect("selectivity fixture");

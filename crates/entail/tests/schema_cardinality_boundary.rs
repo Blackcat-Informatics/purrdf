@@ -14,34 +14,38 @@ const CLASS: &str = "https://example.org/A";
 
 fn ontology(count: u32, asserted: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let class = builder.intern_iri(CLASS);
-    let role = builder.intern_iri("https://example.org/p");
-    let filler = builder.intern_iri("https://example.org/F");
+    let class = builder.intern_iri(CLASS).unwrap();
+    let role = builder.intern_iri("https://example.org/p").unwrap();
+    let filler = builder.intern_iri("https://example.org/F").unwrap();
     for (label, predicate, count) in [
         ("minimum", owl::MIN_QUALIFIED_CARDINALITY, count),
         ("maximum", owl::MAX_QUALIFIED_CARDINALITY, 0),
     ] {
-        let restriction = builder.intern_blank(label, BlankScope::DEFAULT);
-        let number = builder.intern_literal(RdfLiteral {
-            lexical_form: count.to_string(),
-            datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
-            language: None,
-            direction: None,
-        });
+        let restriction = builder.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        let number = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: count.to_string(),
+                datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
         for (subject, predicate, object) in [
             (class, rdfs::SUB_CLASS_OF, restriction),
             (restriction, owl::ON_PROPERTY, role),
             (restriction, owl::ON_CLASS, filler),
             (restriction, predicate, number),
         ] {
-            let predicate = builder.intern_iri(predicate);
-            builder.push_quad(subject, predicate, object, None);
+            let predicate = builder.intern_iri(predicate).unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
     }
     if asserted {
-        let individual = builder.intern_iri("https://example.org/i");
-        let predicate = builder.intern_iri(rdf::TYPE);
-        builder.push_quad(individual, predicate, class, None);
+        let individual = builder.intern_iri("https://example.org/i").unwrap();
+        let predicate = builder.intern_iri(rdf::TYPE).unwrap();
+        builder
+            .push_quad(individual, predicate, class, None)
+            .unwrap();
     }
     builder.freeze().expect("authored boundary ontology")
 }

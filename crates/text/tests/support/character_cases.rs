@@ -6,7 +6,7 @@ use purrdf_text::{Analyzer, GraphSelector, HanCharacterIndex, TextIndexConfig};
 
 pub(crate) fn prepend_scalars_do_not_hide_han_bases() {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/text");
+    let predicate = builder.intern_iri("https://example.org/text").unwrap();
     for (subject, text) in [
         ("a", "\u{600}中"),
         ("b", "中\u{600}文"),
@@ -14,9 +14,11 @@ pub(crate) fn prepend_scalars_do_not_hide_han_bases() {
         ("d", "中\u{16ff0}文"),
         ("e", "中\u{16ff1}文"),
     ] {
-        let subject = builder.intern_iri(&format!("https://example.org/{subject}"));
-        let text = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, predicate, text, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{subject}"))
+            .unwrap();
+        let text = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, predicate, text, None).unwrap();
     }
     let dataset = builder.freeze().expect("dataset");
     let config = TextIndexConfig::new(

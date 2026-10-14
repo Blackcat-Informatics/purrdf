@@ -736,12 +736,12 @@ fn a8_a_triple_term_is_an_intermediate_node_of_a_walk() {
     // First, the constraint this fixture is shaped around, verified rather than assumed:
     // the IR rejects a quoted triple asserted in SUBJECT position.
     let mut refused = RdfDatasetBuilder::new();
-    let x = refused.intern_iri(&format!("{EX}x"));
-    let r = refused.intern_iri(&format!("{EX}r"));
-    let y = refused.intern_iri(&format!("{EX}y"));
-    let p = refused.intern_iri(&format!("{EX}p"));
-    let quoted = refused.intern_triple(x, r, y);
-    refused.push_quad(quoted, p, y, None);
+    let x = refused.intern_iri(&format!("{EX}x")).unwrap();
+    let r = refused.intern_iri(&format!("{EX}r")).unwrap();
+    let y = refused.intern_iri(&format!("{EX}y")).unwrap();
+    let p = refused.intern_iri(&format!("{EX}p")).unwrap();
+    let quoted = refused.intern_triple(x, r, y).unwrap();
+    refused.push_quad(quoted, p, y, None).unwrap();
     let error = refused
         .freeze()
         .expect_err("a quoted triple may not be an ASSERTED subject");
@@ -750,21 +750,21 @@ fn a8_a_triple_term_is_an_intermediate_node_of_a_walk() {
     // `ex:a ex:p <<( ex:x ex:r ex:y )>> . ex:z ex:q <<( ex:x ex:r ex:y )>> .` plus a
     // same-shaped two-hop walk over plain IRIs, `ex:m ex:p ex:n . ex:w ex:q ex:n .`
     let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri(&format!("{EX}a"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let qp = builder.intern_iri(&format!("{EX}q"));
-    let r = builder.intern_iri(&format!("{EX}r"));
-    let x = builder.intern_iri(&format!("{EX}x"));
-    let y = builder.intern_iri(&format!("{EX}y"));
-    let z = builder.intern_iri(&format!("{EX}z"));
-    let m = builder.intern_iri(&format!("{EX}m"));
-    let n = builder.intern_iri(&format!("{EX}n"));
-    let w = builder.intern_iri(&format!("{EX}w"));
-    let quoted = builder.intern_triple(x, r, y);
-    builder.push_quad(a, p, quoted, None);
-    builder.push_quad(z, qp, quoted, None);
-    builder.push_quad(m, p, n, None);
-    builder.push_quad(w, qp, n, None);
+    let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let qp = builder.intern_iri(&format!("{EX}q")).unwrap();
+    let r = builder.intern_iri(&format!("{EX}r")).unwrap();
+    let x = builder.intern_iri(&format!("{EX}x")).unwrap();
+    let y = builder.intern_iri(&format!("{EX}y")).unwrap();
+    let z = builder.intern_iri(&format!("{EX}z")).unwrap();
+    let m = builder.intern_iri(&format!("{EX}m")).unwrap();
+    let n = builder.intern_iri(&format!("{EX}n")).unwrap();
+    let w = builder.intern_iri(&format!("{EX}w")).unwrap();
+    let quoted = builder.intern_triple(x, r, y).unwrap();
+    builder.push_quad(a, p, quoted, None).unwrap();
+    builder.push_quad(z, qp, quoted, None).unwrap();
+    builder.push_quad(m, p, n, None).unwrap();
+    builder.push_quad(w, qp, n, None).unwrap();
     let data = builder.freeze().expect("the fixture freezes");
 
     let graph = snapshot(
@@ -1120,12 +1120,12 @@ fn a17_identifier_stability_is_pinned_for_iris_and_for_blank_nodes() {
     // id would differ here.
     let first = local_dataset([("a", "p", "b"), ("b", "p", "c")]);
     let mut reordered = RdfDatasetBuilder::new();
-    let c = reordered.intern_iri(&format!("{EX}c"));
-    let p = reordered.intern_iri(&format!("{EX}p"));
-    let b = reordered.intern_iri(&format!("{EX}b"));
-    let a = reordered.intern_iri(&format!("{EX}a"));
-    reordered.push_quad(b, p, c, None);
-    reordered.push_quad(a, p, b, None);
+    let c = reordered.intern_iri(&format!("{EX}c")).unwrap();
+    let p = reordered.intern_iri(&format!("{EX}p")).unwrap();
+    let b = reordered.intern_iri(&format!("{EX}b")).unwrap();
+    let a = reordered.intern_iri(&format!("{EX}a")).unwrap();
+    reordered.push_quad(b, p, c, None).unwrap();
+    reordered.push_quad(a, p, b, None).unwrap();
     let second = reordered.freeze().expect("the fixture freezes");
 
     let ids_of = |data: &RdfDataset| {
@@ -1149,12 +1149,12 @@ fn a17_identifier_stability_is_pinned_for_iris_and_for_blank_nodes() {
     // Now a walk THROUGH a blank node: `ex:a ex:p _:mid . _:mid ex:p ex:c .`
     let blank_dataset = |label: &str, scope: BlankScope| -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri(&format!("{EX}a"));
-        let p = builder.intern_iri(&format!("{EX}p"));
-        let c = builder.intern_iri(&format!("{EX}c"));
-        let mid = builder.intern_blank(label, scope);
-        builder.push_quad(a, p, mid, None);
-        builder.push_quad(mid, p, c, None);
+        let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+        let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+        let c = builder.intern_iri(&format!("{EX}c")).unwrap();
+        let mid = builder.intern_blank(label, scope).unwrap();
+        builder.push_quad(a, p, mid, None).unwrap();
+        builder.push_quad(mid, p, c, None).unwrap();
         builder.freeze().expect("the fixture freezes")
     };
     let blank_ids = |data: &RdfDataset| -> Vec<TermValue> {
@@ -1203,20 +1203,22 @@ fn a17_identifier_stability_is_pinned_for_iris_and_for_blank_nodes() {
 #[test]
 fn a18_a_hop_statement_joins_to_its_rdf12_annotation() {
     let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri(&format!("{EX}a"));
-    let b = builder.intern_iri(&format!("{EX}b"));
-    let c = builder.intern_iri(&format!("{EX}c"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let certainty = builder.intern_iri(&format!("{EX}certainty"));
-    let reifier = builder.intern_iri(&format!("{EX}r1"));
-    builder.push_quad(a, p, b, None);
-    builder.push_quad(b, p, c, None);
+    let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let b = builder.intern_iri(&format!("{EX}b")).unwrap();
+    let c = builder.intern_iri(&format!("{EX}c")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let certainty = builder.intern_iri(&format!("{EX}certainty")).unwrap();
+    let reifier = builder.intern_iri(&format!("{EX}r1")).unwrap();
+    builder.push_quad(a, p, b, None).unwrap();
+    builder.push_quad(b, p, c, None).unwrap();
     // The RDF 1.2 annotation on ONE of the two statements: a reifier naming `ex:a ex:p
     // ex:b`, carrying `ex:certainty "9"^^xsd:integer`.
-    let annotated = builder.intern_triple(a, p, b);
-    let score = builder.intern_literal(RdfLiteral::typed("9", XSD_INTEGER));
-    builder.push_reifier(reifier, annotated);
-    builder.push_annotation(reifier, certainty, score);
+    let annotated = builder.intern_triple(a, p, b).unwrap();
+    let score = builder
+        .intern_literal(RdfLiteral::typed("9", XSD_INTEGER))
+        .unwrap();
+    builder.push_reifier(reifier, annotated).unwrap();
+    builder.push_annotation(reifier, certainty, score).unwrap();
     let data = builder.freeze().expect("the fixture freezes");
 
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
@@ -1327,19 +1329,19 @@ fn a19_the_expansion_budget_fails_a_fruitless_search_rather_than_answering_empty
 #[test]
 fn a20_a_step_over_rdf_reifies_walks_a_statement_to_its_reifier() {
     let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri(&format!("{EX}a"));
-    let b = builder.intern_iri(&format!("{EX}b"));
-    let c = builder.intern_iri(&format!("{EX}c"));
-    let d = builder.intern_iri(&format!("{EX}d"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let r1 = builder.intern_iri(&format!("{EX}r1"));
-    let r2 = builder.intern_iri(&format!("{EX}r2"));
-    builder.push_quad(a, p, b, None);
-    builder.push_quad(c, p, d, None);
-    let ab = builder.intern_triple(a, p, b);
-    let cd = builder.intern_triple(c, p, d);
-    builder.push_reifier(r1, ab);
-    builder.push_reifier(r2, cd);
+    let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let b = builder.intern_iri(&format!("{EX}b")).unwrap();
+    let c = builder.intern_iri(&format!("{EX}c")).unwrap();
+    let d = builder.intern_iri(&format!("{EX}d")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let r1 = builder.intern_iri(&format!("{EX}r1")).unwrap();
+    let r2 = builder.intern_iri(&format!("{EX}r2")).unwrap();
+    builder.push_quad(a, p, b, None).unwrap();
+    builder.push_quad(c, p, d, None).unwrap();
+    let ab = builder.intern_triple(a, p, b).unwrap();
+    let cd = builder.intern_triple(c, p, d).unwrap();
+    builder.push_reifier(r1, ab).unwrap();
+    builder.push_reifier(r2, cd).unwrap();
     let data = builder.freeze().expect("the fixture freezes");
 
     let step = PathStep::new(vec![(TermValue::iri(RDF_REIFIES), PathDirection::Inverse)])
@@ -1405,21 +1407,21 @@ fn a20_a_step_over_rdf_reifies_walks_a_statement_to_its_reifier() {
 #[test]
 fn a21_a_step_over_an_annotation_predicate_crosses_both_layers_in_one_walk() {
     let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri(&format!("{EX}a"));
-    let b = builder.intern_iri(&format!("{EX}b"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let source = builder.intern_iri(&format!("{EX}source"));
-    let r1 = builder.intern_iri(&format!("{EX}r1"));
-    let doc1 = builder.intern_iri(&format!("{EX}doc1"));
-    let doc2 = builder.intern_iri(&format!("{EX}doc2"));
-    builder.push_quad(a, p, b, None);
+    let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let b = builder.intern_iri(&format!("{EX}b")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let source = builder.intern_iri(&format!("{EX}source")).unwrap();
+    let r1 = builder.intern_iri(&format!("{EX}r1")).unwrap();
+    let doc1 = builder.intern_iri(&format!("{EX}doc1")).unwrap();
+    let doc2 = builder.intern_iri(&format!("{EX}doc2")).unwrap();
+    builder.push_quad(a, p, b, None).unwrap();
     // The asserted half of the `ex:source` relation.
-    builder.push_quad(doc1, source, doc2, None);
+    builder.push_quad(doc1, source, doc2, None).unwrap();
     // The statement-layer half: a reifier for `<<ex:a ex:p ex:b>>`, annotated with the
     // very same predicate.
-    let ab = builder.intern_triple(a, p, b);
-    builder.push_reifier(r1, ab);
-    builder.push_annotation(r1, source, doc1);
+    let ab = builder.intern_triple(a, p, b).unwrap();
+    builder.push_reifier(r1, ab).unwrap();
+    builder.push_annotation(r1, source, doc1).unwrap();
     let data = builder.freeze().expect("the fixture freezes");
 
     let graph = snapshot(&data, &[("source", PathDirection::Forward)]);

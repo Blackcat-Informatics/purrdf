@@ -9,16 +9,15 @@
 //! `purrdf-core` so consumers can depend on the contract without depending on
 //! an engine. Concrete adapters live in the sibling `purrdf` crate.
 
-use std::convert::Infallible;
 use std::io::Write;
 use std::sync::Arc;
 
 use purrdf_events::RdfEventSink;
 
 use crate::{
-    BlankScope, Nested, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId,
-    TermValue, try_fold_nested,
+    BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId, TermValue,
 };
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 /// Term interning seam: dataset-independent values enter a concrete term table.
 ///
@@ -27,66 +26,69 @@ use crate::{
 /// here, rather than persisting ids.
 pub trait TermFactory {
     /// Intern a complete dataset-independent term value.
-    fn intern_value(&mut self, value: &TermValue) -> TermId;
+    /// # Errors
+    /// Returns the original term-table capacity or physical storage refusal.
+    fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
 
     /// Intern an IRI term.
-    fn intern_iri_value(&mut self, iri: &str) -> TermId;
+    /// # Errors
+    /// Returns the original term-table capacity or physical storage refusal.
+    fn intern_iri_value(&mut self, iri: &str) -> Result<TermId, StorageError>;
 
     /// Intern a blank node identified by `(label, scope)`.
-    fn intern_blank_value(&mut self, label: &str, scope: BlankScope) -> TermId;
+    /// # Errors
+    /// Returns the original term-table capacity or physical storage refusal.
+    fn intern_blank_value(
+        &mut self,
+        label: &str,
+        scope: BlankScope,
+    ) -> Result<TermId, StorageError>;
 
     /// Intern a literal term.
-    fn intern_literal_value(&mut self, literal: RdfLiteral) -> TermId;
+    /// # Errors
+    /// Returns the original term-table capacity or physical storage refusal.
+    fn intern_literal_value(&mut self, literal: RdfLiteral) -> Result<TermId, StorageError>;
 
     /// Intern an RDF 1.2 quoted-triple term from already-interned component ids.
-    fn intern_triple_value(&mut self, s: TermId, p: TermId, o: TermId) -> TermId;
+    /// # Errors
+    /// Returns the original term-table capacity or physical storage refusal.
+    fn intern_triple_value(
+        &mut self,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+    ) -> Result<TermId, StorageError>;
 }
 
 impl TermFactory for RdfDatasetBuilder {
-    /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
-    /// predicate and object, each fully before the next, then the triple itself.
-    fn intern_value(&mut self, value: &TermValue) -> TermId {
-        let interned = try_fold_nested(
-            value,
-            self,
-            |builder, value| {
-                Ok::<_, Infallible>(Nested::Leaf(match value {
-                    TermValue::Iri(iri) => builder.intern_iri_value(iri),
-                    TermValue::Blank { label, scope } => builder.intern_blank_value(label, *scope),
-                    TermValue::Literal {
-                        lexical_form,
-                        datatype,
-                        language,
-                        direction,
-                    } => builder.intern_literal_value(RdfLiteral {
-                        lexical_form: lexical_form.clone(),
-                        datatype: Some(datatype.clone()),
-                        language: language.clone(),
-                        direction: *direction,
-                    }),
-                    TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
-                }))
-            },
-            |builder, _, s, p, o| Ok(builder.intern_triple_value(s, p, o)),
-        );
-        match interned {
-            Ok(id) => id,
-        }
+    fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError> {
+        let mut resident = Resident;
+        let bytes = self.interner_buffer_bytes()?;
+        self.intern_value_with_memory(value, &mut Memory::resume(&mut resident, bytes))
     }
 
-    fn intern_iri_value(&mut self, iri: &str) -> TermId {
+    fn intern_iri_value(&mut self, iri: &str) -> Result<TermId, StorageError> {
         self.intern_iri(iri)
     }
 
-    fn intern_blank_value(&mut self, label: &str, scope: BlankScope) -> TermId {
+    fn intern_blank_value(
+        &mut self,
+        label: &str,
+        scope: BlankScope,
+    ) -> Result<TermId, StorageError> {
         self.intern_blank(label, scope)
     }
 
-    fn intern_literal_value(&mut self, literal: RdfLiteral) -> TermId {
+    fn intern_literal_value(&mut self, literal: RdfLiteral) -> Result<TermId, StorageError> {
         self.intern_literal(literal)
     }
 
-    fn intern_triple_value(&mut self, s: TermId, p: TermId, o: TermId) -> TermId {
+    fn intern_triple_value(
+        &mut self,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+    ) -> Result<TermId, StorageError> {
         self.intern_triple(s, p, o)
     }
 }
@@ -395,15 +397,17 @@ mod tests {
         };
 
         let mut builder = RdfDatasetBuilder::new();
-        let s_id = builder.intern_value(&s);
-        let p_id = builder.intern_value(&p);
-        let triple_id = builder.intern_value(&triple);
-        let blank_id = builder.intern_value(&blank);
-        let typed_id = builder.intern_value(&typed);
-        let directional_id = builder.intern_value(&directional);
-        builder.push_quad(s_id, p_id, triple_id, Some(blank_id));
-        builder.push_quad(s_id, p_id, typed_id, None);
-        builder.push_quad(s_id, p_id, directional_id, None);
+        let s_id = builder.intern_value(&s).unwrap();
+        let p_id = builder.intern_value(&p).unwrap();
+        let triple_id = builder.intern_value(&triple).unwrap();
+        let blank_id = builder.intern_value(&blank).unwrap();
+        let typed_id = builder.intern_value(&typed).unwrap();
+        let directional_id = builder.intern_value(&directional).unwrap();
+        builder
+            .push_quad(s_id, p_id, triple_id, Some(blank_id))
+            .unwrap();
+        builder.push_quad(s_id, p_id, typed_id, None).unwrap();
+        builder.push_quad(s_id, p_id, directional_id, None).unwrap();
 
         let dataset = builder.freeze().expect("term factory output is valid");
         assert_eq!(dataset.term_id_by_value(&s), Some(s_id));
@@ -430,9 +434,9 @@ mod term_walk_tests {
                 let s = reference(builder, s);
                 let p = reference(builder, p);
                 let o = reference(builder, o);
-                builder.intern_triple_value(s, p, o)
+                builder.intern_triple_value(s, p, o).unwrap()
             }
-            leaf => builder.intern_value(leaf),
+            leaf => builder.intern_value(leaf).unwrap(),
         }
     }
 
@@ -451,14 +455,14 @@ mod term_walk_tests {
             );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
-                found.intern_value(&value),
+                found.intern_value(&value).unwrap(),
                 reference(&mut expected, &value),
                 "seed {seed}"
             );
             let sentinel = "http://example.org/sentinel";
             assert_eq!(
-                found.intern_iri(sentinel),
-                expected.intern_iri(sentinel),
+                found.intern_iri(sentinel).unwrap(),
+                expected.intern_iri(sentinel).unwrap(),
                 "seed {seed}"
             );
         }
@@ -472,7 +476,7 @@ mod term_walk_tests {
         purrdf_stack::on_stack(128 * 1024, || {
             let value = crate::term_fixture::triple_chain(LEVELS);
             let mut builder = RdfDatasetBuilder::new();
-            assert_eq!(builder.intern_value(&value).index(), LEVELS + 2);
+            assert_eq!(builder.intern_value(&value).unwrap().index(), LEVELS + 2);
         })
         .expect("the thread starts");
     }

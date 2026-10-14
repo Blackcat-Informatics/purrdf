@@ -95,13 +95,14 @@ fn conformance_corpus() {
         }
 
         // Compare the report graphs, sh:resultMessage aside.
-        let produced_graph = canonical_without_messages(&report.to_ntriples());
+        let produced_graph =
+            canonical_without_messages(&report.to_ntriples().expect("report serializes"));
         let expected_graph = canonical_without_messages(&expected_nt);
         if produced_graph != expected_graph {
             failures.push(format!(
                 "[{case_name}] report graph differs from the frozen report (RDFC-1.0, \
                  sh:resultMessage aside):\n  PRODUCED:\n{}\n  EXPECTED:\n{}",
-                report.to_ntriples(),
+                report.to_ntriples().expect("report serializes"),
                 expected_nt
             ));
         }
