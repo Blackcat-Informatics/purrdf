@@ -20,7 +20,10 @@
 //!    diagnostic code — no base is ever fabricated.
 
 use purrdf::iri::{BaseIri, BaseOrigin, BaseScope, IriError, ScopedBase};
-use purrdf::{NativeRdfFormat, RdfDataset, parse_dataset, serialize_dataset_to_format};
+use purrdf::{
+    MutableDataset, NativeRdfFormat, RdfDataset, ViewLimits, parse_dataset,
+    serialize_dataset_to_format,
+};
 use std::sync::Arc;
 
 /// A Turtle document whose subject is a relative reference and which declares no
@@ -50,6 +53,22 @@ fn ingress_base_resolves_a_relative_reference() {
     assert!(
         nt.contains("<https://example.org/base/rel>"),
         "relative <rel> must resolve against the base, got: {nt}"
+    );
+}
+
+#[test]
+fn caller_limited_compaction_keeps_the_resolved_base_through_the_facade() {
+    let dataset = parsed_under_base();
+    let mutable = MutableDataset::new(Arc::clone(&dataset));
+    let compacted = mutable
+        .freeze_with_limits(ViewLimits {
+            max_auxiliary_bytes: 1_073_741_824,
+            ..ViewLimits::default()
+        })
+        .expect("the facade admits caller-selected compaction limits");
+    assert_eq!(
+        text(&compacted, NativeRdfFormat::NTriples, None),
+        text(&dataset, NativeRdfFormat::NTriples, None)
     );
 }
 

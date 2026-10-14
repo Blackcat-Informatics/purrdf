@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
-use purrdf::ir::MutableDataset;
+use purrdf::ir::{GraphExistenceMode, MutableDataset};
 use purrdf::{
     CanonHash, JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
     SerializeGraph, SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify,
@@ -386,12 +386,28 @@ impl Drop for UpdateClaim {
 }
 
 impl Dataset {
-    /// An empty frozen base — the COW root for a dataset with no parsed content.
-    fn empty_base() -> Result<MutableDataset, JsError> {
+    /// An empty frozen base — the COW root for a dataset with no parsed content —
+    /// under the graph-existence policy `mode`.
+    fn empty_base(mode: GraphExistenceMode) -> Result<MutableDataset, JsError> {
         let base = RdfDatasetBuilder::new()
             .freeze()
             .map_err(|e| diag_to_err(&e))?;
-        Ok(MutableDataset::new(base))
+        Ok(MutableDataset::new_with_graph_existence(base, mode))
+    }
+
+    /// The policy a JavaScript `rememberEmptyGraphs` argument selects: omitted or
+    /// `true` is the default [`GraphExistenceMode::RememberEmpty`]; `false` opts out
+    /// to [`GraphExistenceMode::Implicit`].
+    const fn mode_of(remember_empty_graphs: Option<bool>) -> GraphExistenceMode {
+        match remember_empty_graphs {
+            Some(false) => GraphExistenceMode::Implicit,
+            Some(true) | None => GraphExistenceMode::RememberEmpty,
+        }
+    }
+
+    /// The graph-existence policy this dataset's mutations and UPDATEs apply under.
+    pub(crate) const fn graph_existence(&self) -> GraphExistenceMode {
+        self.inner.graph_existence()
     }
 
     /// A new dataset over `inner`, with a fresh identity at generation zero.
@@ -404,11 +420,16 @@ impl Dataset {
         })
     }
 
-    /// A new dataset over a frozen base, with a fresh identity at generation zero.
-    /// The mutable base retains the original native admission through this host
-    /// object; resident parser and sink owners enter through `Arc::into`.
+    /// A new dataset over a frozen base, with a fresh identity at generation zero,
+    /// under the default graph-existence policy. The handle retains the original
+    /// native admission; resident parser and sink owners enter through Arc::into.
     pub(crate) fn from_frozen(frozen: DatasetHandle) -> Result<Self, JsError> {
-        Self::from_mutable(MutableDataset::new(frozen))
+        Self::from_frozen_in(frozen, GraphExistenceMode::default())
+    }
+
+    /// A new dataset over a frozen base under the graph-existence policy `mode`.
+    fn from_frozen_in(frozen: DatasetHandle, mode: GraphExistenceMode) -> Result<Self, JsError> {
+        Self::from_mutable(MutableDataset::new_with_graph_existence(frozen, mode))
     }
 
     /// Read access to the quads. Reading never advances the generation.
@@ -438,10 +459,11 @@ impl Dataset {
     }
 
     /// Replace the whole content with `frozen` — the commit of an UPDATE. Always a
-    /// mutation, whether or not the new base happens to equal the old one.
+    /// mutation, whether or not the new base happens to equal the old one. The
+    /// dataset keeps its graph-existence policy.
     pub(crate) fn replace(&mut self, frozen: Arc<RdfDataset>) -> Result<(), RdfDiagnostic> {
         self.mutate(|inner| {
-            *inner = MutableDataset::new(frozen);
+            *inner = MutableDataset::new_with_graph_existence(frozen, inner.graph_existence());
             ((), true)
         })
     }
@@ -469,9 +491,22 @@ impl Dataset {
 #[wasm_bindgen]
 impl Dataset {
     /// An empty dataset.
+    ///
+    /// `rememberEmptyGraphs` selects the named-graph lifetime its mutations and
+    /// UPDATEs apply under. Omitted or `true` (the default) remembers a named graph,
+    /// empty or not, until it is dropped: removing its last quad or `CLEAR` keeps it.
+    /// `false` opts out to the implicit lifetime, in which a graph exists only while
+    /// it holds a quad (or as a parsed document declared it, until it is emptied).
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Result<Self, JsError> {
-        Self::from_mutable(Self::empty_base()?)
+    pub fn new(remember_empty_graphs: Option<bool>) -> Result<Self, JsError> {
+        Self::from_mutable(Self::empty_base(Self::mode_of(remember_empty_graphs))?)
+    }
+
+    /// `rememberEmptyGraphs` — whether this dataset remembers empty named graphs
+    /// (the default) rather than tying each graph's lifetime to its quads.
+    #[wasm_bindgen(getter, js_name = rememberEmptyGraphs)]
+    pub fn remember_empty_graphs(&self) -> bool {
+        self.graph_existence() == GraphExistenceMode::RememberEmpty
     }
 
     /// `parse(input, format, base?)` → a dataset of the parsed quads.
@@ -479,13 +514,20 @@ impl Dataset {
     /// `format` is a media type or short name
     /// (turtle/ntriples/nquads/trig/rdfxml/jsonld/yamlld).
     /// Ill-typed literals are preserved verbatim (RDFLib parity), not rejected.
+    /// `rememberEmptyGraphs` selects the dataset's named-graph lifetime exactly as the
+    /// constructor's does; omitted, it is the default, remembered empty graphs.
     #[wasm_bindgen(js_name = parse)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn parse(input: &str, format: &str, base: Option<String>) -> Result<Self, JsError> {
+    pub fn parse(
+        input: &str,
+        format: &str,
+        base: Option<String>,
+        remember_empty_graphs: Option<bool>,
+    ) -> Result<Self, JsError> {
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
         let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
             .map_err(|e| diag_to_err(&e))?;
-        Self::from_frozen(dataset.into())
+        Self::from_frozen_in(dataset.into(), Self::mode_of(remember_empty_graphs))
     }
 
     /// `serialize(format, base?)` → the dataset rendered in `format` (a UTF-8 string).
@@ -749,7 +791,7 @@ impl Dataset {
     #[wasm_bindgen(js_name = snapshot)]
     pub fn snapshot(&self) -> Result<Self, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        Self::from_frozen(frozen.into())
+        Self::from_frozen_in(frozen.into(), self.graph_existence())
     }
 
     /// `generation` — how many mutations this dataset's content has seen.
@@ -874,7 +916,7 @@ impl Dataset {
         let matched = self
             .inner
             .quads_for_pattern(s.as_ref(), p.as_ref(), o.as_ref(), graph_match);
-        let mut out = Self::empty_base()?;
+        let mut out = Self::empty_base(self.graph_existence())?;
         for qv in &matched {
             // These values were just read back out of an existing dataset, so they
             // already satisfy the absoluteness invariant. Propagate rather than
@@ -1002,7 +1044,7 @@ mod identity_fixture {
     /// exact integer range without adding a seed operation to the release package.
     #[wasm_bindgen]
     pub fn __purrdf_test_large_dataset_identity() -> Result<Dataset, JsError> {
-        let mut dataset = Dataset::new()?;
+        let mut dataset = Dataset::new(None)?;
         dataset.id = 9_007_199_254_740_993;
         dataset.generation = 9_007_199_254_740_995;
         Ok(dataset)
@@ -1039,8 +1081,8 @@ mod tests {
     /// advance the generation an asynchronous commit compares against.
     #[test]
     fn generation_advances_on_every_change_and_only_on_a_change() {
-        let mut dataset = Dataset::new().expect("empty dataset");
-        let other = Dataset::new().expect("empty dataset");
+        let mut dataset = Dataset::new(None).expect("empty dataset");
+        let other = Dataset::new(None).expect("empty dataset");
         assert_ne!(
             dataset.identity(),
             other.identity(),
@@ -1128,7 +1170,7 @@ mod tests {
             mint_dataset_id(&counter).unwrap_err().code,
             "dataset-identity-exhausted"
         );
-        let mut dataset = Dataset::new().unwrap();
+        let mut dataset = Dataset::new(None).unwrap();
         dataset.generation = u64::MAX;
         let called = Cell::new(false);
         let error = dataset
@@ -1145,7 +1187,7 @@ mod tests {
     /// The synchronous UPDATE goes through the same door.
     #[test]
     fn a_synchronous_update_advances_the_generation() {
-        let mut dataset = Dataset::new().expect("empty dataset");
+        let mut dataset = Dataset::new(None).expect("empty dataset");
         crate::query::QueryEngine::new()
             .update(
                 &mut dataset,
@@ -1159,7 +1201,7 @@ mod tests {
 
     #[test]
     fn empty_dataset_has_zero_size() {
-        let ds = Dataset::new().unwrap();
+        let ds = Dataset::new(None).unwrap();
         assert_eq!(ds.size(), 0);
     }
 
@@ -1174,7 +1216,7 @@ mod tests {
         // isomorphism check below (a quad-count check alone would miss it).
         let nt = "<https://e/s> <https://e/p> <https://e/o> .\n\
                   <https://e/s> <https://e/label> \"value\" .\n";
-        let Ok(ds) = Dataset::parse(nt, "ntriples", None) else {
+        let Ok(ds) = Dataset::parse(nt, "ntriples", None, None) else {
             panic!("parse n-triples failed");
         };
         for fmt in [
@@ -1186,7 +1228,7 @@ mod tests {
             let Ok(text) = ds.serialize(fmt, None) else {
                 panic!("serialize {fmt} failed");
             };
-            let Ok(reparsed) = Dataset::parse(&text, fmt, None) else {
+            let Ok(reparsed) = Dataset::parse(&text, fmt, None, None) else {
                 panic!("re-parse {fmt} failed");
             };
             let Ok(iso) = reparsed.isomorphic(&ds) else {
@@ -1198,7 +1240,7 @@ mod tests {
 
     #[test]
     fn add_has_delete_are_consistent() {
-        let mut ds = Dataset::new().unwrap();
+        let mut ds = Dataset::new(None).unwrap();
         let q = triple("https://e/s", "https://e/p", "https://e/o");
         assert!(!ds.has(&q).unwrap());
         assert!(ds.add(&q).unwrap());
@@ -1216,7 +1258,7 @@ mod tests {
         // Exercises the canonicalization seam: a tag added as "EN" is found as the
         // canonical lowercased rdf:langString literal.
         use purrdf::RdfLiteral;
-        let mut ds = Dataset::new().unwrap();
+        let mut ds = Dataset::new(None).unwrap();
         let q = Quad::from_parts(
             named("https://e/s"),
             named("https://e/p"),
@@ -1229,7 +1271,7 @@ mod tests {
 
     #[test]
     fn match_filters_by_pattern() {
-        let mut ds = Dataset::new().unwrap();
+        let mut ds = Dataset::new(None).unwrap();
         ds.add(&triple("https://e/s1", "https://e/p", "https://e/o1"))
             .unwrap();
         ds.add(&triple("https://e/s2", "https://e/p", "https://e/o2"))
@@ -1264,7 +1306,7 @@ mod tests {
     fn match_treats_variable_as_wildcard() {
         // RDF/JS idiom: a Variable in a match() slot is a wildcard, equivalent to an
         // omitted (None) argument — it must NOT error, and must NOT constrain the slot.
-        let mut ds = Dataset::new().unwrap();
+        let mut ds = Dataset::new(None).unwrap();
         ds.add(&triple("https://e/s1", "https://e/p", "https://e/o1"))
             .unwrap();
         ds.add(&triple("https://e/s2", "https://e/p", "https://e/o2"))
@@ -1301,7 +1343,7 @@ mod tests {
 
     #[test]
     fn quads_returns_inserted_quads() {
-        let mut ds = Dataset::new().unwrap();
+        let mut ds = Dataset::new(None).unwrap();
         let q = triple("https://e/s", "https://e/p", "https://e/o");
         ds.add(&q).unwrap();
         let quads = ds.quads().unwrap();
@@ -1314,6 +1356,7 @@ mod tests {
         let ds = Dataset::parse(
             "<https://e/s> <https://e/p> <https://e/o> .\n",
             "ntriples",
+            None,
             None,
         )
         .unwrap();
@@ -1328,6 +1371,7 @@ mod tests {
         let ds = Dataset::parse(
             "<https://e/alice> <https://e/knows> <https://e/bob> .\n",
             "ntriples",
+            None,
             None,
         )
         .unwrap();
@@ -1409,9 +1453,10 @@ mod tests {
             ),
             "nquads",
             None,
+            None,
         )
         .expect("parse");
-        let mut added = Dataset::new().expect("empty");
+        let mut added = Dataset::new(None).expect("empty");
         for quad in parsed.quads().expect("quads") {
             added.add(&quad).expect("add");
         }
@@ -1443,14 +1488,14 @@ mod tests {
     #[test]
     fn parse_then_serialize_round_trips_ntriples() {
         let input = "<https://e/s> <https://e/p> <https://e/o> .\n";
-        let ds = Dataset::parse(input, "ntriples", None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
         assert_eq!(ds.size(), 1);
         let out = ds.serialize("ntriples", None).unwrap();
         assert!(out.contains("https://e/s"));
         assert!(out.contains("https://e/p"));
         assert!(out.contains("https://e/o"));
         // Re-parsing the output yields the same single quad.
-        let reparsed = Dataset::parse(&out, "ntriples", None).unwrap();
+        let reparsed = Dataset::parse(&out, "ntriples", None, None).unwrap();
         assert_eq!(reparsed.size(), 1);
     }
 
@@ -1470,7 +1515,7 @@ mod tests {
             "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
             "<<( <https://e/s1> <https://e/p> <https://e/o1> )>> <https://e/g1> .\n",
         );
-        let ds = Dataset::parse(MIXED, "nquads", None)
+        let ds = Dataset::parse(MIXED, "nquads", None, None)
             .unwrap_or_else(|_| unreachable!("N-Quads parses"));
 
         let lossy = ds
@@ -1517,7 +1562,7 @@ mod tests {
             "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
             "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
         );
-        let ds = Dataset::parse(WITH_LAYER, "nquads", None)
+        let ds = Dataset::parse(WITH_LAYER, "nquads", None, None)
             .unwrap_or_else(|_| unreachable!("N-Quads parses"));
 
         // Star-capable: one document, both lanes, the triple term intact and no loss.
@@ -1563,7 +1608,13 @@ mod tests {
     #[test]
     fn parse_turtle_with_base_resolves_relative_iris() {
         let input = "<rel> <https://e/p> <https://e/o> .\n";
-        let ds = Dataset::parse(input, "turtle", Some("https://example.org/".to_owned())).unwrap();
+        let ds = Dataset::parse(
+            input,
+            "turtle",
+            Some("https://example.org/".to_owned()),
+            None,
+        )
+        .unwrap();
         let out = ds.serialize("ntriples", None).unwrap();
         assert!(out.contains("https://example.org/rel"));
     }
@@ -1577,7 +1628,7 @@ mod tests {
         let base = "https://example.org/base/";
         let input = "<https://example.org/base/s> <https://example.org/base/p> \
                      <https://example.org/base/o> .\n";
-        let Ok(ds) = Dataset::parse(input, "ntriples", None) else {
+        let Ok(ds) = Dataset::parse(input, "ntriples", None, None) else {
             panic!("parse n-triples failed");
         };
         for format in ["jsonld", "yamlld"] {
@@ -1605,7 +1656,7 @@ mod tests {
             "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
             "<https://e/r> <https://e/confidence> \"0.9\" .\n",
         );
-        let Ok(ds) = Dataset::parse(input, "ntriples", None) else {
+        let Ok(ds) = Dataset::parse(input, "ntriples", None, None) else {
             panic!("parse n-triples failed");
         };
         for format in ["jsonld", "yamlld"] {
@@ -1637,7 +1688,7 @@ mod tests {
         // The factory uses the same native datatype expansion rule.
         let input =
             "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar--rtl .\n";
-        let ds = Dataset::parse(input, "ntriples", None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
         assert_eq!(ds.size(), 1, "the directional literal parsed into one quad");
 
         // Build the IDENTICAL directional literal the way a DataFactory would (which
@@ -1675,7 +1726,7 @@ mod tests {
         // Parse the plain (no-direction) language-tagged literal into the base.
         let input =
             "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar .\n";
-        let ds = Dataset::parse(input, "ntriples", None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
         assert_eq!(ds.size(), 1);
 
         // A directional query literal of the same text + language must NOT match it.

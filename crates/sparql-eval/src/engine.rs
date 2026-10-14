@@ -5757,7 +5757,8 @@ pub struct QueryOptions<'a> {
     pub candidate_scope: Option<&'a dyn crate::CandidateScope>,
     /// The named-graph lifetime policy for this request's UPDATE branch.
     /// Queries read the existing graph registry independently of this policy.
-    /// [`purrdf_core::GraphExistenceMode::Implicit`] preserves the default behavior.
+    /// [`purrdf_core::GraphExistenceMode::RememberEmpty`] is the default;
+    /// select [`purrdf_core::GraphExistenceMode::Implicit`] for row-driven lifetime.
     pub graph_existence: purrdf_core::GraphExistenceMode,
     /// The pre-binding lane the request names (see [`ShaclPrebinding`]); every lane
     /// takes the same rewrite.
@@ -5947,9 +5948,11 @@ impl QueryOptions<'_> {
     /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
     /// depth, no `SERVICE` source, and the engine's own `LOAD` resolver. What every
     /// entry did before it took options.
+    /// UPDATE remembers empty named graphs; explicitly select
+    /// [`purrdf_core::GraphExistenceMode::Implicit`] for row-driven lifetime.
     pub const EMPTY: Self = Self {
         candidate_scope: None,
-        graph_existence: purrdf_core::GraphExistenceMode::Implicit,
+        graph_existence: purrdf_core::GraphExistenceMode::RememberEmpty,
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::BoundFunctionRegistry::EMPTY,
         user_function_admission: None,
@@ -6010,8 +6013,8 @@ impl<'a> QueryOptions<'a> {
 
     /// Select the named-graph lifetime policy used by either UPDATE entry point.
     /// Frozen graph presence and ordinary query evaluation remain unchanged.
-    /// [`Self::EMPTY`] selects `GraphExistenceMode::Implicit` in 3.x; remembered
-    /// empty graphs are expected to become the default in v4.0.
+    /// [`Self::EMPTY`] selects [`purrdf_core::GraphExistenceMode::RememberEmpty`].
+    /// Select [`purrdf_core::GraphExistenceMode::Implicit`] to opt out explicitly.
     #[must_use]
     pub const fn with_graph_existence(
         mut self,
@@ -6626,21 +6629,6 @@ fn check_plan_matches_registries(
         .map_err(EvaluationFailure::into_diagnostic)
 }
 
-/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
-/// registry fingerprint — validated against `relations` by
-/// [`check_plan_matches_relations`] at every call site before this runs, so it is safe to
-/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
-/// taken over, sorted.
-///
-/// Called once per governed execution rather than per outcome arm, so the refusal path
-/// ([`NativeSparqlEngine::admit`]), the complete path, and the truncated path all carry
-/// the SAME identity for the SAME execution — there is exactly one place this is computed
-/// and every [`GovernedOutcome`] arm reads from it.
-///
-/// # Errors
-///
-/// The host's execution diagnostic if a registered relation's declaration
-/// methods panic.
 /// A governed visitor result retaining its original registry identity buffers.
 /// Native callers borrow the outcome; only legacy egress transfers caller storage.
 pub struct AdmittedInternedGoverned<R> {
@@ -6696,6 +6684,21 @@ struct AdmittedRelationIdentity {
     frame: crate::workspace::LexicalFrame,
 }
 
+/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
+/// registry fingerprint — validated by the preparation and registry admission
+/// checks before this runs, so it is safe to
+/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
+/// taken over, sorted.
+///
+/// Called once per governed execution rather than per outcome arm, so the refusal path
+/// (`NativeSparqlEngine::admit_refusal`), the complete path, and the truncated path all carry
+/// the SAME identity for the SAME execution — there is exactly one place this is computed
+/// and every [`GovernedOutcome`] arm reads from it.
+///
+/// # Errors
+///
+/// The host's execution diagnostic if a registered relation's declaration
+/// methods panic, or the original admission failure while retaining the identity.
 fn relation_identity(
     prepared: &PreparedQuery,
     relations: &crate::property_fn::PropertyFunctionRegistry,

@@ -101,6 +101,17 @@ const jsonld = reparsed.serializeWithContext("jsonld", context);
 derived requests. Matching `QueryEngine.queryRawConfigured` and
 `queryRawWithContext` methods serialize CONSTRUCT/DESCRIBE graph results.
 
+## Named graph lifetime
+
+Datasets remember empty named graphs by default: removing their last row or
+clearing them preserves the graph, while `DROP` removes it. Pass `false` to
+`new Dataset(false)` or `Dataset.parse(input, format, base, false)` for implicit
+graph existence. The `rememberEmptyGraphs` getter reports this choice.
+Snapshots, matches, and synchronous and asynchronous updates preserve it.
+In remembered mode, an operation requiring a missing graph fails unless its
+SPARQL `SILENT` form suppresses that error. The policy belongs to the dataset
+instance and is not serialized into RDF.
+
 ## Graph, tabular, and research-object projection archives
 
 Projection and lift run entirely in memory through the native Rust engine. The
@@ -178,7 +189,8 @@ ownership, and all limits. Complete examples are in
 - `DataFactory` — `namedNode`, `blankNode`, `literal`, `typedLiteral`,
   `directionalLiteral`, `variable`, `defaultGraph`, `quad`, `quotedTriple`,
   `fromTerm`, `fromQuad`.
-- `Dataset` — `Dataset.parse(input, format, base?)`, `serialize(format)`,
+- `Dataset` — `new Dataset(rememberEmptyGraphs?)`,
+  `Dataset.parse(input, format, base?, rememberEmptyGraphs?)`, `serialize(format)`,
   `serializeWithLoss(format)`, `serializeConfigured(format, optionsJson)`,
   `serializeWithContext(format, context)`,
   `add` / `delete` / `has` / `match` / `quads` / `size`, iteration.

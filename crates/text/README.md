@@ -57,6 +57,16 @@ execution is reserved for actual target paths and host interfaces described in
 
 ## Versioned BM25F, ranked within a partition
 
+`TextIndexConfig::with_surface_index(false)` builds a BM25F-only index, omitting
+substring and phonetic postings. Construction otherwise includes the surface
+index. `TextIndex::surface_index()` returns `Option<&SurfaceIndex>` so callers
+can handle its absence explicitly. Exact ranked scores, document order, source
+identity and independent Han retrieval are unchanged by this selection.
+Index generations use the `purrdf-text/index/v4` preimage, which includes a
+surface-presence byte and distinguishes an omitted index from an empty one.
+This intentionally changes index fingerprints in both modes; source fingerprints
+and serialized ranked answers retain their existing encodings.
+
 Ranking uses one fielded BM25F path, including the single-field case. The
 immutable `RankingProfile` binds up to sixteen named fields, each field's
 weight and length normalization, total predicate routing, exact arithmetic,
