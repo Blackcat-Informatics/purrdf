@@ -464,10 +464,9 @@ pub fn numeric_render_layout(
     let groups = digits.div_ceil(19);
     let group_words = if groups <= 3 { 0 } else { groups };
     let quotient_words = if limbs <= 3 { 0 } else { limbs };
-    // Native division retains old/new quotient destinations beside groups.
+    // Native rendering mutates one admitted quotient beside the group array.
     let words = quotient_words
-        .checked_mul(2)
-        .and_then(|n| n.checked_add(group_words))
+        .checked_add(group_words)
         .ok_or(SizeOverflow)?;
     let temporary_bytes = std::alloc::Layout::array::<u64>(words)
         .map_err(|_| SizeOverflow)?
@@ -698,9 +697,10 @@ pub const fn render(limbs: u64, scale: u64) -> Cost {
 }
 
 // Display divides by 10^19, once per coefficient group, not once per
-// output digit. Each pass initializes its quotient and computes division and
-// remainder over at most `limbs` words. Linear terms cover the initial clone,
-// trimming and amortized group growth; fractional padding only costs text.
+// output digit. The one retained quotient is cloned initially, then each pass
+// computes division and remainder over at most `limbs` words. The conservative
+// linear terms also cover trimming and amortized group growth; fractional
+// padding only costs text.
 const fn render_parts(limbs: u64, digits: u64, text: u64) -> Cost {
     let groups = digits.div_ceil(19);
     let work = groups
@@ -710,7 +710,8 @@ const fn render_parts(limbs: u64, digits: u64, text: u64) -> Cost {
         // padded text. Each is bounded by the final rendered length.
         .saturating_add(text.saturating_mul(2))
         .saturating_add(1);
-    // Coefficient/quotient copies and old/new group buffers can coexist.
+    // The quotient and old/new group buffers can coexist; this remains a
+    // conservative work-admission bound over the in-place native renderer.
     // Decimal formatting additionally holds its coefficient text, padded text
     // and destination string, including geometric spare string capacity.
     let words = limbs

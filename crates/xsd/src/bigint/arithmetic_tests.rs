@@ -5,7 +5,7 @@ use super::KARATSUBA_THRESHOLD;
 
 #[cfg(test)]
 mod tests {
-    use super::super::{BigInt, LimbScratch};
+    use super::super::{BigInt, LimbScratch, LimbScratchError};
     use super::KARATSUBA_THRESHOLD;
     use purrdf_testkit::rng::splitmix64_next;
 
@@ -52,6 +52,56 @@ mod tests {
             }
         }
         assert!(BigInt::one().div_rem(&BigInt::zero()).is_none());
+    }
+
+    #[test]
+    fn decimal_render_reuses_one_quotient_destination() {
+        let digits = "12345678901234567890".repeat(20);
+        let value = BigInt::from_digits(&digits).expect("valid decimal digits");
+        let layout = value.decimal_render_layout(0).expect("addressable layout");
+        let capacity = value.limb_len().max(layout.group_capacity());
+        let scratch = LimbScratch::new(2, capacity).expect("two admitted destinations");
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let prepared = value
+            .prepare_decimal_digits_in(&scratch)
+            .expect("one quotient and one group destination");
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(prepared.to_string(), digits);
+        assert_eq!(
+            scratch.available(),
+            1,
+            "only the group destination remains held"
+        );
+        drop(prepared);
+        assert_eq!(
+            scratch.available(),
+            2,
+            "the original group owner is returned"
+        );
+
+        let one = LimbScratch::new(1, capacity).expect("one admitted destination");
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        assert_eq!(
+            value.prepare_decimal_digits_in(&one).unwrap_err(),
+            LimbScratchError::Exhausted { destinations: 1 }
+        );
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(one.available(), 1, "refusal returns the group destination");
+
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let prepared = value.prepare_decimal_digits().expect("native rendering");
+        assert_eq!(window.close().allocations, 2, "one group and one quotient");
+        assert_eq!(prepared.to_string(), digits);
+
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let lexical = value.to_string();
+        let rendered = window.close();
+        assert_eq!(lexical, digits);
+        assert!(
+            rendered.allocations <= 9,
+            "canonical output allocations: {}",
+            rendered.allocations
+        );
     }
 
     #[test]

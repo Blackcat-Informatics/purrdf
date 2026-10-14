@@ -301,6 +301,18 @@ fn bench_growth(c: &mut Bench) {
                 )
             });
         });
+        if digits == 40_000 {
+            // One fixed-work render window over the existing 40k decimal fixture.
+            group.bench_function("render_canonical_fixed100/40000", |bench| {
+                bench.iter(|| {
+                    let mut bytes = 0;
+                    for _ in 0..100 {
+                        bytes += black_box(black_box(&decimal).canonical_lexical()).len();
+                    }
+                    black_box(bytes)
+                });
+            });
+        }
         group.bench_function(format!("to_f64/{digits}"), |bench| {
             bench.iter(|| black_box(black_box(&decimal).to_f64()));
         });

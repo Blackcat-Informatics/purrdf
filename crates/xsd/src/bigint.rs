@@ -278,17 +278,23 @@ fn mag_divmod_small(
     divisor: u64,
     storage: &impl Allocate,
 ) -> Result<(Mag, u64), LimbScratchError> {
+    let mut quotient = storage.copy(a)?;
+    let remainder = mag_divmod_small_in_place(&mut quotient, divisor);
+    Ok((quotient, remainder))
+}
+
+/// The one small-divisor quotient loop, retaining its admitted destination.
+fn mag_divmod_small_in_place(quotient: &mut Mag, divisor: u64) -> u64 {
     debug_assert_ne!(divisor, 0, "division by zero");
     let d = u128::from(divisor);
-    let mut out: Mag = storage.destination(a.len(), a.len())?;
     let mut rem: u128 = 0;
-    for (slot, &limb) in out.iter_mut().zip(a.iter()).rev() {
-        let cur = (rem << 64) | u128::from(limb);
+    for slot in quotient.iter_mut().rev() {
+        let cur = (rem << 64) | u128::from(*slot);
         *slot = (cur / d) as u64;
         rem = cur % d;
     }
-    mag_trim(&mut out);
-    Ok((out, rem as u64))
+    mag_trim(quotient);
+    rem as u64
 }
 
 /// Writes a sub-limb left shift into initialized storage.
@@ -1779,15 +1785,10 @@ impl BigInt {
         if self.is_zero() {
             storage.push(&mut groups, 0)?;
         } else {
-            let mut quotient: Option<Mag> = None;
-            loop {
-                let current: &[u64] = quotient.as_ref().map_or(&self.magnitude, |value| value);
-                if current.is_empty() {
-                    break;
-                }
-                let (next, remainder) = mag_divmod_small(current, CHUNK_BASE, storage)?;
+            let mut quotient = storage.copy(&self.magnitude)?;
+            while !quotient.is_empty() {
+                let remainder = mag_divmod_small_in_place(&mut quotient, CHUNK_BASE);
                 storage.push(&mut groups, remainder)?;
-                quotient = Some(next);
             }
         }
         let leading = groups.last().copied().expect("zero includes one group");
