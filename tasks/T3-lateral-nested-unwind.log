@@ -1,0 +1,18 @@
+
+running 1 test
+
+thread 'eval::tests::nested_lateral_unwind_restores_all_entered_parents' (3805711) panicked at crates/sparql-eval/src/eval.rs:6590:17:
+nested copied LATERAL child unwinds
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'eval::tests::nested_lateral_unwind_restores_all_entered_parents' (3805711) panicked at crates/sparql-eval/src/eval.rs:6623:9:
+assertion failed: caught.is_err()
+test eval::tests::nested_lateral_unwind_restores_all_entered_parents ... FAILED
+
+failures:
+
+failures:
+    eval::tests::nested_lateral_unwind_restores_all_entered_parents
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1619 filtered out; finished in 0.00s
+

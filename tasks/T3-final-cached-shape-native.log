@@ -1,0 +1,6 @@
+
+running 1 test
+test eval::tests::copied_join_shape_offer_sees_the_positive_scope_before_its_inputs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1620 filtered out; finished in 0.00s
+

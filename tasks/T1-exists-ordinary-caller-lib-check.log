@@ -1,0 +1,27 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+error: unnecessary qualification
+   --> crates/sparql-eval/src/expr.rs:288:44
+    |
+288 |     pub(crate) fn suspended_row(&self) -> &crate::solution::RetainedRow<I> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+288 -     pub(crate) fn suspended_row(&self) -> &crate::solution::RetainedRow<I> {
+288 +     pub(crate) fn suspended_row(&self) -> &RetainedRow<I> {
+    |
+
+error: variable does not need to be mutable
+    --> crates/sparql-eval/src/eval.rs:3624:32
+     |
+3624 |                 let (decision, mut record) = pending.prepare_exists(site, expression, ctx)?;
+     |                                ----^^^^^^
+     |                                |
+     |                                help: remove this `mut`
+     |
+     = note: `-D unused-mut` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_mut)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 2 previous errors

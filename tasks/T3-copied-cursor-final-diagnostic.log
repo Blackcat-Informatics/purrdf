@@ -1,0 +1,120 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/geo-kernel)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6578:13
+     |
+6578 |             std::mem::size_of::<OrdinaryPosition<'static>>(),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+6578 -             std::mem::size_of::<OrdinaryPosition<'static>>(),
+6578 +             size_of::<OrdinaryPosition<'static>>(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6579:13
+     |
+6579 |             std::mem::size_of::<OrdinaryFrame<'static, purrdf_core::TermId>>(),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6579 -             std::mem::size_of::<OrdinaryFrame<'static, purrdf_core::TermId>>(),
+6579 +             size_of::<OrdinaryFrame<'static, purrdf_core::TermId>>(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6579:56
+     |
+6579 |             std::mem::size_of::<OrdinaryFrame<'static, purrdf_core::TermId>>(),
+     |                                                        ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6579 -             std::mem::size_of::<OrdinaryFrame<'static, purrdf_core::TermId>>(),
+6579 +             std::mem::size_of::<OrdinaryFrame<'static, TermId>>(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6580:13
+     |
+6580 |             std::mem::size_of::<OrdinaryExists<'static, purrdf_core::TermId>>(),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6580 -             std::mem::size_of::<OrdinaryExists<'static, purrdf_core::TermId>>(),
+6580 +             size_of::<OrdinaryExists<'static, purrdf_core::TermId>>(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6580:57
+     |
+6580 |             std::mem::size_of::<OrdinaryExists<'static, purrdf_core::TermId>>(),
+     |                                                         ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6580 -             std::mem::size_of::<OrdinaryExists<'static, purrdf_core::TermId>>(),
+6580 +             std::mem::size_of::<OrdinaryExists<'static, TermId>>(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6581:13
+     |
+6581 |             std::mem::size_of::<OrdinaryLateral<purrdf_core::TermId>>(),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6581 -             std::mem::size_of::<OrdinaryLateral<purrdf_core::TermId>>(),
+6581 +             size_of::<OrdinaryLateral<purrdf_core::TermId>>(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6581:49
+     |
+6581 |             std::mem::size_of::<OrdinaryLateral<purrdf_core::TermId>>(),
+     |                                                 ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6581 -             std::mem::size_of::<OrdinaryLateral<purrdf_core::TermId>>(),
+6581 +             std::mem::size_of::<OrdinaryLateral<TermId>>(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6582:13
+     |
+6582 |             std::mem::size_of::<crate::expr::FilterSequence<'static, purrdf_core::TermId>>(),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6582 -             std::mem::size_of::<crate::expr::FilterSequence<'static, purrdf_core::TermId>>(),
+6582 +             size_of::<crate::expr::FilterSequence<'static, purrdf_core::TermId>>(),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:6582:70
+     |
+6582 |             std::mem::size_of::<crate::expr::FilterSequence<'static, purrdf_core::TermId>>(),
+     |                                                                      ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+6582 -             std::mem::size_of::<crate::expr::FilterSequence<'static, purrdf_core::TermId>>(),
+6582 +             std::mem::size_of::<crate::expr::FilterSequence<'static, TermId>>(),
+     |
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 9 previous errors

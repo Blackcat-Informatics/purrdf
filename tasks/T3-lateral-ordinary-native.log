@@ -1,0 +1,27 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 7m 57s
+     Running unittests src/lib.rs (/opt/.cargo/ab/9210f0404045ba/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 19 tests
+test engine::tests::prebinding_is_pushed_into_a_lateral_right_arm ... ok
+test eval::tests::lateral_of_units_is_the_unit_sequence ... ok
+test binop::tests::lateral_over_graph_variable_keeps_column_order ... ok
+test governor::soundness::tests::a_correlated_call_is_licensed_at_its_lateral_and_nowhere_below ... ok
+test governor::soundness::tests::lateral_pushes_no_row_ceiling_to_either_arm ... ok
+test exists_admission_gate::tests::probe_would_diverge_on_lateral ... ok
+test expr::tests::exists_over_a_lateral_limit_correlates_through_a_triple_position ... ok
+test expr::tests::exists_nested_in_a_filter_expression_with_a_lateral_inner_correlates ... ok
+test nested_lateral_gate::disagreeing_layers_answer_as_the_full_substitution_does ... ok
+test nested_lateral_gate::walks_along_next_answer_the_rows_read_by_hand ... ok
+test property_fn_eval::tests::a_correlated_call_is_opened_with_the_lateral_s_row_ceiling ... ok
+test property_fn_eval::tests::a_correlated_lateral_drives_its_call_whole_and_in_its_own_frame ... ok
+test remote::tests::nonsilent_service_forwards_lateral_text ... ok
+test remote::tests::silent_service_forwards_lateral_text_and_silences_a_rejection ... ok
+test service_endpoints::tests::a_lateral_endpoint_some_solution_cannot_name_is_refused_before_any_request ... ok
+test workspace::owned_row_regressions::certainty_lateral_context_and_filter_requirements_use_original_admitted_home ... ok
+test nested_lateral_gate::a_thousand_nested_laterals_answer ... ok
+test nested_lateral_gate::nested_lateral_per_row_work_is_linear_in_depth ... ok
+test nested_lateral_gate::generated_nested_laterals_match_the_full_substitution ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 1599 filtered out; finished in 3.07s
+

@@ -1,0 +1,11 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 8m 05s
+     Running unittests src/lib.rs (/opt/.cargo/ab/9210f0404045ba/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 3 tests
+test eval::tests::ordinary_runner_exists_box_refusal_precedes_copied_scope_installation ... ok
+test eval::tests::ordinary_runner_lateral_box_and_pending_spill_refuse_before_child_entry ... ok
+test eval::tests::ordinary_runner_nested_results_release_all_grants_after_the_last_output ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1620 filtered out; finished in 0.00s
+

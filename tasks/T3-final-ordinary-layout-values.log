@@ -1,0 +1,7 @@
+
+running 1 test
+ordinary layout bytes: position=16 frame=208 exists_row=1648 lateral_row=504 filter_sequence=1216
+test eval::tests::diagnostic_ordinary_frame_layout ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1620 filtered out; finished in 0.00s
+

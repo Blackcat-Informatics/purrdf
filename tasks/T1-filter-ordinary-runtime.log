@@ -1,0 +1,55 @@
+
+running 50 tests
+test binop::tests::copied_filter_exists_uses_the_runner_owned_tree ... ok
+test binop::tests::optional_inline_filter_excludes_failing_pairings ... ok
+test binop::tests::union_filter_unbound_branch_yields_zero_but_query_not_empty ... ok
+test binop::tests::union_filter_true_branch_contributes_unit_solution ... ok
+test engine::tests::shacl_prebinding_bound_in_filter_only_group ... ok
+test engine::tests::prebinding_pushdown_keeps_the_variable_bound_for_an_inner_filter ... ok
+test engine::tests::shacl_prebinding_union_filter_only_branch ... ok
+test engine::tests::filter_not_exists_antijoin_returns_correct_rows ... ok
+test eval::tests::filter_exists_builds_inner_index_once_across_outer_rows ... ok
+test eval::tests::filter_exists_forced_parallel_and_sequential_agree ... ok
+test eval::tests::optional_filter_forced_parallel_and_sequential_agree ... ok
+test eval::tests::filter_regex_and_numeric_forced_parallel_and_sequential_agree ... ok
+test exists_admission_gate::tests::exists_paths_agree_on_filter_certainly_bound ... ok
+test engine::tests::substitute_visible_inside_filter_exists_disjunction ... ok
+test expr::tests::arithmetic_filter_not_exists_survives_empty_inner_group ... ok
+test expr::tests::correlated_filter_exists_memo_off_matches_memo_on ... ok
+test expr::tests::correlated_arithmetic_filter_not_exists_uses_outer_binding ... ok
+test expr::tests::filter_duration_equality_negated_over_bgp ... ok
+test expr::tests::correlated_filter_exists_returns_correct_result ... ok
+test expr::tests::filter_duration_equality_over_bgp ... ok
+test expr::tests::filter_instant_difference_over_bgp ... ok
+test expr::tests::filter_instant_plus_duration_over_bgp ... ok
+test expr::tests::filter_negation_separates_false_from_error ... ok
+test expr::tests::filter_numeric_over_bgp ... ok
+test expr::tests::filter_not_exists_over_bgp ... ok
+test expr::tests::filter_over_a_bound_duration_round_trips_through_interning ... ok
+test expr::tests::exists_nested_in_a_filter_expression_with_a_lateral_inner_correlates ... ok
+test geo::functions::standard_tests::a_governor_trip_inside_geodesy_withholds_the_filter_or_bind_answer ... ok
+test geo::functions::standard_tests::original_carrier_construction_refusal_is_fatal_in_filter_and_bind ... ok
+test governor::soundness::tests::exists_inside_a_filter_expression_is_found_by_the_walk ... ok
+test parallel::tests::unsafe_inside_nested_exists_filter_is_detected ... ok
+test path_relation::tests::a_bound_end_prunes_rather_than_merely_filters ... ok
+test predicate_use::tests::a_call_reachable_only_through_filter_exists_is_still_found ... ok
+test predicate_use::tests::an_unregistered_iri_inside_filter_exists_is_data ... ok
+test property_fn_eval::tests::a_bound_output_position_filters_the_relation_s_rows ... ok
+test property_fn_eval::tests::a_repeated_variable_enforces_equality_and_filters_rather_than_errors ... ok
+test geo::functions::standard_tests::a_real_precision_exhaustion_remains_fatal_in_filter_and_bind ... ok
+test geo::relation::tests::every_mode_returns_the_rows_the_all_free_answer_would_have_been_filtered_to ... ok
+test remote::tests::a_block_a_filter_reads_is_not_moved_past_it_and_is_joined_once ... ok
+test remote::tests::a_block_joined_beside_filters_is_forwarded_beneath_them_and_admitted ... ok
+test property_fn_plan::iterative_walk_tests::a_hundred_thousand_filters_are_bound_on_a_128_kib_thread ... ok
+test user_fn::tests::a_user_function_argument_keeps_its_binding_for_an_inner_filter ... ok
+test user_fn::tests::native_expression_error_in_a_filter_drops_only_that_solution ... ok
+test user_fn::tests::native_score_filter_over_parallel_threshold ... ok
+test user_fn::tests::native_score_in_filter_pushes_down ... ok
+test vm::tests::copied_filter_exists_resolves_through_its_retained_pattern_owner ... ok
+test workspace::owned_row_regressions::certainty_lateral_context_and_filter_requirements_use_original_admitted_home ... ok
+test governor::soundness::iterative_walks::a_hundred_thousand_filters_are_analyzed_and_admitted_on_a_128_kib_thread ... ok
+test row_checkpoint_gate::a_forked_filter_trips_at_the_sequential_row_under_every_fuel_budget ... ok
+test row_checkpoint_gate::a_forked_exact_filter_group_fold_and_optional_trip_where_the_direct_loops_do ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 1568 filtered out; finished in 5.40s
+

@@ -1,0 +1,20 @@
+cargo fmt --all --check
+Diff in /home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval/src/vm/mod.rs:617:
+         {
+             FilterPoll::Exists(site) => Ok(FilterRowStep::Exists(self, site)),
+             FilterPoll::Complete(value) => {
+-                let (keep, evidence) = self.state.finish(
+-                    &self.linked,
+-                    expression,
+-                    &self.row,
+-                    schema,
+-                    value,
+-                    ctx,
+-                )?;
++                let (keep, evidence) =
++                    self.state
++                        .finish(&self.linked, expression, &self.row, schema, value, ctx)?;
+                 Ok(FilterRowStep::Complete((
+                     self.linked,
+                     self.row,
+make: *** [Makefile:92: check] Error 1

@@ -1,0 +1,116 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+    #[test]
+    fn ordinary_runner_inline_empty_and_zero_row_lateral_need_no_native_grant() {
+        use crate::workspace::owned_row_regressions::account;
+        use std::sync::atomic::Ordering;
+
+        let empty = GraphPattern::Values {
+            variables: Vec::new(),
+            bindings: Vec::new(),
+        };
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        for pattern in [
+            GraphPattern::Slice {
+                inner: Child::new(empty.clone()),
+                start: 0,
+                length: None,
+            },
+            GraphPattern::Lateral {
+                left: Child::new(empty.clone()),
+                right: Child::new(GraphPattern::empty_bgp()),
+            },
+        ] {
+            let base = crate::QueryWorkspace::<crate::workspace::owned_row_regressions::Refusal>::control_bytes().unwrap();
+            let (workspace, ledger, _) = account(base);
+            let mut ctx = EvalCtx::new(dataset.as_ref());
+            ctx.growth = workspace.capability();
+            let result = eval_evaluated(&pattern, &mut ctx).unwrap();
+            assert!(result.rows().rows.is_empty());
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            assert!(workspace.take_failure().is_none());
+            drop(result);
+            drop(ctx);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn ordinary_runner_frame_and_child_refusals_precede_copied_scope_installation() {
+        use crate::workspace::owned_row_regressions::account;
+        use std::sync::atomic::Ordering;
+
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let inner_slice = GraphPattern::Slice {
+            inner: Child::new(GraphPattern::Values { variables: Vec::new(), bindings: Vec::new() }),
+            start: 0,
+            length: None,
+        };
+        let patterns = [
+            (GraphPattern::Slice { inner: Child::new(inner_slice), start: 0, length: None }, 4 * size_of::<OrdinaryFrame<'static, TermId>>()),
+            (GraphPattern::Filter { inner: Child::new(GraphPattern::empty_bgp()), expr: purrdf_sparql_algebra::Expression::Exists(Child::new(GraphPattern::empty_bgp())) }, size_of::<OrdinaryExists<'static, TermId>>()),
+            (GraphPattern::Lateral { left: Child::new(GraphPattern::empty_bgp()), right: Child::new(GraphPattern::empty_bgp()) }, size_of::<OrdinaryLateral<TermId>>()),
+        ];
+        let _definition = crate::expr::force_exists_strategy_for_test(crate::expr::ForcedExistsStrategy::Definition);
+        for (pattern, bytes) in patterns {
+            let (workspace, ledger, base) = account(1_000_000);
+            let bytes = u64::try_from(bytes).unwrap();
+            ledger.refuse_growth.store(bytes, Ordering::Relaxed);
+            let mut ctx = EvalCtx::new(dataset.as_ref());
+            ctx.growth = workspace.capability();
+            let error = eval_evaluated(&pattern, &mut ctx).err().expect("selected original native grant refuses");
+            assert!(matches!(error, EvalError::WorkspaceStopped));
+            assert_eq!(ledger.rejected_growth.load(Ordering::Relaxed), bytes);
+            assert!(!ctx.in_substituted_exists);
+            assert!(ctx.active_copied_pattern.is_none());
+            assert!(ctx.correlated_node_maps.is_empty());
+            assert_eq!(workspace.take_failure().unwrap().identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(workspace.take_failure().is_none());
+            // The refused reservation stays latched. A fresh caller capability
+            // on the same context must still find the restored ordinary scope.
+            ctx.growth = crate::WorkspaceCapability::resident();
+            let healthy = eval_evaluated(&GraphPattern::empty_bgp(), &mut ctx).unwrap();
+            assert_eq!(healthy.rows().rows.len(), 1);
+            drop(healthy);
+            drop(ctx);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn ordinary_runner_nested_results_retain_grants_until_the_last_output_owner() {
+        use crate::workspace::owned_row_regressions::account;
+        use std::sync::atomic::Ordering;
+
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let _definition = crate::expr::force_exists_strategy_for_test(crate::expr::ForcedExistsStrategy::Definition);
+        for lateral in [false, true] {
+            let mut pattern = GraphPattern::empty_bgp();
+            for _ in 0..3 {
+                pattern = if lateral {
+                    GraphPattern::Lateral { left: Child::new(GraphPattern::empty_bgp()), right: Child::new(pattern) }
+                } else {
+                    GraphPattern::Filter { inner: Child::new(GraphPattern::empty_bgp()), expr: purrdf_sparql_algebra::Expression::Exists(Child::new(pattern)) }
+                };
+            }
+            let (workspace, ledger, base) = account(1_000_000);
+            let mut ctx = EvalCtx::new(dataset.as_ref());
+            ctx.growth = workspace.capability();
+            let result = eval_evaluated(&pattern, &mut ctx).unwrap();
+            assert_eq!(result.rows().rows.len(), 1);
+            assert!(!ctx.in_substituted_exists);
+            assert!(ctx.active_copied_pattern.is_none());
+            assert!(ctx.correlated_node_maps.is_empty());
+            assert!(ledger.live.load(Ordering::Relaxed) > base);
+            drop(ctx);
+            drop(workspace);
+            assert!(ledger.live.load(Ordering::Relaxed) > 0, "output keeps its original grant");
+            drop(result);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0, "last output releases every frame and native grant");
+        }
+    }

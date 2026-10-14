@@ -1,0 +1,8 @@
+
+ Performance counter stats for process id '3495014':
+
+          82715234      instructions:u                                                        
+             72.09 msec task-clock:u                                                          
+
+       2.009883806 seconds time elapsed
+

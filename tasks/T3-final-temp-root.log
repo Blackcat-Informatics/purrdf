@@ -1,0 +1,9 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/testkit)
+    Finished `test` profile [optimized] target(s) in 11.62s
+     Running unittests src/lib.rs (/opt/.cargo/ab/9210f0404045ba/debug/build/purrdf-testkit/df50ed774e802436/out/purrdf_testkit-df50ed774e802436)
+
+running 1 test
+test temp::tests::unit_test_directories_live_in_the_target_tmp_directory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.00s
+

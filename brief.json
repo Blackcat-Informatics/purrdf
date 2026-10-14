@@ -1,0 +1,131 @@
+{
+  "issue": 531,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Evaluator delivery follow-up: relocated test artifact and unqualified performance evidence",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "515": "sparql-eval/datalog: per-row evidence -- information state per standpoint, completeness, frame -- combined by the bilattice",
+    "516": "Loss ledger as queryable RDF 1.2: content-identified reasons, and merging accepted reasons into the answer",
+    "511": "retrieval: field scoping applied inside each stratum's candidate generation, before depth, with undecided counts",
+    "518": "Optimizer: a ShapeProvider extension for exact physical operators (ordered window, bucketed series, host shapes)",
+    "512": "text/sparql-eval: dictionary-match shape -- a VALUES block of phrases on one predicate as one automaton, longest-first spans",
+    "532": "Carry row evidence and scoped retrieval through exact physical shapes",
+    "535": "Use host-managed Cargo outputs for WASM and C packaging",
+    "365": "Post-v3.0: asynchronous Wasm lane and parse/serialize follow-ups from #358",
+    "531": "Evaluator delivery follow-up: relocated test artifact and unqualified performance evidence"
+  },
+  "link_relations": {
+    "515": "mentions",
+    "516": "mentions",
+    "511": "mentions",
+    "518": "mentions",
+    "512": "mentions",
+    "532": "mentions",
+    "535": "mentions",
+    "365": "mentions",
+    "531": "mentions"
+  },
+  "related": [
+    {
+      "number": 542,
+      "title": "rdf-core: MutableDataset::freeze uses fixed default ViewLimits; allow caller limits",
+      "state": "OPEN"
+    },
+    {
+      "number": 515,
+      "title": "sparql-eval/datalog: per-row evidence -- information state per standpoint, completeness, frame -- combined by the bilattice",
+      "state": "CLOSED"
+    },
+    {
+      "number": 471,
+      "title": "v4.0: remembered empty named graphs become the default",
+      "state": "OPEN"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 536,
+      "title": "Restore MSRV shapes build and Arm64 numerical replay gates",
+      "state": "CLOSED"
+    },
+    {
+      "number": 401,
+      "title": "Update transfers preserve RDF 1.2 identity: per-document LOAD blank scoping and typed record transfer",
+      "state": "CLOSED"
+    },
+    {
+      "number": 516,
+      "title": "Loss ledger as queryable RDF 1.2: content-identified reasons, and merging accepted reasons into the answer",
+      "state": "CLOSED"
+    },
+    {
+      "number": 511,
+      "title": "retrieval: field scoping applied inside each stratum's candidate generation, before depth, with undecided counts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 470,
+      "title": "v4.0: exact tower only, and an exact-or-18-half-even default division policy",
+      "state": "OPEN"
+    },
+    {
+      "number": 394,
+      "title": "sparql-eval: fallible EXPLAIN entry point for operational (FallibleDatasetView) storage",
+      "state": "CLOSED"
+    },
+    {
+      "number": 372,
+      "title": "Sequence and inverse property paths are not translated to triple patterns (SPARQL 1.1 section 18.2.2.4), so linked patterns become a cross product",
+      "state": "CLOSED"
+    },
+    {
+      "number": 518,
+      "title": "Optimizer: a ShapeProvider extension for exact physical operators (ordered window, bucketed series, host shapes)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 512,
+      "title": "text/sparql-eval: dictionary-match shape -- a VALUES block of phrases on one predicate as one automaton, longest-first spans",
+      "state": "CLOSED"
+    },
+    {
+      "number": 358,
+      "title": "Expose async SERVICE resolution to JavaScript/Wasm hosts",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 26,
+    "semantic-identity-loss": 2,
+    "performance": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [
+      {
+        "number": 532,
+        "title": "Carry row evidence and scoped retrieval through exact physical shapes",
+        "state": "MERGED",
+        "url": "https://github.com/Blackcat-Informatics/purrdf/pull/532",
+        "this_stage": false
+      }
+    ],
+    "own_branch": "paudley/531-evaluator-delivery-follow-up-relocated"
+  },
+  "coverage": [
+    "issue #531 + 13 comment(s) via github",
+    "link crawl: 9 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Evaluator', 'delivery', 'follow-up:']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #531 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #531: 1",
+    "requirement candidates: 9 line(s); 8 comment(s) matched no rule",
+    "referenced artifacts: 17 path(s) (11 on disk), 37 identifier(s), 2 workspace package(s), 11 URL(s)"
+  ]
+}

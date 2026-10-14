@@ -1,0 +1,24 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 3m 07s
+     Running unittests src/lib.rs (/opt/.cargo/ab/9210f0404045ba/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 3 tests
+test eval::tests::ordinary_runner_nested_results_release_all_grants_after_the_last_output ... ok
+test eval::tests::ordinary_runner_lateral_box_and_pending_spill_refuse_before_child_entry ... ok
+test eval::tests::ordinary_runner_exists_box_refusal_precedes_copied_scope_installation ... FAILED
+
+failures:
+
+---- eval::tests::ordinary_runner_exists_box_refusal_precedes_copied_scope_installation stdout ----
+
+thread 'eval::tests::ordinary_runner_exists_box_refusal_precedes_copied_scope_installation' (3047015) panicked at crates/sparql-eval/src/eval.rs:6307:13:
+one FILTER row
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    eval::tests::ordinary_runner_exists_box_refusal_precedes_copied_scope_installation
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 1620 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --lib`

@@ -1,0 +1,194 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/lex)
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling crossbeam-utils v0.8.21
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/xsd)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf-events)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/cdt)
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/deflate)
+   Compiling unicode-ident v1.0.24
+   Compiling hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+error[E0514]: found crate `purrdf_xsd` compiled by an incompatible version of rustc
+  --> crates/rdf-core/src/distance/binary64.rs:35:16
+   |
+35 | pub(crate) use purrdf_xsd::ieee::Binary64;
+   |                ^^^^^^^^^^
+   |
+   = note: the following crate versions were found:
+           crate `purrdf_xsd` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/purrdf-xsd/75b2c53a92f6253a/out/libpurrdf_xsd-75b2c53a92f6253a.rmeta
+   = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0514]: found crate `purrdf_hash` compiled by an incompatible version of rustc
+  --> crates/rdf-core/src/hash.rs:76:16
+   |
+76 | pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
+   |                ^^^^^^^^^^^
+   |
+   = note: the following crate versions were found:
+           crate `purrdf_hash` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/purrdf-hash/f3a155459717838e/out/libpurrdf_hash-f3a155459717838e.rmeta
+   = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0514]: found crate `purrdf_lex` compiled by an incompatible version of rustc
+   --> crates/rdf-core/src/hash.rs:204:9
+    |
+204 |     use purrdf_lex::allocation::StorageError;
+    |         ^^^^^^^^^^
+    |
+    = note: the following crate versions were found:
+            crate `purrdf_lex` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/purrdf-lex/611626c303a7c694/out/libpurrdf_lex-611626c303a7c694.rmeta
+    = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0514]: found crate `purrdf_iri` compiled by an incompatible version of rustc
+  --> crates/rdf-core/src/ir/absolute.rs:41:5
+   |
+41 | use purrdf_iri::{BaseScope, IriError};
+   |     ^^^^^^^^^^
+   |
+   = note: the following crate versions were found:
+           crate `purrdf_iri` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/purrdf-iri/add8cc85ec8baeb3/out/libpurrdf_iri-add8cc85ec8baeb3.rmeta
+   = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0514]: found crate `purrdf_cdt` compiled by an incompatible version of rustc
+  --> crates/rdf-core/src/cdt_blank.rs:97:5
+   |
+97 | use purrdf_cdt::{CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, parse_cdt_by_iri};
+   |     ^^^^^^^^^^
+   |
+   = note: the following crate versions were found:
+           crate `purrdf_cdt` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/purrdf-cdt/66a7c02ecf104d7d/out/libpurrdf_cdt-66a7c02ecf104d7d.rmeta
+   = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0514]: found crate `sha2` compiled by an incompatible version of rustc
+  --> crates/rdf-core/src/artifact/container.rs:32:5
+   |
+32 | use sha2::{Digest, Sha256};
+   |     ^^^^
+   |
+   = note: the following crate versions were found:
+           crate `sha2` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/sha2/78d489b78be8c3b8/out/libsha2-78d489b78be8c3b8.rmeta
+   = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0514]: found crate `purrdf_events` compiled by an incompatible version of rustc
+  --> crates/rdf-core/src/backend.rs:16:5
+   |
+16 | use purrdf_events::RdfEventSink;
+   |     ^^^^^^^^^^^^^
+   |
+   = note: the following crate versions were found:
+           crate `purrdf_events` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/purrdf-events/1b91902ed156585b/out/libpurrdf_events-1b91902ed156585b.rmeta
+   = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0514]: found crate `purrdf_deflate` compiled by an incompatible version of rustc
+  --> crates/rdf-core/src/ir/pack/dict.rs:74:5
+   |
+74 | use purrdf_deflate::common_prefix_len;
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: the following crate versions were found:
+           crate `purrdf_deflate` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/purrdf-deflate/012ee2468727243f/out/libpurrdf_deflate-012ee2468727243f.rmeta
+   = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0514]: found crate `regex_syntax` compiled by an incompatible version of rustc
+  --> crates/rdf-core/src/xsd_regex/ecma_emit.rs:13:5
+   |
+13 | use regex_syntax::hir::{Class, Hir, HirKind, Look};
+   |     ^^^^^^^^^^^^
+   |
+   = note: the following crate versions were found:
+           crate `regex_syntax` compiled by <unknown rustc version>: /opt/.cargo/ab/9210f0404045ba/wasm32-unknown-unknown/debug/build/regex-syntax/90d8556e9a4cbafa/out/libregex_syntax-90d8556e9a4cbafa.rmeta
+   = help: please recompile that crate using this compiler (rustc 1.101.0-nightly (822182db4 2026-10-13)) (consider running `cargo clean` first)
+
+error[E0432]: unresolved import `super::backend::Backend`
+  --> crates/rdf-core/src/csv/arch.rs:35:5
+   |
+35 | use super::backend::Backend;
+   |     ^^^^^^^^^^^^^^^^-------
+   |                     |
+   |                     no `Backend` in `csv::backend`
+
+error[E0432]: unresolved import `crate::RdfTextDirection`
+  --> crates/rdf-core/src/ir/builder.rs:31:5
+   |
+31 |     RdfTextDirection,
+   |     ^^^^^^^^^^^^^^^^ no `RdfTextDirection` in the root
+   |
+   = help: consider importing this unresolved item through its public re-export instead:
+           crate::model::RdfTextDirection
+
+error[E0432]: unresolved import `crate::RdfTextDirection`
+  --> crates/rdf-core/src/ir/canon/state.rs:23:34
+   |
+23 | use crate::{BlankScope, QuadIds, RdfTextDirection, TermRef, TermValue};
+   |                                  ^^^^^^^^^^^^^^^^ no `RdfTextDirection` in the root
+   |
+   = help: consider importing this unresolved item through its public re-export instead:
+           crate::model::RdfTextDirection
+
+error[E0432]: unresolved import `crate::RdfTextDirection`
+  --> crates/rdf-core/src/ir/dataset.rs:41:5
+   |
+41 |     RdfTextDirection, RdfTriple,
+   |     ^^^^^^^^^^^^^^^^ no `RdfTextDirection` in the root
+   |
+   = help: consider importing this unresolved item through its public re-export instead:
+           crate::model::RdfTextDirection
+
+error[E0432]: unresolved import `crate::RdfTextDirection`
+ --> crates/rdf-core/src/ir/embedding/target.rs:8:28
+  |
+8 | use crate::{ContentDigest, RdfTextDirection};
+  |                            ^^^^^^^^^^^^^^^^ no `RdfTextDirection` in the root
+  |
+  = help: consider importing this unresolved item through its public re-export instead:
+          crate::model::RdfTextDirection
+
+error[E0432]: unresolved import `crate::RdfTextDirection`
+  --> crates/rdf-core/src/ir/global.rs:35:5
+   |
+35 | use crate::RdfTextDirection;
+   |     ^^^^^^^----------------
+   |            |
+   |            no `RdfTextDirection` in the root
+   |
+help: consider importing this unresolved item through its public re-export instead
+   |
+35 | use crate::model::RdfTextDirection;
+   |            +++++++
+
+error[E0432]: unresolved import `crate::RdfTextDirection`
+ --> crates/rdf-core/src/ir/segmented/format.rs:7:48
+  |
+7 | use crate::{BlankScope, GlobalTermId, QuadIds, RdfTextDirection, TermRef};
+  |                                                ^^^^^^^^^^^^^^^^ no `RdfTextDirection` in the root
+  |
+  = help: consider importing this unresolved item through its public re-export instead:
+          crate::model::RdfTextDirection
+
+error[E0432]: unresolved import `crate::RdfTextDirection`
+  --> crates/rdf-core/src/ir/pack/dict.rs:82:25
+   |
+82 | use crate::{BlankScope, RdfTextDirection, TermRef, TermValue};
+   |                         ^^^^^^^^^^^^^^^^ no `RdfTextDirection` in the root
+   |
+   = help: consider importing this unresolved item through its public re-export instead:
+           crate::model::RdfTextDirection
+
+Some errors have detailed explanations: E0432, E0514.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `purrdf-core` (lib) due to 17 previous errors

@@ -1,0 +1,1352 @@
+﻿2026-10-14T00:12:42.8615303Z Current runner version: '2.337.0'
+2026-10-14T00:12:42.8640750Z ##[group]Runner Image Provisioner
+2026-10-14T00:12:42.8641805Z Hosted Compute Agent
+2026-10-14T00:12:42.8642452Z Version: 20261002.596
+2026-10-14T00:12:42.8643170Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-14T00:12:42.8644137Z Build Date: 2026-10-02T22:28:27Z
+2026-10-14T00:12:42.8644854Z Worker ID: {36daadc3-4d7a-42ac-a616-dab9f97c55ba}
+2026-10-14T00:12:42.8645640Z Region: westus
+2026-10-14T00:12:42.8646192Z Cloud: Azure
+2026-10-14T00:12:42.8646718Z ##[endgroup]
+2026-10-14T00:12:42.8648396Z ##[group]Operating System
+2026-10-14T00:12:42.8649110Z Ubuntu
+2026-10-14T00:12:42.8649705Z 24.04.5
+2026-10-14T00:12:42.8650221Z LTS
+2026-10-14T00:12:42.8650692Z ##[endgroup]
+2026-10-14T00:12:42.8651770Z ##[group]Runner Image
+2026-10-14T00:12:42.8652417Z Image: ubuntu-24.04
+2026-10-14T00:12:42.8653014Z Version: 20261004.327.1
+2026-10-14T00:12:42.8654560Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-14T00:12:42.8656207Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+2026-10-14T00:12:42.8657164Z ##[endgroup]
+2026-10-14T00:12:42.8658666Z ##[group]GITHUB_TOKEN Permissions
+2026-10-14T00:12:42.8660851Z Contents: read
+2026-10-14T00:12:42.8661517Z Metadata: read
+2026-10-14T00:12:42.8662122Z ##[endgroup]
+2026-10-14T00:12:42.8664529Z Secret source: Actions
+2026-10-14T00:12:42.8665540Z Cache mode: write
+2026-10-14T00:12:42.8666298Z Prepare workflow directory
+2026-10-14T00:12:42.9046612Z Prepare all required actions
+2026-10-14T00:12:42.9117712Z Getting action download info
+2026-10-14T00:12:43.2885654Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-14T00:12:43.4031652Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-14T00:12:43.6215019Z Download action repository 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e' (SHA:48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e)
+2026-10-14T00:12:43.9025963Z Complete job name: wasm-package
+2026-10-14T00:12:43.9876160Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+2026-10-14T00:12:43.9877356Z with:
+2026-10-14T00:12:43.9877859Z   persist-credentials: false
+2026-10-14T00:12:43.9878470Z   repository: Blackcat-Informatics/purrdf
+2026-10-14T00:12:43.9883113Z   token: ***
+2026-10-14T00:12:43.9883818Z   ssh-strict: true
+2026-10-14T00:12:43.9884302Z   ssh-user: git
+2026-10-14T00:12:43.9884766Z   clean: true
+2026-10-14T00:12:43.9885255Z   sparse-checkout-cone-mode: true
+2026-10-14T00:12:43.9885824Z   fetch-depth: 1
+2026-10-14T00:12:43.9886284Z   fetch-tags: false
+2026-10-14T00:12:43.9886767Z   show-progress: true
+2026-10-14T00:12:43.9887242Z   lfs: false
+2026-10-14T00:12:43.9887797Z   submodules: false
+2026-10-14T00:12:43.9888296Z   set-safe-directory: true
+2026-10-14T00:12:43.9888848Z   allow-unsafe-pr-checkout: false
+2026-10-14T00:12:43.9889745Z ##[endgroup]
+2026-10-14T00:12:44.0916403Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-14T00:12:44.0918755Z ##[group]Getting Git version info
+2026-10-14T00:12:44.0919598Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-14T00:12:44.0920790Z [command]/usr/bin/git version
+2026-10-14T00:12:44.0982644Z git version 2.55.0
+2026-10-14T00:12:44.1005186Z ##[endgroup]
+2026-10-14T00:12:44.1017150Z Temporarily overriding HOME='/home/runner/work/_temp/d6859e6f-cb1d-4632-adf4-24f2c122141b' before making global git config changes
+2026-10-14T00:12:44.1018725Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-14T00:12:44.1022506Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-14T00:12:44.1074023Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-14T00:12:44.1077983Z ##[group]Determining repository object format
+2026-10-14T00:12:44.1079915Z ##[endgroup]
+2026-10-14T00:12:44.1080799Z ##[group]Initializing the repository
+2026-10-14T00:12:44.1084271Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-14T00:12:44.1208061Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-14T00:12:44.1210123Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-14T00:12:44.1212645Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-14T00:12:44.1214514Z hint: call:
+2026-10-14T00:12:44.1215575Z hint:
+2026-10-14T00:12:44.1216949Z hint: 	git config --global init.defaultBranch <name>
+2026-10-14T00:12:44.1217905Z hint:
+2026-10-14T00:12:44.1218555Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-14T00:12:44.1219605Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-14T00:12:44.1220651Z hint:
+2026-10-14T00:12:44.1221538Z hint: 	git branch -m <name>
+2026-10-14T00:12:44.1222362Z hint:
+2026-10-14T00:12:44.1223114Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-14T00:12:44.1224735Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-14T00:12:44.1226695Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-14T00:12:44.1308752Z ##[endgroup]
+2026-10-14T00:12:44.1309860Z ##[group]Disabling automatic garbage collection
+2026-10-14T00:12:44.1312280Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-14T00:12:44.1345563Z ##[endgroup]
+2026-10-14T00:12:44.1346625Z ##[group]Setting up auth
+2026-10-14T00:12:44.1347313Z Removing SSH command configuration
+2026-10-14T00:12:44.1351745Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-14T00:12:44.1384605Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-14T00:12:44.1743855Z Removing HTTP extra header
+2026-10-14T00:12:44.1749417Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-14T00:12:44.1785512Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-14T00:12:44.2000256Z Removing includeIf entries pointing to credentials config files
+2026-10-14T00:12:44.2006039Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-14T00:12:44.2044309Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-14T00:12:44.2270870Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-14T00:12:44.2307335Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:44.2337437Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:44.2372076Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:44.2403753Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:44.2431519Z ##[endgroup]
+2026-10-14T00:12:44.2432912Z ##[group]Fetching the repository
+2026-10-14T00:12:44.2438599Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +78d32abe05594bb438891eacc8e42183fdbf963f:refs/remotes/origin/paudley/531-evaluator-delivery-follow-up-relocated
+2026-10-14T00:12:48.8722622Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-14T00:12:48.8723971Z  * [new ref]           78d32abe05594bb438891eacc8e42183fdbf963f -> origin/paudley/531-evaluator-delivery-follow-up-relocated
+2026-10-14T00:12:48.8732020Z [command]/usr/bin/git branch --list --remote origin/paudley/531-evaluator-delivery-follow-up-relocated
+2026-10-14T00:12:48.8757746Z   origin/paudley/531-evaluator-delivery-follow-up-relocated
+2026-10-14T00:12:48.8766501Z [command]/usr/bin/git rev-parse refs/remotes/origin/paudley/531-evaluator-delivery-follow-up-relocated
+2026-10-14T00:12:48.8789070Z 78d32abe05594bb438891eacc8e42183fdbf963f
+2026-10-14T00:12:48.8794469Z ##[endgroup]
+2026-10-14T00:12:48.8795751Z ##[group]Determining the checkout info
+2026-10-14T00:12:48.8796897Z ##[endgroup]
+2026-10-14T00:12:48.8799990Z [command]/usr/bin/git sparse-checkout disable
+2026-10-14T00:12:48.8852123Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-14T00:12:48.8881951Z ##[group]Checking out the ref
+2026-10-14T00:12:48.8886569Z [command]/usr/bin/git checkout --progress --force -B paudley/531-evaluator-delivery-follow-up-relocated refs/remotes/origin/paudley/531-evaluator-delivery-follow-up-relocated
+2026-10-14T00:12:49.9577847Z Updating files:  61% (11409/18624)
+2026-10-14T00:12:49.9702161Z Updating files:  62% (11547/18624)
+2026-10-14T00:12:49.9917007Z Updating files:  63% (11734/18624)
+2026-10-14T00:12:50.0121991Z Updating files:  64% (11920/18624)
+2026-10-14T00:12:50.0216156Z Updating files:  65% (12106/18624)
+2026-10-14T00:12:50.0285650Z Updating files:  66% (12292/18624)
+2026-10-14T00:12:50.0376248Z Updating files:  67% (12479/18624)
+2026-10-14T00:12:50.0453804Z Updating files:  68% (12665/18624)
+2026-10-14T00:12:50.0524736Z Updating files:  69% (12851/18624)
+2026-10-14T00:12:50.0589640Z Updating files:  70% (13037/18624)
+2026-10-14T00:12:50.0652837Z Updating files:  71% (13224/18624)
+2026-10-14T00:12:50.0724074Z Updating files:  72% (13410/18624)
+2026-10-14T00:12:50.0792403Z Updating files:  73% (13596/18624)
+2026-10-14T00:12:50.0862387Z Updating files:  74% (13782/18624)
+2026-10-14T00:12:50.0929543Z Updating files:  75% (13968/18624)
+2026-10-14T00:12:50.0994034Z Updating files:  76% (14155/18624)
+2026-10-14T00:12:50.1061218Z Updating files:  77% (14341/18624)
+2026-10-14T00:12:50.1129598Z Updating files:  78% (14527/18624)
+2026-10-14T00:12:50.1207654Z Updating files:  79% (14713/18624)
+2026-10-14T00:12:50.1271888Z Updating files:  80% (14900/18624)
+2026-10-14T00:12:50.1336923Z Updating files:  81% (15086/18624)
+2026-10-14T00:12:50.1401547Z Updating files:  82% (15272/18624)
+2026-10-14T00:12:50.1477438Z Updating files:  83% (15458/18624)
+2026-10-14T00:12:50.1556525Z Updating files:  84% (15645/18624)
+2026-10-14T00:12:50.1621539Z Updating files:  85% (15831/18624)
+2026-10-14T00:12:50.1691533Z Updating files:  86% (16017/18624)
+2026-10-14T00:12:50.1758366Z Updating files:  87% (16203/18624)
+2026-10-14T00:12:50.1822510Z Updating files:  88% (16390/18624)
+2026-10-14T00:12:50.1940921Z Updating files:  89% (16576/18624)
+2026-10-14T00:12:50.2014128Z Updating files:  90% (16762/18624)
+2026-10-14T00:12:50.2086101Z Updating files:  91% (16948/18624)
+2026-10-14T00:12:50.2156363Z Updating files:  92% (17135/18624)
+2026-10-14T00:12:50.2231520Z Updating files:  93% (17321/18624)
+2026-10-14T00:12:50.2305282Z Updating files:  94% (17507/18624)
+2026-10-14T00:12:50.2477234Z Updating files:  95% (17693/18624)
+2026-10-14T00:12:50.2484582Z Updating files:  96% (17880/18624)
+2026-10-14T00:12:50.2563375Z Updating files:  97% (18066/18624)
+2026-10-14T00:12:50.2642928Z Updating files:  98% (18252/18624)
+2026-10-14T00:12:50.2718284Z Updating files:  99% (18438/18624)
+2026-10-14T00:12:50.2719071Z Updating files: 100% (18624/18624)
+2026-10-14T00:12:50.2719858Z Updating files: 100% (18624/18624), done.
+2026-10-14T00:12:50.2909044Z Switched to a new branch 'paudley/531-evaluator-delivery-follow-up-relocated'
+2026-10-14T00:12:50.2917003Z branch 'paudley/531-evaluator-delivery-follow-up-relocated' set up to track 'origin/paudley/531-evaluator-delivery-follow-up-relocated'.
+2026-10-14T00:12:50.2945421Z ##[endgroup]
+2026-10-14T00:12:50.3005889Z [command]/usr/bin/git log -1 --format=%H
+2026-10-14T00:12:50.3030773Z 78d32abe05594bb438891eacc8e42183fdbf963f
+2026-10-14T00:12:50.3040036Z ##[group]Removing auth
+2026-10-14T00:12:50.3040506Z Removing SSH command configuration
+2026-10-14T00:12:50.3044820Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-14T00:12:50.3074955Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-14T00:12:50.3310737Z Removing HTTP extra header
+2026-10-14T00:12:50.3314701Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-14T00:12:50.3345675Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-14T00:12:50.3580752Z Removing includeIf entries pointing to credentials config files
+2026-10-14T00:12:50.3584412Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-14T00:12:50.3613112Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-14T00:12:50.3614177Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-14T00:12:50.3614680Z includeif.gitdir:/github/workspace/.git.path
+2026-10-14T00:12:50.3615073Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-14T00:12:50.3624730Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-14T00:12:50.3647385Z /home/runner/work/_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:50.3657091Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:50.3696449Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-14T00:12:50.3717453Z /home/runner/work/_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:50.3724923Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:50.3761657Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-14T00:12:50.3789692Z /github/runner_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:50.3797255Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:50.3830003Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-14T00:12:50.3851694Z /github/runner_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:50.3859930Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config
+2026-10-14T00:12:50.3890901Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-14T00:12:50.4123629Z Removing credentials config '/home/runner/work/_temp/git-credentials-3b4b7f7b-34d4-483a-a94e-8386a830783c.config'
+2026-10-14T00:12:50.4133623Z ##[endgroup]
+2026-10-14T00:12:50.4457123Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-14T00:12:50.4457743Z with:
+2026-10-14T00:12:50.4457943Z   toolchain: nightly
+2026-10-14T00:12:50.4458175Z   targets: wasm32-unknown-unknown
+2026-10-14T00:12:50.4458422Z ##[endgroup]
+2026-10-14T00:12:50.4555647Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-14T00:12:50.4595913Z ##[group]Run : parse toolchain version
+2026-10-14T00:12:50.4596278Z [36;1m: parse toolchain version[0m
+2026-10-14T00:12:50.4596559Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-14T00:12:50.4597096Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-14T00:12:50.4597674Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-14T00:12:50.4597971Z [36;1m  exit 1[0m
+2026-10-14T00:12:50.4598307Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-14T00:12:50.4598796Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-14T00:12:50.4599347Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:50.4599872Z [36;1m  else[0m
+2026-10-14T00:12:50.4600278Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:50.4600736Z [36;1m  fi[0m
+2026-10-14T00:12:50.4601042Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-14T00:12:50.4601579Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:50.4602044Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-14T00:12:50.4602568Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:50.4603067Z [36;1melse[0m
+2026-10-14T00:12:50.4603540Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:50.4603894Z [36;1mfi[0m
+2026-10-14T00:12:50.4875610Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:50.4876069Z env:
+2026-10-14T00:12:50.4876312Z   toolchain: nightly
+2026-10-14T00:12:50.4876587Z ##[endgroup]
+2026-10-14T00:12:50.5017639Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=46]
+2026-10-14T00:12:50.5041411Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-14T00:12:50.5062922Z ##[group]Run : construct rustup command line
+2026-10-14T00:12:50.5063584Z [36;1m: construct rustup command line[0m
+2026-10-14T00:12:50.5064067Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:50.5064749Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:50.5065252Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:50.5127662Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:50.5128028Z env:
+2026-10-14T00:12:50.5128240Z   targets: wasm32-unknown-unknown
+2026-10-14T00:12:50.5128503Z   components: 
+2026-10-14T00:12:50.5128721Z ##[endgroup]
+2026-10-14T00:12:50.5231245Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=18]
+2026-10-14T00:12:50.5235522Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-14T00:12:50.5255733Z ##[group]Run : set $CARGO_HOME
+2026-10-14T00:12:50.5256008Z [36;1m: set $CARGO_HOME[0m
+2026-10-14T00:12:50.5256331Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-14T00:12:50.5322436Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:50.5322826Z ##[endgroup]
+2026-10-14T00:12:50.5425152Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=18]
+2026-10-14T00:12:50.5427855Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-14T00:12:50.5455046Z ##[group]Run : install rustup if needed
+2026-10-14T00:12:50.5455369Z [36;1m: install rustup if needed[0m
+2026-10-14T00:12:50.5455678Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-14T00:12:50.5456458Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-14T00:12:50.5457216Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-14T00:12:50.5457501Z [36;1mfi[0m
+2026-10-14T00:12:50.5522291Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:50.5522654Z env:
+2026-10-14T00:12:50.5522869Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:12:50.5523139Z ##[endgroup]
+2026-10-14T00:12:50.5617013Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=18]
+2026-10-14T00:12:50.5621281Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-14T00:12:50.5628339Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-14T00:12:50.5631876Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-14T00:12:50.5652528Z ##[group]Run rustup toolchain install nightly --target wasm32-unknown-unknown --profile minimal --no-self-update
+2026-10-14T00:12:50.5653571Z [36;1mrustup toolchain install nightly --target wasm32-unknown-unknown --profile minimal --no-self-update[0m
+2026-10-14T00:12:50.5718164Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:50.5718515Z env:
+2026-10-14T00:12:50.5718722Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:12:50.5718993Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-14T00:12:50.5719233Z ##[endgroup]
+2026-10-14T00:12:50.6303843Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-14T00:12:50.7497517Z info: latest update on 2026-10-13 for version 1.101.0-nightly (e9bbadf68 2026-10-12)
+2026-10-14T00:12:50.7498226Z info: downloading 4 components
+2026-10-14T00:12:59.8399586Z 
+2026-10-14T00:12:59.8465433Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (e9bbadf68 2026-10-12)
+2026-10-14T00:12:59.8466143Z 
+2026-10-14T00:12:59.8534683Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=9290]
+2026-10-14T00:12:59.8540280Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-14T00:12:59.8559182Z ##[group]Run rustup default nightly
+2026-10-14T00:12:59.8559491Z [36;1mrustup default nightly[0m
+2026-10-14T00:12:59.8620044Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:59.8620390Z env:
+2026-10-14T00:12:59.8620592Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:12:59.8620870Z ##[endgroup]
+2026-10-14T00:12:59.8759158Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+2026-10-14T00:12:59.8764792Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+2026-10-14T00:12:59.8765086Z 
+2026-10-14T00:12:59.8827395Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (e9bbadf68 2026-10-12)
+2026-10-14T00:12:59.8828001Z 
+2026-10-14T00:12:59.8828501Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+2026-10-14T00:12:59.8844692Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=30]
+2026-10-14T00:12:59.8849673Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-14T00:12:59.8868632Z ##[group]Run : create cachekey
+2026-10-14T00:12:59.8868921Z [36;1m: create cachekey[0m
+2026-10-14T00:12:59.8869629Z [36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-14T00:12:59.8870340Z [36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-14T00:12:59.8870998Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-14T00:12:59.8930271Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:59.8930617Z env:
+2026-10-14T00:12:59.8930817Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:12:59.8931069Z ##[endgroup]
+2026-10-14T00:12:59.9251757Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=40]
+2026-10-14T00:12:59.9254760Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-14T00:12:59.9272876Z ##[group]Run : disable incremental compilation
+2026-10-14T00:12:59.9273527Z [36;1m: disable incremental compilation[0m
+2026-10-14T00:12:59.9273867Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-14T00:12:59.9274224Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-14T00:12:59.9274511Z [36;1mfi[0m
+2026-10-14T00:12:59.9334602Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:59.9334958Z env:
+2026-10-14T00:12:59.9335167Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:12:59.9335429Z ##[endgroup]
+2026-10-14T00:12:59.9416192Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=16]
+2026-10-14T00:12:59.9418358Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-14T00:12:59.9435345Z ##[group]Run : enable colors in Cargo output
+2026-10-14T00:12:59.9435678Z [36;1m: enable colors in Cargo output[0m
+2026-10-14T00:12:59.9435995Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-14T00:12:59.9436354Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-14T00:12:59.9436649Z [36;1mfi[0m
+2026-10-14T00:12:59.9490034Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:59.9490377Z env:
+2026-10-14T00:12:59.9490580Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:12:59.9490844Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:12:59.9491056Z ##[endgroup]
+2026-10-14T00:12:59.9568474Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=14]
+2026-10-14T00:12:59.9572899Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-14T00:12:59.9591177Z ##[group]Run : enable Cargo sparse registry
+2026-10-14T00:12:59.9591511Z [36;1m: enable Cargo sparse registry[0m
+2026-10-14T00:12:59.9591886Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-14T00:12:59.9592605Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-14T00:12:59.9593706Z [36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-14T00:12:59.9594338Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-14T00:12:59.9594906Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-14T00:12:59.9595422Z [36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-14T00:12:59.9596010Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-14T00:12:59.9596574Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-14T00:12:59.9596940Z [36;1m  fi[0m
+2026-10-14T00:12:59.9597135Z [36;1mfi[0m
+2026-10-14T00:12:59.9650969Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:12:59.9651323Z env:
+2026-10-14T00:12:59.9651532Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:12:59.9651793Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:12:59.9652018Z   CARGO_TERM_COLOR: always
+2026-10-14T00:12:59.9652243Z ##[endgroup]
+2026-10-14T00:12:59.9950075Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=37]
+2026-10-14T00:12:59.9954886Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-14T00:12:59.9973862Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-14T00:12:59.9974320Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-14T00:12:59.9974894Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-14T00:12:59.9975547Z [36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-14T00:12:59.9976020Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-14T00:12:59.9976335Z [36;1mfi[0m
+2026-10-14T00:13:00.0036764Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:13:00.0037152Z env:
+2026-10-14T00:13:00.0037379Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:00.0037679Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:00.0037927Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:00.0038178Z ##[endgroup]
+2026-10-14T00:13:00.0238702Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=28]
+2026-10-14T00:13:00.0243036Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-14T00:13:00.0262448Z ##[group]Run rustc +nightly --version --verbose
+2026-10-14T00:13:00.0262830Z [36;1mrustc +nightly --version --verbose[0m
+2026-10-14T00:13:00.0324021Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:13:00.0324400Z env:
+2026-10-14T00:13:00.0324629Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:00.0324915Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:00.0325184Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:00.0325461Z ##[endgroup]
+2026-10-14T00:13:00.0505592Z rustc 1.101.0-nightly (e9bbadf68 2026-10-12)
+2026-10-14T00:13:00.0506791Z binary: rustc
+2026-10-14T00:13:00.0507503Z commit-hash: e9bbadf6824e65b3583c2dda3a0926ec76df9143
+2026-10-14T00:13:00.0508259Z commit-date: 2026-10-12
+2026-10-14T00:13:00.0508911Z host: x86_64-unknown-linux-gnu
+2026-10-14T00:13:00.0509601Z release: 1.101.0-nightly
+2026-10-14T00:13:00.0510205Z LLVM version: 23.1.3
+2026-10-14T00:13:00.0525825Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=28]
+2026-10-14T00:13:00.0620147Z Prepare all required actions
+2026-10-14T00:13:00.0620709Z Getting action download info
+2026-10-14T00:13:00.2075473Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-10-14T00:13:00.7696146Z ##[group]Run ./.github/actions/wasm-toolchain
+2026-10-14T00:13:00.7696449Z env:
+2026-10-14T00:13:00.7696665Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:00.7696931Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:00.7697157Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:00.7697384Z ##[endgroup]
+2026-10-14T00:13:00.7702987Z ##[start-action display=Add the wasm32 target;id=__self.__run]
+2026-10-14T00:13:00.7738251Z ##[group]Run rustup target add wasm32-unknown-unknown
+2026-10-14T00:13:00.7738689Z [36;1mrustup target add wasm32-unknown-unknown[0m
+2026-10-14T00:13:00.7803777Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:13:00.7804131Z env:
+2026-10-14T00:13:00.7804373Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:00.7804629Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:00.7804839Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:00.7805054Z ##[endgroup]
+2026-10-14T00:13:00.8417836Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-14T00:13:00.9216210Z info: latest update on 2026-10-13 for version 1.101.0-nightly (e9bbadf68 2026-10-12)
+2026-10-14T00:13:00.9339103Z info: component rust-std for target wasm32-unknown-unknown is up to date
+2026-10-14T00:13:00.9343657Z info: downloading 3 components
+2026-10-14T00:13:03.4826389Z info: component rust-std for target wasm32-unknown-unknown is up to date
+2026-10-14T00:13:03.4888840Z ##[end-action id=__self.__run;outcome=success;conclusion=success;duration_ms=2718]
+2026-10-14T00:13:03.4891893Z ##[start-action display=Cache the Rust build;id=__self.__Swatinem_rust-cache]
+2026-10-14T00:13:03.4953748Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-10-14T00:13:03.4954138Z with:
+2026-10-14T00:13:03.4954358Z   key: wasm-toolchain
+2026-10-14T00:13:03.4954579Z   prefix-key: v0-rust
+2026-10-14T00:13:03.4954790Z   add-job-id-key: true
+2026-10-14T00:13:03.4955027Z   add-rust-environment-hash-key: true
+2026-10-14T00:13:03.4955297Z   cache-targets: true
+2026-10-14T00:13:03.4955513Z   cache-all-crates: false
+2026-10-14T00:13:03.4955752Z   cache-workspace-crates: false
+2026-10-14T00:13:03.4955992Z   save-if: true
+2026-10-14T00:13:03.4956198Z   cache-provider: github
+2026-10-14T00:13:03.4956417Z   cache-bin: true
+2026-10-14T00:13:03.4956634Z   lookup-only: false
+2026-10-14T00:13:03.4956841Z   cmd-format: {0}
+2026-10-14T00:13:03.4957032Z env:
+2026-10-14T00:13:03.4957229Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:03.4957486Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:03.4957715Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:03.4957938Z ##[endgroup]
+2026-10-14T00:13:03.7749403Z (node:2551) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-14T00:13:03.7750461Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-14T00:13:05.5920656Z ##[group]Cache Configuration
+2026-10-14T00:13:05.5921190Z Cache Provider:
+2026-10-14T00:13:05.5921546Z     github
+2026-10-14T00:13:05.5921875Z Workspaces:
+2026-10-14T00:13:05.5922238Z     /home/runner/work/purrdf/purrdf
+2026-10-14T00:13:05.5922712Z Cache Paths:
+2026-10-14T00:13:05.5923087Z     /home/runner/.cargo/bin
+2026-10-14T00:13:05.5923792Z     /home/runner/.cargo/.crates.toml
+2026-10-14T00:13:05.5924320Z     /home/runner/.cargo/.crates2.json
+2026-10-14T00:13:05.5924828Z     /home/runner/.cargo/registry
+2026-10-14T00:13:05.5925295Z     /home/runner/.cargo/git
+2026-10-14T00:13:05.5925743Z     /home/runner/work/purrdf/purrdf/target
+2026-10-14T00:13:05.5926304Z Restore Key:
+2026-10-14T00:13:05.5926837Z     v0-rust-wasm-toolchain-wasm-package-Linux-x64-dafec859
+2026-10-14T00:13:05.5927452Z Cache Key:
+2026-10-14T00:13:05.5928509Z     v0-rust-wasm-toolchain-wasm-package-Linux-x64-dafec859-e890734d
+2026-10-14T00:13:05.5929295Z .. Prefix:
+2026-10-14T00:13:05.5929782Z   - v0-rust-wasm-toolchain-wasm-package-Linux-x64
+2026-10-14T00:13:05.5930381Z .. Environment considered:
+2026-10-14T00:13:05.5930779Z   - Rust Versions:
+2026-10-14T00:13:05.5931255Z     - 1.101.0-nightly x86_64-unknown-linux-gnu e9bbadf6824e65b3583c2dda3a0926ec76df9143
+2026-10-14T00:13:05.5931824Z     - 1.99.0 x86_64-unknown-linux-gnu b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+2026-10-14T00:13:05.5932363Z     - 1.101.0-nightly x86_64-unknown-linux-gnu e9bbadf6824e65b3583c2dda3a0926ec76df9143
+2026-10-14T00:13:05.5932792Z   - CARGO_HOME
+2026-10-14T00:13:05.5933362Z   - CARGO_INCREMENTAL
+2026-10-14T00:13:05.5933739Z   - CARGO_TERM_COLOR
+2026-10-14T00:13:05.5934132Z .. Lockfiles considered:
+2026-10-14T00:13:05.5934468Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+2026-10-14T00:13:05.5934915Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+2026-10-14T00:13:05.5935320Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+2026-10-14T00:13:05.5935688Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+2026-10-14T00:13:05.5936121Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+2026-10-14T00:13:05.5936487Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+2026-10-14T00:13:05.5936845Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+2026-10-14T00:13:05.5937214Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+2026-10-14T00:13:05.5937632Z   - /home/runner/work/purrdf/purrdf/crates/conformance-kit/Cargo.toml
+2026-10-14T00:13:05.5938050Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+2026-10-14T00:13:05.5938429Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+2026-10-14T00:13:05.5939249Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+2026-10-14T00:13:05.5939647Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+2026-10-14T00:13:05.5940064Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+2026-10-14T00:13:05.5940505Z   - /home/runner/work/purrdf/purrdf/crates/geo-kernel/Cargo.toml
+2026-10-14T00:13:05.5940891Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+2026-10-14T00:13:05.5941244Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+2026-10-14T00:13:05.5941642Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+2026-10-14T00:13:05.5942052Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+2026-10-14T00:13:05.5942444Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+2026-10-14T00:13:05.5942837Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+2026-10-14T00:13:05.5943733Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+2026-10-14T00:13:05.5944138Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+2026-10-14T00:13:05.5944534Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+2026-10-14T00:13:05.5944919Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+2026-10-14T00:13:05.5945293Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+2026-10-14T00:13:05.5945692Z   - /home/runner/work/purrdf/purrdf/crates/mime/Cargo.toml
+2026-10-14T00:13:05.5946065Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+2026-10-14T00:13:05.5946448Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+2026-10-14T00:13:05.5946839Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+2026-10-14T00:13:05.5947241Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+2026-10-14T00:13:05.5947634Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+2026-10-14T00:13:05.5948004Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+2026-10-14T00:13:05.5948380Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+2026-10-14T00:13:05.5948775Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+2026-10-14T00:13:05.5949144Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+2026-10-14T00:13:05.5949693Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+2026-10-14T00:13:05.5950114Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+2026-10-14T00:13:05.5950568Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+2026-10-14T00:13:05.5951023Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+2026-10-14T00:13:05.5951441Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+2026-10-14T00:13:05.5951840Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+2026-10-14T00:13:05.5952215Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+2026-10-14T00:13:05.5952591Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+2026-10-14T00:13:05.5952969Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+2026-10-14T00:13:05.5953537Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+2026-10-14T00:13:05.5953920Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+2026-10-14T00:13:05.5954286Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+2026-10-14T00:13:05.5954800Z ##[endgroup]
+2026-10-14T00:13:05.5954921Z 
+2026-10-14T00:13:05.5955005Z ... Restoring cache ...
+2026-10-14T00:13:05.8346606Z No cache found.
+2026-10-14T00:13:05.8484760Z ##[end-action id=__self.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=2359]
+2026-10-14T00:13:05.8487684Z ##[start-action display=Read the toolchain pins (single source of truth);id=__self.pins]
+2026-10-14T00:13:05.8506212Z ##[group]Run set -euo pipefail
+2026-10-14T00:13:05.8506519Z [36;1mset -euo pipefail[0m
+2026-10-14T00:13:05.8506848Z [36;1mwb="$(grep -oP 'wasm-bindgen = "=\K[0-9.]+' Cargo.toml)"[0m
+2026-10-14T00:13:05.8507379Z [36;1mtest -n "$wb" || { echo "could not read the wasm-bindgen pin from Cargo.toml"; exit 1; }[0m
+2026-10-14T00:13:05.8508091Z [36;1mbn="$(grep -oP '^BINARYEN_VERSION := \K[0-9]+' Makefile)"[0m
+2026-10-14T00:13:05.8508590Z [36;1mtest -n "$bn" || { echo "could not read BINARYEN_VERSION from Makefile"; exit 1; }[0m
+2026-10-14T00:13:05.8509067Z [36;1mecho "wasm_bindgen=$wb" >> "$GITHUB_OUTPUT"[0m
+2026-10-14T00:13:05.8509407Z [36;1mecho "binaryen=$bn" >> "$GITHUB_OUTPUT"[0m
+2026-10-14T00:13:05.8570005Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:13:05.8570351Z env:
+2026-10-14T00:13:05.8570554Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:05.8570811Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:05.8571032Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:05.8571260Z   CACHE_ON_FAILURE: false
+2026-10-14T00:13:05.8571474Z ##[endgroup]
+2026-10-14T00:13:05.8684235Z ##[end-action id=__self.pins;outcome=success;conclusion=success;duration_ms=19]
+2026-10-14T00:13:05.8686754Z ##[start-action display=Install wasm-bindgen-cli (prebuilt, matched to the workspace pin);id=__self.__run_2]
+2026-10-14T00:13:05.8704984Z ##[group]Run set -euo pipefail
+2026-10-14T00:13:05.8705280Z [36;1mset -euo pipefail[0m
+2026-10-14T00:13:05.8705512Z [36;1mver="0.2.125"[0m
+2026-10-14T00:13:05.8705828Z [36;1mbase="wasm-bindgen-${ver}-x86_64-unknown-linux-musl"[0m
+2026-10-14T00:13:05.8706370Z [36;1murl="https://github.com/rustwasm/wasm-bindgen/releases/download/${ver}/${base}.tar.gz"[0m
+2026-10-14T00:13:05.8706855Z [36;1mcurl -fsSL "$url" -o /tmp/wb.tar.gz[0m
+2026-10-14T00:13:05.8707195Z [36;1mcurl -fsSL "${url}.sha256sum" -o /tmp/wb.sha256[0m
+2026-10-14T00:13:05.8707633Z [36;1mecho "$(awk '{print $1}' /tmp/wb.sha256)  /tmp/wb.tar.gz" | sha256sum -c -[0m
+2026-10-14T00:13:05.8708150Z [36;1mmkdir -p /tmp/wb && tar -xzf /tmp/wb.tar.gz -C /tmp/wb --strip-components=1[0m
+2026-10-14T00:13:05.8708678Z [36;1minstall -Dm0755 /tmp/wb/wasm-bindgen "$HOME/.cargo/bin/wasm-bindgen"[0m
+2026-10-14T00:13:05.8709138Z [36;1mfound="$(wasm-bindgen --version | awk '{print $2}')"[0m
+2026-10-14T00:13:05.8709682Z [36;1mtest "$found" = "$ver" || { echo "wasm-bindgen version mismatch: got $found, expected $ver"; exit 1; }[0m
+2026-10-14T00:13:05.8710185Z [36;1mecho "wasm-bindgen $found installed"[0m
+2026-10-14T00:13:05.8710758Z [36;1m# The same CLI is the wasm32 test runner's: scripts/wasm-test-runner.sh[0m
+2026-10-14T00:13:05.8711281Z [36;1m# generates each wasm32 test binary's Node bindings with it, so[0m
+2026-10-14T00:13:05.8711754Z [36;1m# `make wasm-test` and `make wasm-pkg-test` are held to this one[0m
+2026-10-14T00:13:05.8712171Z [36;1m# wasm-bindgen pin rather than to a second one.[0m
+2026-10-14T00:13:05.8765805Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:13:05.8766152Z env:
+2026-10-14T00:13:05.8766353Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:05.8766616Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:05.8766835Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:05.8767060Z   CACHE_ON_FAILURE: false
+2026-10-14T00:13:05.8767275Z ##[endgroup]
+2026-10-14T00:13:06.6646792Z /tmp/wb.tar.gz: OK
+2026-10-14T00:13:06.8864986Z wasm-bindgen 0.2.125 installed
+2026-10-14T00:13:06.8874050Z ##[end-action id=__self.__run_2;outcome=success;conclusion=success;duration_ms=1018]
+2026-10-14T00:13:06.8877669Z ##[start-action display=Install the pinned Binaryen validator and optimizer;id=__self.__self]
+2026-10-14T00:13:06.8912935Z Prepare all required actions
+2026-10-14T00:13:06.8967249Z ##[group]Run ./.github/actions/binaryen-toolchain
+2026-10-14T00:13:06.8967801Z env:
+2026-10-14T00:13:06.8968164Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:06.8968641Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:06.8969044Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:06.8969463Z   CACHE_ON_FAILURE: false
+2026-10-14T00:13:06.8969875Z ##[endgroup]
+2026-10-14T00:13:06.8975354Z ##[start-action display=Install binaryen (prebuilt, matched to BINARYEN_VERSION) and verify SIMD;id=__self.__self.__run]
+2026-10-14T00:13:06.8996494Z ##[group]Run set -euo pipefail
+2026-10-14T00:13:06.8996988Z [36;1mset -euo pipefail[0m
+2026-10-14T00:13:06.8997309Z [36;1mver="$(grep -oP '^BINARYEN_VERSION := \K[0-9]+' Makefile)"[0m
+2026-10-14T00:13:06.8997702Z [36;1mbase="binaryen-version_${ver}-x86_64-linux"[0m
+2026-10-14T00:13:06.8998239Z [36;1murl="https://github.com/WebAssembly/binaryen/releases/download/version_${ver}/${base}.tar.gz"[0m
+2026-10-14T00:13:06.8998759Z [36;1mcurl -fsSL "$url" -o /tmp/bn.tar.gz[0m
+2026-10-14T00:13:06.8999084Z [36;1mcurl -fsSL "${url}.sha256" -o /tmp/bn.sha256[0m
+2026-10-14T00:13:06.8999506Z [36;1mecho "$(awk '{print $1}' /tmp/bn.sha256)  /tmp/bn.tar.gz" | sha256sum -c -[0m
+2026-10-14T00:13:06.9000070Z [36;1mmkdir -p /tmp/binaryen && tar -xzf /tmp/bn.tar.gz -C /tmp/binaryen --strip-components=1[0m
+2026-10-14T00:13:06.9000551Z [36;1mecho "/tmp/binaryen/bin" >> "$GITHUB_PATH"[0m
+2026-10-14T00:13:06.9000875Z [36;1mexport PATH="/tmp/binaryen/bin:$PATH"[0m
+2026-10-14T00:13:06.9001249Z [36;1mfound="$(wasm-opt --version | grep -oE '[0-9]+' | head -1)"[0m
+2026-10-14T00:13:06.9001789Z [36;1mtest "$found" = "$ver" || { echo "binaryen version mismatch: got $found, expected $ver"; exit 1; }[0m
+2026-10-14T00:13:06.9002336Z [36;1mprintf '(module)\n' | wasm-opt --enable-simd -o /dev/null - \[0m
+2026-10-14T00:13:06.9002839Z [36;1m  || { echo "FAIL: installed wasm-opt lacks --enable-simd support"; exit 1; }[0m
+2026-10-14T00:13:06.9003602Z [36;1mecho "binaryen $found installed (wasm-opt --enable-simd verified)"[0m
+2026-10-14T00:13:06.9063089Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-14T00:13:06.9063679Z env:
+2026-10-14T00:13:06.9063888Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:06.9064146Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:06.9064363Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:06.9064592Z   CACHE_ON_FAILURE: false
+2026-10-14T00:13:06.9064807Z ##[endgroup]
+2026-10-14T00:13:07.8768547Z /tmp/bn.tar.gz: OK
+2026-10-14T00:13:10.0029957Z warning: no passes specified, not doing any work
+2026-10-14T00:13:10.0033729Z binaryen 130 installed (wasm-opt --enable-simd verified)
+2026-10-14T00:13:10.0044260Z ##[end-action id=__self.__self.__run;outcome=success;conclusion=success;duration_ms=3106]
+2026-10-14T00:13:10.0049078Z ##[end-action id=__self.__self;outcome=success;conclusion=success;duration_ms=3117]
+2026-10-14T00:13:10.1274164Z ##[group]Run make wasm-pkg
+2026-10-14T00:13:10.1274520Z [36;1mmake wasm-pkg[0m
+2026-10-14T00:13:10.1338455Z shell: /usr/bin/bash -e {0}
+2026-10-14T00:13:10.1338722Z env:
+2026-10-14T00:13:10.1338932Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:13:10.1339209Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:13:10.1339444Z   CARGO_TERM_COLOR: always
+2026-10-14T00:13:10.1339686Z   CACHE_ON_FAILURE: false
+2026-10-14T00:13:10.1339916Z ##[endgroup]
+2026-10-14T00:13:11.2139323Z [1m[92m    Updating[0m crates.io index
+2026-10-14T00:13:11.8294293Z [1m[92m Downloading[0m crates ...
+2026-10-14T00:13:11.8752759Z [1m[92m  Downloaded[0m wasm-bindgen v0.2.125
+2026-10-14T00:13:11.8787039Z [1m[92m  Downloaded[0m digest v0.11.3
+2026-10-14T00:13:11.8816308Z [1m[92m  Downloaded[0m aead v0.6.1
+2026-10-14T00:13:11.8834339Z [1m[92m  Downloaded[0m crossbeam-deque v0.8.6
+2026-10-14T00:13:11.8850095Z [1m[92m  Downloaded[0m crypto-common v0.2.2
+2026-10-14T00:13:11.8861603Z [1m[92m  Downloaded[0m ctutils v0.4.2
+2026-10-14T00:13:11.8887700Z [1m[92m  Downloaded[0m aes v0.9.3
+2026-10-14T00:13:11.8937856Z [1m[92m  Downloaded[0m crossbeam-epoch v0.9.18
+2026-10-14T00:13:11.8970744Z [1m[92m  Downloaded[0m ctr v0.10.1
+2026-10-14T00:13:11.8998881Z [1m[92m  Downloaded[0m cpufeatures v0.3.0
+2026-10-14T00:13:11.9014962Z [1m[92m  Downloaded[0m crossbeam-utils v0.8.21
+2026-10-14T00:13:11.9040805Z [1m[92m  Downloaded[0m aes-gcm v0.11.1
+2026-10-14T00:13:11.9070803Z [1m[92m  Downloaded[0m aho-corasick v1.1.4
+2026-10-14T00:13:11.9121788Z [1m[92m  Downloaded[0m either v1.16.0
+2026-10-14T00:13:11.9136101Z [1m[92m  Downloaded[0m getrandom v0.3.4
+2026-10-14T00:13:11.9169869Z [1m[92m  Downloaded[0m polyval v0.7.3
+2026-10-14T00:13:11.9190962Z [1m[92m  Downloaded[0m wasm-bindgen-shared v0.2.125
+2026-10-14T00:13:11.9201434Z [1m[92m  Downloaded[0m block-buffer v0.12.1
+2026-10-14T00:13:11.9213349Z [1m[92m  Downloaded[0m ghash v0.6.0
+2026-10-14T00:13:11.9224705Z [1m[92m  Downloaded[0m typenum v1.20.1
+2026-10-14T00:13:11.9258414Z [1m[92m  Downloaded[0m universal-hash v0.6.1
+2026-10-14T00:13:11.9267773Z [1m[92m  Downloaded[0m inout v0.2.2
+2026-10-14T00:13:11.9279883Z [1m[92m  Downloaded[0m cpubits v0.1.1
+2026-10-14T00:13:11.9288637Z [1m[92m  Downloaded[0m quote v1.0.46
+2026-10-14T00:13:11.9315414Z [1m[92m  Downloaded[0m rustversion v1.0.22
+2026-10-14T00:13:11.9343054Z [1m[92m  Downloaded[0m wasm-bindgen-macro v0.2.125
+2026-10-14T00:13:11.9351879Z [1m[92m  Downloaded[0m cfg-if v1.0.4
+2026-10-14T00:13:11.9364978Z [1m[92m  Downloaded[0m fastrand v2.4.1
+2026-10-14T00:13:11.9378277Z [1m[92m  Downloaded[0m cmov v0.5.4
+2026-10-14T00:13:11.9395754Z [1m[92m  Downloaded[0m sha2 v0.11.0
+2026-10-14T00:13:11.9432172Z [1m[92m  Downloaded[0m twox-hash v2.1.2
+2026-10-14T00:13:11.9454851Z [1m[92m  Downloaded[0m cipher v0.5.2
+2026-10-14T00:13:11.9478941Z [1m[92m  Downloaded[0m once_cell v1.21.4
+2026-10-14T00:13:11.9503749Z [1m[92m  Downloaded[0m visual-hashing v1.0.0
+2026-10-14T00:13:11.9525854Z [1m[92m  Downloaded[0m hybrid-array v0.4.15
+2026-10-14T00:13:11.9547450Z [1m[92m  Downloaded[0m proc-macro2 v1.0.106
+2026-10-14T00:13:11.9576558Z [1m[92m  Downloaded[0m const-oid v0.10.2
+2026-10-14T00:13:11.9599442Z [1m[92m  Downloaded[0m unicode-ident v1.0.24
+2026-10-14T00:13:11.9626531Z [1m[92m  Downloaded[0m rayon-core v1.13.0
+2026-10-14T00:13:11.9662842Z [1m[92m  Downloaded[0m wasm-bindgen-macro-support v0.2.125
+2026-10-14T00:13:11.9682956Z [1m[92m  Downloaded[0m bumpalo v3.20.3
+2026-10-14T00:13:11.9708738Z [1m[92m  Downloaded[0m memchr v2.8.2
+2026-10-14T00:13:11.9763482Z [1m[92m  Downloaded[0m regex v1.12.4
+2026-10-14T00:13:11.9816394Z [1m[92m  Downloaded[0m rayon v1.12.0
+2026-10-14T00:13:11.9909647Z [1m[92m  Downloaded[0m hashbrown v0.17.1
+2026-10-14T00:13:11.9961628Z [1m[92m  Downloaded[0m syn v2.0.118
+2026-10-14T00:13:12.0066484Z [1m[92m  Downloaded[0m regex-syntax v0.8.11
+2026-10-14T00:13:12.0136220Z [1m[92m  Downloaded[0m regex-automata v0.4.14
+2026-10-14T00:13:12.0273635Z [1m[92m  Downloaded[0m libc v0.2.186
+2026-10-14T00:13:12.0671313Z [1m[92m  Downloaded[0m structured-zstd v0.0.49
+2026-10-14T00:13:12.1366736Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-10-14T00:13:12.1368027Z [1m[92m   Compiling[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+2026-10-14T00:13:12.1368868Z [1m[92m   Compiling[0m const-oid v0.10.2
+2026-10-14T00:13:12.1378466Z [1m[92m   Compiling[0m cfg-if v1.0.4
+2026-10-14T00:13:12.1669565Z [1m[92m   Compiling[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+2026-10-14T00:13:12.2494800Z [1m[92m   Compiling[0m regex-syntax v0.8.11
+2026-10-14T00:13:12.3084939Z [1m[92m   Compiling[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+2026-10-14T00:13:12.6284588Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-10-14T00:13:13.3815059Z [1m[92m   Compiling[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+2026-10-14T00:13:13.6085267Z [1m[92m   Compiling[0m hybrid-array v0.4.15
+2026-10-14T00:13:14.2690074Z [1m[92m   Compiling[0m regex-automata v0.4.14
+2026-10-14T00:13:14.3094892Z [1m[92m   Compiling[0m crypto-common v0.2.2
+2026-10-14T00:13:15.3086903Z [1m[92m   Compiling[0m block-buffer v0.12.1
+2026-10-14T00:13:15.4154944Z [1m[92m   Compiling[0m digest v0.11.3
+2026-10-14T00:13:15.5324569Z [1m[92m   Compiling[0m sha2 v0.11.0
+2026-10-14T00:13:15.8404984Z [1m[92m   Compiling[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+2026-10-14T00:13:16.5604016Z [1m[92m   Compiling[0m crossbeam-utils v0.8.21
+2026-10-14T00:13:16.6900940Z [1m[92m   Compiling[0m wasm-bindgen-shared v0.2.125
+2026-10-14T00:13:16.7995117Z [1m[92m   Compiling[0m regex v1.12.4
+2026-10-14T00:13:17.4214766Z [1m[92m   Compiling[0m proc-macro2 v1.0.106
+2026-10-14T00:13:17.4464664Z [1m[92m   Compiling[0m unicode-ident v1.0.24
+2026-10-14T00:13:17.5080702Z [1m[92m   Compiling[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+2026-10-14T00:13:17.5796519Z [1m[92m   Compiling[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+2026-10-14T00:13:20.2484956Z [1m[92m   Compiling[0m crossbeam-epoch v0.9.18
+2026-10-14T00:13:20.5275181Z [1m[92m   Compiling[0m quote v1.0.46
+2026-10-14T00:13:20.6076136Z [1m[92m   Compiling[0m rayon-core v1.13.0
+2026-10-14T00:13:20.6515455Z [1m[92m   Compiling[0m crossbeam-deque v0.8.6
+2026-10-14T00:13:20.8044621Z [1m[92m   Compiling[0m rustversion v1.0.22
+2026-10-14T00:13:21.4475239Z [1m[92m   Compiling[0m either v1.16.0
+2026-10-14T00:13:21.6105364Z [1m[92m   Compiling[0m rayon v1.12.0
+2026-10-14T00:13:22.0325056Z [1m[92m   Compiling[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+2026-10-14T00:13:24.4894584Z [1m[92m   Compiling[0m syn v2.0.118
+2026-10-14T00:13:25.8664735Z [1m[92m   Compiling[0m bumpalo v3.20.3
+2026-10-14T00:13:26.0734719Z [1m[92m   Compiling[0m wasm-bindgen v0.2.125
+2026-10-14T00:13:27.0004703Z [1m[92m   Compiling[0m inout v0.2.2
+2026-10-14T00:13:27.0774769Z [1m[92m   Compiling[0m cmov v0.5.4
+2026-10-14T00:13:27.2784716Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-10-14T00:13:27.3294545Z [1m[92m   Compiling[0m ctutils v0.4.2
+2026-10-14T00:13:27.5255230Z [1m[92m   Compiling[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+2026-10-14T00:13:29.5125759Z [1m[92m   Compiling[0m wasm-bindgen-macro-support v0.2.125
+2026-10-14T00:13:31.2775609Z [1m[92m   Compiling[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+2026-10-14T00:13:31.3914736Z [1m[92m   Compiling[0m cpubits v0.1.1
+2026-10-14T00:13:31.4205895Z [1m[92m   Compiling[0m universal-hash v0.6.1
+2026-10-14T00:13:31.4734639Z [1m[92m   Compiling[0m cipher v0.5.2
+2026-10-14T00:13:31.7224633Z [1m[92m   Compiling[0m polyval v0.7.3
+2026-10-14T00:13:31.8173762Z [1m[92m   Compiling[0m fastrand v2.4.1
+2026-10-14T00:13:32.0005163Z [1m[92m   Compiling[0m twox-hash v2.1.2
+2026-10-14T00:13:32.0674931Z [1m[92m   Compiling[0m structured-zstd v0.0.49
+2026-10-14T00:13:33.4544976Z [1m[92m   Compiling[0m wasm-bindgen-macro v0.2.125
+2026-10-14T00:13:35.3378186Z [1m[92m   Compiling[0m ghash v0.6.0
+2026-10-14T00:13:35.3874968Z [1m[92m   Compiling[0m aes v0.9.3
+2026-10-14T00:13:35.6824571Z [1m[92m   Compiling[0m ctr v0.10.1
+2026-10-14T00:13:35.8054581Z [1m[92m   Compiling[0m aead v0.6.1
+2026-10-14T00:13:35.8834799Z [1m[92m   Compiling[0m aes-gcm v0.11.1
+2026-10-14T00:13:35.9675143Z [1m[92m   Compiling[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+2026-10-14T00:13:36.7264840Z [1m[92m   Compiling[0m visual-hashing v1.0.0
+2026-10-14T00:13:36.9305302Z [1m[92m   Compiling[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+2026-10-14T00:13:44.6865419Z [1m[92m   Compiling[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+2026-10-14T00:13:47.3282529Z [1m[92m   Compiling[0m purrdf-geo-kernel v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo-kernel)
+2026-10-14T00:13:47.4947485Z [1m[92m   Compiling[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+2026-10-14T00:13:59.0855983Z [1m[92m   Compiling[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+2026-10-14T00:14:05.2194666Z [1m[92m   Compiling[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+2026-10-14T00:14:07.6867386Z [1m[92m   Compiling[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+2026-10-14T00:14:27.7004898Z [1m[92m   Compiling[0m purrdf-mime v3.0.1 (/home/runner/work/purrdf/purrdf/crates/mime)
+2026-10-14T00:14:28.9840391Z [1m[92m   Compiling[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+2026-10-14T00:14:29.9365470Z [1m[92m   Compiling[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+2026-10-14T00:14:35.3545451Z [1m[92m   Compiling[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+2026-10-14T00:14:48.9055063Z [1m[92m   Compiling[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+2026-10-14T00:14:55.3723807Z [1m[92m   Compiling[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+2026-10-14T00:15:47.2455734Z [1m[92m   Compiling[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+2026-10-14T00:15:57.4685097Z [1m[92m   Compiling[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+2026-10-14T00:16:06.8465226Z [1m[92m   Compiling[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+2026-10-14T00:16:09.4624858Z [1m[92m   Compiling[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+2026-10-14T00:16:09.4925101Z [1m[92m   Compiling[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+2026-10-14T00:16:09.8813189Z [1m[92m   Compiling[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+2026-10-14T00:16:12.9315065Z [1m[92m   Compiling[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+2026-10-14T00:17:08.2277199Z [1m[92m   Compiling[0m purrdf-wasm v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-wasm)
+2026-10-14T00:21:23.5980636Z [1m[92m    Finished[0m `release` profile [optimized] target(s) in 8m 12s
+2026-10-14T00:21:31.5650166Z cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+2026-10-14T00:21:31.5774021Z wasm-opt -Oz \
+2026-10-14T00:21:31.5774420Z 	--enable-bulk-memory --enable-nontrapping-float-to-int \
+2026-10-14T00:21:31.5774893Z 	--enable-sign-ext --enable-mutable-globals --enable-simd \
+2026-10-14T00:21:31.5775412Z 	-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+2026-10-14T00:23:10.4874781Z cargo run -p wasm-link --release --locked -- crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+2026-10-14T00:23:10.5721485Z [1m[92m Downloading[0m crates ...
+2026-10-14T00:23:10.6017752Z [1m[92m  Downloaded[0m leb128fmt v0.1.0
+2026-10-14T00:23:10.6052239Z [1m[92m  Downloaded[0m wasm-encoder v0.259.0
+2026-10-14T00:23:10.6191115Z [1m[92m   Compiling[0m leb128fmt v0.1.0
+2026-10-14T00:23:10.6782093Z [1m[92m   Compiling[0m wasm-encoder v0.259.0
+2026-10-14T00:23:11.2325214Z [1m[92m   Compiling[0m wasm-link v3.0.1 (/home/runner/work/purrdf/purrdf/crates/wasm-link)
+2026-10-14T00:23:16.9472091Z [1m[92m    Finished[0m `release` profile [optimized] target(s) in 6.43s
+2026-10-14T00:23:16.9485453Z [1m[92m     Running[0m `target/release/wasm-link crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm`
+2026-10-14T00:23:25.6768643Z OK: wasm-link linked crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm: stack pointer is global 0 (exported as purrdf_stack_pointer); purrdf_jspi_suspend is function 8, called only from $suspend (function 17665), which 1 call site(s) reach; 52 other import(s) behind trampolines with 418 reference(s) routed; purrdf_jspi_run wrapped by function 17710 (region top appended as its last parameter); 411 exported function(s) behind the poison gate (366 trapping, 45 inert release function(s); globals idle=3, poisoned=4, active=5, parked=6, outbound=7); validated under ["mutable-globals", "nontrapping-float-to-int", "sign-ext", "bulk-memory", "simd"]
+2026-10-14T00:23:33.0228151Z OK: verified 425985 SIMD opcode(s) present in the optimized wasm artifact
+2026-10-14T00:23:33.0236457Z OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)
+2026-10-14T00:23:33.0306601Z ##[group]Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+2026-10-14T00:23:33.0307015Z with:
+2026-10-14T00:23:33.0307212Z   node-version: 24
+2026-10-14T00:23:33.0307425Z   check-latest: false
+2026-10-14T00:23:33.0310324Z   token: ***
+2026-10-14T00:23:33.0310759Z   package-manager-cache: true
+2026-10-14T00:23:33.0311041Z env:
+2026-10-14T00:23:33.0311252Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:23:33.0311504Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:23:33.0311724Z   CARGO_TERM_COLOR: always
+2026-10-14T00:23:33.0311953Z   CACHE_ON_FAILURE: false
+2026-10-14T00:23:33.0312172Z ##[endgroup]
+2026-10-14T00:23:33.2067301Z Found in cache @ /opt/hostedtoolcache/node/24.21.0/x64
+2026-10-14T00:23:33.2071559Z ##[group]Environment details
+2026-10-14T00:23:33.6596063Z node: v24.21.0
+2026-10-14T00:23:33.6596478Z npm: 11.19.0
+2026-10-14T00:23:33.6596810Z yarn: 1.22.22
+2026-10-14T00:23:33.6597504Z ##[endgroup]
+2026-10-14T00:23:33.6724889Z ##[group]Run npm ci --ignore-scripts --no-audit --no-fund
+2026-10-14T00:23:33.6725337Z [36;1mnpm ci --ignore-scripts --no-audit --no-fund[0m
+2026-10-14T00:23:33.6725666Z [36;1mnpm run check[0m
+2026-10-14T00:23:33.6822838Z shell: /usr/bin/bash -e {0}
+2026-10-14T00:23:33.6823142Z env:
+2026-10-14T00:23:33.6823562Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:23:33.6823894Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:23:33.6824159Z   CARGO_TERM_COLOR: always
+2026-10-14T00:23:33.6824436Z   CACHE_ON_FAILURE: false
+2026-10-14T00:23:33.6824706Z ##[endgroup]
+2026-10-14T00:23:34.9651329Z 
+2026-10-14T00:23:34.9659075Z added 3 packages in 1s
+2026-10-14T00:23:35.1141260Z 
+2026-10-14T00:23:35.1141992Z > @blackcatinformatics/purrdf@3.0.1 check
+2026-10-14T00:23:35.1142631Z > npm run typecheck && npm test && npm run smoke:pack
+2026-10-14T00:23:35.1142944Z 
+2026-10-14T00:23:35.2204210Z 
+2026-10-14T00:23:35.2205062Z > @blackcatinformatics/purrdf@3.0.1 typecheck
+2026-10-14T00:23:35.2205744Z > tsc -p tsconfig.types.json
+2026-10-14T00:23:35.2205975Z 
+2026-10-14T00:23:35.6633567Z 
+2026-10-14T00:23:35.6634990Z > @blackcatinformatics/purrdf@3.0.1 test
+2026-10-14T00:23:35.6635739Z > node --test tests/*.test.mjs
+2026-10-14T00:23:35.6636062Z 
+2026-10-14T00:23:36.2365324Z ✔ queryGoverned computes MEDIAN through aggregateNamespace (103.337813ms)
+2026-10-14T00:23:36.2425252Z ✔ omitting aggregateNamespace leaves the ten names unregistered, with the existing typed error (1.688836ms)
+2026-10-14T00:23:36.2485200Z ✔ updateGoverned reaches MEDIAN from a DELETE/INSERT WHERE nested SELECT (20.556749ms)
+2026-10-14T00:23:36.2524854Z ✔ an ungoverned entry refuses aggregateNamespace rather than ignoring it (0.417851ms)
+2026-10-14T00:23:36.2535095Z ✔ queryEntailmentGoverned computes MEDIAN through aggregateNamespace over an entailed closure (79.793116ms)
+2026-10-14T00:23:36.2565497Z ✔ omitting aggregateNamespace leaves queryEntailmentGoverned's statistical set unregistered (1.153817ms)
+2026-10-14T00:23:36.6865315Z ✔ three interleaved async queries resume out of order and all answer correctly (225.842859ms)
+2026-10-14T00:23:36.6955221Z ✔ a deep sync query during a suspension is answered (308.42526ms)
+2026-10-14T00:23:37.7539118Z ✔ jobs suspended inside a property path's walk scope, interleaved with each other and with synchronous paths, all answer their synchronous baselines (1142.977485ms)
+2026-10-14T00:23:40.0912407Z ✔ an async job started from inside a sync callback runs and returns (20.47123ms)
+2026-10-14T00:36:11.2168656Z ✔ a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included (750374.920012ms)
+2026-10-14T00:36:11.2171595Z ✔ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (1925.782831ms)
+2026-10-14T00:36:11.2173565Z ℹ admitted nesting endpoints: {"synchronous":282,"job":282}
+2026-10-14T00:36:11.2177280Z ✔ a FILTER nested 10 000 parentheses deep answers what one pair answers, on both lanes (14.790969ms)
+2026-10-14T00:36:11.2179800Z ✔ nesting answers on the asynchronous lane as deep as the job's stacks hold it, and is the synchronous lane's refusal past that (589.072803ms)
+2026-10-14T00:36:11.2207591Z ✔ a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing (533.470113ms)
+2026-10-14T00:36:11.2315087Z ✔ beginAsync beyond maxConcurrentJobs is refused (21.839274ms)
+2026-10-14T00:36:11.5540982Z ✔ every sync-suite query answers identically through queryAsync, eight at a time, yielding at every poll (4818.117679ms)
+2026-10-14T00:36:11.5542865Z ✔ every corpus query's asynchronous job stays inside the top quarter of its stack region (51.791238ms)
+2026-10-14T00:36:11.5544663Z ✔ explainQueryAsync on a SERVICE-free query is byte-identical to explainQuery (114.437495ms)
+2026-10-14T00:36:11.5545896Z ✔ explainQueryAsync explains a SERVICE join over the host's answer; the synchronous twin refuses it (63.978332ms)
+2026-10-14T00:36:11.5547638Z ✔ SERVICE SILENT under explainQueryAsync: a failing resolver is the join identity, as on queryAsync (13.693513ms)
+2026-10-14T00:36:11.5548827Z ✔ a CPU-heavy explainQueryAsync yields to the event loop; the synchronous twin does not (4567.788945ms)
+2026-10-14T00:36:11.5549778Z ✔ an AbortSignal aborted mid-explain rejects with the abort reason (63.55511ms)
+2026-10-14T00:36:11.5550682Z ✔ a deadline stops explainQueryAsync as it stops the other ungoverned twins (65.567157ms)
+2026-10-14T00:36:11.5551687Z ✔ a parse error rejects with the synchronous twin's words (7.302866ms)
+2026-10-14T00:36:11.5553833Z ✔ async SHACL twins return exactly their synchronous twins' results on core and SHACL-SPARQL fixtures, conforming and not (772.960255ms)
+2026-10-14T00:36:11.5555675Z ✔ the change, entailment and product twins return their synchronous twins' values (331.900425ms)
+2026-10-14T00:36:11.5557364Z ✔ a refused product rejects with the synchronous twin's ShaclProductRefusal, dimension and all (14.977347ms)
+2026-10-14T00:36:11.5559465Z ✔ a SERVICE in a SHACL-SPARQL target is refused on both lanes and no host handler is asked; the local target answers (32.606218ms)
+2026-10-14T00:36:11.5560937Z ✔ the shapes-graph arguments reach the job exactly as they reach the synchronous twin (54.402668ms)
+2026-10-14T00:36:11.5562363Z ✔ a heavy validation with no SPARQL in it yields to the event loop; the synchronous twin does not (1628.641965ms)
+2026-10-14T00:36:11.5564404Z ✔ a signal stops a SHACL validation: its reason, a timeout, and an already-aborted signal (1645.946734ms)
+2026-10-14T00:36:11.5566458Z ✔ concurrent SHACL validations suspended at every poll, interleaved with synchronous validations, all answer their synchronous baselines (3989.232346ms)
+2026-10-14T00:36:11.5568525Z ✔ two concurrent jobs issuing the same request without deadlines share one host call (205.54924ms)
+2026-10-14T00:36:11.5569862Z ✔ a job stopped while it waits abandons only itself; the host's signal waits for the other job (8.523106ms)
+2026-10-14T00:36:11.5570702Z ✔ the host's signal aborts once every job waiting on the call has been stopped (2.882537ms)
+2026-10-14T00:36:11.5571533Z ✔ the same request under SERVICE and SERVICE SILENT is two host calls, each told its own silent (5.03602ms)
+2026-10-14T00:36:11.5572442Z ✔ a different cell ceiling is its own host call; the same ceiling is shared (13.644547ms)
+2026-10-14T00:36:11.5574278Z ✔ a job whose deadline is later than the in-flight call's is its own call; an earlier one shares it (11.218663ms)
+2026-10-14T00:36:11.5575709Z ✔ a job without a deadline never joins a call bounded by one; a job with one joins an unbounded call (11.337527ms)
+2026-10-14T00:36:11.5576638Z ✔ a short-deadline job's timed-out call is never a SILENT failure for a job with a longer deadline (7.835712ms)
+2026-10-14T00:36:11.5577460Z ✔ one job asks the host once for a request it repeats; sequential jobs each ask (16.878489ms)
+2026-10-14T00:36:11.5578714Z ✔ jobs sharing a call each abandon it at their request's timeout, and the call aborts when the last leaves (36.157526ms)
+2026-10-14T00:36:11.5579947Z ✔ host-effect deadlines settle in otherwise idle Node, with every timer released (3445.110488ms)
+2026-10-14T00:36:11.5580827Z ✔ a 20,000-level SERVICE term can be walked, cloned, compared and dropped without poisoning (890.995419ms)
+2026-10-14T00:36:11.5581512Z ✔ queryAsync joins remote bindings with local rows (103.086239ms)
+2026-10-14T00:36:11.5583031Z ✔ a delayed promise is awaited, not raced (52.937689ms)
+2026-10-14T00:36:11.5584259Z ✔ a transport failure is a thrown error without SILENT (5.270218ms)
+2026-10-14T00:36:11.5585388Z ✔ a transport failure is the join identity under SILENT (2.183631ms)
+2026-10-14T00:36:11.5586857Z ✔ a resolver that throws fails its invocation: the join identity under SILENT, recorded as a fault; native-sparql-host-fault without (9.520407ms)
+2026-10-14T00:36:11.5588023Z ✔ a host denial with no catalog installed fails the query, is the identity under SILENT, and never invents a catalog cause (4.01894ms)
+2026-10-14T00:36:11.5589811Z ✔ a catalog denies an endpoint it does not list, before any host call (7.239749ms)
+2026-10-14T00:36:11.5591185Z ✔ SERVICE SILENT with a resolver still forwards the request (1.145972ms)
+2026-10-14T00:36:11.5592385Z ✔ a variable endpoint bound by VALUES resolves per row (17.611048ms)
+2026-10-14T00:36:11.5593842Z ✔ an endpoint variable nothing binds is refused, under SILENT too (10.961113ms)
+2026-10-14T00:36:11.5595521Z ✔ SERVICE SILENT with no source, or with an endpoint that is not an IRI, is the join identity on both lanes (16.503078ms)
+2026-10-14T00:36:11.5597156Z ✔ a group join binding the endpoint on its right answers as the left-bound form (11.390514ms)
+2026-10-14T00:36:11.5598084Z ✔ a variable endpoint some solution cannot name refuses the query before any request, in either row order (7.077896ms)
+2026-10-14T00:36:11.5599534Z ✔ a variable endpoint bound by an OPTIONAL, group join or MINUS left side is asked once per endpoint (7.023604ms)
+2026-10-14T00:36:11.5601169Z ✔ SILENT swallows one variable endpoint's failure for that endpoint only (7.109435ms)
+2026-10-14T00:36:11.5602535Z ✔ a nested SERVICE is forwarded inside the outer request text (1.675481ms)
+2026-10-14T00:36:11.5604094Z ✔ queryAsync without resolveService fails like the sync path (1.925357ms)
+2026-10-14T00:36:11.5605219Z ✔ synchronous query methods are unchanged (23.107779ms)
+2026-10-14T00:36:11.5606109Z ✔ every async twin evaluates (272.511279ms)
+2026-10-14T00:36:11.5607884Z ✔ a yielding job lets a setTimeout(…, 0) timer another party scheduled fire between its turns; a job that never yields does not (362.636199ms)
+2026-10-14T00:36:11.5609283Z ✔ AbortSignal cancels a running query (62.381362ms)
+2026-10-14T00:36:11.5610339Z ✔ a resolver that ignores ctx.signal still cancels promptly (522.893095ms)
+2026-10-14T00:36:11.5611442Z ✔ deadlineMs spans the awaited SERVICE time (123.919638ms)
+2026-10-14T00:36:11.5612458Z ✔ maxRemoteRequests governs async SERVICE dispatch (1.901393ms)
+2026-10-14T00:36:11.5613845Z ✔ maxIntermediateCells bounds the decoded remote answer (15.150044ms)
+2026-10-14T00:36:11.5615227Z ✔ an unconfigured cell ceiling never reaches the resolver as the metering sentinel (2.345303ms)
+2026-10-14T00:36:11.5616345Z ✔ LOAD resolves through resolveLoad (13.963383ms)
+2026-10-14T00:36:11.5617251Z ✔ LOAD without resolveLoad fails unless SILENT (1.804091ms)
+2026-10-14T00:36:11.5618955Z ✔ LOAD: a host policy denial reads distinctly from a catalog capability denial, and LOAD SILENT loads nothing over either (2.35429ms)
+2026-10-14T00:36:11.5620917Z ✔ LOAD redirect: every hop is resolved and authorized in Rust, with its own profile's headers (3.394924ms)
+2026-10-14T00:36:11.5622298Z ✔ a LOAD parse error is the LOAD's decode failure (1.447725ms)
+2026-10-14T00:36:11.5623622Z ✔ INSERT WHERE federates through resolveService (6.671517ms)
+2026-10-14T00:36:11.5624789Z ✔ dataset mutation during an async update is refused (3.781737ms)
+2026-10-14T00:36:11.5625890Z ✔ commitUpdate refuses a different dataset (1.28463ms)
+2026-10-14T00:36:11.5627081Z ✔ queries see a snapshot; mutation during a query is allowed (1.634144ms)
+2026-10-14T00:36:11.5628262Z ✔ refusal pair: an update begun while another update of the dataset is in flight is refused; a sequential one applies (3.755759ms)
+2026-10-14T00:36:11.5628966Z ✔ hasAsyncQueries reports JSPI (0.189233ms)
+2026-10-14T00:36:11.5629402Z ✔ async methods hard-fail without JSPI (281.162325ms)
+2026-10-14T00:36:11.5630316Z ✔ governor vectors: service transport cases certify identically on the async lane (5.89722ms)
+2026-10-14T00:36:11.5631073Z ✔ refusal pair: yieldEveryPolls -1 is refused, 0 yields at every poll (13.596689ms)
+2026-10-14T00:36:11.5632292Z ✔ a job's stack region is the size of the module's own shadow stack (1.205673ms)
+2026-10-14T00:36:11.5633696Z ✔ refusal pair: a failure kind "nope" is a host fault the request reports, "denied" is a denial; SILENT answers both with the join identity (4.246736ms)
+2026-10-14T00:36:11.5634665Z ✔ refusal pair: mediaType text/x-unknown fails the LOAD, text/turtle loads (0.972738ms)
+2026-10-14T00:36:11.5635541Z ✔ refusal pair: the cancel option is refused, signal is accepted (1.07024ms)
+2026-10-14T00:36:11.5636427Z ✔ refusal pair: a localServices value that is not a Dataset is refused; a Dataset serves, and stays the caller's (2.816703ms)
+2026-10-14T00:36:11.5637433Z ✔ refusal pair: a catalog that is not a ServiceCatalog is refused; a ServiceCatalog governs, and stays usable (3.435901ms)
+2026-10-14T00:36:11.5638416Z ✔ refusal pair: a profile timeout no JavaScript timer can honour is refused; the longest one is accepted (0.239748ms)
+2026-10-14T00:36:11.5639290Z ✔ a job's memo keeps rows only: a repeated request whose first answer failed asks again (3.910538ms)
+2026-10-14T00:36:11.5640104Z ✔ a fresh engine keeps scope: two same-label blanks in different scopes stay distinct (72.608504ms)
+2026-10-14T00:36:11.5640847Z ✔ blankScope = "merge" drops the scope: the same blanks become one node (1.023813ms)
+2026-10-14T00:36:11.5641445Z ✔ the mode is per engine, and can be set back to keep (2.91124ms)
+2026-10-14T00:36:11.5642115Z ✔ a value that is not a mode throws with the options code and leaves the mode alone (1.084597ms)
+2026-10-14T00:36:11.5642772Z ✔ an unscoped blank and an IRI are the same under both modes (2.150097ms)
+2026-10-14T00:36:11.5643510Z ✔ the dataset's own quads are not affected by the option (1.349602ms)
+2026-10-14T00:36:11.5644114Z ✔ an asynchronous job takes the mode in force when it begins (12.771076ms)
+2026-10-14T00:36:11.5644853Z ✔ typed scoped blanks retain identity through insertion, serialization and parsing (12.048114ms)
+2026-10-14T00:36:11.5645607Z ✔ SparqlProtocolRequest reads an operation and its dataset parameters (24.227113ms)
+2026-10-14T00:36:11.5646412Z ✔ SparqlProtocolRequest reads an update's USING and USING NAMED parameters in request order (3.021597ms)
+2026-10-14T00:36:11.5647224Z ✔ refusal pair: a protocol refusal is a typed Error with name, status and parameter (0.728983ms)
+2026-10-14T00:36:11.5648020Z ✔ refusal pair: effectiveText refuses a malformed operation, not a well-formed one (0.588068ms)
+2026-10-14T00:36:11.5648803Z ✔ the negotiated twin serializes by Accept and names the formats a dataset needs (72.750759ms)
+2026-10-14T00:36:11.5649514Z ✔ refusal pair: accept is refused by every twin but the negotiated one (5.329369ms)
+2026-10-14T00:36:11.5650303Z ✔ refusal pair: the service resolver refuses an option it would ignore; its own options build (2.497127ms)
+2026-10-14T00:36:11.5650982Z ✔ refusal pair: cache options are all-or-nothing (0.607495ms)
+2026-10-14T00:36:11.5651491Z ✔ refusal pair: a bindings key must be an origin (0.39045ms)
+2026-10-14T00:36:11.5652123Z ✔ a request to a bound origin goes through its binding; any other through fetch (5.581259ms)
+2026-10-14T00:36:11.5652843Z ✔ headers are sent protocol first, then the profile's, then the credential (0.514692ms)
+2026-10-14T00:36:11.5653724Z ✔ the effect's headers are the catalog profile's, then its credential, end to end (25.654761ms)
+2026-10-14T00:36:11.5655074Z ✔ a request is abandoned when the query abandons it: at its profile's timeout, a transport failure SILENT absorbs; the prompt neighbour answers (50.285969ms)
+2026-10-14T00:36:11.5656063Z ✔ a non-2xx answer is a transport failure and its body is cancelled, unread (1.182941ms)
+2026-10-14T00:36:11.5656752Z ✔ a transport failure fails a query, and SERVICE SILENT swallows it (2.683675ms)
+2026-10-14T00:36:11.5657688Z ✔ SERVICE redirect: a 302 to an unlisted origin is a transport failure, never fetched; SILENT matches the endpoint being down (3.112657ms)
+2026-10-14T00:36:11.5658936Z ✔ SERVICE redirect: a 307 is never followed — no body or header ever reaches the Location (0.392985ms)
+2026-10-14T00:36:11.5659884Z ✔ SERVICE redirect: an opaque-redirect response is also a transport failure, its Location withheld (0.317714ms)
+2026-10-14T00:36:11.5660835Z ✔ the cache answers a repeated cacheable request, and a different request is a miss (9.914267ms)
+2026-10-14T00:36:11.5661916Z ✔ refusal pair: a request the job marks not cacheable never touches the cache; a cacheable one is cached (2.453265ms)
+2026-10-14T00:36:11.5662844Z ✔ the job marks a request carrying a credential not cacheable, end to end (3.336956ms)
+2026-10-14T00:36:11.5663998Z ✔ refusal pair: a cache whose match or put rejects fails the request as a transport failure; a healthy cache answers (13.271781ms)
+2026-10-14T00:36:11.5665035Z ✔ a failed cache call fails a plain SERVICE and is the join identity under SERVICE SILENT, recorded (16.648421ms)
+2026-10-14T00:36:11.5665967Z ✔ refusal pair: the load resolver refuses an option it would ignore; its own options build (0.60989ms)
+2026-10-14T00:36:11.5666829Z ✔ one LOAD hop sends the job's Accept, User-Agent and headers, and answers the document (0.696932ms)
+2026-10-14T00:36:11.5667903Z ✔ refusal pair: a LOAD the catalog does not authorize is denied before any fetch; an authorized one is fetched with its profile (47.689968ms)
+2026-10-14T00:36:11.5668890Z ✔ a LOAD response without a Content-Type is a transport failure; with one it loads (14.648223ms)
+2026-10-14T00:36:11.5669794Z ✔ a redirect is handed back to the job, never followed; an opaque one withholds its Location (0.559586ms)
+2026-10-14T00:36:11.5670742Z ✔ LOAD redirect: a redirect to an unlisted origin is denied, and the unlisted origin is never fetched (5.871192ms)
+2026-10-14T00:36:11.5671851Z ✔ LOAD redirect: the valid neighbour — a redirect to a listed origin loads, and a relative IRI resolves against the final URL (7.242655ms)
+2026-10-14T00:36:11.5672974Z ✔ LOAD redirect: a redirect loop fails as typed transport after exactly five hops; four hops load (10.078811ms)
+2026-10-14T00:36:11.5674140Z ✔ LOAD redirect: the redirected origin's own profile headers are sent, never the source's (1.004087ms)
+2026-10-14T00:36:11.5674951Z ✔ refusal pair: handleSparqlRequest requires governors with deadlineMs (5.144706ms)
+2026-10-14T00:36:11.5675512Z ✔ every request form answers (8.628014ms)
+2026-10-14T00:36:11.5676197Z ✔ each Accept is answered in its format, byte for byte what queryRaw writes (30.406731ms)
+2026-10-14T00:36:11.5677613Z ✔ refusal pair: 406 before evaluation, and after it for named graphs (6.779519ms)
+2026-10-14T00:36:11.5678876Z ✔ refusal pair: protocol refusals are 400/405/415 problems; the valid neighbour is 200 (4.009953ms)
+2026-10-14T00:36:11.5679791Z ✔ dataset parameters are honoured, and without them the query's own dataset answers (24.927291ms)
+2026-10-14T00:36:11.5680755Z ✔ the operation text is parsed exactly once on the request path: effectiveText runs only to splice dataset parameters (5.633478ms)
+2026-10-14T00:36:11.5681771Z ✔ refusal pair: maxRequestBytes must be a positive integer when given; without it, 1 MiB is the default (1.491518ms)
+2026-10-14T00:36:11.5683097Z ✔ refusal pair: a body over maxRequestBytes is a 413, by Content-Length, by streaming past it with none, or with a lying smaller one; the valid neighbour answers at exactly the limit (4.651553ms)
+2026-10-14T00:36:11.5684555Z ✔ a deterministic ceiling is a 422 carrying its dimension; the unbounded neighbour is 200 (4.172366ms)
+2026-10-14T00:36:11.5685338Z ✔ a deadline or a cancelled request is a 503 without Retry-After, not a 422 (35.83237ms)
+2026-10-14T00:36:11.5686302Z ✔ refusal pair: a SERVICE no resolver reaches is a 500 with its engine code and a correlation id; with a resolver it answers 200 (4.549221ms)
+2026-10-14T00:36:11.5687431Z ✔ refusal pair: an unbound SERVICE ?e is a 400 with the engine's refusal; a host fault stays a sanitized 500 (9.139559ms)
+2026-10-14T00:36:11.5689033Z ✔ refusal pair: a resolveService that throws is a 500 with a correlation id, never the exception's own words; a healthy resolver is the 200 neighbour and the hook is never called for it (3.976961ms)
+2026-10-14T00:36:11.5691015Z ✔ SERVICE SILENT over a resolveService bug is the join identity, a 200 whose body never carries the bug's words, and the bug still reaches onInternalError under a correlation id; the neighbour is a genuine typed transport failure, which never touches the hook (4.269779ms)
+2026-10-14T00:36:11.5692691Z ✔ the default onInternalError hook writes one console.error line carrying the original error and the correlation id (2.20502ms)
+2026-10-14T00:36:11.5694313Z ✔ an onInternalError that throws synchronously still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error (11.697119ms)
+2026-10-14T00:36:11.5695731Z ✔ an onInternalError that returns a rejecting promise still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error (8.733249ms)
+2026-10-14T00:36:11.5697069Z ✔ valid neighbour: a non-throwing onInternalError (sync, and async-resolving) is called exactly once and console.error is never called (26.023259ms)
+2026-10-14T00:36:11.5698227Z ✔ an unexpected exception anywhere else in the adapter is also a 500 with a correlation id, never a bare rejection (6.048823ms)
+2026-10-14T00:36:11.5699128Z ✔ the catalog denies an unlisted endpoint before any fetch; a listed one is fetched (6.172995ms)
+2026-10-14T00:36:11.5700314Z ✔ refusal pair: a SERVICE the catalog denies is a 403 with its engine code and none of the catalog's configuration; an endpoint the same catalog allows answers 200 (12.262856ms)
+2026-10-14T00:36:11.5701676Z ✔ refusal pair: a SERVICE the resolver's own policy denies is a 403 with its engine code and none of the resolver's words; a request it allows answers 200 (5.526427ms)
+2026-10-14T00:36:11.5703029Z ✔ refusal pair: a SERVICE endpoint that answers an HTTP error is a 502 with its engine code and none of its words; an allowed endpoint that answers is 200 (11.761088ms)
+2026-10-14T00:36:11.5704672Z ✔ refusal pair: a SERVICE whose transport throws is a 502 with its engine code and none of the exception's words; an allowed endpoint that answers is 200 (11.17307ms)
+2026-10-14T00:36:11.5707579Z ✔ refusal pair: a LOAD the catalog denies is a 403 and one whose fetch fails a 502, each with its engine code and none of its words; an allowed, answering source is 204 (13.774871ms)
+2026-10-14T00:36:11.5709684Z ✔ refusal pair: an operation this endpoint misconfigured is a 500 InternalError with a correlation id, never the error class name; the configured neighbour answers 200 (5.990434ms)
+2026-10-14T00:36:11.5710895Z ✔ refusal pair: the first stack guard keeps its status, code and words; the shallow neighbour answers 200 (2962.019061ms)
+2026-10-14T00:36:11.5711669Z ✔ a federated query runs end to end through a service binding (2.430011ms)
+2026-10-14T00:36:11.5712405Z ✔ CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS without (3.664719ms)
+2026-10-14T00:36:11.5713592Z ✔ a poisoned instance still answers every request with the sanitized 500 and a correlation id (346.595915ms)
+2026-10-14T00:36:11.5714432Z ✔ an engine starts at eighteen digits truncated toward zero (92.191939ms)
+2026-10-14T00:36:11.5715149Z ✔ exact answers a terminating quotient and leaves a non-terminating one unbound (12.896339ms)
+2026-10-14T00:36:11.5715783Z ✔ a rounded policy rounds in its named direction (3.72434ms)
+2026-10-14T00:36:11.5716402Z ✔ an unreadable policy is refused and the previous one stays in force (8.389186ms)
+2026-10-14T00:36:11.5717075Z ✔ the policy reaches the governed, update and entailment entries (259.780951ms)
+2026-10-14T00:36:11.5717780Z ✔ governed evidence counts each absorbed expression error by its F&O code (3.316598ms)
+2026-10-14T00:36:11.5718499Z ✔ an asynchronous job takes the policy and reports its expression errors (10.068645ms)
+2026-10-14T00:36:11.5719585Z ✔ the README and the book say the remote endpoint's CORS policy governs a browser host (5.620312ms)
+2026-10-14T00:36:11.5720244Z ✔ the book's recipes are the README's, byte for byte (1.336087ms)
+2026-10-14T00:36:11.5720993Z ✔ the resolveService recipe joins the remote rows, and reports a network failure as transport (317.058454ms)
+2026-10-14T00:36:11.5721817Z ✔ the Worker recipe answers a SPARQL Protocol request with the joined results (74.244842ms)
+2026-10-14T00:36:11.5722482Z ✔ parse resolves a relative IRI against the supplied base (13.43186ms)
+2026-10-14T00:36:11.5723514Z ✔ parse without a base refuses a relative IRI with the shared code (2.182067ms)
+2026-10-14T00:36:11.5724178Z ✔ parse rejects a base that is not an absolute IRI (0.468575ms)
+2026-10-14T00:36:11.5724703Z ✔ an in-document base wins over the supplied one (0.638704ms)
+2026-10-14T00:36:11.5725310Z ✔ serializeConfigured carries the document base into JSON-LD (24.241731ms)
+2026-10-14T00:36:11.5725916Z ✔ serializeWithContext carries the same document base (4.965048ms)
+2026-10-14T00:36:11.5726552Z ✔ serializeConfigured rejects a base that is not an absolute IRI (0.579162ms)
+2026-10-14T00:36:11.5727156Z ✔ omitting the egress base leaves the document absolute (1.67485ms)
+2026-10-14T00:36:11.5727757Z ✔ serialize emits the base declaration, with a no-base control (1.33272ms)
+2026-10-14T00:36:11.5729080Z ✔ serialize to a base-incapable format stays absolute rather than throwing (0.438119ms)
+2026-10-14T00:36:11.5730003Z ✔ serialize rejects a base that is not an absolute IRI (0.382675ms)
+2026-10-14T00:36:11.5730651Z ✔ serialize without a base is byte-identical to omitting the argument (0.499633ms)
+2026-10-14T00:36:11.5731284Z ✔ serialize keeps the RDF 1.2 statement layer under a base (9.863312ms)
+2026-10-14T00:36:11.5731967Z ✔ a format with no triple-term surface fails closed rather than dropping rows (1.333543ms)
+2026-10-14T00:36:11.5732727Z ✔ entailCheckProofGoldenVectors runs the committed proof artifact ON WASM (83.007045ms)
+2026-10-14T00:36:11.5734390Z ✔ an answer nobody recorded is never presented as verified ON WASM (6.067037ms)
+2026-10-14T00:36:11.5735591Z ✔ the session records proofs only when asked ON WASM (3.158873ms)
+2026-10-14T00:36:11.5736937Z ✔ entailCheckGoldenVectors runs the committed tri-host artifact ON WASM (146.506218ms)
+2026-10-14T00:36:11.5737871Z ✔ an inconsistent input is refused WITH its certificate ON WASM (23.006271ms)
+2026-10-14T00:36:11.5738731Z ✔ every golden case is byte-identical across the wasm/JS boundary (141.362591ms)
+2026-10-14T00:36:11.5739468Z ✔ entailMaterialize's evaluation limits refuse naming this host's arguments (45.621072ms)
+2026-10-14T00:36:11.5740225Z ✔ entailMaterialize and entailConsistency close over the import table (40.381714ms)
+2026-10-14T00:36:11.5741039Z ✔ the conclusion-directed services take the evaluation limits, naming this host's argument (47.273831ms)
+2026-10-14T00:36:11.5741796Z ✔ entailMaterialize closes under rdfs and always returns a report (16.988888ms)
+2026-10-14T00:36:11.5742434Z ✔ entailMaterialize under simple is the identity closure (0.453468ms)
+2026-10-14T00:36:11.5743032Z ✔ entailMaterialize is byte-stable across repeated calls (37.147364ms)
+2026-10-14T00:36:11.5744482Z ✔ entailMaterialize rejects an unknown regime, naming the accepted set (0.407241ms)
+2026-10-14T00:36:11.5745630Z ✔ entailMaterialize materializes every regime spelling (29.295324ms)
+2026-10-14T00:36:11.5746726Z ✔ a rule document belongs to rif alone and is refused elsewhere (0.366785ms)
+2026-10-14T00:36:11.5748024Z ✔ entailMaterialize rejects a malformed document (never a silent empty closure) (2.655252ms)
+2026-10-14T00:36:11.5749406Z ✔ entailMaterialize throws on a reserved-vocabulary closure, naming it (0.316571ms)
+2026-10-14T00:36:11.5750805Z ✔ entailMaterialize still closes an ordinary document neighbouring the reserved one (0.218328ms)
+2026-10-14T00:36:11.5752254Z ✔ the rule inventories are the specification tables, and the gap is measurable (18.993754ms)
+2026-10-14T00:36:11.5753793Z ✔ the rule inventories reject an unknown regime, naming the accepted set (0.670173ms)
+2026-10-14T00:36:11.5755427Z ✔ entailExtensions names what this build adds beyond the specification table (7.857804ms)
+2026-10-14T00:36:11.5756815Z ✔ entailConsistency decides consistency ON WASM, with its certificate (0.681233ms)
+2026-10-14T00:36:11.5758020Z ✔ entailClassify reaches the full subsumption hierarchy ON WASM (0.765981ms)
+2026-10-14T00:36:11.5759128Z ✔ entailRealize reaches the individuals' entailed types ON WASM (0.687074ms)
+2026-10-14T00:36:11.5760467Z ✔ entailInstances retrieves instances for a class the schema never asserts them of ON WASM (0.574454ms)
+2026-10-14T00:36:11.5761968Z ✔ entailEntails decides an axiom entailed nowhere by assertion ON WASM (0.549617ms)
+2026-10-14T00:36:11.5763449Z ✔ entailEntails answers unknown (never false) on an exhausted budget ON WASM (0.622503ms)
+2026-10-14T00:36:11.5764713Z ✔ entailProfile certifies the most restrictive profile first ON WASM (2.681651ms)
+2026-10-14T00:36:11.5766026Z ✔ entailExtractModule extracts a locality module as canonical N-Quads ON WASM (0.395018ms)
+2026-10-14T00:36:11.5767476Z ✔ entailExtractModule rejects an unknown method, naming the accepted set (0.19807ms)
+2026-10-14T00:36:11.5768672Z ✔ entailJustify finds a minimal entailing subset ON WASM (2.447323ms)
+2026-10-14T00:36:11.5769956Z ✔ entailExplainConclusion derives a chase conclusion never asserted ON WASM (13.929941ms)
+2026-10-14T00:36:11.5771281Z ✔ the existential refusal is per conclusion, not per regime ON WASM (7.013807ms)
+2026-10-14T00:36:11.5772631Z ✔ every DL reasoning service is reachable from the package root, not only ./pkg/ (0.202799ms)
+2026-10-14T00:36:11.5774390Z ✔ every conclusion-directed entailment service is reachable from the package root (22.991205ms)
+2026-10-14T00:36:11.5775708Z ✔ a variable in PREDICATE position is projected like any other (9.658979ms)
+2026-10-14T00:36:11.5776828Z ✔ a conclusion nothing derives has no warrant, and says so (8.223317ms)
+2026-10-14T00:36:11.5777976Z ✔ the two regimes defined by a missing input are refused by name (0.664762ms)
+2026-10-14T00:36:11.5779090Z ✔ webont-imports-011 answers from its own premise, owl:imports intact (71.458093ms)
+2026-10-14T00:36:11.5779800Z ✔ an unsupplied import throws by name rather than reasoning without it (9.579701ms)
+2026-10-14T00:36:11.5780463Z ✔ the import arrays are parallel, and a length mismatch is refused (6.320342ms)
+2026-10-14T00:36:11.5781041Z ✔ a malformed import table is refused by entry (6.173888ms)
+2026-10-14T00:36:11.5781631Z ✔ wasm_entail_premise_iris: the three services honour premiseIris (1.430373ms)
+2026-10-14T00:36:11.5782363Z ✔ literal(value, { language, direction }) builds an RDF 1.2 directional literal (3.186164ms)
+2026-10-14T00:36:11.5783108Z ✔ Dataset.from and DataFactory.dataset build chainable datasets from quads (7.819022ms)
+2026-10-14T00:36:11.5784156Z ✔ Dataset#toStream is the instance form of datasetToStream (0.645366ms)
+2026-10-14T00:36:11.5784877Z ✔ native geographic response and strict semantic refusal cross the package root (66.227849ms)
+2026-10-14T00:36:11.5785664Z ✔ an original work refusal throws instead of allocating a partial JSON response (11.027608ms)
+2026-10-14T00:36:11.5786352Z ✔ point buckets and their profile outlive the creating session (17.534586ms)
+2026-10-14T00:36:11.5787066Z ✔ explicit axes reach sync queries and an already started async profile snapshot (71.687142ms)
+2026-10-14T00:36:11.5787862Z ✔ an ungoverned query is unchanged: same rows, and no governor vocabulary reaches it (80.118377ms)
+2026-10-14T00:36:11.5788600Z ✔ an ungoverned entry refuses a governor option rather than ignoring it (1.130323ms)
+2026-10-14T00:36:11.5789305Z ✔ queryGoverned with no ceiling completes and still hands back a receipt (1.02154ms)
+2026-10-14T00:36:11.5790062Z ✔ queryEntailmentGoverned carries the query outcome and closure report together (59.622847ms)
+2026-10-14T00:36:11.5790801Z ✔ queryEntailmentGoverned closes over the dataset's owl:imports table (43.648044ms)
+2026-10-14T00:36:11.5791589Z ✔ queryEntailmentGoverned takes the closure's evaluation limits, naming its own option (39.368066ms)
+2026-10-14T00:36:11.5792610Z ✔ queryEntailmentGoverned exposes a closure stop without an answer or report (1.102962ms)
+2026-10-14T00:36:11.5793730Z ✔ the evidence maps are keyed by the engine's own dimension vocabulary (4.320513ms)
+2026-10-14T00:36:11.5794571Z ✔ the answer cap is inclusive: cap == answer size completes (1.056645ms)
+2026-10-14T00:36:11.5795321Z ✔ the answer cap is inclusive: cap == answer size - 1 exhausts and certifies what it reached (3.581334ms)
+2026-10-14T00:36:11.5796191Z ✔ a zero fuel ceiling trips on the first charged unit of work (4.426341ms)
+2026-10-14T00:36:11.5796826Z ✔ a fuel ceiling large enough to cover the query completes it (4.751419ms)
+2026-10-14T00:36:11.5797512Z ✔ a zero wall deadline trips on the first stop poll inside the real wasm module (1.259885ms)
+2026-10-14T00:36:11.5798285Z ✔ a non-zero wall deadline trips a query it cannot cover, so the wasm clock advances (83.81243ms)
+2026-10-14T00:36:11.5799054Z ✔ the same query completes when the wall deadline is not the binding constraint (2.330665ms)
+2026-10-14T00:36:11.5799754Z ✔ a cancelled token stops the query as an outcome and survives the call (3.70357ms)
+2026-10-14T00:36:11.5800343Z ✔ an uncancelled token leaves the query complete (2.449717ms)
+2026-10-14T00:36:11.5800946Z ✔ cancellation outranks a deadline when both fire at the same point (2.087982ms)
+2026-10-14T00:36:11.5801561Z ✔ every governor trip is a returned outcome, not a throw (23.961256ms)
+2026-10-14T00:36:11.5802417Z ✔ a ceiling the planner's estimate already exceeds is REFUSED, and reports an estimate rather than a measurement (0.828459ms)
+2026-10-14T00:36:11.5803606Z ✔ the scratch ceiling binds a value-constructing query and leaves a plain one alone (1.342279ms)
+2026-10-14T00:36:11.5804412Z ✔ a genuine query error still throws — a trip is not the only outcome shape (16.120725ms)
+2026-10-14T00:36:11.5805145Z ✔ a negative ceiling is refused rather than wrapping into an unreachable one (1.373998ms)
+2026-10-14T00:36:11.5805864Z ✔ the answer cap counts RDF 1.2 triple-term solutions like any other (10.771869ms)
+2026-10-14T00:36:11.5806588Z ✔ the answer cap counts RDF 1.2 reifier statements in a CONSTRUCT answer sequence (11.907322ms)
+2026-10-14T00:36:11.5807343Z ✔ a governed UPDATE that fits its budget applies and reports a receipt (18.752703ms)
+2026-10-14T00:36:11.5808041Z ✔ a tripped UPDATE applies NOTHING and leaves the dataset byte-identical (6.602789ms)
+2026-10-14T00:36:11.5808642Z ✔ a cancelled token stops an UPDATE as an outcome (0.637922ms)
+2026-10-14T00:36:11.5809322Z ✔ updateGoverned refuses maxAnswers rather than ignoring a ceiling the caller set (0.378868ms)
+2026-10-14T00:36:11.5810026Z ✔ explainQuery renders the charge ledger a budget is sized from (2.838995ms)
+2026-10-14T00:36:11.5810704Z ✔ dataset identities and mutation generations use exact bigint transport (24.12939ms)
+2026-10-14T00:36:11.5811398Z ✔ isomorphic() is true for the same graph under blank-node relabeling (6.064994ms)
+2026-10-14T00:36:11.5812035Z ✔ isomorphic() is false for a structurally different graph (0.324246ms)
+2026-10-14T00:36:11.5812701Z ✔ canonicalize() is stable and identifies isomorphic graphs byte-for-byte (0.710217ms)
+2026-10-14T00:36:11.5814013Z ✔ canonicalize() throws on a reserved-vocabulary IRI, naming it, rather than aborting (0.924507ms)
+2026-10-14T00:36:11.5815168Z ✔ an ordinary IRI neighbouring the reserved namespace still canonicalizes (0.315811ms)
+2026-10-14T00:36:11.5815856Z ✔ configured Dataset serialization reuses compiled contexts (37.081855ms)
+2026-10-14T00:36:11.5816543Z ✔ configured graph results and YAML schema headers use the same engine (67.628718ms)
+2026-10-14T00:36:11.5817090Z ✔ closed options fail before output (0.903729ms)
+2026-10-14T00:36:11.5817638Z ✔ frozen lexical capability inventory accounts for every file (1.733439ms)
+2026-10-14T00:36:11.5818270Z ✔ every frozen JSON string vector crosses the package decoder (103.888556ms)
+2026-10-14T00:36:11.5818980Z ✔ every JSON code unit and surrogate pair matches the frozen answer digest (24163.126645ms)
+2026-10-14T00:36:11.5819872Z ✔ every unreserved percent vector crosses SPARQL ENCODE_FOR_URI (12556.682415ms)
+2026-10-14T00:36:11.5820552Z ✔ every frozen string escape preserves its consumed-prefix boundary (35.717059ms)
+2026-10-14T00:36:11.5821239Z ✔ every UCHAR scalar and refusal matches the frozen answer digests (14949.484038ms)
+2026-10-14T00:36:11.5821841Z ✔ parsePackument accepts the npm 11 array response (6.260479ms)
+2026-10-14T00:36:11.5822400Z ✔ parsePackument accepts the npm 12 package-name map (0.352328ms)
+2026-10-14T00:36:11.5823109Z ✔ parsePackument rejects zero or multiple package records (0.989739ms)
+2026-10-14T00:36:11.5824015Z ✔ parsePackument rejects a malformed package record (0.328194ms)
+2026-10-14T00:36:11.5824651Z ✔ missingPackedFiles accepts a tarball holding every promised path (0.747817ms)
+2026-10-14T00:36:11.5825312Z ✔ missingPackedFiles names a files entry npm silently omitted (0.322903ms)
+2026-10-14T00:36:11.5825969Z ✔ missingPackedFiles names an exports target the tarball lacks (0.340646ms)
+2026-10-14T00:36:11.5826617Z ✔ missingPackedFiles refuses a pack record without a file list (0.533707ms)
+2026-10-14T00:36:11.5827332Z ✔ missingPackedFiles accepts nested contents of an explicit directory promise (0.445382ms)
+2026-10-14T00:36:11.5827998Z ✔ missingPackedFiles refuses an empty directory marker (0.463737ms)
+2026-10-14T00:36:11.5828596Z ✔ missingPackedFiles refuses a directory prefix lookalike (0.271748ms)
+2026-10-14T00:36:11.5829181Z ✔ missingPackedFiles keeps exact file promises strict (1.053078ms)
+2026-10-14T00:36:11.5829859Z ✔ missingPackedFiles never turns an export target into a directory promise (1.224388ms)
+2026-10-14T00:36:11.5830679Z ✔ a panic in a synchronous call poisons every entry point, and typed errors poison nothing (320.907668ms)
+2026-10-14T00:36:11.5831385Z ✔ a refused query carries sparql-parse-lex on both lanes (26.913944ms)
+2026-10-14T00:36:11.5831983Z ✔ a refused query carries sparql-parse-syntax on both lanes (11.311177ms)
+2026-10-14T00:36:11.5832628Z ✔ a refused query carries sparql-parse-unsupported on both lanes (2.47257ms)
+2026-10-14T00:36:11.5833510Z ✔ a refused query carries sparql-parse-iri on both lanes (2.396819ms)
+2026-10-14T00:36:11.5834152Z ✔ a refused query carries sparql-parse-cdt-arity on both lanes (2.35434ms)
+2026-10-14T00:36:11.5834735Z ✔ a relative IRI without a base names its typed cause (0.832245ms)
+2026-10-14T00:36:11.5835319Z ✔ a refused update carries its typed presentation on both lanes (4.25405ms)
+2026-10-14T00:36:11.5836057Z ✔ a failure without a typed presentation carries none; the valid neighbour answers (44.294032ms)
+2026-10-14T00:36:11.5836746Z ✔ projection archive matches the shared Rust/Python bytes (63.886625ms)
+2026-10-14T00:36:11.5837385Z ✔ write-only profiles and mismatched tagged config fail explicitly (2.170265ms)
+2026-10-14T00:36:11.5838197Z ✔ all research-object profiles execute through the shared WASM carrier (95.843322ms)
+2026-10-14T00:36:11.5839206Z ✔ DCAT RDF executes deterministically and remains write-only through WASM (68.67947ms)
+2026-10-14T00:36:11.5840314Z ✔ VoID executes deterministically and remains write-only through WASM (11.813878ms)
+2026-10-14T00:36:11.5841068Z ✔ attached RO-Crate matches the cross-host archive through generated WASM (10.587082ms)
+2026-10-14T00:36:11.5841679Z ✔ SELECT returns SPARQL Results JSON bindings (64.741513ms)
+2026-10-14T00:36:11.5842264Z ✔ SELECT over the default graph does not see named-graph triples (1.215221ms)
+2026-10-14T00:36:11.5842796Z ✔ ASK returns a boolean result document (2.094694ms)
+2026-10-14T00:36:11.5843618Z ✔ QueryEngine SELECT returns typed package-root bindings (2.966043ms)
+2026-10-14T00:36:11.5844265Z ✔ NOW and RAND read the live JavaScript clock and entropy on wasm (6.793867ms)
+2026-10-14T00:36:11.5844853Z ✔ QueryEngine SELECT rows are a single-owner stream (1.114874ms)
+2026-10-14T00:36:11.5845505Z ✔ QueryEngine query routes ASK and graph results into discriminated objects (3.923532ms)
+2026-10-14T00:36:11.5846404Z ✔ QueryEngine raw serialization supports result and graph formats (4.020223ms)
+2026-10-14T00:36:11.5846911Z ✔ CONSTRUCT returns Turtle (1.178863ms)
+2026-10-14T00:36:11.5847390Z ✔ a malformed query throws, never a silent empty result (3.104061ms)
+2026-10-14T00:36:11.5848011Z ✔ a SERVICE clause hard-fails offline (no resolver in the browser) (4.042275ms)
+2026-10-14T00:36:11.5848735Z ✔ QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolver (12.432975ms)
+2026-10-14T00:36:11.5849484Z ✔ queryRaw provenanceNamespace populates and round-trips through JSON (3.261054ms)
+2026-10-14T00:36:11.5850337Z ✔ queryRaw provenanceNamespace populates and round-trips through XML (5.321926ms)
+2026-10-14T00:36:11.5850972Z ✔ omitting provenanceNamespace emits pure W3C output (0.858545ms)
+2026-10-14T00:36:11.5851498Z ✔ a lone provenanceNamespace half is refused (0.373198ms)
+2026-10-14T00:36:11.5852098Z ✔ serialize supports JSON-LD (the docs 'copy as' transcode surface) (10.066533ms)
+2026-10-14T00:36:11.5852860Z ✔ the default query() format never returns an empty string for a named-graph CONSTRUCT (2.45076ms)
+2026-10-14T00:36:11.5853872Z ✔ the default query() format is still Turtle for a default-graph CONSTRUCT (1.118911ms)
+2026-10-14T00:36:11.5854561Z ✔ an explicit single-graph format throws for a named-graph CONSTRUCT (1.860807ms)
+2026-10-14T00:36:11.5855223Z ✔ an explicit quad-capable format carries a named-graph CONSTRUCT (0.618456ms)
+2026-10-14T00:36:11.5855935Z ✔ an explicit single-graph format still serializes a default-graph CONSTRUCT (0.652779ms)
+2026-10-14T00:36:11.5856717Z ✔ the default query() format carries a named-graph DESCRIBE instead of emptying it (5.100903ms)
+2026-10-14T00:36:11.5857432Z ✔ an explicit single-graph format throws for a named-graph DESCRIBE (1.527364ms)
+2026-10-14T00:36:11.5858140Z ✔ serializeWithLoss reports the named-graph rows a single-graph syntax drops (1.39648ms)
+2026-10-14T00:36:11.5858820Z ✔ SERVICE SILENT and LOAD SILENT succeed with nothing fetched (7.228148ms)
+2026-10-14T00:36:11.5872758Z ✔ nesting answers on the synchronous lane as deep as its stacks hold it, and is a typed refusal past that (333.352601ms)
+2026-10-14T00:36:11.5874299Z ✔ on the synchronous lane the deepest answer and the first refusal are neighbours (331.679684ms)
+2026-10-14T00:36:11.5875243Z ✔ a FILTER nested 10 000 parentheses deep answers what one pair answers, and the engine answers afterwards (7.958213ms)
+2026-10-14T00:36:11.5876418Z ✔ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (593.19988ms)
+2026-10-14T00:36:11.5877663Z ✔ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (9489.69538ms)
+2026-10-14T00:36:11.5878719Z ✔ a pattern nested past the dataset's triple terms answers nothing, and its stored-depth neighbour matches (5.590246ms)
+2026-10-14T00:36:11.5879680Z ✔ inserting a triple term past the dataset's limit is the dataset's typed refusal, and 16 levels insert (1.517045ms)
+2026-10-14T00:36:11.5880499Z ✔ a synchronous failure carries its code; the well-formed neighbour answers (1.549897ms)
+2026-10-14T00:36:11.5881211Z ✔ the synchronous and asynchronous lanes answer and refuse identically (18.74589ms)
+2026-10-14T00:36:11.5881854Z ✔ a snapshot is an independent dataset with its own identity (1.29532ms)
+2026-10-14T00:36:11.5882496Z ✔ every results alias has the same bytes through all raw format APIs (93.686648ms)
+2026-10-14T00:36:11.5883441Z ✔ every governed twin exposes metered and explicit no-ceiling execution (220.977784ms)
+2026-10-14T00:36:11.5884273Z ✔ no-ceiling execution preserves cancellation and refuses ignored options (45.931851ms)
+2026-10-14T00:36:11.5885055Z ✔ strict JSON options refuse repeated members and arrays with diagnostic pointers (7.614279ms)
+2026-10-14T00:36:11.5885769Z ✔ generated host Reflect.get preserves throwing getter refusal (0.560016ms)
+2026-10-14T00:36:11.5886289Z ✔ version() returns the crate semver (1.520221ms)
+2026-10-14T00:36:11.5886949Z ✔ DataFactory builds RDF/JS terms (1.357517ms)
+2026-10-14T00:36:11.5887467Z ✔ literal() refuses a non-tag where the caller named it (1.062175ms)
+2026-10-14T00:36:11.5888110Z ✔ polymorphic literal(value, datatype) dispatches to a typed literal (0.333002ms)
+2026-10-14T00:36:11.5888720Z ✔ parse → serialize → reparse round-trips N-Triples (8.015899ms)
+2026-10-14T00:36:11.5889283Z ✔ expanded JSON-LD and YAML-LD wasm bytes are frozen (9.628963ms)
+2026-10-14T00:36:11.5889791Z ✔ DatasetCore add/has/delete/match/iterate (4.700704ms)
+2026-10-14T00:36:11.5890435Z ✔ DatasetCore.add/delete chain (RDF/JS return-this) (0.219771ms)
+2026-10-14T00:36:11.5891079Z ✔ DatasetCore.match treats a Variable as a wildcard (RDF/JS idiom) (0.499404ms)
+2026-10-14T00:36:11.5891752Z ✔ RDF-1.2 wedge — directional literal round-trips through N-Quads (1.637029ms)
+2026-10-14T00:36:11.5892402Z ✔ RDF-1.2 wedge — quoted-triple term round-trips through N-Quads (1.259133ms)
+2026-10-14T00:36:11.5892929Z ✔ Sink streams quads into a dataset (1.442155ms)
+2026-10-14T00:36:11.5893939Z ✔ datasetToStream → streamToDataset round-trips via the Sink (0.399547ms)
+2026-10-14T00:36:11.5894505Z ✔ an unsupported format is a rejected error (4.277253ms)
+2026-10-14T00:36:11.5895136Z ✔ RDF-1.2 — directional literal: .datatype.value derives rdf:dirLangString (0.251149ms)
+2026-10-14T00:36:11.5895897Z ✔ RDF-1.2 — directional literal: in-memory add/has without serialize round-trip (0.354021ms)
+2026-10-14T00:36:11.5896673Z ✔ RDF-1.2 — directional literal: parse then factory-built has() (cross-path) (0.523478ms)
+2026-10-14T00:36:11.5897303Z ✔ Term.equals(null) returns false (RDF/JS spec) (0.164667ms)
+2026-10-14T00:36:11.5897838Z ✔ Term.equals(undefined) returns false (RDF/JS spec) (0.091972ms)
+2026-10-14T00:36:11.5898441Z ✔ Term.equals sanity: same term is true, different term is false (0.226803ms)
+2026-10-14T00:36:11.5899004Z ✔ Quad.equals(null) returns false (RDF/JS spec) (0.10704ms)
+2026-10-14T00:36:11.5899535Z ✔ Quad.equals(undefined) returns false (RDF/JS spec) (0.094556ms)
+2026-10-14T00:36:11.5900135Z ✔ Quad.equals sanity: same quad is true, different quad is false (0.179195ms)
+2026-10-14T00:36:11.5900680Z ✔ Term.equals does not consume its argument (0.110867ms)
+2026-10-14T00:36:11.5901155Z ✔ Quad.equals does not consume its argument (0.162324ms)
+2026-10-14T00:36:11.5901811Z ✔ serialize refuses what serializeWithLoss projects, for a star-incapable target (5.746718ms)
+2026-10-14T00:36:11.5902579Z ✔ serializeWithLoss counts the declared empty graphs a target cannot write (80.994161ms)
+2026-10-14T00:36:11.5903518Z ✔ a sink receives the same bytes serialize returns (68.819671ms)
+2026-10-14T00:36:11.5904171Z ✔ a sink that throws aborts instead of truncating (26.8376ms)
+2026-10-14T00:36:11.5904804Z ✔ an object without write is refused rather than silently producing nothing (0.724674ms)
+2026-10-14T00:36:11.5905557Z ✔ SHA-3 built-ins reach their published FIPS 202 digests through the wasm module (65.392677ms)
+2026-10-14T00:36:11.5906363Z ✔ SEP-0008's underscored spelling reaches the same digests through the wasm module (0.845179ms)
+2026-10-14T00:36:11.5907046Z ✔ SHA-3 digests survive the typed QueryEngine.select surface (3.636486ms)
+2026-10-14T00:36:11.5907708Z ✔ the SHA-3 hyphen is part of the name, and a spaced hyphen still subtracts (8.645756ms)
+2026-10-14T00:36:11.5908656Z ✔ wasm_shacl_import_unresolved: shaclValidateToSarif rejects an unresolved owl:imports with the typed ShaclImportError (12.08893ms)
+2026-10-14T00:36:11.5909834Z ✔ wasm_shacl_import_unresolved: shaclValidateChangesToSarif rejects an unresolved owl:imports with the typed ShaclImportError (3.546898ms)
+2026-10-14T00:36:11.5910998Z ✔ wasm_shacl_import_unresolved: shaclEntail rejects an unresolved owl:imports with the typed ShaclImportError (0.67965ms)
+2026-10-14T00:36:11.5912056Z ✔ wasm_shacl_import_unresolved: shaclApplyRules rejects an unresolved owl:imports with the typed ShaclImportError (0.724594ms)
+2026-10-14T00:36:11.5913146Z ✔ wasm_shacl_import_unresolved: shaclEvalNodeExpr rejects an unresolved owl:imports with the typed ShaclImportError (2.369277ms)
+2026-10-14T00:36:11.5914700Z ✔ wasm_shacl_import_unresolved: shaclLintShapes rejects an unresolved owl:imports with the typed ShaclImportError (0.899561ms)
+2026-10-14T00:36:11.5915760Z ✔ wasm_shacl_import_unresolved: shaclPackProduct rejects an unresolved owl:imports with the typed ShaclImportError (3.64979ms)
+2026-10-14T00:36:11.5916639Z ✔ wasm_shacl_import_supplied: every entry point applies a supplied import (163.227869ms)
+2026-10-14T00:36:11.5917730Z ✔ wasm_shacl_import_declared_in_place: an ontology declared in place resolves the import, and its neighbour does not (2.577787ms)
+2026-10-14T00:36:11.5918741Z ✔ wasm_shacl_import_unreached_entry: a table entry nothing imports is refused, and a reached one is not (1.865616ms)
+2026-10-14T00:36:11.5919679Z ✔ wasm_shacl_import_array_lengths: import arrays of different lengths are refused, never truncated (0.434843ms)
+2026-10-14T00:36:11.5920645Z ✔ wasm_shacl_import_prefix_idiom: SHACL's prefix idiom resolves with no table, and a header import does not (100.867698ms)
+2026-10-14T00:36:11.5921694Z ✔ shaclPackProduct -> shaclProductValidateToSarif round trips to the SAME verdict shaclValidateToSarif reaches (62.387732ms)
+2026-10-14T00:36:11.5922679Z ✔ shaclProductExplain reports well-formed identity/format fields without admitting the product (2.203397ms)
+2026-10-14T00:36:11.5923726Z ✔ shaclProductCertify succeeds on a genuine product (1.12387ms)
+2026-10-14T00:36:11.5924434Z ✔ shaclProductValidateToSarifRebuild validates and agrees with the admit path (1.640636ms)
+2026-10-14T00:36:11.5925162Z ✔ *Expecting variants accept the product's own identity digest (2.854254ms)
+2026-10-14T00:36:11.5926055Z ✔ *Expecting variants refuse a product bound to a DIFFERENT identity digest, with a neighbouring valid case beside it (2.829768ms)
+2026-10-14T00:36:11.5927241Z ✔ a corrupted product is refused as a ShaclProductRefusal carrying its dimension label across the boundary, with a valid neighbour beside it (1.302914ms)
+2026-10-14T00:36:11.5928202Z ✔ wasm_shacl_shapes_graph: shapesGraph-001 through shaclValidateToSarif (128.241278ms)
+2026-10-14T00:36:11.5928954Z ✔ wasm_shacl_shapes_graph: the change path, a packed product and lint carry it (253.983991ms)
+2026-10-14T00:36:11.5929686Z ✔ wasm_shacl_shapes_graph: a relative shapes graph with no base is refused (3.23764ms)
+2026-10-14T00:36:11.5930438Z ✔ wasm_rules_shapes_graph: shaclApplyRules and shaclEntail pre-bind $shapesGraph (49.532017ms)
+2026-10-14T00:36:11.5931128Z ✔ shaclValidateToSarif emits SARIF 2.1.0 with a violation (45.976703ms)
+2026-10-14T00:36:11.5931800Z ✔ shaclValidateToSarif rejects malformed shapes (never a silent pass) (1.288388ms)
+2026-10-14T00:36:11.5932584Z ✔ wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformanceDisallows (2.839456ms)
+2026-10-14T00:36:11.5933729Z ✔ wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWellFormed (173.061951ms)
+2026-10-14T00:36:11.5934644Z ✔ wasm_shacl_subclass_of_in_shapes_graph: shaclValidateToSarif honours subClassOfInShapesGraph (3.498618ms)
+2026-10-14T00:36:11.5935686Z ✔ wasm_shacl_sparql_expr_declaration: shaclValidateToSarif evaluates sh:sparqlExpr beside its vocabulary declaration (86.656319ms)
+2026-10-14T00:36:11.5936677Z ✔ wasm_shacl_message_languages: shaclValidateToSarif carries every message with its language (1.484684ms)
+2026-10-14T00:36:11.5937465Z ✔ shaclEntail materializes the inferred triple and keeps the base fact (23.912203ms)
+2026-10-14T00:36:11.5938278Z ✔ wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, beside the verdict (3.864872ms)
+2026-10-14T00:36:11.5939072Z ✔ shaclValidateChangesToSarif validates the change and reports its scope (5.550592ms)
+2026-10-14T00:36:11.5939732Z ✔ shaclValidateChangesToSarif honours the retract half (0.827918ms)
+2026-10-14T00:36:11.5940452Z ✔ shaclValidateChangesToSarif reports an unbounded footprint rather than guessing (50.215815ms)
+2026-10-14T00:36:11.5941194Z ✔ shaclValidateChangesToSarif rejects a malformed change document (0.999828ms)
+2026-10-14T00:36:11.5942274Z ✔ wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its proof, and honours the round limit (184.799842ms)
+2026-10-14T00:36:11.5943574Z ✔ wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope (10.06088ms)
+2026-10-14T00:36:11.5944546Z ✔ shaclEvalNodeExpr reports the mandatory diagnostic as { rule, shape }, and none for the neighbour (2.546429ms)
+2026-10-14T00:36:11.5945714Z ✔ wasm_shacl_eval_node_expr_selectors: shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle (9.385879ms)
+2026-10-14T00:36:11.5946831Z ✔ wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one (314.85164ms)
+2026-10-14T00:36:11.5948041Z ✔ wasm_shacl_apply_rules: the wasm32 default stored-fact limit refuses a 70,000-triple copy, naming maxStoredFacts, and admits it when raised (3727.62278ms)
+2026-10-14T00:36:11.5949405Z ✔ wasm_shacl_entail_limits: shaclEntail takes the four rule-evaluation limits, names its own arguments, and materializes the closure when they are raised (10.748726ms)
+2026-10-14T00:36:11.5950548Z ✔ wasm_shacl_check_rules: shaclCheckRules checks a SPARQL 1.2 RL rule set to a level and evaluates nothing (3.052003ms)
+2026-10-14T00:36:11.5951389Z ✔ a trap that is not a panic, in a synchronous call, poisons every entry point (301.219858ms)
+2026-10-14T00:36:11.5952280Z ✔ installAsync requires every linker global by name, and the runtime reads the gate as the linker defines it (6.830304ms)
+2026-10-14T00:36:11.5953569Z ✔ a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error (2.955052ms)
+2026-10-14T00:36:11.5954388Z ✔ visualization APIs preserve RDF 1.2 statement semantics (50.411209ms)
+2026-10-14T00:36:11.5954923Z ✔ visualization modes share the same model (3.919304ms)
+2026-10-14T00:36:11.5955576Z ✔ cross-graph reifier roles survive graph selection without leaking occurrences (1.642881ms)
+2026-10-14T00:36:11.5956338Z ✔ typed refusal and healthy nullable-count neighbor: xpath-2.0-2010-12-14 (137.778577ms)
+2026-10-14T00:36:11.5957102Z ✔ large finite REGEX shapes through the optimized package: xpath-2.0-2010-12-14 (3528.564121ms)
+2026-10-14T00:36:11.5957817Z ✔ large finite REPLACE retains the last capture: xpath-2.0-2010-12-14 (334.3985ms)
+2026-10-14T00:36:11.5958509Z ✔ typed refusal and healthy nullable-count neighbor: xpath-3.1-2017-03-21 (47.962495ms)
+2026-10-14T00:36:11.5959268Z ✔ large finite REGEX shapes through the optimized package: xpath-3.1-2017-03-21 (2901.116629ms)
+2026-10-14T00:36:11.5960001Z ✔ large finite REPLACE retains the last capture: xpath-3.1-2017-03-21 (261.785157ms)
+2026-10-14T00:36:11.5960629Z ✔ an integer past i128 has its exact canonical lexical form (2.839546ms)
+2026-10-14T00:36:11.5961188Z ✔ a long decimal has its exact canonical lexical form (0.6154ms)
+2026-10-14T00:36:11.5961845Z ✔ a malformed lexical has no canonical form, and its well-formed neighbour does (0.286846ms)
+2026-10-14T00:36:11.5962401Z ✔ long integers compare exactly (0.607195ms)
+2026-10-14T00:36:11.5962990Z ✔ malformed and incomparable values have no order, and their neighbours do (0.489444ms)
+2026-10-14T00:36:11.5963895Z ✔ a SPARQL sum past i128 returns its exact lexical form (50.330932ms)
+2026-10-14T00:36:11.5964275Z ℹ tests 449
+2026-10-14T00:36:11.5964484Z ℹ suites 0
+2026-10-14T00:36:11.5964687Z ℹ pass 449
+2026-10-14T00:36:11.5964887Z ℹ fail 0
+2026-10-14T00:36:11.5965095Z ℹ cancelled 0
+2026-10-14T00:36:11.5965309Z ℹ skipped 0
+2026-10-14T00:36:11.5965510Z ℹ todo 0
+2026-10-14T00:36:11.5965762Z ℹ duration_ms 755864.741962
+2026-10-14T00:36:11.6782316Z 
+2026-10-14T00:36:11.6782999Z > @blackcatinformatics/purrdf@3.0.1 smoke:pack
+2026-10-14T00:36:11.6783827Z > node tests/pack-smoke.mjs
+2026-10-14T00:36:11.6784073Z 
+2026-10-14T00:36:13.3030547Z npm tarball: 11406881 bytes
+2026-10-14T00:36:13.3031034Z npm unpacked: 34429917 bytes
+2026-10-14T00:36:13.3031302Z npm entries: 152
+2026-10-14T00:36:14.5579846Z 
+2026-10-14T00:36:14.5580541Z added 1 package in 1s
+2026-10-14T00:36:14.8757018Z OK: packed tarball smoke passed for blackcatinformatics-purrdf-3.0.1.tgz
+2026-10-14T00:36:14.9101876Z ##[group]Run ./scripts/check-wasm-dataset-identity.sh
+2026-10-14T00:36:14.9102319Z [36;1m./scripts/check-wasm-dataset-identity.sh[0m
+2026-10-14T00:36:14.9165253Z shell: /usr/bin/bash -e {0}
+2026-10-14T00:36:14.9165523Z env:
+2026-10-14T00:36:14.9165734Z   CARGO_HOME: /home/runner/.cargo
+2026-10-14T00:36:14.9166014Z   CARGO_INCREMENTAL: 0
+2026-10-14T00:36:14.9166244Z   CARGO_TERM_COLOR: always
+2026-10-14T00:36:14.9166486Z   CACHE_ON_FAILURE: false
+2026-10-14T00:36:14.9166716Z ##[endgroup]
+2026-10-14T00:36:15.1491369Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-10-14T00:36:15.1507779Z [1m[92m   Compiling[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+2026-10-14T00:36:15.1508912Z [1m[92m   Compiling[0m const-oid v0.10.2
+2026-10-14T00:36:15.1509656Z [1m[92m   Compiling[0m cfg-if v1.0.4
+2026-10-14T00:36:15.1909878Z [1m[92m   Compiling[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+2026-10-14T00:36:15.3478025Z [1m[92m   Compiling[0m regex-syntax v0.8.11
+2026-10-14T00:36:15.3856820Z [1m[92m   Compiling[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+2026-10-14T00:36:16.7542681Z [1m[92m   Compiling[0m hybrid-array v0.4.15
+2026-10-14T00:36:16.9715594Z [1m[92m   Compiling[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+2026-10-14T00:36:17.4922636Z [1m[92m   Compiling[0m crypto-common v0.2.2
+2026-10-14T00:36:18.7974616Z [1m[92m   Compiling[0m block-buffer v0.12.1
+2026-10-14T00:36:18.9110419Z [1m[92m   Compiling[0m digest v0.11.3
+2026-10-14T00:36:19.0354034Z [1m[92m   Compiling[0m sha2 v0.11.0
+2026-10-14T00:36:19.0369204Z [1m[92m   Compiling[0m regex-automata v0.4.14
+2026-10-14T00:36:20.8925380Z [1m[92m   Compiling[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+2026-10-14T00:36:22.9505280Z [1m[92m   Compiling[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+2026-10-14T00:36:23.5895510Z [1m[92m   Compiling[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+2026-10-14T00:36:27.5757112Z [1m[92m   Compiling[0m regex v1.12.4
+2026-10-14T00:36:28.7465782Z [1m[92m   Compiling[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+2026-10-14T00:36:30.1331206Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-10-14T00:36:35.2816025Z [1m[92m   Compiling[0m wasm-bindgen-shared v0.2.125
+2026-10-14T00:36:35.5564491Z [1m[92m   Compiling[0m crossbeam-utils v0.8.21
+2026-10-14T00:36:35.9056938Z [1m[92m   Compiling[0m proc-macro2 v1.0.106
+2026-10-14T00:36:36.3145241Z [1m[92m   Compiling[0m unicode-ident v1.0.24
+2026-10-14T00:36:36.7399099Z [1m[92m   Compiling[0m quote v1.0.46
+2026-10-14T00:36:37.0240081Z [1m[92m   Compiling[0m crossbeam-epoch v0.9.18
+2026-10-14T00:36:37.3964912Z [1m[92m   Compiling[0m rustversion v1.0.22
+2026-10-14T00:36:37.9570417Z [1m[92m   Compiling[0m rayon-core v1.13.0
+2026-10-14T00:36:38.7890444Z [1m[92m   Compiling[0m crossbeam-deque v0.8.6
+2026-10-14T00:36:39.6465493Z [1m[92m   Compiling[0m syn v2.0.118
+2026-10-14T00:36:42.1029479Z [1m[92m   Compiling[0m either v1.16.0
+2026-10-14T00:36:42.2684536Z [1m[92m   Compiling[0m bumpalo v3.20.3
+2026-10-14T00:36:42.5224972Z [1m[92m   Compiling[0m rayon v1.12.0
+2026-10-14T00:36:45.5684827Z [1m[92m   Compiling[0m wasm-bindgen-macro-support v0.2.125
+2026-10-14T00:36:46.5652055Z [1m[92m   Compiling[0m wasm-bindgen v0.2.125
+2026-10-14T00:36:47.4575275Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-10-14T00:36:47.5244819Z [1m[92m   Compiling[0m inout v0.2.2
+2026-10-14T00:36:47.6122874Z [1m[92m   Compiling[0m cmov v0.5.4
+2026-10-14T00:36:47.8096630Z [1m[92m   Compiling[0m ctutils v0.4.2
+2026-10-14T00:36:48.0264666Z [1m[92m   Compiling[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+2026-10-14T00:37:13.8009571Z [1m[92m   Compiling[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+2026-10-14T00:37:19.1996139Z [1m[92m   Compiling[0m purrdf-geo-kernel v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo-kernel)
+2026-10-14T00:37:23.4961230Z [1m[92m   Compiling[0m cpubits v0.1.1
+2026-10-14T00:37:23.5275366Z [1m[92m   Compiling[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+2026-10-14T00:37:23.6617110Z [1m[92m   Compiling[0m universal-hash v0.6.1
+2026-10-14T00:37:23.7155072Z [1m[92m   Compiling[0m cipher v0.5.2
+2026-10-14T00:37:23.9765339Z [1m[92m   Compiling[0m polyval v0.7.3
+2026-10-14T00:37:24.1045124Z [1m[92m   Compiling[0m fastrand v2.4.1
+2026-10-14T00:37:24.2935723Z [1m[92m   Compiling[0m twox-hash v2.1.2
+2026-10-14T00:37:24.3711418Z [1m[92m   Compiling[0m structured-zstd v0.0.49
+2026-10-14T00:37:26.0022261Z [1m[92m   Compiling[0m wasm-bindgen-macro v0.2.125
+2026-10-14T00:37:28.2655834Z [1m[92m   Compiling[0m ghash v0.6.0
+2026-10-14T00:37:28.3245032Z [1m[92m   Compiling[0m aes v0.9.3
+2026-10-14T00:37:28.6955032Z [1m[92m   Compiling[0m ctr v0.10.1
+2026-10-14T00:37:28.8305021Z [1m[92m   Compiling[0m aead v0.6.1
+2026-10-14T00:37:28.9194872Z [1m[92m   Compiling[0m aes-gcm v0.11.1
+2026-10-14T00:37:29.0075845Z [1m[92m   Compiling[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+2026-10-14T00:37:29.8026219Z [1m[92m   Compiling[0m visual-hashing v1.0.0
+2026-10-14T00:37:30.1845377Z [1m[92m   Compiling[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+2026-10-14T00:37:48.7975231Z [1m[92m   Compiling[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+2026-10-14T00:38:11.7205184Z [1m[92m   Compiling[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+2026-10-14T00:38:20.0835485Z [1m[92m   Compiling[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+2026-10-14T00:38:49.9886106Z [1m[92m   Compiling[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+2026-10-14T00:39:03.3625478Z [1m[92m   Compiling[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+2026-10-14T00:39:45.1835467Z [1m[92m   Compiling[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+2026-10-14T00:40:41.8845285Z [1m[92m   Compiling[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+2026-10-14T00:40:42.0405427Z [1m[92m   Compiling[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+2026-10-14T00:41:10.1276572Z [1m[92m   Compiling[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+2026-10-14T00:41:13.5975678Z [1m[92m   Compiling[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+2026-10-14T00:41:13.6365343Z [1m[92m   Compiling[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+2026-10-14T00:41:20.1004238Z [1m[92m   Compiling[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+2026-10-14T00:41:26.4046074Z [1m[92m   Compiling[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+2026-10-14T00:41:28.6406658Z [1m[92m   Compiling[0m purrdf-mime v3.0.1 (/home/runner/work/purrdf/purrdf/crates/mime)
+2026-10-14T00:41:30.2912669Z [1m[92m   Compiling[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+2026-10-14T00:41:30.8755717Z [1m[92m   Compiling[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+2026-10-14T00:41:31.3045437Z [1m[92m   Compiling[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+2026-10-14T00:41:38.8205129Z [1m[92m   Compiling[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+2026-10-14T00:42:06.7201230Z [1m[92m   Compiling[0m purrdf-wasm v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-wasm)
+2026-10-14T00:42:38.2412710Z [1m[92m    Finished[0m `test` profile [optimized] target(s) in 6m 23s
+2026-10-14T00:42:49.7396301Z Dataset wasm getters preserve bigint identities above 2^53 and mutation advances exactly
+2026-10-14T00:42:49.7430970Z Exchange wasm bigint identities settle exactly above 2^53, reject wrapping inputs and refuse exhaustion
+2026-10-14T00:42:49.8286353Z Identity ABI receipt: target/identity-transport-receipts/8d8d864cc44750d6db21808401a8ae8c69c3c5895de16414ba4387778cd54b02.json
+2026-10-14T00:42:49.9686444Z ##[error]The operation was canceled.
+2026-10-14T00:42:49.9796319Z Post job cleanup.
+2026-10-14T00:42:49.9799734Z ##[start-action display=Cache the Rust build;id=__d000da97-3813-4322-9676-1247da7e75fb.__Swatinem_rust-cache]
+2026-10-14T00:42:49.9818617Z ##[end-action id=__d000da97-3813-4322-9676-1247da7e75fb.__Swatinem_rust-cache;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-14T00:42:49.9882823Z Post job cleanup.
+2026-10-14T00:42:50.0752316Z [command]/usr/bin/git version
+2026-10-14T00:42:50.0799123Z git version 2.55.0
+2026-10-14T00:42:50.0834946Z Temporarily overriding HOME='/home/runner/work/_temp/9336f24e-28ca-404e-ae0b-559496296e15' before making global git config changes
+2026-10-14T00:42:50.0836591Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-14T00:42:50.0840746Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-14T00:42:50.0870069Z Removing SSH command configuration
+2026-10-14T00:42:50.0876222Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-14T00:42:50.0909199Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-14T00:42:50.1143775Z Removing HTTP extra header
+2026-10-14T00:42:50.1148078Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-14T00:42:50.1181816Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-14T00:42:50.1409650Z Removing includeIf entries pointing to credentials config files
+2026-10-14T00:42:50.1415994Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-14T00:42:50.1448760Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-14T00:42:50.1853584Z Cleaning up orphan processes

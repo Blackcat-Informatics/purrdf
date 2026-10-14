@@ -1,0 +1,675 @@
+diff --git bindings/python/tests/test_retrieval.py bindings/python/tests/test_retrieval.py
+index 7d51e2971..41955cd9d 100644
+--- bindings/python/tests/test_retrieval.py
++++ bindings/python/tests/test_retrieval.py
+@@ -257,7 +257,7 @@ def _producer_call(sparql: str) -> tuple[str, str]:
+     build that rendered a request term into the wrong argument list, or into no
+     argument list at all, leaves every substring of the text where it was.
+     """
+-    found = re.search(r"<([^<>]+)> \( ([^()]*) \)", sparql)
++    found = re.search(r"<([^<>]+)> \( (.+) \) \} LIMIT \d+ \}", sparql)
+     assert found is not None, f"a compiled unit calls one producer: {sparql!r}"
+     return found.group(1), found.group(2)
+ 
+diff --git crates/geo-kernel/src/measure.rs crates/geo-kernel/src/measure.rs
+index dcf1f3bd7..8fe806169 100644
+--- crates/geo-kernel/src/measure.rs
++++ crates/geo-kernel/src/measure.rs
+@@ -1215,7 +1215,7 @@ pub(crate) fn geometry_n_with_memory<S: purrdf_lex::allocation::Admission + ?Siz
+             .map(|point| {
+                 arithmetic.geometry(
+                     dim,
+-                    GeometryBody::Point(point.as_ref().map(&mut *copy).transpose()?),
++                    GeometryBody::Point(point.as_ref().map(*copy).transpose()?),
+                 )
+             })
+             .transpose(),
+diff --git crates/hnsw/tests/float_environment.rs crates/hnsw/tests/float_environment.rs
+index 8ed586f56..479415576 100644
+--- crates/hnsw/tests/float_environment.rs
++++ crates/hnsw/tests/float_environment.rs
+@@ -12,10 +12,8 @@
+ //! named refusal; then it runs the same calls in the default environment and asserts
+ //! they answer. The register is per-thread, so no other test observes it.
+ //!
+-//! On `x86_64` the refusal names the MXCSR, which is read before anything else. On 32-bit
+-//! x86 with SSE2 no register is read, so the same flushed thread is refused on the
+-//! behavioural probe's evidence alone, and the default environment still answers: that is
+-//! the target class the probe exists for. The refusal itself is unit-tested for
++//! On `x86_64` and 32-bit x86 with SSE2 the refusal names the MXCSR, which is read
++//! before anything else. The default environment still answers. The refusal is unit-tested for
+ //! `aarch64`'s FPCR and RISC-V's `frm` in `purrdf_core::distance`, and wasm has no such
+ //! register.
+ //!
+@@ -34,14 +32,13 @@ mod purremb;
+ 
+ #[path = "support/fixture.rs"]
+ mod fixture;
+-use fixture::{bits, knn_invoke, params};
++use fixture::{bits, is_ftz, is_ftz_refusal, knn_invoke, params};
+ use std::sync::Arc;
+ 
+ use purrdf_core::DistanceMetric;
+ use purrdf_core::distance::control::Mxcsr;
+ use purrdf_core::distance::{
+-    Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
+-    Reassociated, RecordedPathError, Resolved, RowsRef,
++    Arithmetic, Bound, Bounded, Exact, Measure, Reassociated, RecordedPathError, Resolved, RowsRef,
+ };
+ use purrdf_core::purremb_fixture::reference_norm;
+ use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Ranked, VectorMatrix, guard, relation::HnswSpace};
+@@ -49,33 +46,6 @@ use purrdf_sparql_eval::{
+     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
+ };
+ 
+-/// Whether `refusal` is the flush-to-zero refusal this target reports for an FTZ thread:
+-/// the MXCSR by name where it is read, and the probe's flushed-result row where not.
+-fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
+-    let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
+-        return false;
+-    };
+-    if cfg!(target_arch = "x86_64") {
+-        matches!(
+-            evidence,
+-            FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
+-        )
+-    } else {
+-        matches!(
+-            evidence,
+-            FloatEnvironmentEvidence::Probe {
+-                operation: "f64::MIN_POSITIVE * 0.5",
+-                observed: 0,
+-                ..
+-            }
+-        )
+-    }
+-}
+-
+-fn is_ftz(error: &HnswError) -> bool {
+-    matches!(error, HnswError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
+-}
+-
+ fn is_ftz_eval(error: &EvalError) -> bool {
+     matches!(error, EvalError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
+ }
+diff --git crates/hnsw/tests/float_environment_rayon.rs crates/hnsw/tests/float_environment_rayon.rs
+index 589e055ed..d953a0e0d 100644
+--- crates/hnsw/tests/float_environment_rayon.rs
++++ crates/hnsw/tests/float_environment_rayon.rs
+@@ -32,12 +32,11 @@
+ 
+ #[path = "support/fixture.rs"]
+ mod fixture;
+-use fixture::{bits, params, seeded_matrix};
++use fixture::{bits, is_ftz, params, seeded_matrix};
+ use purrdf_core::DistanceMetric;
+ use purrdf_core::distance::Reassociated;
+ use purrdf_core::distance::control;
+-use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
+-use purrdf_hnsw::{HnswError, HnswIndex, Ranked};
++use purrdf_hnsw::{HnswIndex, Ranked};
+ 
+ /// Set FTZ on the calling thread for the rest of its life: called only from the global
+ /// pool's start handler, on threads this binary's pool owns and no other test shares.
+@@ -45,30 +44,6 @@ fn flush_this_thread() {
+     control::set_mxcsr(control::mxcsr() | control::MXCSR_FTZ);
+ }
+ 
+-/// Whether `error` is the flush-to-zero refusal this target reports: the MXCSR by name
+-/// on `x86_64`, where it is read, and the probe's flushed-result row on 32-bit x86 with
+-/// SSE2.
+-fn is_ftz(error: &HnswError) -> bool {
+-    let HnswError::FloatEnvironment(FloatEnvironmentError::FlushToZero { evidence }) = error else {
+-        return false;
+-    };
+-    if cfg!(target_arch = "x86_64") {
+-        matches!(
+-            evidence,
+-            FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
+-        )
+-    } else {
+-        matches!(
+-            evidence,
+-            FloatEnvironmentEvidence::Probe {
+-                operation: "f64::MIN_POSITIVE * 0.5",
+-                observed: 0,
+-                ..
+-            }
+-        )
+-    }
+-}
+-
+ #[test]
+ fn a_flushing_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_thread_bits() {
+     // The global pool flushes; nothing in this binary has touched rayon before, so this is
+diff --git crates/hnsw/tests/support/fixture.rs crates/hnsw/tests/support/fixture.rs
+index 1cd77f608..c3824767f 100644
+--- crates/hnsw/tests/support/fixture.rs
++++ crates/hnsw/tests/support/fixture.rs
+@@ -9,12 +9,28 @@
+ // subset. Matches the sibling `support/purremb.rs`.
+ #![allow(dead_code, unreachable_pub, unused_imports)]
+ 
+-use purrdf_core::distance::{Arithmetic, Exact};
+-use purrdf_hnsw::{Kernel, Ranked, VectorMatrix};
++use purrdf_core::distance::{Arithmetic, Exact, FloatEnvironmentError, FloatEnvironmentEvidence};
++use purrdf_hnsw::{HnswError, Kernel, Ranked, VectorMatrix};
+ use purrdf_sparql_eval::{EmbeddingKnnRelation, EvalError, PfArgs, PfRow, PropertyFunction};
+ 
+ pub use purrdf_hnsw::fixture::params;
+ 
++/// Whether `refusal` names the MXCSR flush-to-zero departure used by x86 tests.
++pub fn is_ftz_refusal(refusal: &FloatEnvironmentError) -> bool {
++    let FloatEnvironmentError::FlushToZero { evidence } = refusal else {
++        return false;
++    };
++    matches!(
++        evidence,
++        FloatEnvironmentEvidence::Register { name: "MXCSR", .. }
++    )
++}
++
++/// Whether an index refuses the MXCSR departure on its computing thread.
++pub fn is_ftz(error: &HnswError) -> bool {
++    matches!(error, HnswError::FloatEnvironment(refusal) if is_ftz_refusal(refusal))
++}
++
+ /// A deterministic `rows x dims` matrix of SplitMix64 draws in `[-1, 1)` from `seed`.
+ /// With `zero = Some(substitute)` an exact zero draw is replaced by `substitute`; with
+ /// `None` the draws are kept as they are. Nothing here reads a clock or an RNG.
+diff --git crates/rdf-core/src/distance/binary64_tests.rs crates/rdf-core/src/distance/binary64_tests.rs
+index 5c7604de3..11c0fb650 100644
+--- crates/rdf-core/src/distance/binary64_tests.rs
++++ crates/rdf-core/src/distance/binary64_tests.rs
+@@ -441,20 +441,26 @@ mod x87 {
+         // The refused case: the guard bypassed, the thread at Linux's 64-bit precision.
+         // Every double-rounding row fails and nothing else does, and the first names the
+         // departure.
+-        let (failing, probed, resolved, reassociated) = {
++        let saved = x87::control_word();
++        let (failing, probed) = {
+             let _bypassed = bypass::bypass();
+-            (
+-                failing_rows(),
+-                env::probe(),
+-                Exact::resolve(),
+-                Reassociated::resolve(),
+-            )
++            let failing = failing_rows();
++            let precision = Precision::enter();
++            let probed = env::probe_with(precision.binary64());
++            // The core-only bypass supplies a faulty token; public admission owns
++            // its separate Binary64Scope and must still guard and restore it.
++            assert_eq!(env::probe(), Ok(()));
++            assert_eq!(x87::control_word(), saved);
++            assert!(Exact::resolve().is_ok());
++            assert_eq!(x87::control_word(), saved);
++            assert!(Reassociated::resolve().is_ok());
++            assert_eq!(x87::control_word(), saved);
++            (failing, probed)
+         };
++        assert_eq!(x87::control_word(), saved);
+         assert_eq!(failing, vec![8, 9, 10, 11, 12]);
+         let refused = refusal(8, 1.0);
+         assert_eq!(probed, Err(refused));
+-        assert_eq!(resolved, Err(refused));
+-        assert_eq!(reassociated.map(|_| ()), Err(refused));
+         assert!(
+             refused
+                 .to_string()
+@@ -467,6 +473,7 @@ mod x87 {
+         assert_eq!(env::probe(), Ok(()));
+         assert!(Exact::resolve().is_ok());
+         assert!(Reassociated::resolve().is_ok());
++        assert_eq!(x87::control_word(), saved);
+     }
+ 
+     #[test]
+diff --git crates/rdf-core/src/distance/tests.rs crates/rdf-core/src/distance/tests.rs
+index f7d857408..967ec972a 100644
+--- crates/rdf-core/src/distance/tests.rs
++++ crates/rdf-core/src/distance/tests.rs
+@@ -1064,9 +1064,8 @@ fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
+     let saved = control::mxcsr();
+     for (name, bits, _, probe) in mxcsr_departures() {
+         let refused = resolve_under_mxcsr(saved | bits);
+-        // On x86_64 the register is read first, so the refusal names it; on 32-bit x86
+-        // no register is read and the probe's refusal is the answer.
+-        #[cfg(target_arch = "x86_64")]
++        // Both x86 with SSE2 and x86_64 read MXCSR before the probe, so the
++        // refusal identifies the register that held the invalid bits.
+         let expected = {
+             let evidence = FloatEnvironmentEvidence::Register {
+                 name: "MXCSR",
+@@ -1079,8 +1078,6 @@ fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
+                 _ => FloatEnvironmentError::RoundingMode { evidence },
+             }
+         };
+-        #[cfg(target_arch = "x86")]
+-        let expected = probe;
+         assert_eq!(refused, Err(expected), "{name} must be refused by name");
+     }
+     // The valid neighbour: the same register with those fields clear resolves, so the
+diff --git crates/rdf-core/src/query_scope/counters.rs crates/rdf-core/src/query_scope/counters.rs
+index 4b21823be..5c0163ef7 100644
+--- crates/rdf-core/src/query_scope/counters.rs
++++ crates/rdf-core/src/query_scope/counters.rs
+@@ -18,144 +18,6 @@ pub enum ConstraintDecision {
+     Undecided(ReasonId),
+ }
+ 
+-#[cfg(test)]
+-mod tests {
+-    use super::*;
+-    use crate::{TermBox, TermValue, evidence::ReasonDescription};
+-    use core::convert::Infallible;
+-    use purrdf_lex::allocation::Resident;
+-
+-    #[test]
+-    fn unknown_time_is_counted_separately_even_when_place_rejects() {
+-        let cause = TermValue::iri("https://example.org/missing-time");
+-        let concern = TermValue::Triple {
+-            s: TermBox::new(TermValue::iri("https://example.org/constraint")),
+-            p: TermBox::new(TermValue::iri("https://example.org/time")),
+-            o: TermBox::new(TermValue::simple_literal("required")),
+-        };
+-        let reason = ReasonDescription {
+-            cause: &cause,
+-            concern: &concern,
+-            constraint: None,
+-            vault: None,
+-            watermark: None,
+-        }
+-        .identity(&mut Memory::new(&mut Resident))
+-        .unwrap();
+-        let time = Digest32::new([1; 32]);
+-        let place = Digest32::new([2; 32]);
+-        let mut scope = ScopeCounters::with_admission(&[time, place], Resident).unwrap();
+-        let retained = scope.live;
+-        for _ in 0..2279 {
+-            scope
+-                .evaluate(
+-                    |constraint| {
+-                        Ok::<_, Infallible>(if constraint == time {
+-                            ConstraintDecision::Undecided(reason)
+-                        } else {
+-                            ConstraintDecision::Rejected
+-                        })
+-                    },
+-                    |decisions| {
+-                        assert_eq!(
+-                            decisions,
+-                            &[
+-                                (0, ConstraintDecision::Undecided(reason)),
+-                                (1, ConstraintDecision::Rejected)
+-                            ]
+-                        );
+-                        Ok::<_, Infallible>(())
+-                    },
+-                )
+-                .unwrap();
+-            assert_eq!(scope.live, retained);
+-        }
+-        let counts = scope.counts().unwrap();
+-        assert_eq!(
+-            (counts[0].satisfied, counts[0].rejected, counts[0].undecided),
+-            (0, 0, 2279)
+-        );
+-        assert_eq!(
+-            (counts[1].satisfied, counts[1].rejected, counts[1].undecided),
+-            (0, 2279, 0)
+-        );
+-    }
+-
+-    #[test]
+-    fn operational_failure_cannot_publish_partial_counts_or_an_unknown_row() {
+-        let constraints = [Digest32::new([1; 32]), Digest32::new([2; 32])];
+-        let mut scope = ScopeCounters::with_admission(&constraints, Resident).unwrap();
+-        let mut emitted = false;
+-        let error = scope
+-            .evaluate(
+-                |constraint| {
+-                    if constraint == constraints[0] {
+-                        Ok(ConstraintDecision::Satisfied)
+-                    } else {
+-                        Err("original scan failed")
+-                    }
+-                },
+-                |_| {
+-                    emitted = true;
+-                    Ok(())
+-                },
+-            )
+-            .unwrap_err();
+-        assert!(matches!(
+-            error,
+-            ScopeError::Callback("original scan failed")
+-        ));
+-        assert!(!emitted);
+-        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
+-    }
+-
+-    #[test]
+-    fn satisfied_candidates_need_no_temporary_decision_capacity() {
+-        #[derive(Debug)]
+-        struct Capacity {
+-            live: usize,
+-            limit: usize,
+-        }
+-        impl Admission for Capacity {
+-            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+-                if bytes > self.limit {
+-                    return Err(StorageError::AdmissionFailed);
+-                }
+-                self.live = bytes;
+-                Ok(())
+-            }
+-        }
+-        let mut scope = ScopeCounters::with_admission(
+-            &[Digest32::new([1; 32])],
+-            Capacity {
+-                live: 0,
+-                limit: usize::MAX,
+-            },
+-        )
+-        .unwrap();
+-        scope.admission.limit = scope.live;
+-        scope
+-            .evaluate(
+-                |_| Ok::<_, Infallible>(ConstraintDecision::Satisfied),
+-                |decisions| {
+-                    assert_eq!(decisions, []);
+-                    Ok::<_, Infallible>(())
+-                },
+-            )
+-            .unwrap();
+-        assert_eq!(scope.counts().unwrap()[0].satisfied, 1);
+-        assert_eq!(scope.admission.live, scope.live);
+-        assert!(matches!(
+-            scope.evaluate(
+-                |_| Ok::<_, Infallible>(ConstraintDecision::Rejected),
+-                |_| Ok::<_, Infallible>(())
+-            ),
+-            Err(ScopeError::Storage(StorageError::AdmissionFailed))
+-        ));
+-        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
+-    }
+-}
+-
+ /// Separate exact counts for one caller-declared constraint.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub struct ConstraintCounts {
+@@ -313,3 +175,141 @@ impl<S: Admission> ScopeCounters<S> {
+         result
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{TermBox, TermValue, evidence::ReasonDescription};
++    use core::convert::Infallible;
++    use purrdf_lex::allocation::Resident;
++
++    #[test]
++    fn unknown_time_is_counted_separately_even_when_place_rejects() {
++        let cause = TermValue::iri("https://example.org/missing-time");
++        let concern = TermValue::Triple {
++            s: TermBox::new(TermValue::iri("https://example.org/constraint")),
++            p: TermBox::new(TermValue::iri("https://example.org/time")),
++            o: TermBox::new(TermValue::simple_literal("required")),
++        };
++        let reason = ReasonDescription {
++            cause: &cause,
++            concern: &concern,
++            constraint: None,
++            vault: None,
++            watermark: None,
++        }
++        .identity(&mut Memory::new(&mut Resident))
++        .unwrap();
++        let time = Digest32::new([1; 32]);
++        let place = Digest32::new([2; 32]);
++        let mut scope = ScopeCounters::with_admission(&[time, place], Resident).unwrap();
++        let retained = scope.live;
++        for _ in 0..2279 {
++            scope
++                .evaluate(
++                    |constraint| {
++                        Ok::<_, Infallible>(if constraint == time {
++                            ConstraintDecision::Undecided(reason)
++                        } else {
++                            ConstraintDecision::Rejected
++                        })
++                    },
++                    |decisions| {
++                        assert_eq!(
++                            decisions,
++                            &[
++                                (0, ConstraintDecision::Undecided(reason)),
++                                (1, ConstraintDecision::Rejected)
++                            ]
++                        );
++                        Ok::<_, Infallible>(())
++                    },
++                )
++                .unwrap();
++            assert_eq!(scope.live, retained);
++        }
++        let counts = scope.counts().unwrap();
++        assert_eq!(
++            (counts[0].satisfied, counts[0].rejected, counts[0].undecided),
++            (0, 0, 2279)
++        );
++        assert_eq!(
++            (counts[1].satisfied, counts[1].rejected, counts[1].undecided),
++            (0, 2279, 0)
++        );
++    }
++
++    #[test]
++    fn operational_failure_cannot_publish_partial_counts_or_an_unknown_row() {
++        let constraints = [Digest32::new([1; 32]), Digest32::new([2; 32])];
++        let mut scope = ScopeCounters::with_admission(&constraints, Resident).unwrap();
++        let mut emitted = false;
++        let error = scope
++            .evaluate(
++                |constraint| {
++                    if constraint == constraints[0] {
++                        Ok(ConstraintDecision::Satisfied)
++                    } else {
++                        Err("original scan failed")
++                    }
++                },
++                |_| {
++                    emitted = true;
++                    Ok(())
++                },
++            )
++            .unwrap_err();
++        assert!(matches!(
++            error,
++            ScopeError::Callback("original scan failed")
++        ));
++        assert!(!emitted);
++        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
++    }
++
++    #[test]
++    fn satisfied_candidates_need_no_temporary_decision_capacity() {
++        #[derive(Debug)]
++        struct Capacity {
++            live: usize,
++            limit: usize,
++        }
++        impl Admission for Capacity {
++            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
++                if bytes > self.limit {
++                    return Err(StorageError::AdmissionFailed);
++                }
++                self.live = bytes;
++                Ok(())
++            }
++        }
++        let mut scope = ScopeCounters::with_admission(
++            &[Digest32::new([1; 32])],
++            Capacity {
++                live: 0,
++                limit: usize::MAX,
++            },
++        )
++        .unwrap();
++        scope.admission.limit = scope.live;
++        scope
++            .evaluate(
++                |_| Ok::<_, Infallible>(ConstraintDecision::Satisfied),
++                |decisions| {
++                    assert_eq!(decisions, []);
++                    Ok::<_, Infallible>(())
++                },
++            )
++            .unwrap();
++        assert_eq!(scope.counts().unwrap()[0].satisfied, 1);
++        assert_eq!(scope.admission.live, scope.live);
++        assert!(matches!(
++            scope.evaluate(
++                |_| Ok::<_, Infallible>(ConstraintDecision::Rejected),
++                |_| Ok::<_, Infallible>(())
++            ),
++            Err(ScopeError::Storage(StorageError::AdmissionFailed))
++        ));
++        assert!(matches!(scope.counts(), Err(ScopeError::Aborted)));
++    }
++}
+diff --git crates/retrieval/src/search.rs crates/retrieval/src/search.rs
+index 976cf3814..14c8802a6 100644
+--- crates/retrieval/src/search.rs
++++ crates/retrieval/src/search.rs
+@@ -65,7 +65,7 @@
+ //! read it back off the answer, which is what happens here —
+ //! [`execute`](crate::execute) tags each stream with the plan its unit was
+ //! compiled from, the bridge below keeps
+-//! the tag, and [`fuse`] names it in the trailer only when every stream still
++//! the tag, and [`crate::fuse`] names it in the trailer only when every stream still
+ //! agrees on it.
+ //!
+ //! `search` therefore takes [`SearchResult::plan_id`] from the trailer and
+@@ -179,7 +179,7 @@
+ //! nothing. That is [`FusionError::UnknownStratum`], naming the first executed
+ //! stratum the profile does not weight.
+ //!
+-//! [`fuse`] itself keeps refusing an unweighted stratum outright, and that is
++//! [`crate::fuse`] itself keeps refusing an unweighted stratum outright, and that is
+ //! not a contradiction: its caller hands it `(stratum, stream)` pairs directly
+ //! and thereby asserts that each one belongs in this fusion. `search` makes no
+ //! such assertion on the caller's behalf — it decides which streams to hand over
+@@ -469,7 +469,7 @@ impl From<FusionError> for SearchError {
+ /// — and a caller that wants the whole of every stratum says so with
+ /// [`ReadBound::Complete`](crate::ReadBound::Complete).
+ ///
+-/// [`fuse`] remains the lower-level entry and still takes a bound, because a
++/// [`crate::fuse`] remains the lower-level entry and still takes a bound, because a
+ /// caller assembling its own streams has no request to read one from. That entry
+ /// refuses a bound the streams were not planned for
+ /// ([`FusionError::ReadBoundMismatch`]), so the two cannot drift.
+@@ -962,7 +962,7 @@ struct Attempt {
+ /// the profile is
+ /// deliberately not a planning input, and keeping the executor profile-free is
+ /// what lets the unfused rung be consumed with no fusion law in the path.
+-/// [`fuse`] nonetheless
++/// [`crate::fuse`] nonetheless
+ /// requires a [`RankedRow`], which carries the contribution beside them. This
+ /// adapter is that conversion, and
+ /// it is the *only* place the crate performs it.
+@@ -1050,7 +1050,7 @@ impl<'d> RankedStreamAdapter<'d> {
+     /// [`execute`](crate::execute) tags every stream it returns with the bound
+     /// the bundle was compiled for
+     /// ([`StratumStream::fused_bound`](crate::StratumStream)), and
+-    /// this is how that tag continues into the fusion: [`fuse`] reads it back
++    /// this is how that tag continues into the fusion: [`crate::fuse`] reads it back
+     /// through [`RankedStream::fused_bound`] and refuses a `top_k` that disagrees
+     /// with it, so a read taken for one bound is never served as an answer to
+     /// another.
+@@ -1071,7 +1071,7 @@ impl<'d> RankedStreamAdapter<'d> {
+     /// [`execute`](crate::execute) tags every stream it returns with the plan its
+     /// unit was compiled from
+     /// ([`StratumStream::plan_id`](crate::StratumStream)), and
+-    /// this is how that tag continues into the fusion: [`fuse`] reads it back
++    /// this is how that tag continues into the fusion: [`crate::fuse`] reads it back
+     /// through [`RankedStream::plan_id`] and names it in the trailer, so the
+     /// identity in a fused answer is the one that travelled with the rows.
+     ///
+diff --git crates/sparql-eval/src/engine.rs crates/sparql-eval/src/engine.rs
+index 6a49e895f..2400e7e7f 100644
+--- crates/sparql-eval/src/engine.rs
++++ crates/sparql-eval/src/engine.rs
+@@ -6626,21 +6626,6 @@ fn check_plan_matches_registries(
+         .map_err(EvaluationFailure::into_diagnostic)
+ }
+ 
+-/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
+-/// registry fingerprint — validated against `relations` by
+-/// [`check_plan_matches_relations`] at every call site before this runs, so it is safe to
+-/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
+-/// taken over, sorted.
+-///
+-/// Called once per governed execution rather than per outcome arm, so the refusal path
+-/// ([`NativeSparqlEngine::admit`]), the complete path, and the truncated path all carry
+-/// the SAME identity for the SAME execution — there is exactly one place this is computed
+-/// and every [`GovernedOutcome`] arm reads from it.
+-///
+-/// # Errors
+-///
+-/// The host's execution diagnostic if a registered relation's declaration
+-/// methods panic.
+ /// A governed visitor result retaining its original registry identity buffers.
+ /// Native callers borrow the outcome; only legacy egress transfers caller storage.
+ pub struct AdmittedInternedGoverned<R> {
+@@ -6696,6 +6681,21 @@ struct AdmittedRelationIdentity {
+     frame: crate::workspace::LexicalFrame,
+ }
+ 
++/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
++/// registry fingerprint — validated by the preparation and registry admission
++/// checks before this runs, so it is safe to
++/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
++/// taken over, sorted.
++///
++/// Called once per governed execution rather than per outcome arm, so the refusal path
++/// (`NativeSparqlEngine::admit_refusal`), the complete path, and the truncated path all carry
++/// the SAME identity for the SAME execution — there is exactly one place this is computed
++/// and every [`GovernedOutcome`] arm reads from it.
++///
++/// # Errors
++///
++/// The host's execution diagnostic if a registered relation's declaration
++/// methods panic, or the original admission failure while retaining the identity.
+ fn relation_identity(
+     prepared: &PreparedQuery,
+     relations: &crate::property_fn::PropertyFunctionRegistry,
+diff --git crates/sparql-eval/src/geo/relation.rs crates/sparql-eval/src/geo/relation.rs
+index bd9b4702e..19da39b2a 100644
+--- crates/sparql-eval/src/geo/relation.rs
++++ crates/sparql-eval/src/geo/relation.rs
+@@ -150,7 +150,7 @@ impl RowBounds {
+ ///
+ /// # Emission order is `(?so1, ?so2)` ascending, and that is the contract
+ ///
+-/// Rows are sorted lexicographically on the pair, in [`TermValue`]'s own total
++/// Rows are sorted lexicographically on the pair, in [`purrdf_core::TermValue`]'s own total
+ /// order, and deduplicated. The engine preserves that order verbatim into the
+ /// query's answer, so it is part of this relation's public behaviour rather than
+ /// an implementation detail.
+diff --git crates/sparql-eval/src/property_fn_eval.rs crates/sparql-eval/src/property_fn_eval.rs
+index 4c93e59c5..087ef9802 100644
+--- crates/sparql-eval/src/property_fn_eval.rs
++++ crates/sparql-eval/src/property_fn_eval.rs
+@@ -3969,7 +3969,7 @@ impl CallCursor {
+     }
+ 
+     /// The work the relation has reported so far, summed over every pull
+-    /// ([`PfCursor::take_work`]).
++    /// ([`crate::property_fn::PfCursor::take_work`]).
+     #[must_use]
+     pub const fn work(&self) -> u64 {
+         self.work

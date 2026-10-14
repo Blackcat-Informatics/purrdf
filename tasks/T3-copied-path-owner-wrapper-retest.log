@@ -1,0 +1,12 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 8m 33s
+     Running unittests src/lib.rs (/opt/.cargo/ab/9210f0404045ba/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 1 test
+copied Slice depth 20: 400 root-prefix steps
+copied Slice depth 40: 1600 root-prefix steps
+copied Slice depth 80: 6400 root-prefix steps
+test eval::tests::diagnostic_copied_path_prefix_steps ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1620 filtered out; finished in 0.00s
+

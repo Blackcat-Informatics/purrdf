@@ -1,0 +1,70 @@
+diff --git a/crates/sparql-eval/tests/stack_refusal.rs b/crates/sparql-eval/tests/stack_refusal.rs
+index cb932e05b..81de1a201 100644
+--- a/crates/sparql-eval/tests/stack_refusal.rs
++++ b/crates/sparql-eval/tests/stack_refusal.rs
+@@ -1,8 +1,8 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! A prepared correlated query answers on the caller's stack and refuses on a
+-//! smaller physical stack, with the same typed boundary under metering. The
++//! A prepared correlated query retains the native small-stack refusal and the
++//! WASM worklist answer, then refuses below each physical margin. The
+ //! shared runner executes this test natively and on actual WebAssembly.
+ 
+ use purrdf_core::{RdfDatasetBuilder, SparqlResult, TermValue};
+@@ -24,8 +24,8 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
+     }
+     let dataset = builder.freeze().expect("valid resident fixture");
+     let engine = NativeSparqlEngine::new();
+-    // Below the unchanged host-depth ceiling, but tall enough to consume the
+-    // smaller stack's headroom. An even number of negations selects only s1.
++    // Below the unchanged host-depth ceiling. Native and WASM frames and margins
++    // differ on the smaller stack. An even number of negations selects only s1.
+     let depth = 80;
+     let query = format!(
+         "SELECT ?s WHERE {{ {}?s <http://example.org/q> ?z{} }}",
+@@ -73,20 +73,40 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
+         assert_answer(evaluate(&engine).expect("the query answers on the caller's stack"));
+         // Engines contain caller-selected resolvers and are not Send. Carry the
+         // prepared plan into a fresh engine on the actual evaluating stack.
+-        let refused = purrdf_stack::on_stack_scoped(192 * 1024, || {
++        let smaller = purrdf_stack::on_stack_scoped(192 * 1024, || {
+             let scoped_engine = NativeSparqlEngine::new();
+             let result = evaluate(&scoped_engine);
+             assert_answer(
+                 scoped_engine
+                     .query_prepared(&dataset, &canary, &[], QueryOptions::EMPTY)
+-                    .expect("the refused engine still answers its shallow canary"),
++                    .expect("the smaller-stack engine still answers its shallow canary"),
+             );
+             result
+         })
+-        .expect("the smaller stack scope is admitted")
++        .expect("the smaller stack scope is admitted");
++        // The native margin is 128 KiB and the WASM shadow-stack margin 64 KiB.
++        // Preserve each actual physical boundary without changing either guard.
++        #[cfg(not(target_arch = "wasm32"))]
++        assert_eq!(
++            smaller
++                .expect_err("the native smaller stack retains its typed refusal")
++                .code,
++            EvalError::STACK_EXHAUSTED_CODE,
++        );
++        #[cfg(target_arch = "wasm32")]
++        assert_answer(smaller.expect("the worklist query answers on the WASM smaller stack"));
++        let refused = purrdf_stack::on_stack_scoped(purrdf_stack::MARGIN_BYTES / 2, || {
++            evaluate(&NativeSparqlEngine::new())
++        })
++        .expect("the below-margin stack scope is admitted")
+         .expect_err("the actual stack guard refuses before a partial answer escapes");
+         assert_eq!(refused.code, EvalError::STACK_EXHAUSTED_CODE);
+         // The caller's stack context is restored after each typed refusal.
++        assert_answer(
++            engine
++                .query_prepared(&dataset, &canary, &[], QueryOptions::EMPTY)
++                .expect("the caller's shallow canary answers after refusal"),
++        );
+         assert_answer(
+             evaluate(&engine).expect("the same engine still answers on the caller's stack"),
+         );

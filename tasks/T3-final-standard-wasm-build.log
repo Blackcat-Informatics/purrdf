@@ -1,0 +1,78 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/hash)
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf-core)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling digest v0.11.3
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling sha2 v0.11.0
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling crossbeam-epoch v0.9.18
+   Compiling quote v1.0.46
+   Compiling regex-automata v0.4.14
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling rustversion v1.0.22
+   Compiling either v1.16.0
+   Compiling syn v2.0.118
+   Compiling bumpalo v3.20.3
+   Compiling rayon v1.12.0
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling inout v0.2.2
+   Compiling once_cell v1.21.4
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.2
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/stack)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/xsd)
+   Compiling regex v1.12.4
+   Compiling cpubits v0.1.1
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling aes v0.9.3
+   Compiling structured-zstd v0.0.49
+   Compiling ctr v0.10.1
+   Compiling ghash v0.6.0
+   Compiling aead v0.6.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/datalog)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/mime)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/shex)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/json)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/entail)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/purrdf)
+   Compiling purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf-wasm)
+    Finished `release` profile [optimized] target(s) in 11m 02s

@@ -1,0 +1,14 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+error: usage of an `unsafe` block
+    --> crates/sparql-eval/src/eval.rs:3678:9
+     |
+3678 |         unsafe { self.node.as_ref() }
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: the lint level is defined here
+    --> crates/sparql-eval/src/lib.rs:74:49
+     |
+  74 | #![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
+     |                                                 ^^^^^^^^^^^
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error

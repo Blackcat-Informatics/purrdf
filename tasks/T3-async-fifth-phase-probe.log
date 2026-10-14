@@ -1,0 +1,28 @@
+depth phase start: 1791931327690
+depth phase optional bisection complete: 1791931330104
+depth phase optional sync complete: 1791931330215
+depth phase optional async 0 complete: 1791931330322
+depth phase optional async 1 complete: 1791931330434
+depth phase false tree sync complete: 1791931331072
+depth phase true tree sync complete: 1791931331550
+depth phase true tree async complete: 1791931332238
+depth phase false tree async complete: 1791931332713
+
+Interrupted while running:
+
+⚠ tests/async-concurrency.test.mjs (tests/async-concurrency.test.mjs:1:1)
+✖ tests/async-concurrency.test.mjs (125346.00941ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 0
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 125355.679414
+
+✖ failing tests:
+
+test at tests/async-concurrency.test.mjs:1:1
+✖ tests/async-concurrency.test.mjs (125346.00941ms)
+  'Promise resolution is still pending but the event loop has already resolved'

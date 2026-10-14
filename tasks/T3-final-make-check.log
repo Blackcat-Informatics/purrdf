@@ -1,0 +1,432 @@
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+   Compiling libc v0.2.186
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/rdf-core)
+    Checking hashbrown v0.17.1
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/alloc-probe)
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking regex-automata v0.4.14
+    Checking either v1.16.0
+   Compiling getrandom v0.3.4
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/deflate)
+    Checking crossbeam-epoch v0.9.18
+    Checking fastrand v2.4.1
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking twox-hash v2.1.2
+    Checking inout v0.2.2
+    Checking crossbeam-deque v0.8.6
+    Checking cmov v0.5.4
+    Checking digest v0.11.3
+    Checking structured-zstd v0.0.49
+    Checking cpubits v0.1.1
+    Checking sha2 v0.11.0
+    Checking ctutils v0.4.2
+    Checking cipher v0.5.2
+    Checking regex v1.12.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/stack)
+    Checking rayon v1.12.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/testkit)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/ed25519)
+    Checking universal-hash v0.6.1
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+    Checking polyval v0.7.3
+    Checking visual-hashing v1.0.0
+    Checking unicode-ident v1.0.24
+   Compiling proc-macro2 v1.0.106
+    Checking ghash v0.6.0
+   Compiling quote v1.0.46
+    Checking aes-gcm v0.11.1
+   Compiling heck v0.5.0
+    Checking utf8parse v0.2.2
+    Checking is_terminal_polyfill v1.70.2
+    Checking anstyle v1.0.14
+    Checking anstyle-query v1.1.5
+    Checking colorchoice v1.0.5
+    Checking anstyle-parse v1.0.0
+    Checking clap_lex v1.1.0
+    Checking strsim v0.11.1
+   Compiling wasm-bindgen-shared v0.2.125
+    Checking syn v2.0.118
+    Checking anstream v1.0.0
+   Compiling rustversion v1.0.22
+   Compiling target-lexicon v0.13.5
+    Checking clap_builder v4.6.0
+    Checking once_cell v1.21.4
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling clap_derive v4.6.1
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/hash-conformance)
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling pyo3-build-config v0.29.0
+    Checking leb128fmt v0.1.0
+   Compiling pyo3-macros-backend v0.29.0
+    Checking wasm-encoder v0.259.0
+   Compiling pyo3-ffi v0.29.0
+    Checking clap v4.6.1
+   Compiling pyo3 v0.29.0
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/wasm-link)
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling pyo3-macros v0.29.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/jsonschema)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-algebra)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/helper-census)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/mime)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/conformance-kit)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+error: large size difference between variants
+    --> crates/sparql-eval/src/binop.rs:1305:1
+     |
+1305 | / pub(crate) enum LateralStep<I: ViewTermId> {
+1306 | |     Complete(Evaluated<I>),
+     | |     ---------------------- the second-largest variant contains at least 144 bytes
+1307 | |     Child(LateralSequence<I>, LateralPending),
+     | |     ----------------------------------------- the largest variant contains at least 504 bytes
+1308 | | }
+     | |_^ the entire enum is at least 504 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+     = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+1307 -     Child(LateralSequence<I>, LateralPending),
+1307 +     Child(Box<LateralSequence<I>>, LateralPending),
+     |
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/binop.rs:1549:14
+     |
+1549 |     per_row: &crate::AdmittedVec<(RetainedRow<D::Id>, SolutionSeq<D::Id>)>,
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/binop.rs:1555:25
+     |
+1555 |         .union_admitted(&right_schema, &ctx.growth)?
+     |                         ^^^^^^^^^^^^^ help: change this to: `right_schema`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+     = note: `-D clippy::needless-borrow` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: large size difference between variants
+    --> crates/sparql-eval/src/eval.rs:3613:1
+     |
+3613 | /  enum OrdinaryFilterStep<'a, I: ViewTermId> {
+3614 | |      Complete(Evaluated<I>),
+     | |      ---------------------- the second-largest variant contains at least 144 bytes
+3615 | |/     Child {
+3616 | ||         sequence: crate::expr::FilterSequence<'a, I>,
+3617 | ||         decision: crate::expr::ExistsChild<I>,
+3618 | ||         record: Option<crate::evidence_exec::RowEvidence>,
+3619 | ||     },
+     | ||_____- the largest variant contains at least 1298 bytes
+3620 | |  }
+     | |__^ the entire enum is at least 1298 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+3616 -         sequence: crate::expr::FilterSequence<'a, I>,
+3616 +         sequence: Box<crate::expr::FilterSequence<'a, I>>,
+     |
+
+error: the following explicit lifetimes could be elided: 'a
+    --> crates/sparql-eval/src/eval.rs:3663:6
+     |
+3663 | impl<'a> OrdinaryPosition<'a> {
+     |      ^^                   ^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+     = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+     |
+3663 - impl<'a> OrdinaryPosition<'a> {
+3663 + impl OrdinaryPosition<'_> {
+     |
+
+error: large size difference between variants
+    --> crates/sparql-eval/src/eval.rs:3696:1
+     |
+3696 | / enum OrdinaryExistsSchedule<'a, I: ViewTermId> {
+3697 | |     Immediate(crate::expr::FilterSequence<'a, I>),
+     | |     --------------------------------------------- the largest variant contains at least 1168 bytes
+3698 | |     Descend(OrdinaryPosition<'a>),
+     | |     ----------------------------- the second-largest variant contains at least 16 bytes
+3699 | | }
+     | |_^ the entire enum is at least 1168 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+3697 -     Immediate(crate::expr::FilterSequence<'a, I>),
+3697 +     Immediate(Box<crate::expr::FilterSequence<'a, I>>),
+     |
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/eval.rs:3837:19
+     |
+3837 |         position: OrdinaryPosition<'a>,
+     |                   ^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+     = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+     |
+3837 |         position: &OrdinaryPosition<'a>,
+     |                   +
+
+error: this `if` statement can be collapsed
+    --> crates/sparql-eval/src/eval.rs:3880:13
+     |
+3880 | /             if let OrdinaryAfter::Exists { state, .. } = &mut frame.after {
+3881 | |                 if let Some(child) = &mut state.child {
+3882 | |                     child.abort(self.ctx);
+3883 | |                 }
+3884 | |             }
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+     = note: `-D clippy::collapsible-if` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+     |
+3880 ~             if let OrdinaryAfter::Exists { state, .. } = &mut frame.after
+3881 ~                 && let Some(child) = &mut state.child {
+3882 |                     child.abort(self.ctx);
+3883 ~                 }
+     |
+
+error: this `if` statement can be collapsed
+    --> crates/sparql-eval/src/eval.rs:3885:13
+     |
+3885 | /             if let OrdinaryAfter::LateralRight { state, .. } = &mut frame.after {
+3886 | |                 if let Some(child) = &mut state.child {
+3887 | |                     child.abort(self.ctx);
+3888 | |                 }
+3889 | |             }
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+     |
+3885 ~             if let OrdinaryAfter::LateralRight { state, .. } = &mut frame.after
+3886 ~                 && let Some(child) = &mut state.child {
+3887 |                     child.abort(self.ctx);
+3888 ~                 }
+     |
+
+error: the following explicit lifetimes could be elided: 'a
+    --> crates/sparql-eval/src/eval.rs:3895:24
+     |
+3895 | fn eval_ordinary_chain<'a, D: DatasetView + Sync>(
+     |                        ^^
+3896 |     pattern: &'a GraphPattern,
+     |               ^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_lifetimes
+     = note: `-D clippy::needless-lifetimes` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_lifetimes)]`
+help: elide the lifetimes
+     |
+3895 ~ fn eval_ordinary_chain<D: DatasetView + Sync>(
+3896 ~     pattern: &GraphPattern,
+     |
+
+error: large size difference between variants
+   --> crates/sparql-eval/src/expr.rs:146:1
+    |
+146 | / pub(crate) enum FilterStart<'e, I: ViewTermId> {
+147 | |     Complete(Evaluated<I>),
+    | |     ---------------------- the second-largest variant contains at least 144 bytes
+148 | |     Sequence(FilterSequence<'e, I>),
+    | |     ------------------------------- the largest variant contains at least 1168 bytes
+149 | | }
+    | |_^ the entire enum is at least 1168 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+148 -     Sequence(FilterSequence<'e, I>),
+148 +     Sequence(Box<FilterSequence<'e, I>>),
+    |
+
+error: large size difference between variants
+   --> crates/sparql-eval/src/expr.rs:282:1
+    |
+282 | / pub(crate) enum FilterSequenceStep<'e, I: ViewTermId> {
+283 | |     Complete(Evaluated<I>),
+    | |     ---------------------- the second-largest variant contains at least 144 bytes
+284 | |     Exists(FilterSequence<'e, I>, u32),
+    | |     ---------------------------------- the largest variant contains at least 1172 bytes
+285 | | }
+    | |_^ the entire enum is at least 1172 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+284 -     Exists(FilterSequence<'e, I>, u32),
+284 +     Exists(Box<FilterSequence<'e, I>>, u32),
+    |
+
+error: large size difference between variants
+    --> crates/sparql-eval/src/expr.rs:2531:1
+     |
+2531 | / pub(crate) enum ExistsEntered<I: ViewTermId> {
+2532 | |     Complete(bool),
+     | |     -------------- the second-largest variant contains at least 1 bytes
+2533 | |     Child(ExistsPending<I>),
+     | |     ----------------------- the largest variant contains at least 233 bytes
+2534 | | }
+     | |_^ the entire enum is at least 233 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+2533 -     Child(ExistsPending<I>),
+2533 +     Child(Box<ExistsPending<I>>),
+     |
+
+error: the function `outer_bindings_for_substitution` doesn't need a mutable reference
+    --> crates/sparql-eval/src/expr.rs:2680:81
+     |
+2680 |                 let substitution = outer_bindings_for_substitution(row, schema, &mut ledger_scope)?;
+     |                                                                                 ^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_mut_passed
+     = note: `-D clippy::unnecessary-mut-passed` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::unnecessary_mut_passed)]`
+help: remove this `mut`
+     |
+2680 -                 let substitution = outer_bindings_for_substitution(row, schema, &mut ledger_scope)?;
+2680 +                 let substitution = outer_bindings_for_substitution(row, schema, &ledger_scope)?;
+     |
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/expr.rs:2863:16
+     |
+2863 |         inner: Evaluated<I>,
+     |                ^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+     |
+2863 |         inner: &Evaluated<I>,
+     |                +
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/sparql-eval/src/binop.rs:1399:14
+     |
+1399 |         ctx: &mut EvalCtx<'_, D>,
+     |              ^----^^^^^^^^^^^^^^
+     |               |
+     |               help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+     = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/sparql-eval/src/binop.rs:1552:10
+     |
+1552 |     ctx: &mut EvalCtx<'_, D>,
+     |          ^----^^^^^^^^^^^^^^
+     |           |
+     |           help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/sparql-eval/src/expr.rs:2843:10
+     |
+2843 |     ctx: &mut EvalCtx<'_, D>,
+     |          ^----^^^^^^^^^^^^^^
+     |           |
+     |           help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/sparql-eval/src/expr.rs:3272:10
+     |
+3272 |     ctx: &mut EvalCtx<'_, D>,
+     |          ^----^^^^^^^^^^^^^^
+     |           |
+     |           help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+
+error: this parameter is a mutable reference but is not used mutably
+   --> crates/sparql-eval/src/modifier.rs:510:10
+    |
+510 |     ctx: &mut EvalCtx<'_, D>,
+    |          ^----^^^^^^^^^^^^^^
+    |           |
+    |           help: consider removing this `mut`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+
+error: this parameter is a mutable reference but is not used mutably
+   --> crates/sparql-eval/src/vm/mod.rs:549:17
+    |
+549 |         linked: &mut Linked<'_, D::Id>,
+    |                 ^----^^^^^^^^^^^^^^^^^
+    |                  |
+    |                  help: consider removing this `mut`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 21 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unnecessary structure name repetition
+    --> crates/sparql-eval/src/eval.rs:6455:30
+     |
+6455 |                     Arc::new(RootJoin),
+     |                              ^^^^^^^^ help: use the applicable keyword: `Self`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+     = note: `-D clippy::use-self` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: unnecessary structure name repetition
+    --> crates/sparql-eval/src/eval.rs:6518:34
+     |
+6518 |                         Arc::new(PanicJoin),
+     |                                  ^^^^^^^^^ help: use the applicable keyword: `Self`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 23 previous errors
+make: *** [Makefile:94: check] Error 101

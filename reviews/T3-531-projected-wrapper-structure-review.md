@@ -1,0 +1,9 @@
+# Projected native wrapper structure — 2026-10-13
+
+VERDICT: PASS for this bounded source-structure question; helper-census execution and the full #531 contract remain open.
+
+`ProjectedNative<T, U>` in `crates/sparql-eval/src/workspace.rs` is the evaluator's typed facade over the single projected-owner implementation, `purrdf_lex::allocation::SharedView<SharedWorkspacePayload<T>, U>`. Its `Clone` must retain the admitted owner without requiring `T: Clone` or `U: Clone`; its `Deref` exposes the selected immutable `U`; `try_project` returns another admitted native facade. These are trait/API forwarding at the existing workspace home, not a second owner, allocation, traversal, or projection algorithm. The `owner` conversion and `NativeSharedWorkspace::into_projected` likewise keep the private payload and grant together. The constructors/default macros in `crates/lex/src/constructors.rs` and `crates/hash/src/impls.rs` do not implement this generic `Clone`/`Deref` contract.
+
+The two `Self(self.0.clone())` bodies (`ProjectedNative::clone` and `NativeSharedWorkspace::clone`) do have identical spelling. That does **not** by itself make a new helper-census duplicate: `normalize.rs::shim_candidate` excludes any body mentioning `self`, while `census.rs::isomorphic_groups` requires at least 20 structural tokens. These clone bodies are shorter. The new `Deref` and `try_project` bodies also mention `self` and are short. There is no exact `[[distinct]]` row naming `ProjectedNative` in `helpers-ledger.toml`; none is needed for the stated detector rules, and this review does not invent one. Existing `[[distinct]]` rows are exact member sets and cannot be presumed to sanction new members.
+
+Keep the wrappers as written for this source question. The owner must still run the unchanged helper-census gate on the final source, and this verdict says nothing about compiled lifetime behavior, copied-depth work, WASM floors, or #531 completion.

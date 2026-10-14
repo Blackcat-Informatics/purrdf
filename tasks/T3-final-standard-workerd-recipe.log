@@ -1,0 +1,9 @@
+[workerd diagnostics] probe: hasAsyncQueries() = true
+[workerd diagnostics] suspension: the short request answered 200 with [["https://example.org/a",null]] while the SERVICE answer was held; the held request then answered 200; order ["short","gated"]
+[workerd diagnostics] yielding (async lane): the long job reported {"lane":"async","n":"4950","async":{"polls":15069,"yields":15069,"serviceEffects":0,"loadEffects":0,"stackHighWaterBytes":32716,"serviceWaitMs":0,"loadWaitMs":0,"yieldWaitMs":96,"freezeMs":1,"evaluateMs":136,"serializeMs":0,"silenced":[],"expressionErrors":{"err:FOAR0001":0,"err:FOAR0002":0,"err:FOCA0001":0,"err:FOCA0002":0,"err:FOCA0003":0,"err:FOCA0006":0,"err:FORG0001":0,"err:XPTY0004":0}},"observed":{"lane":"async","longDone":false}}
+[workerd diagnostics] yielding (async lane): the observer recorded {"lane":"async","longDone":false}
+[workerd diagnostics] yielding (sync control): the long job reported {"lane":"sync","n":"4950","observed":{"lane":"sync","longDone":true}}
+[workerd diagnostics] yielding (sync control): the observer recorded {"lane":"sync","longDone":true}
+workerd Worker recipe: JSPI and setTimeout present; joined, SILENT, 502 and 403 answered as the recipe promises
+suspension: a request was answered while a SERVICE answer was held open
+yielding: a 100-node self-join at yieldEveryPolls 0 yielded 15069 times and the observer answered mid-job; the synchronous control answered it only afterwards

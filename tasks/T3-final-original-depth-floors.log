@@ -1,0 +1,12 @@
+✔ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (1136.805543ms)
+ℹ admitted nesting endpoints: {"synchronous":282,"job":282}
+✔ nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards (475.459202ms)
+✔ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (3117.133702ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3860.530548

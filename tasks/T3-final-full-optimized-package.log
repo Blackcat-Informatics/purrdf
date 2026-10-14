@@ -1,0 +1,9 @@
+
+> @blackcatinformatics/purrdf@3.0.1 check
+> npm run typecheck && npm test && npm run smoke:pack
+
+
+> @blackcatinformatics/purrdf@3.0.1 typecheck
+> tsc -p tsconfig.types.json
+
+sh: line 1: tsc: command not found

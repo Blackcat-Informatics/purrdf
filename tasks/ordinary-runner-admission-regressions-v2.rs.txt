@@ -1,0 +1,139 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+    #[test]
+    fn ordinary_runner_lateral_box_and_pending_spill_refuse_before_child_entry() {
+        use crate::workspace::owned_row_regressions::{Refusal, account};
+        use std::sync::atomic::Ordering;
+
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let node = GraphPattern::Lateral {
+            left: Child::new(GraphPattern::empty_bgp()),
+            right: Child::new(GraphPattern::empty_bgp()),
+        };
+        let GraphPattern::Lateral { left, right } = &node else { unreachable!() };
+        let parent = GraphPattern::Slice { inner: Child::new(node.clone()), start: 0, length: None };
+        for spill in [false, true] {
+            // Prepare the existing caller-owned arguments before the measured
+            // account. The selected method's first new grant is the spill or box.
+            let mut ctx = EvalCtx::new(dataset.as_ref());
+            let child = eval_evaluated(left, &mut ctx).unwrap();
+            let lift = crate::governor::lift::Lift::at_admitted(&node, &ctx.growth).unwrap().detach();
+            let crate::binop::LateralStart::Sequence(sequence) = crate::binop::begin_lateral(&node, right, lift, child, &mut ctx).unwrap() else {
+                panic!("one real left row suspends the right child");
+            };
+            assert!(sequence.has_row());
+            let first = if spill {
+                Some(OrdinaryFrame {
+                    position: OrdinaryPosition::Borrowed(&parent),
+                    boundary: NodeBoundary::enter(&parent, &mut ctx).unwrap(),
+                    after: OrdinaryAfter::Slice { start: 0, length: None, lift: crate::governor::lift::Lift::at_admitted(&parent, &ctx.growth).unwrap().detach() },
+                })
+            } else { None };
+            let base = crate::QueryWorkspace::<Refusal>::control_bytes().unwrap();
+            let (workspace, ledger, _) = account(base);
+            ctx.growth = workspace.capability();
+            let mut runner = OrdinaryRunner {
+                pending: crate::AdmittedVec::new(&ctx.growth),
+                ctx: &mut ctx,
+                active: None,
+                first,
+            };
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base, "empty pending storage has no native grant");
+            let error = runner.schedule_lateral(OrdinaryPosition::Borrowed(&node), &node, right, sequence).err().expect("first new spill or box grant refuses");
+            assert!(matches!(error, EvalError::WorkspaceStopped));
+            assert!(runner.pending.is_empty());
+            drop(runner);
+            assert!(!ctx.in_substituted_exists);
+            assert!(ctx.active_copied_pattern.is_none());
+            assert!(ctx.correlated_node_maps.is_empty());
+            assert_eq!(workspace.take_failure().unwrap().identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(workspace.take_failure().is_none());
+            ctx.growth = crate::WorkspaceCapability::resident();
+            let healthy = eval_evaluated(&GraphPattern::empty_bgp(), &mut ctx).unwrap();
+            assert_eq!(healthy.rows().rows.len(), 1);
+            drop(healthy);
+            drop(ctx);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn ordinary_runner_exists_box_refusal_precedes_copied_scope_installation() {
+        use crate::workspace::owned_row_regressions::{Refusal, account};
+        use std::sync::atomic::Ordering;
+
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let expression = purrdf_sparql_algebra::Expression::Exists(Child::new(GraphPattern::empty_bgp()));
+        let node = GraphPattern::Filter { inner: Child::new(GraphPattern::empty_bgp()), expr: expression.clone() };
+        let _definition = crate::expr::force_exists_strategy_for_test(crate::expr::ForcedExistsStrategy::Definition);
+        let mut ctx = EvalCtx::new(dataset.as_ref());
+        let child = eval_evaluated(&GraphPattern::empty_bgp(), &mut ctx).unwrap();
+        let lift = crate::governor::lift::Lift::at_admitted(&node, &ctx.growth).unwrap().detach();
+        let crate::expr::FilterStart::Sequence(sequence) = crate::expr::begin_filter_child(&node, &expression, lift, child, &mut ctx).unwrap() else { panic!("one FILTER row"); };
+        let OrdinaryFilterStep::Child { sequence, decision, record } = step_ordinary_filter(sequence, &node, &expression, &mut ctx).unwrap() else { panic!("actual Definition child event"); };
+        let base = crate::QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let (workspace, ledger, _) = account(base);
+        ctx.growth = workspace.capability();
+        let mut runner = OrdinaryRunner {
+            pending: crate::AdmittedVec::new(&ctx.growth),
+            ctx: &mut ctx,
+            active: None,
+            first: None,
+        };
+        let error = runner.schedule_exists(OrdinaryPosition::Borrowed(&node), sequence, decision, record).err().expect("actual suspended EXISTS box refuses its first grant");
+        assert!(matches!(error, EvalError::WorkspaceStopped));
+        assert!(runner.first.is_none());
+        assert!(runner.pending.is_empty());
+        drop(runner);
+        assert!(!ctx.in_substituted_exists);
+        assert!(ctx.active_copied_pattern.is_none());
+        assert!(ctx.correlated_node_maps.is_empty());
+        assert_eq!(workspace.take_failure().unwrap().identity, 7);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        assert!(workspace.take_failure().is_none());
+        ctx.growth = crate::WorkspaceCapability::resident();
+        let healthy = eval_evaluated(&GraphPattern::empty_bgp(), &mut ctx).unwrap();
+        assert_eq!(healthy.rows().rows.len(), 1);
+        drop(healthy);
+        drop(ctx);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn ordinary_runner_nested_results_release_all_grants_after_the_last_output() {
+        use crate::workspace::owned_row_regressions::account;
+        use std::sync::atomic::Ordering;
+
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let _definition = crate::expr::force_exists_strategy_for_test(crate::expr::ForcedExistsStrategy::Definition);
+        for lateral in [false, true] {
+            let mut pattern = GraphPattern::empty_bgp();
+            for _ in 0..3 {
+                pattern = if lateral {
+                    GraphPattern::Lateral { left: Child::new(GraphPattern::empty_bgp()), right: Child::new(pattern) }
+                } else {
+                    GraphPattern::Filter { inner: Child::new(GraphPattern::empty_bgp()), expr: purrdf_sparql_algebra::Expression::Exists(Child::new(pattern)) }
+                };
+            }
+            let (workspace, ledger, base) = account(1_000_000);
+            let mut ctx = EvalCtx::new(dataset.as_ref());
+            ctx.growth = workspace.capability();
+            let result = eval_evaluated(&pattern, &mut ctx).unwrap();
+            assert_eq!(result.rows().rows.len(), 1);
+            assert!(!ctx.in_substituted_exists);
+            assert!(ctx.active_copied_pattern.is_none());
+            assert!(ctx.correlated_node_maps.is_empty());
+            assert!(ledger.live.load(Ordering::Relaxed) > base);
+            drop(ctx);
+            drop(workspace);
+            assert!(ledger.live.load(Ordering::Relaxed) > 0, "output keeps its original grant");
+            drop(result);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0, "completion and last output drop leave no native grant");
+        }
+    }

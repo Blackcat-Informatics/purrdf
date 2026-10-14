@@ -1,0 +1,17 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/531-evaluator-delivery-follow-up-relocated/crates/sparql-eval)
+error: the method `finish` doesn't need a mutable reference
+   --> crates/sparql-eval/src/vm/mod.rs:621:21
+    |
+621 |                     &mut self.linked,
+    |                     ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_mut_passed
+    = note: `-D clippy::unnecessary-mut-passed` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_mut_passed)]`
+help: remove this `mut`
+    |
+621 -                     &mut self.linked,
+621 +                     &self.linked,
+    |
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error
