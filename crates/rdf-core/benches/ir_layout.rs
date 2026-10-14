@@ -31,10 +31,9 @@
 //!    *measured*, not asserted. A predicate-grouped adjacency shim is also measured
 //!    so the third candidate the RFC names is benched rather than deferred.
 //!
-//! There is no secondary index in the shipped dataset today (the only non-linear
-//! structure is the sparse, handle-sorted source-location table built at freeze, so
-//! its "index-build cost" is already folded into the build group); this is noted in
-//! the build group rather than benched as a separate index pass.
+//! Cold/warm groups measure the resident lazy permutations separately from freeze.
+//! The explicit graph-free carrier also reports physical base, reifier and
+//! annotation slices and each populated ordinal index at two corpus sizes.
 
 #[path = "../tests/support/borrowed.rs"]
 mod borrowed;
@@ -44,7 +43,7 @@ use std::sync::Arc;
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    TermGuard as _, TermId, TermRef, TermValue,
+    TermGuard as _, TermId, TermRef, TermValue, TripleDataset, TripleDatasetBuilder,
 };
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
@@ -306,6 +305,116 @@ fn print_alloc_metrics() {
 // ---------------------------------------------------------------------------
 // Bench groups.
 // ---------------------------------------------------------------------------
+
+fn build_triple_corpus(rows: usize) -> (TripleDataset, [TermId; 3]) {
+    let mut builder = TripleDatasetBuilder::default();
+    let predicate = builder.intern_iri("http://example.org/triple/p").unwrap();
+    let annotation = builder
+        .intern_iri("http://example.org/triple/annotation")
+        .unwrap();
+    let object = builder
+        .intern_literal(RdfLiteral::language_tagged("searchable text", "en"))
+        .unwrap();
+    for index in 0..rows {
+        let subject = builder
+            .intern_blank(&format!("record{index}"), BlankScope(3))
+            .unwrap();
+        let quoted = builder.intern_triple(subject, predicate, object).unwrap();
+        builder.push_triple(subject, predicate, object).unwrap();
+        builder.push_reifier(subject, quoted).unwrap();
+        builder
+            .push_annotation(subject, annotation, object)
+            .unwrap();
+    }
+    (builder.freeze().unwrap(), [predicate, annotation, object])
+}
+
+fn bench_triple_carrier(c: &mut Bench) {
+    for rows in [1_000, 10_000] {
+        let window = CurrentThreadWindow::open();
+        let (dataset, [predicate, annotation, object]) = build_triple_corpus(rows);
+        let build = window.close();
+        let cold = dataset.storage_layout();
+        assert_eq!(
+            (cold.triples, cold.reifiers, cold.annotations),
+            (12 * rows, 8 * rows, 12 * rows)
+        );
+        assert_eq!(
+            (
+                cold.triple_orders,
+                cold.annotation_orders,
+                cold.reifier_targets
+            ),
+            ([0, 0], [0, 0], 0)
+        );
+        println!("[ir_layout] triple corpus rows={rows} cold={cold:?}");
+        report("triple build", build);
+        let window = CurrentThreadWindow::open();
+        assert_eq!(
+            dataset
+                .triples_for_pattern(None, Some(predicate), None)
+                .unwrap()
+                .count(),
+            rows
+        );
+        assert_eq!(
+            dataset
+                .triples_for_pattern(None, None, Some(object))
+                .unwrap()
+                .count(),
+            rows
+        );
+        assert_eq!(
+            dataset
+                .annotations_for_pattern(None, Some(annotation), None)
+                .unwrap()
+                .count(),
+            rows
+        );
+        assert_eq!(
+            dataset
+                .annotations_for_pattern(None, None, Some(object))
+                .unwrap()
+                .count(),
+            rows
+        );
+        let (_, target) = dataset.reifiers().next().unwrap();
+        assert_eq!(
+            dataset
+                .reifiers_for_pattern(None, Some(target))
+                .unwrap()
+                .count(),
+            1
+        );
+        let indexes = window.close();
+        let warm = dataset.storage_layout();
+        assert_eq!(
+            (
+                warm.triple_orders,
+                warm.annotation_orders,
+                warm.reifier_targets
+            ),
+            ([4 * rows; 2], [4 * rows; 2], 4 * rows)
+        );
+        println!("[ir_layout] triple corpus rows={rows} warm={warm:?}");
+        report("triple cold indexes", indexes);
+        let mut group = c.benchmark_group(format!("triple_carrier/{rows}"));
+        group.bench_function("build", |b| {
+            b.iter(|| std::hint::black_box(build_triple_corpus(rows)));
+        });
+        group.bench_function("warm_predicate_probe", |b| {
+            b.iter(|| {
+                std::hint::black_box(
+                    dataset
+                        .triples_for_pattern(None, Some(predicate), None)
+                        .unwrap()
+                        .count(),
+                )
+            });
+        });
+        group.finish();
+    }
+}
 
 fn bench_build(c: &mut Bench) {
     let mut group = c.benchmark_group("ir_build");
@@ -1008,6 +1117,7 @@ bench_group!(
     benches,
     bench_metrics,
     bench_build,
+    bench_triple_carrier,
     bench_literal_intern,
     bench_canonicalize,
     bench_iterate,

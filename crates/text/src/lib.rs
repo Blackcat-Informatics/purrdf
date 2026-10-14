@@ -17,6 +17,41 @@
 //! merely resemble each other produce a search that returns nothing and reports
 //! nothing.
 //!
+//! # Explicit graph-free corpora
+//!
+//! [`GraphLanguage`] remains the default: documents are keyed by graph, subject
+//! and language, and partitions by graph and language. [`GraphFree`] instead
+//! stores subject/language documents and language-only partitions. The graph
+//! coordinate occupies no storage and contributes no field to its separately
+//! domain-separated index and source identities. Both profiles use the same
+//! analyzer, scorer, token dictionary and ranked/occurrence relation code.
+//! Selecting a graph-free profile is explicit; an all-default quad dataset is
+//! not automatically reinterpreted as one. Open a
+//! [`TripleRead`](purrdf_core::TripleRead) from its immutable triple carrier:
+//!
+//! ```
+//! use purrdf_core::{RdfLiteral, TermValue, TripleDatasetBuilder};
+//! use purrdf_text::{Analyzer, GraphFree, TextIndex, TextIndexConfig};
+//! let mut builder = TripleDatasetBuilder::default();
+//! let subject = builder.intern_iri("urn:document")?;
+//! let predicate = builder.intern_iri("urn:text")?;
+//! let text = builder.intern_literal(RdfLiteral::simple("river bank"))?;
+//! builder.push_triple(subject, predicate, text)?;
+//! let dataset = builder.freeze()?;
+//! let read = dataset.read()?;
+//! let config = TextIndexConfig::<GraphFree>::for_triples(
+//!     vec![TermValue::iri("urn:text")], Analyzer::empty_lexicon(),
+//! )?;
+//! let index = TextIndex::from_dataset(&read, &config)?;
+//! assert_eq!(index.document_count(), 1);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Graph-free construction still reads the original RDF 1.2 annotation layer,
+//! scoped identities and language/direction law. Named graph requests through
+//! a triple read refuse before missing-name shortcuts and retain the original
+//! operation failure; a fresh read of the same frozen carrier remains healthy.
+//!
 //! # It mints no vocabulary
 //!
 //! Ranked retrieval reaches SPARQL through the evaluator's property-function
@@ -76,6 +111,7 @@ pub use dictionary_relation::PhraseOccurrenceRelation;
 mod error;
 mod query_workspace;
 pub use query_workspace::CapacityFailure;
+mod corpus;
 mod fixed;
 mod index;
 pub mod phonetic;
@@ -94,6 +130,7 @@ pub use analysis::{
     AlignedText, Analysis, Analyzer, AnalyzerScratch, Projection, Token, UnicodeVersion,
     UnicodeVersions, unicode_versions,
 };
+pub use corpus::{CorpusProfile, GraphFree, GraphLanguage};
 pub use error::TextError;
 pub use fixed::{Fixed, SCALE_DIGITS};
 pub use index::{

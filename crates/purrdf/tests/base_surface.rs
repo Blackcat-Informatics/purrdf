@@ -190,3 +190,38 @@ fn the_base_types_are_reachable_from_the_facade_alone() {
     // The inverse a serializer uses: relativize a target back against the base.
     assert_eq!(base.relativize(&resolved).as_deref(), Some("rel"));
 }
+
+/// The one-dependency facade carries graph-free storage and its actual rule engine.
+#[test]
+fn compact_triple_rule_carrier_is_available_through_the_facade() {
+    use purrdf::shapes::srl::{self, InferOptions};
+    let source = purrdf::TripleDataset::try_from(
+        Arc::try_unwrap(parsed_under_base()).expect("one parsed owner"),
+    )
+    .expect("all-default input");
+    assert_eq!(source.storage_layout().triples, 12);
+    let rules = srl::parse_and_check(
+        "RULE { ?s <https://example.org/q> ?o } WHERE { ?s <https://example.org/p> ?o }",
+        None,
+    )
+    .expect("one simple rule");
+    let read = source.read().expect("admitted compact read");
+    let inferred = srl::infer_triples(&rules, &read, &InferOptions::default())
+        .expect("actual facade rule execution");
+    assert_eq!(inferred.dataset().storage_layout().triples, 24);
+    assert_eq!(inferred.inferred().len(), 1);
+    assert_eq!(
+        inferred.inferred()[0][0].to_string(),
+        "<https://example.org/base/rel>"
+    );
+    assert_eq!(
+        inferred
+            .inferred_dataset()
+            .unwrap()
+            .storage_layout()
+            .triples,
+        12
+    );
+    let empty = purrdf::TripleDatasetBuilder::default().freeze().unwrap();
+    assert!(empty.is_empty());
+}

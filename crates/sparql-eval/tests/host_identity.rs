@@ -7,11 +7,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use purrdf_core::{
-    DatasetView, FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds,
-    SparqlRequest, TermGuard, TermRef, TermValue, ViewOperationStatus, ViewTermId,
-    WorkspaceReservation,
+    CanonHash, DatasetView, FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds,
+    RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermGuard, TermRef, TermValue,
+    TripleDataset, TripleReadError, ViewOperationStatus, ViewTermId, WorkspaceReservation,
+    try_canonicalize_flat_view,
 };
-use purrdf_sparql_eval::{FallibleSparqlError, NativeSparqlEngine, QueryOptions};
+use purrdf_sparql_eval::{EvalCtx, FallibleSparqlError, NativeSparqlEngine, QueryOptions, eval};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct HostId(u64);
@@ -470,8 +471,139 @@ fn certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failur
     }
 }
 
+fn carrier_pair(populated: bool) -> (Arc<RdfDataset>, TripleDataset) {
+    let build = || {
+        let mut builder = RdfDatasetBuilder::default();
+        if populated {
+            let a = builder.intern_iri("urn:a").unwrap();
+            let b = builder.intern_iri("urn:b").unwrap();
+            let p = builder.intern_iri("urn:p").unwrap();
+            builder.push_quad(a, p, b, None).unwrap();
+            builder.push_quad(b, p, a, None).unwrap();
+        }
+        builder.freeze().unwrap()
+    };
+    let quad = build();
+    let triple = TripleDataset::try_from(Arc::try_unwrap(build()).unwrap()).unwrap();
+    (quad, triple)
+}
+
+fn triple_graph_support_precedes_empty_and_nested_query_shortcuts() {
+    let engine = NativeSparqlEngine::new();
+    for populated in [false, true] {
+        let (quad, triple) = carrier_pair(populated);
+        for query in [
+            "SELECT * WHERE { GRAPH <urn:absent> { ?s ?p ?o } }",
+            "ASK { GRAPH ?g { ?s ?p ?o } }",
+            "CONSTRUCT { ?s ?p ?o } WHERE { GRAPH <urn:absent> { ?s ?p ?o } }",
+            "SELECT * WHERE { ?s <urn:missing> ?o . GRAPH <urn:absent> { ?s ?p ?o } }",
+            "ASK { FILTER EXISTS { GRAPH <urn:absent> {} } }",
+            "SELECT * WHERE { ?s <urn:missing> ?o . FILTER NOT EXISTS { GRAPH ?g { ?s ?p ?o } } }",
+            "SELECT * WHERE { { SELECT * WHERE { GRAPH ?g { ?s ?p ?o } } } }",
+            "SELECT * FROM <urn:absent> WHERE { ?s ?p ?o }",
+            "ASK FROM NAMED <urn:absent> { ?s ?p ?o }",
+        ] {
+            let prepared = engine.prepare_query(query, None).unwrap();
+            for use_prepared in [false, true] {
+                let read = triple.read().unwrap();
+                let result = if use_prepared {
+                    engine.query_prepared_fallible_view(&read, &prepared, &[], QueryOptions::EMPTY)
+                } else {
+                    engine.query_fallible_view(&read, request(query), QueryOptions::EMPTY)
+                };
+                assert!(
+                    matches!(
+                        result,
+                        Err(FallibleSparqlError::Operational {
+                            error: TripleReadError::NamedGraphsUnsupported,
+                            ..
+                        })
+                    ),
+                    "{query}, populated={populated}, prepared={use_prepared}: {result:?}"
+                );
+                assert_eq!(
+                    read.read_error(),
+                    Some(TripleReadError::NamedGraphsUnsupported)
+                );
+                let healthy = triple.read().unwrap();
+                assert!(
+                    engine
+                        .query_fallible_view(
+                            &healthy,
+                            request("SELECT * WHERE { ?s ?p ?o }"),
+                            QueryOptions::EMPTY
+                        )
+                        .is_ok()
+                );
+            }
+            // The same syntactically valid operation is supported by the existing
+            // quad carrier even when its dictionary has no graph name.
+            assert!(
+                engine
+                    .query_with_options_view(quad.as_ref(), request(query), QueryOptions::EMPTY)
+                    .is_ok()
+            );
+            if query.contains("GRAPH") {
+                let read = triple.read().unwrap();
+                let mut context = EvalCtx::new(&read);
+                assert!(eval(prepared.query().pattern(), &mut context).is_err());
+                assert_eq!(
+                    read.read_error(),
+                    Some(TripleReadError::NamedGraphsUnsupported)
+                );
+            }
+        }
+    }
+}
+
+fn triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results() {
+    let (quad, triple) = carrier_pair(true);
+    let engine = NativeSparqlEngine::new();
+    for query in [
+        "SELECT ?s ?o WHERE { ?s <urn:p> ?o } ORDER BY ?s ?o",
+        "SELECT ?s ?missing WHERE { ?s <urn:p> ?o OPTIONAL { ?s <urn:missing> ?missing } } ORDER BY ?s",
+        "SELECT ?s WHERE { { ?s <urn:p> ?o } UNION { ?s <urn:p> ?o } } ORDER BY ?s",
+        "SELECT ?s ?o WHERE { ?s <urn:p>+ ?o } ORDER BY ?s ?o",
+        "SELECT (COUNT(*) AS ?n) WHERE { ?s <urn:p> ?o }",
+        "ASK { ?s <urn:p> ?o . FILTER EXISTS { ?o <urn:p> ?s } }",
+        "CONSTRUCT { ?s <urn:derived> ?o } WHERE { ?s <urn:p> ?o }",
+    ] {
+        let expected = engine
+            .query_with_options_view(quad.as_ref(), request(query), QueryOptions::EMPTY)
+            .unwrap();
+        let read = triple.read().unwrap();
+        let actual = engine
+            .query_fallible_view(&read, request(query), QueryOptions::EMPTY)
+            .unwrap()
+            .result;
+        match expected {
+            SparqlResult::Solutions {
+                variables, rows, ..
+            } => {
+                let (actual_variables, actual_rows) = actual.solutions().unwrap();
+                assert_eq!(actual_variables, variables, "{query}");
+                assert_eq!(actual_rows, rows, "{query}");
+            }
+            SparqlResult::Boolean(expected) => {
+                assert_eq!(actual.boolean(), Some(expected), "{query}");
+            }
+            SparqlResult::Graph(expected) => assert_eq!(
+                try_canonicalize_flat_view(actual.graph().unwrap(), CanonHash::Sha256)
+                    .unwrap()
+                    .nquads,
+                try_canonicalize_flat_view(expected.as_ref(), CanonHash::Sha256)
+                    .unwrap()
+                    .nquads,
+                "{query}"
+            ),
+        }
+    }
+}
+
 purrdf_testkit::harness_main!(
     original_host_ids_join_and_expand_triples_without_native_interning,
     host_deletion_discards_partial_output_and_preserves_first_typed_cause,
     certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failure,
+    triple_graph_support_precedes_empty_and_nested_query_shortcuts,
+    triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results,
 );

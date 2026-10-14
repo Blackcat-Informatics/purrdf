@@ -791,6 +791,14 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
         self.0.read_error()
     }
 
+    fn supports_named_graphs(&self) -> bool {
+        self.0.supports_named_graphs()
+    }
+
+    fn require_named_graphs(&self) -> Result<(), Self::ReadError> {
+        self.0.require_named_graphs()
+    }
+
     /// A residue holds a subset of the inner view's quads.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
         self.0.triple_term_nesting_bound()

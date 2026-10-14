@@ -64,6 +64,7 @@ use purrdf_sparql_eval::{
 use crate::error::TextError;
 use crate::index::{PartitionKey, TextIndex, TextIndexConfig, source_digest};
 use crate::score::{Constraint, Scored, ScoringWork};
+use crate::{CorpusProfile, GraphLanguage};
 
 // `?score` is emitted as `xsd:decimal`; `?rank`, `?matched` and `?position` as
 // `xsd:integer`. A searchable literal is an `xsd:string`, an `rdf:langString` or
@@ -361,7 +362,7 @@ fn agrees_owned(
     Ok(true)
 }
 
-fn language_matches(language: &Constraint<&str>, key: &PartitionKey) -> bool {
+fn language_matches<P: CorpusProfile>(language: &Constraint<&str>, key: &PartitionKey<P>) -> bool {
     match language {
         Constraint::Any => true,
         Constraint::Absent => key.language().is_none(),
@@ -378,7 +379,7 @@ fn language_matches(language: &Constraint<&str>, key: &PartitionKey) -> bool {
 /// Built by sorting rather than by hashing, so the grouping — and therefore
 /// every row bound derived from it — is a pure function of the index's
 /// contents.
-fn language_groups(keys: &[PartitionKey]) -> Vec<Vec<usize>> {
+fn language_groups<P: CorpusProfile>(keys: &[PartitionKey<P>]) -> Vec<Vec<usize>> {
     let mut order: Vec<usize> = (0..keys.len()).collect();
     order.sort_by(|&left, &right| keys[left].language().cmp(&keys[right].language()));
 
@@ -394,8 +395,9 @@ fn language_groups(keys: &[PartitionKey]) -> Vec<Vec<usize>> {
 
 /// How many distinct graphs the index's partitions name, counting the default
 /// graph as one of them.
-fn distinct_graphs(keys: &[PartitionKey]) -> u64 {
-    let mut graphs: Vec<Option<&TermValue>> = keys.iter().map(PartitionKey::graph).collect();
+fn distinct_graphs<P: CorpusProfile>(keys: &[PartitionKey<P>]) -> u64 {
+    let mut graphs: Vec<Option<&TermValue>> =
+        keys.iter().map(PartitionKey::graph_coordinate).collect();
     graphs.sort_unstable();
     graphs.dedup();
     graphs.len() as u64
@@ -449,7 +451,7 @@ fn distinct_graphs(keys: &[PartitionKey]) -> u64 {
 /// Nothing here reads a clock, a counter or an RNG. The value is a pure
 /// function of the index's content, so two processes that built the same index
 /// from the same rows attest the same generation and a reader may compare them.
-pub(crate) fn index_generation(index: &TextIndex) -> Arc<str> {
+pub(crate) fn index_generation<P: CorpusProfile>(index: &TextIndex<P>) -> Arc<str> {
     Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))
 }
 
@@ -476,7 +478,7 @@ struct SearchBounds {
 
 impl SearchBounds {
     /// Measure `index`.
-    fn of(index: &TextIndex) -> Self {
+    fn of<P: CorpusProfile>(index: &TextIndex<P>) -> Self {
         let (keys, documents_in): (Vec<_>, Vec<_>) = index
             .partitions()
             .filter(|(_, stats)| stats.document_count() != 0)
@@ -629,9 +631,9 @@ impl SearchBounds {
 /// the same answer on `wasm32-unknown-unknown` as on a native build. That is
 /// what the stable class asserts, so the relation may run across workers.
 #[derive(Clone, Debug)]
-pub struct TextSearchRelation {
+pub struct TextSearchRelation<P: CorpusProfile = GraphLanguage> {
     /// The index every invocation is answered from.
-    index: Arc<TextIndex>,
+    index: Arc<TextIndex<P>>,
     /// The declared modes, materialized once so [`PropertyFunction::modes`]
     /// can hand out a slice.
     modes: [BindingPattern; 2],
@@ -813,7 +815,23 @@ struct ScopedHits {
     declarations: AdmittedVec<(u32, Option<purrdf_sparql_eval::RowEvidence>)>,
 }
 
-impl TextSearchRelation {
+impl TextSearchRelation<GraphLanguage> {
+    /// The flattened argument position of `?doc`, the document's subject.
+    pub const DOC: usize = SEARCH_DOC;
+    /// The flattened argument position of the needle. Always an input.
+    pub const NEEDLE: usize = SEARCH_NEEDLE;
+    /// The flattened argument position of `?score`, the exact BM25 score.
+    pub const SCORE: usize = SEARCH_SCORE;
+    /// The flattened argument position of `?rank`, the per-partition rank.
+    pub const RANK: usize = SEARCH_RANK;
+    /// The flattened argument position of `?lang`, the document's language tag.
+    pub const LANG: usize = SEARCH_LANG;
+    /// The flattened argument position of `?matched`, the count of distinct
+    /// needle terms the document holds.
+    pub const MATCHED: usize = SEARCH_MATCHED;
+}
+
+impl<P: CorpusProfile> TextSearchRelation<P> {
     /// A ranked-retrieval relation over `index`.
     ///
     /// The row bounds this relation declares are measured here, once, rather
@@ -823,7 +841,7 @@ impl TextSearchRelation {
     /// so one rendering is interned once and every invocation attests a pointer to
     /// it rather than a fresh copy.
     #[must_use]
-    pub fn new(index: Arc<TextIndex>) -> Self {
+    pub fn new(index: Arc<TextIndex<P>>) -> Self {
         let bounds = SearchBounds::of(&index);
         let generation = index_generation(&index);
         Self {
@@ -840,7 +858,7 @@ impl TextSearchRelation {
 
     /// The index this relation answers from.
     #[must_use]
-    pub fn index(&self) -> &TextIndex {
+    pub fn index(&self) -> &TextIndex<P> {
         &self.index
     }
 
@@ -856,20 +874,6 @@ impl TextSearchRelation {
         Arc::clone(&self.observations)
     }
 
-    /// The flattened argument position of `?doc`, the document's subject.
-    pub const DOC: usize = SEARCH_DOC;
-    /// The flattened argument position of the needle. Always an input.
-    pub const NEEDLE: usize = SEARCH_NEEDLE;
-    /// The flattened argument position of `?score`, the exact BM25 score.
-    pub const SCORE: usize = SEARCH_SCORE;
-    /// The flattened argument position of `?rank`, the per-partition rank.
-    pub const RANK: usize = SEARCH_RANK;
-    /// The flattened argument position of `?lang`, the document's language tag.
-    pub const LANG: usize = SEARCH_LANG;
-    /// The flattened argument position of `?matched`, the count of distinct
-    /// needle terms the document holds.
-    pub const MATCHED: usize = SEARCH_MATCHED;
-
     /// The ranked-retrieval declaration this relation can honestly make, for a
     /// **caller-supplied** stratum.
     ///
@@ -878,7 +882,7 @@ impl TextSearchRelation {
     /// not a property of this type — the same relation is a ranked producer in
     /// one host and an ordinary row source in another. What this method adds is
     /// only that a host does not have to hand-write the argument indices: the
-    /// positions come from [`Self::DOC`] and [`Self::NEEDLE`], which are this
+    /// positions come from [`SEARCH_DOC`] and [`SEARCH_NEEDLE`], which are this
     /// relation's own, so a declaration cannot drift from the row shape.
     ///
     /// Nothing is minted. `stratum` is the caller's IRI; `predicate` is the
@@ -889,7 +893,7 @@ impl TextSearchRelation {
     ///
     /// # What it declares, and why
     ///
-    /// * **Candidate at [`Self::DOC`]** — the document subject is the term a
+    /// * **Candidate at [`SEARCH_DOC`]** — the document subject is the term a
     ///   consumer fuses and joins on; every other position is about the row.
     /// * **One accepted alternative: a literal request term**, with an explicit
     ///   predicate retained through [`LexicalQuery`]. Field membership is resolved
@@ -915,7 +919,7 @@ impl TextSearchRelation {
     ///   refuse every untagged request term, which is the larger population;
     ///   a host that wants a tag to *select* a partition writes its own
     ///   alternative, with a [`TermPattern`] naming that language and a
-    ///   [`RequestFacet::Language`] placement at [`Self::LANG`].
+    ///   [`RequestFacet::Language`] placement at [`SEARCH_LANG`].
     /// * **No depth placement.** This relation takes no `k` argument; a consumer
     ///   bounds it with `LIMIT`, which is what "bounded by the consumer's row
     ///   ceiling" means in [`RankedDeclaration::depth_placement`].
@@ -1032,12 +1036,12 @@ impl TextSearchRelation {
                 },
                 placements: vec![TermPlacement {
                     facet: RequestFacet::ScopedLexicalValue,
-                    position: Self::NEEDLE,
+                    position: SEARCH_NEEDLE,
                     datatype: None,
                 }],
             }],
             depth_placement: None,
-            candidate_position: Self::DOC,
+            candidate_position: SEARCH_DOC,
             duplicates: DuplicatePolicy::Unique,
             // Passed through, never asserted here, for the reason `domains` is.
             // BM25 over THIS index is exhaustive — every document holding a
@@ -1225,7 +1229,7 @@ impl TextSearchRelation {
     fn ranked_owned(
         &self,
         needle: &[QueryString],
-        matches: impl Fn(&PartitionKey) -> bool,
+        matches: impl Fn(&PartitionKey<P>) -> bool,
         ceiling: Option<u64>,
         partition_rank: Option<u32>,
         workspace: &WorkspaceCapability,
@@ -1259,7 +1263,7 @@ impl TextSearchRelation {
     fn ranked_scoped_owned(
         &self,
         needle: &[QueryString],
-        matches: impl Fn(&PartitionKey) -> bool,
+        matches: impl Fn(&PartitionKey<P>) -> bool,
         selection: ScopedSearch<'_>,
         workspace: &WorkspaceCapability,
     ) -> Result<ScopedHits, EvalError> {
@@ -1603,7 +1607,7 @@ impl TextSearchRelation {
     }
 }
 
-impl PropertyFunction for TextSearchRelation {
+impl<P: CorpusProfile> PropertyFunction for TextSearchRelation<P> {
     fn supports_candidate_scope(&self) -> bool {
         true
     }
@@ -1780,8 +1784,8 @@ impl PropertyFunction for TextSearchRelation {
 /// **constant** written at the call site, which the engine still treats as
 /// admission-transparent and so still offers a ceiling for.
 #[derive(Debug)]
-struct SearchCursor {
-    index: Arc<TextIndex>,
+struct SearchCursor<P: CorpusProfile = GraphLanguage> {
+    index: Arc<TextIndex<P>>,
     generation: Arc<str>,
     rows: AdmittedVec<Hit>,
     declarations: AdmittedVec<(u32, Option<purrdf_sparql_eval::RowEvidence>)>,
@@ -1792,7 +1796,7 @@ struct SearchCursor {
     workspace: WorkspaceCapability,
 }
 
-impl SearchCursor {
+impl<P: CorpusProfile> SearchCursor<P> {
     fn build(&self, hit: &Hit) -> Result<AdmittedPfRow, EvalError> {
         let document = self.index.document(hit.document).ok_or_else(|| {
             NativeDiagnostic::error(
@@ -1876,7 +1880,7 @@ macro_rules! resident_cursor_next {
     };
 }
 
-impl PfCursor for SearchCursor {
+impl<P: CorpusProfile> PfCursor for SearchCursor<P> {
     fn carries_row_evidence(&self) -> bool {
         self.scoped
     }
@@ -1916,7 +1920,7 @@ struct OccurrenceBounds {
 
 impl OccurrenceBounds {
     /// Measure `index` by walking every term's postings once.
-    fn of(index: &TextIndex) -> Self {
+    fn of<P: CorpusProfile>(index: &TextIndex<P>) -> Self {
         let keys: Vec<_> = index
             .partitions()
             .filter(|(_, stats)| stats.document_count() != 0)
@@ -2052,9 +2056,9 @@ impl OccurrenceBounds {
 /// target, so an invocation's rows are a pure function of its arguments for the
 /// lifetime of a query and the relation may run across fork-join workers.
 #[derive(Clone, Debug)]
-pub struct TermOccurrenceRelation {
+pub struct TermOccurrenceRelation<P: CorpusProfile = GraphLanguage> {
     /// The index every invocation is answered from.
-    index: Arc<TextIndex>,
+    index: Arc<TextIndex<P>>,
     /// The single declared mode, materialized once.
     modes: [BindingPattern; 1],
     /// The row maxima, measured once at construction.
@@ -2065,7 +2069,7 @@ pub struct TermOccurrenceRelation {
     dictionary: Arc<crate::dictionary::DictionaryCache>,
 }
 
-impl TermOccurrenceRelation {
+impl<P: CorpusProfile> TermOccurrenceRelation<P> {
     /// A positional-matching relation over `index`.
     ///
     /// Walks every term's postings once to measure the row bounds it declares;
@@ -2074,7 +2078,7 @@ impl TermOccurrenceRelation {
     /// the same reason — it is the index fingerprint in lowercase hex, interned
     /// once so that attesting it costs a pointer rather than a copy.
     #[must_use]
-    pub fn new(index: Arc<TextIndex>) -> Self {
+    pub fn new(index: Arc<TextIndex<P>>) -> Self {
         let bounds = OccurrenceBounds::of(&index);
         let generation = index_generation(&index);
         Self {
@@ -2162,12 +2166,12 @@ impl TermOccurrenceRelation {
 
     /// The index this relation answers from.
     #[must_use]
-    pub fn index(&self) -> &TextIndex {
+    pub fn index(&self) -> &TextIndex<P> {
         &self.index
     }
 }
 
-impl PropertyFunction for TermOccurrenceRelation {
+impl<P: CorpusProfile> PropertyFunction for TermOccurrenceRelation<P> {
     fn occurrence_shape(&self) -> Option<purrdf_sparql_eval::property_fn::OccurrenceShape> {
         Some(purrdf_sparql_eval::property_fn::OccurrenceShape {
             analyzer: self.index.analyzer_fingerprint(),
@@ -2281,8 +2285,8 @@ impl PropertyFunction for TermOccurrenceRelation {
 /// filter runs on **every** bound position before a row is emitted, and the
 /// licence is decremented **only** on emitted rows.
 #[derive(Debug)]
-struct OccurrenceCursor {
-    index: Arc<TextIndex>,
+struct OccurrenceCursor<P: CorpusProfile = GraphLanguage> {
+    index: Arc<TextIndex<P>>,
     generation: Arc<str>,
     analyzed: AdmittedVec<QueryString>,
     partitions: AdmittedVec<usize>,
@@ -2294,7 +2298,7 @@ struct OccurrenceCursor {
     workspace: WorkspaceCapability,
 }
 
-impl OccurrenceCursor {
+impl<P: CorpusProfile> OccurrenceCursor<P> {
     fn build(&self, document: u32, position: u32) -> Result<AdmittedPfRow, EvalError> {
         let held = self.index.document(document).ok_or_else(|| {
             NativeDiagnostic::error(
@@ -2352,7 +2356,7 @@ impl OccurrenceCursor {
     }
 }
 
-impl PfCursor for OccurrenceCursor {
+impl<P: CorpusProfile> PfCursor for OccurrenceCursor<P> {
     resident_cursor_next!();
     fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
         self.next_owned()
@@ -2425,10 +2429,10 @@ impl PfCursor for OccurrenceCursor {
 ///   error here: it digests to the digest of an empty row set — equal to an index
 ///   built over an empty corpus, unequal to one built over any corpus with text in
 ///   it — and its coverage reports no shortfall.
-pub fn verify_binding<D: DatasetView>(
-    index: &TextIndex,
+pub fn verify_binding<D: DatasetView, P: CorpusProfile>(
+    index: &TextIndex<P>,
     dataset: &D,
-    config: &TextIndexConfig,
+    config: &TextIndexConfig<P>,
 ) -> Result<(), TextError> {
     if config != index.config() {
         return Err(TextError::config(

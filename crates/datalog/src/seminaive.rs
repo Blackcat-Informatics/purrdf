@@ -10,9 +10,10 @@
 //! already reached its final extension — the stratified-negation semantics, not an
 //! approximation of it.
 //!
-//! # Atoms are arity-4, and the predicate is data
+//! # Static triple or quad atoms, with the predicate as data
 //!
-//! An atom is `triple(?s, ?p, ?o, ?g)`. The predicate and graph positions choose the store
+//! A quad atom is `triple(?s, ?p, ?o, ?g)`; a triple atom stores only its first three
+//! positions. The predicate and, for quads, graph choose the store
 //! PARTITION and the subject/object positions drive its `(subject, object)` index, and the
 //! two are independent: an atom whose predicate and graph are known — a constant, or a
 //! variable an earlier atom bound — addresses one partition through a single ordered-map
@@ -100,12 +101,13 @@ use crate::paths::shortest_path;
 use purrdf_core::{SmallVec, smallvec};
 
 use crate::plan::{
-    ATOM_ARITY, AtomOperator, AtomShape, CyclicPlan, Executable, IndexChoice, JoinGroup,
-    POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT, Parsed, PositionPlan,
-    RulePlan, predicate_symbol,
+    AtomOperator, AtomShape, CyclicPlan, Executable, IndexChoice, JoinGroup, POSITION_OBJECT,
+    POSITION_SUBJECT, Parsed, PositionPlan, RulePlan, predicate_symbol,
 };
 use crate::stop::{StopSignal, is_stopped};
-use crate::store::{Bound, Fact, PartitionRef, RelationStore, TermInterner};
+use crate::store::{
+    Arity, Bound, PartitionRef, RelationStore, ShapeFact, StoreShape, TermInterner,
+};
 
 // ── Budgets ─────────────────────────────────────────────────────────────────────
 
@@ -756,6 +758,16 @@ impl StepGovernor {
 pub enum EvalError<E = core::convert::Infallible> {
     /// The original failure of the caller-owned dictionary or its pinned source.
     Source(E),
+    /// An immutable-base body probe requires the ordered evaluation contract.
+    BaseReadRequiresSchedule {
+        /// The first rule whose base authority requires the ordered executor.
+        rule: usize,
+    },
+    /// An authored Base body probe has no captured immutable base input.
+    MissingBase {
+        /// The first rule needing the absent authority.
+        rule: usize,
+    },
     /// The original logical capacity or physical storage refusal.
     Storage(purrdf_lex::allocation::StorageError),
     /// The original row-evidence account refused or encountered a broken invariant.
@@ -995,6 +1007,13 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Source(error) => error.fmt(f),
+            Self::BaseReadRequiresSchedule { rule } => write!(
+                f,
+                "rule {rule} reads immutable base facts and requires ordered evaluation"
+            ),
+            Self::MissingBase { rule } => {
+                write!(f, "rule {rule} requires an explicit immutable base input")
+            }
             Self::Storage(error) => error.fmt(f),
             Self::Evidence(error) => error.fmt(f),
             Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
@@ -1150,20 +1169,26 @@ impl<E> From<core::convert::Infallible> for EvalError<E> {
 /// `sources` is in the rule's AUTHORED body order regardless of the order the planner
 /// chose to execute the atoms in, so provenance reads the way the rule is written.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Derivation {
+pub struct Derivation<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The derived fact.
-    fact: Fact,
+    fact: ShapeFact<N>,
     /// The producing rule's index in authored program order.
     rule: usize,
     /// The matched positive body facts, in authored body order.
-    sources: Vec<Fact>,
+    sources: Vec<ShapeFact<N>>,
     /// `1 + max(source proof heights)`; a seeded fact has height 0.
     proof_height: u32,
 }
 
-impl Derivation {
+impl<const N: usize> Derivation<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The derived fact.
-    pub fn fact(&self) -> &Fact {
+    pub fn fact(&self) -> &ShapeFact<N> {
         &self.fact
     }
 
@@ -1173,7 +1198,7 @@ impl Derivation {
     }
 
     /// The matched positive body facts, in authored body order.
-    pub fn sources(&self) -> &[Fact] {
+    pub fn sources(&self) -> &[ShapeFact<N>] {
         &self.sources
     }
 
@@ -1185,28 +1210,34 @@ impl Derivation {
 
 /// A completed evaluation: the saturated store, its derivations and the budget report.
 #[derive(Debug, Clone)]
-pub struct Evaluation<D: TermDictionary = TermInterner> {
+pub struct Evaluation<D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The least model: the seeded EDB plus every derived fact.
-    facts: RelationStore<D>,
+    facts: RelationStore<D, N>,
     /// Every derivation, in lexical `(fact, rule, sources)` order.
-    derivations: Vec<Derivation>,
+    derivations: Vec<Derivation<N>>,
     /// What the run consumed, against the limits it ran under.
     budget: BudgetReport,
 }
 
-impl<D: TermDictionary> Evaluation<D> {
+impl<D: TermDictionary, const N: usize> Evaluation<D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The least model: the seeded EDB plus every derived fact.
-    pub fn facts(&self) -> &RelationStore<D> {
+    pub fn facts(&self) -> &RelationStore<D, N> {
         &self.facts
     }
 
     /// Take ownership of the least model.
-    pub fn into_facts(self) -> RelationStore<D> {
+    pub fn into_facts(self) -> RelationStore<D, N> {
         self.facts
     }
 
     /// Every derivation, in a total lexical order.
-    pub fn derivations(&self) -> &[Derivation] {
+    pub fn derivations(&self) -> &[Derivation<N>] {
         &self.derivations
     }
 
@@ -1222,10 +1253,13 @@ impl<D: TermDictionary> Evaluation<D> {
 /// # Errors
 /// Returns exact protected/undecidable head refusal before the ordinary
 /// executor's fragment checks, then the same errors as [`compile`].
-pub fn compile_with_declarations(
-    rules: Vec<DlClause>,
+pub fn compile_with_declarations<const N: usize>(
+    rules: Vec<DlClause<N>>,
     declarations: &crate::admission::NeverDeriveDeclarations,
-) -> Result<Executable, EvalError> {
+) -> Result<Executable<N>, EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     declarations.admit(&rules).map_err(EvalError::NeverDerive)?;
     compile(rules)?
         .admit_declarations(declarations)
@@ -1244,7 +1278,10 @@ pub fn compile_with_declarations(
 ///
 /// [`EvalError::NonDatalogHead`], [`EvalError::NonStratifiable`] or
 /// [`EvalError::UnboundHeadVariable`].
-pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
+pub fn compile<const N: usize>(rules: Vec<DlClause<N>>) -> Result<Executable<N>, EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     // The head form is decided FIRST, because the other two checks are both defined in
     // terms of a single head atom: an existential, a disjunctive or an empty head has no
     // "the head predicate" to stratify on and no "the head variables" to range-restrict.
@@ -1256,6 +1293,10 @@ pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
         if !form.is_datalog() {
             return Err(EvalError::NonDatalogHead { rule: index, form });
         }
+    }
+
+    if let Some(rule) = rules.iter().position(DlClause::reads_base) {
+        return Err(EvalError::BaseReadRequiresSchedule { rule });
     }
 
     // A guard that reads the model has no place in a stratification (see
@@ -1299,7 +1340,10 @@ pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
 /// # Errors
 ///
 /// [`EvalError::UnboundHeadVariable`] naming the first offending rule and variable.
-pub(crate) fn check_range_restricted(rules: &[DlClause]) -> Result<(), EvalError> {
+pub(crate) fn check_range_restricted<const N: usize>(rules: &[DlClause<N>]) -> Result<(), EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     for (index, rule) in rules.iter().enumerate() {
         let bound = rule.bound_variables();
         for head in rule.head_atoms() {
@@ -1331,7 +1375,10 @@ pub(crate) fn check_range_restricted(rules: &[DlClause]) -> Result<(), EvalError
 /// Panics if no negative edge lies in a cycle. This is called only after
 /// [`crate::plan::stratify`] has already proven the program non-stratifiable, and that is
 /// exactly the condition, so reaching it would be a contradiction in the stratifier.
-fn negative_cycle(rules: &[DlClause]) -> EvalError {
+fn negative_cycle<const N: usize>(rules: &[DlClause<N>]) -> EvalError
+where
+    Arity<N>: StoreShape<N>,
+{
     // head -> {body}: "head depends on body", in a fixed lexical order, built from the
     // SAME edge set `crate::plan::stratify` decided over — including the coupling edges a
     // variable predicate position adds. Searching a smaller graph than the decision was
@@ -1491,29 +1538,31 @@ const INDEX_BOTH: u8 = 3;
 /// clones a `String` and never re-hashes a fact; surfaces are resolved once, for committed
 /// winners only, when the [`Derivation`] is built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SourceRow<I: TermIdentity = TermId> {
+struct SourceRow<I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The read authority owning this row ID.
+    source: crate::clause::ReadSource,
     /// Index into the producing rule's authored body.
     body_index: usize,
-    /// The matched row's subject term.
-    subject: I,
-    /// The matched row's predicate term — the key of the partition it came from.
-    predicate: I,
-    /// The matched row's object term.
-    object: I,
-    /// The matched row's graph term — the other half of that partition key.
-    graph: I,
+    /// The original matched row, without a graph position in triple execution.
+    terms: [I; N],
     /// The matched row's store-global row id — the key of the proof-height column.
     row: RowId,
 }
 
-impl<I: TermIdentity> SourceRow<I> {
-    /// This row as a [`Fact`] of lexical surfaces.
-    fn fact<D: TermDictionary<Id = I>>(self, rel: &RelationStore<D>) -> Result<Fact, D::Error> {
+impl<I: TermIdentity, const N: usize> SourceRow<I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// This row as a [`ShapeFact<N>`] of lexical surfaces.
+    fn fact<D: TermDictionary<Id = I>>(
+        self,
+        rel: &RelationStore<D, N>,
+    ) -> Result<ShapeFact<N>, D::Error> {
         HeadKey {
-            subject: HeadTerm::Interned(self.subject),
-            predicate: HeadTerm::Interned(self.predicate),
-            object: HeadTerm::Interned(self.object),
-            graph: HeadTerm::Interned(self.graph),
+            positions: self.terms.map(HeadTerm::Interned),
         }
         .fact(rel)
     }
@@ -1524,7 +1573,10 @@ impl<I: TermIdentity> SourceRow<I> {
 /// Bindings live in a flat frame indexed by the plan's variable slots, and hold interned
 /// [`TermId`]s rather than surfaces, so a probe is an integer compare.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SlotSolution<I: TermIdentity = TermId> {
+struct SlotSolution<I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// One slot per plan variable, `None` until an atom binds it.
     ///
     /// Inline rather than heap. This frame is CLONED once per surviving candidate row
@@ -1539,7 +1591,7 @@ struct SlotSolution<I: TermIdentity = TermId> {
     bindings: SmallVec<[Option<I>; 8]>,
     /// The matched body rows, in physical execution order until the plan's swap program
     /// restores authored order.
-    sources: Vec<SourceRow<I>>,
+    sources: Vec<SourceRow<I, N>>,
     /// Slots a guard bound to a surface the store has never interned, with that
     /// surface. Empty — and therefore allocation-free to clone — for every solution of
     /// a guard-free rule; a slot listed here is `None` in `bindings`.
@@ -1576,10 +1628,13 @@ impl<L: AsRef<str>> AsRef<str> for SlotSurface<'_, L> {
 
 impl<'s, I: TermIdentity> SlotValue<'s, I> {
     /// Resolve only at the lexical boundary, retaining the supplied lexical owner.
-    fn surface<D: TermDictionary<Id = I>>(
+    fn surface<D: TermDictionary<Id = I>, const N: usize>(
         self,
-        rel: &'s RelationStore<D>,
-    ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error> {
+        rel: &'s RelationStore<D, N>,
+    ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error>
+    where
+        Arity<N>: StoreShape<N>,
+    {
         rel.interner().check_read()?;
         let surface = match self {
             Self::Interned(id) => Some(SlotSurface::Pinned(rel.interner().resolve_term(id)?)),
@@ -1591,12 +1646,15 @@ impl<'s, I: TermIdentity> SlotValue<'s, I> {
     }
 }
 
-impl<I: TermIdentity> SlotSolution<I> {
+impl<I: TermIdentity, const N: usize> SlotSolution<I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Conjoin the original negative premise without changing positive provenance.
     fn retain_negative<D: TermDictionary<Id = I>>(
         &mut self,
         id: purrdf_core::evidence::EvidenceId,
-        owner: &mut dyn evidence::RuleEvidence<D>,
+        owner: &mut dyn evidence::RuleEvidence<D, N>,
     ) -> Result<(), EvalError<D::Error>> {
         self.negative_evidence = Some(match self.negative_evidence {
             None => id,
@@ -1639,12 +1697,15 @@ impl<I: TermIdentity> SlotSolution<I> {
     }
 }
 
-impl<I: TermIdentity> SlotSolution<I> {
+impl<I: TermIdentity, const N: usize> SlotSolution<I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The lexical surface bound in `slot`, if any.
     fn surface<'s, D: TermDictionary<Id = I>>(
         &'s self,
         slot: usize,
-        rel: &'s RelationStore<D>,
+        rel: &'s RelationStore<D, N>,
     ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error> {
         self.value(slot).surface(rel)
     }
@@ -1655,7 +1716,7 @@ impl<I: TermIdentity> SlotSolution<I> {
         &mut self,
         slot: usize,
         surface: &str,
-        rel: &RelationStore<D>,
+        rel: &RelationStore<D, N>,
     ) -> Result<(), D::Error> {
         rel.interner().check_read()?;
         let id = rel.interner().lookup_term(surface)?;
@@ -1696,19 +1757,22 @@ impl<I: TermIdentity> PositionValue<I> {
 }
 
 /// Per-position constant bindings resolved once for an atom invocation.
-type ConstantPositions<I> = [Option<PositionValue<I>>; ATOM_ARITY];
+type ConstantPositions<I, const N: usize> = [Option<PositionValue<I>>; N];
 
 /// Resolve the constant positions of `shape` ONCE per operator invocation.
 ///
 /// A constant's surface does not depend on the partial solution, so its dictionary probe
 /// is hoisted out of the per-solution loop exactly as it was before the predicate became a
 /// term. `None` marks a variable position, resolved per solution.
-fn constant_positions<D: TermDictionary>(
-    shape: &AtomShape,
-    rel: &RelationStore<D>,
-) -> Result<ConstantPositions<D::Id>, D::Error> {
+fn constant_positions<D: TermDictionary, const N: usize>(
+    shape: &AtomShape<N>,
+    rel: &RelationStore<D, N>,
+) -> Result<ConstantPositions<D::Id, N>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     rel.interner().check_read()?;
-    let mut constants = [None; ATOM_ARITY];
+    let mut constants = [None; N];
     for (position, value) in constants.iter_mut().enumerate() {
         if let Some(surface) = shape.positions()[position].constant() {
             *value = Some(
@@ -1727,52 +1791,58 @@ fn constant_positions<D: TermDictionary>(
 /// This is the ONE-TIME scan-mode dispatch: once per operator invocation — not per row —
 /// the scan mode is lifted to a `const SCAN` monomorphization parameter, so the per-row
 /// delta filter has no runtime branch.
-fn extend_slot_solutions<D: TermDictionary>(
-    operator: &AtomOperator,
-    rel: &RelationStore<D>,
+fn extend_slot_solutions<D: TermDictionary, const N: usize>(
+    operator: &AtomOperator<N>,
+    rel: &RelationStore<D, N>,
     delta: Delta,
     scan: Scan,
-    solutions: &[SlotSolution<D::Id>],
+    solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id>>, D::Error> {
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     match scan {
         Scan::Delta => {
-            extend_slot_operator::<SCAN_DELTA, D>(operator, rel, delta, solutions, governor)
+            extend_slot_operator::<SCAN_DELTA, D, N>(operator, rel, delta, solutions, governor)
         }
         Scan::Full => {
-            extend_slot_operator::<SCAN_FULL, D>(operator, rel, delta, solutions, governor)
+            extend_slot_operator::<SCAN_FULL, D, N>(operator, rel, delta, solutions, governor)
         }
         Scan::OldOnly => {
-            extend_slot_operator::<SCAN_OLD_ONLY, D>(operator, rel, delta, solutions, governor)
+            extend_slot_operator::<SCAN_OLD_ONLY, D, N>(operator, rel, delta, solutions, governor)
         }
     }
 }
 
 /// Dispatch one operator to its statically-shaped index kernel.
-fn extend_slot_operator<const SCAN: u8, D: TermDictionary>(
-    operator: &AtomOperator,
-    rel: &RelationStore<D>,
+fn extend_slot_operator<const SCAN: u8, D: TermDictionary, const N: usize>(
+    operator: &AtomOperator<N>,
+    rel: &RelationStore<D, N>,
     delta: Delta,
-    solutions: &[SlotSolution<D::Id>],
+    solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id>>, D::Error> {
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     match operator.index() {
         IndexChoice::Any => {
-            extend_atom::<SCAN, INDEX_ANY, D>(operator, rel, delta, solutions, governor)
+            extend_atom::<SCAN, INDEX_ANY, D, N>(operator, rel, delta, solutions, governor)
         }
         IndexChoice::Subject => {
-            extend_atom::<SCAN, INDEX_SUBJECT, D>(operator, rel, delta, solutions, governor)
+            extend_atom::<SCAN, INDEX_SUBJECT, D, N>(operator, rel, delta, solutions, governor)
         }
         IndexChoice::Object => {
-            extend_atom::<SCAN, INDEX_OBJECT, D>(operator, rel, delta, solutions, governor)
+            extend_atom::<SCAN, INDEX_OBJECT, D, N>(operator, rel, delta, solutions, governor)
         }
         IndexChoice::Both => {
-            extend_atom::<SCAN, INDEX_BOTH, D>(operator, rel, delta, solutions, governor)
+            extend_atom::<SCAN, INDEX_BOTH, D, N>(operator, rel, delta, solutions, governor)
         }
     }
 }
 
-/// The one arity-4 atom kernel: address the partitions the predicate and graph positions
+/// The shared atom kernel: address the partitions the predicate and optional graph
 /// admit, and inside each one select exactly the rows the `(subject, object)` index admits.
 ///
 /// The two halves are independent, which is the whole performance argument. `INDEX` is a
@@ -1782,13 +1852,17 @@ fn extend_slot_operator<const SCAN: u8, D: TermDictionary>(
 /// ([`AtomShape::addresses_one_partition`]) — which is every atom of every rule that
 /// names its predicate — and only degrades to a sweep of matching partitions when the rule
 /// genuinely quantifies over the predicate or the graph.
-fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary>(
-    operator: &AtomOperator,
-    rel: &RelationStore<D>,
+fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary, const N: usize>(
+    operator: &AtomOperator<N>,
+    rel: &RelationStore<D, N>,
     delta: Delta,
-    solutions: &[SlotSolution<D::Id>],
+    solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id>>, D::Error> {
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let rel = rel.read_source(operator.shape().read_source());
     let shape = operator.shape();
     let body_index = operator.body_index();
     let constants = constant_positions(shape, rel)?;
@@ -1798,10 +1872,10 @@ fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary>(
         if governor.spent() {
             break;
         }
-        // Resolve all four positions: constants were resolved once above, a bound variable
+        // Resolve every stored position: constants were resolved once above, a bound variable
         // reads its frame slot, a free variable is bound by the scan.
-        let mut values = [PositionValue::Free; ATOM_ARITY];
-        for position in 0..ATOM_ARITY {
+        let mut values = [PositionValue::Free; N];
+        for position in 0..N {
             values[position] = match (&shape.positions()[position], constants[position]) {
                 (PositionPlan::Constant(_), Some(resolved)) => resolved,
                 (PositionPlan::Constant(_), None) => {
@@ -1840,17 +1914,13 @@ fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary>(
             _ => unreachable!("INDEX is a planned index code"),
         };
 
-        for partition in rel.partitions(
-            values[POSITION_PREDICATE].known(),
-            values[POSITION_GRAPH].known(),
-        ) {
-            let (predicate, graph) = (partition.predicate(), partition.graph());
+        for partition in rel.partitions_for(values.map(PositionValue::known)) {
             let mut cursor = partition.select(bound);
             while let Some((subject, object, row)) = cursor.next() {
                 if !keep_row::<SCAN>(delta, row) {
                     continue;
                 }
-                let matched = [subject, predicate, object, graph];
+                let matched = partition.row(subject, object);
                 // The generalized diagonal filter: any two positions holding the same
                 // variable must agree, whichever two they are.
                 if !shape
@@ -1870,11 +1940,9 @@ fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary>(
                     }
                 }
                 merged.sources.push(SourceRow {
+                    source: shape.read_source(),
                     body_index,
-                    subject,
-                    predicate,
-                    object,
-                    graph,
+                    terms: matched,
                     row,
                 });
                 next.push(merged);
@@ -2072,25 +2140,26 @@ impl<'a, I: TermIdentity> LeapfrogIntersection<'a, I> {
 /// Cycle certification admits only atoms whose predicate AND graph are constants — a trie
 /// level is one sorted arrangement, and an atom that quantifies over its predicate denotes
 /// a union of them — so the surfaces are always there to resolve.
-fn cycle_atom_partition<'a, D: TermDictionary>(
-    shape: &AtomShape,
-    rel: &'a RelationStore<D>,
-) -> Result<Option<PartitionRef<'a, D::Id>>, D::Error> {
-    let [_, predicate, _, graph] = constant_positions(shape, rel)?;
-    let (Some(predicate), Some(graph)) = (predicate, graph) else {
-        unreachable!("cycle certification admits only constant-predicate, constant-graph atoms")
-    };
-    Ok(match (predicate.known(), graph.known()) {
-        (Some(predicate), Some(graph)) => rel.partition(predicate, graph),
-        _ => None,
-    })
+fn cycle_atom_partition<'a, D: TermDictionary, const N: usize>(
+    shape: &AtomShape<N>,
+    rel: &'a RelationStore<D, N>,
+) -> Result<Option<PartitionRef<'a, D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let constants = constant_positions(shape, rel)?;
+    let known = constants.map(|value| value.and_then(PositionValue::known));
+    Ok(rel.partition_for(&known))
 }
 
 /// The subject and object frame slots of a certified cycle atom.
 ///
 /// Cycle certification admits only atoms with two DISTINCT variable positions there, so
 /// both slots exist.
-fn cycle_atom_slots(shape: &AtomShape) -> (usize, usize) {
+fn cycle_atom_slots<const N: usize>(shape: &AtomShape<N>) -> (usize, usize)
+where
+    Arity<N>: StoreShape<N>,
+{
     let (Some(subject), Some(object)) = (shape.subject().slot(), shape.object().slot()) else {
         unreachable!("cycle certification admits only distinct variable-variable atoms")
     };
@@ -2099,14 +2168,17 @@ fn cycle_atom_slots(shape: &AtomShape) -> (usize, usize) {
 
 /// Build one cycle atom's trie cursor for `variable_slot`, constrained by any binding of
 /// its other variable.
-fn cycle_atom_cursor<'a, I: TermIdentity>(
-    partition: PartitionRef<'a, I>,
-    shape: &AtomShape,
+fn cycle_atom_cursor<'a, I: TermIdentity, const N: usize>(
+    partition: PartitionRef<'a, I, N>,
+    shape: &AtomShape<N>,
     variable_slot: usize,
-    solution: &SlotSolution<I>,
+    solution: &SlotSolution<I, N>,
     scan: Scan,
     delta: Delta,
-) -> Option<LeapfrogValueCursor<'a, I>> {
+) -> Option<LeapfrogValueCursor<'a, I>>
+where
+    Arity<N>: StoreShape<N>,
+{
     let (subject_slot, object_slot) = cycle_atom_slots(shape);
     if subject_slot == variable_slot {
         Some(LeapfrogValueCursor::subject(
@@ -2127,26 +2199,32 @@ fn cycle_atom_cursor<'a, I: TermIdentity>(
 
 /// Immutable state shared by every recursive variable level of one leapfrog component.
 #[derive(Debug)]
-struct LeapfrogRun<'a, D: TermDictionary = TermInterner> {
+struct LeapfrogRun<'a, D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The rule's plan, for the per-atom operators.
-    plan: &'a RulePlan,
+    plan: &'a RulePlan<N>,
     /// The certified component being descended.
     cycle: &'a CyclicPlan,
     /// Uniform factor mode or the round's semi-naive delta position.
     scan: JoinScan,
     /// The accumulated store.
-    rel: &'a RelationStore<D>,
+    rel: &'a RelationStore<D, N>,
     /// The round's delta span.
     delta: Delta,
 }
 
-impl<D: TermDictionary> LeapfrogRun<'_, D> {
+impl<D: TermDictionary, const N: usize> LeapfrogRun<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Capture the unique fully-ground row for every cycle atom, in the component's
     /// authored atom order.
     ///
     /// Returns `false` — restoring `solution` — if a scan-mode constraint excludes any of
     /// them, which is how the semi-naive decomposition is enforced on a multiway group.
-    fn append_sources(&self, solution: &mut SlotSolution<D::Id>) -> Result<bool, D::Error> {
+    fn append_sources(&self, solution: &mut SlotSolution<D::Id, N>) -> Result<bool, D::Error> {
         let original = solution.sources.len();
         for &planned in self.cycle.atoms() {
             let operator = self.plan.operator_at(planned.positive_position());
@@ -2166,11 +2244,9 @@ impl<D: TermDictionary> LeapfrogRun<'_, D> {
             while let Some((subject, object, row)) = rows.next() {
                 if keep_row_for_scan(scan, self.delta, row) {
                     matched = Some(SourceRow {
+                        source: crate::clause::ReadSource::Evaluation,
                         body_index: planned.body_index(),
-                        subject,
-                        predicate: partition.predicate(),
-                        object,
-                        graph: partition.graph(),
+                        terms: partition.row(subject, object),
                         row,
                     });
                     break;
@@ -2189,8 +2265,8 @@ impl<D: TermDictionary> LeapfrogRun<'_, D> {
     fn recurse(
         &self,
         variable_position: usize,
-        solution: &mut SlotSolution<D::Id>,
-        out: &mut Vec<SlotSolution<D::Id>>,
+        solution: &mut SlotSolution<D::Id, N>,
+        out: &mut Vec<SlotSolution<D::Id, N>>,
         governor: &mut StepGovernor,
     ) -> Result<(), D::Error> {
         if governor.spent() {
@@ -2254,11 +2330,14 @@ impl<D: TermDictionary> LeapfrogRun<'_, D> {
 
 /// Extend every partial solution through one certified cyclic component, materialising no
 /// binary intermediate relation.
-fn extend_solutions_leapfrog<D: TermDictionary>(
-    run: &LeapfrogRun<'_, D>,
-    solutions: &[SlotSolution<D::Id>],
+fn extend_solutions_leapfrog<D: TermDictionary, const N: usize>(
+    run: &LeapfrogRun<'_, D, N>,
+    solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id>>, D::Error> {
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     run.rel.interner().check_read()?;
     let mut out = Vec::new();
     for solution in solutions {
@@ -2296,14 +2375,21 @@ pub(crate) enum JoinStrategy {
 /// negated conjunctions are applied AFTER it by [`evaluate_rule`], against the
 /// accumulated store — which, under the stratified fixpoint, stratification guarantees
 /// holds every negated relation's final extension.
-fn join_body<D: TermDictionary>(
-    plan: &RulePlan,
-    snapshot: JoinSnapshot<'_, D>,
+fn join_body<D: TermDictionary, const N: usize>(
+    plan: &RulePlan<N>,
+    snapshot: JoinSnapshot<'_, D, N>,
     strategy: JoinStrategy,
     governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id>>, D::Error> {
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     snapshot.rel.interner().check_read()?;
-    let leapfrog = plan.has_cyclic_subplan() && matches!(strategy, JoinStrategy::Planned);
+    let leapfrog = plan.has_cyclic_subplan()
+        && matches!(strategy, JoinStrategy::Planned)
+        && plan.operators().iter().all(|operator| {
+            operator.shape().read_source() == crate::clause::ReadSource::Evaluation
+        });
     let joined = if plan.positive().is_empty() {
         // The empty conjunction is relational identity: one empty substitution, so an
         // unconditional or NAF-only rule fires exactly once. Its head is suppressed on the
@@ -2324,21 +2410,31 @@ fn join_body<D: TermDictionary>(
 
 /// What a positive join reads: the accumulated store and the delta it is decomposed over.
 #[derive(Debug)]
-struct JoinSnapshot<'a, D: TermDictionary = TermInterner> {
+struct JoinSnapshot<'a, D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The accumulated store.
-    rel: &'a RelationStore<D>,
+    rel: &'a RelationStore<D, N>,
     /// The rows this evaluation treats as new.
     delta: Delta,
 }
 
-impl<D: TermDictionary> Copy for JoinSnapshot<'_, D> {}
-impl<D: TermDictionary> Clone for JoinSnapshot<'_, D> {
+impl<D: TermDictionary, const N: usize> Copy for JoinSnapshot<'_, D, N> where Arity<N>: StoreShape<N>
+{}
+impl<D: TermDictionary, const N: usize> Clone for JoinSnapshot<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<D: TermDictionary> JoinSnapshot<'_, D> {
+impl<D: TermDictionary, const N: usize> JoinSnapshot<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Every position before the last requires an OldOnly suffix. When the
     /// delta covers the entire frozen store, that suffix is provably empty;
     /// visiting its earlier prefixes can produce no solution. Partial deltas
@@ -2365,39 +2461,52 @@ impl<D: TermDictionary> JoinSnapshot<'_, D> {
 /// after the first round. Skipping it changes no solution: the delta scan admits only
 /// rows at or after the delta's first row, and there are none to admit. It changes only
 /// the candidates enumerated, which is the join-step count.
-fn delta_can_match<D: TermDictionary>(
-    operator: &AtomOperator,
-    snapshot: JoinSnapshot<'_, D>,
-) -> Result<bool, D::Error> {
+fn delta_can_match<D: TermDictionary, const N: usize>(
+    operator: &AtomOperator<N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+) -> Result<bool, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     let shape = operator.shape();
-    let [_, predicate, _, graph] = constant_positions(shape, snapshot.rel)?;
-    let known = |value: Option<PositionValue<D::Id>>| match value {
-        Some(PositionValue::Known(id)) => Ok(Some(id)),
-        Some(PositionValue::Missing) => Err(()),
-        Some(PositionValue::Free) | None => Ok(None),
-    };
-    let (Ok(predicate), Ok(graph)) = (known(predicate), known(graph)) else {
-        // A constant the store never interned matches nothing, delta or not.
-        return Ok(false);
-    };
+    let constants = constant_positions(shape, snapshot.rel)?;
+    let mut positions = [None; N];
+    for &position in Arity::<N>::KEY_POSITIONS {
+        positions[position] = match constants[position] {
+            Some(PositionValue::Known(id)) => Some(id),
+            Some(PositionValue::Missing) => return Ok(false),
+            Some(PositionValue::Free) | None => None,
+        };
+    }
     Ok(snapshot
         .rel
-        .partitions(predicate, graph)
+        .partitions_for(positions)
         .any(|partition| partition.has_row_from(snapshot.delta.lo)))
 }
 
 /// The indexed binary positive join: every planned operator in execution order, for every
 /// semi-naive delta position whose delta atom can match ([`delta_can_match`]).
-fn join_positive_binary<D: TermDictionary>(
-    plan: &RulePlan,
-    snapshot: JoinSnapshot<'_, D>,
+fn join_positive_binary<D: TermDictionary, const N: usize>(
+    plan: &RulePlan<N>,
+    snapshot: JoinSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id>>, D::Error> {
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     snapshot.rel.interner().check_read()?;
     let operators = plan.operators();
-    let mut all: Vec<SlotSolution<D::Id>> = Vec::new();
-    for delta_position in snapshot.delta_positions(operators.len()) {
-        if !delta_can_match(&operators[delta_position], snapshot)? {
+    let mut all: Vec<SlotSolution<D::Id, N>> = Vec::new();
+    let base = operators
+        .iter()
+        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base);
+    let anchors = if base {
+        0..1
+    } else {
+        snapshot.delta_positions(operators.len())
+    };
+    for delta_position in anchors {
+        if !base && !delta_can_match(&operators[delta_position], snapshot)? {
             continue;
         }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
@@ -2406,7 +2515,11 @@ fn join_positive_binary<D: TermDictionary>(
                 operator,
                 snapshot.rel,
                 snapshot.delta,
-                scan_for(position, delta_position),
+                if base {
+                    Scan::Full
+                } else {
+                    scan_for(position, delta_position)
+                },
                 &partial,
                 governor,
             )?;
@@ -2431,12 +2544,15 @@ fn join_positive_binary<D: TermDictionary>(
 /// The hybrid positive join for a rule with at least one certified cyclic subplan: each
 /// physical group in execution order, for every semi-naive delta position whose delta atom
 /// can match ([`delta_can_match`]).
-fn join_positive_leapfrog<D: TermDictionary>(
-    plan: &RulePlan,
-    snapshot: JoinSnapshot<'_, D>,
+fn join_positive_leapfrog<D: TermDictionary, const N: usize>(
+    plan: &RulePlan<N>,
+    snapshot: JoinSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id>>, D::Error> {
-    let mut all: Vec<SlotSolution<D::Id>> = Vec::new();
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut all: Vec<SlotSolution<D::Id, N>> = Vec::new();
     for delta_position in snapshot.delta_positions(plan.positive().len()) {
         if !delta_can_match(plan.operator_at(delta_position), snapshot)? {
             continue;
@@ -2514,7 +2630,7 @@ impl ArgShape {
     /// # Panics
     ///
     /// Panics on a variable the plan has no slot for. [`RulePlan`] assigns a slot to every
-    /// variable of the body AND the head, in every one of their four positions, so that is
+    /// variable of the body AND the head, in every one of their stored positions, so that is
     /// a planner contradiction.
     fn of(term: &ClauseTerm, variables: &[String]) -> Self {
         match term.variable() {
@@ -2528,17 +2644,20 @@ impl ArgShape {
 
     /// The four lowered arguments of `atom`, in `(subject, predicate, object, graph)`
     /// order.
-    fn of_atom(atom: &ClauseAtom, variables: &[String]) -> [Self; ATOM_ARITY] {
+    fn of_atom<const N: usize>(atom: &ClauseAtom<N>, variables: &[String]) -> [Self; N] {
         let terms = atom.terms();
         std::array::from_fn(|position| Self::of(terms[position], variables))
     }
 
     /// This argument under `solution`, for a store probe.
-    fn probe<D: TermDictionary>(
+    fn probe<D: TermDictionary, const N: usize>(
         &self,
-        solution: &SlotSolution<D::Id>,
-        rel: &RelationStore<D>,
-    ) -> Result<ProbeValue<D::Id>, D::Error> {
+        solution: &SlotSolution<D::Id, N>,
+        rel: &RelationStore<D, N>,
+    ) -> Result<ProbeValue<D::Id>, D::Error>
+    where
+        Arity<N>: StoreShape<N>,
+    {
         Ok(match self {
             Self::Slot(slot) => match solution.value(*slot) {
                 SlotValue::Interned(id) => ProbeValue::Known(id),
@@ -2567,12 +2686,20 @@ fn slot_of(name: &str, variables: &[String]) -> usize {
 
 /// A negated body atom, lowered once per evaluation.
 #[derive(Debug, Clone)]
-struct NegatedAtom {
+struct NegatedAtom<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The four lowered arguments, in `(subject, predicate, object, graph)` order.
-    args: [ArgShape; ATOM_ARITY],
+    args: [ArgShape; N],
+    /// The original body read authority.
+    source: crate::clause::ReadSource,
 }
 
-impl NegatedAtom {
+impl<const N: usize> NegatedAtom<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Whether this negated atom is SATISFIED — i.e. some matching fact is present, so it
     /// blocks the rule.
     ///
@@ -2593,8 +2720,8 @@ impl NegatedAtom {
     /// rule fires.
     fn satisfied<D: TermDictionary>(
         &self,
-        solution: &SlotSolution<D::Id>,
-        rel: &RelationStore<D>,
+        solution: &SlotSolution<D::Id, N>,
+        rel: &RelationStore<D, N>,
         governor: &mut StepGovernor,
     ) -> Result<bool, D::Error> {
         self.visit_matches(
@@ -2611,18 +2738,19 @@ impl NegatedAtom {
     /// an earlier visitor failure before inspecting the final source state.
     fn visit_matches<D: TermDictionary, E>(
         &self,
-        solution: &SlotSolution<D::Id>,
-        rel: &RelationStore<D>,
+        solution: &SlotSolution<D::Id, N>,
+        rel: &RelationStore<D, N>,
         governor: &mut StepGovernor,
         mut visit: impl FnMut(RowId) -> Result<bool, E>,
         source_error: impl Fn(D::Error) -> E,
     ) -> Result<bool, E> {
+        let rel = rel.read_source(self.source);
         rel.interner().check_read().map_err(&source_error)?;
         let result = (|| -> Result<bool, E> {
             if !governor.charge() {
                 return Ok(false);
             }
-            let mut values = [None; ATOM_ARITY];
+            let mut values = [None; N];
             for (position, arg) in self.args.iter().enumerate() {
                 match arg.probe(solution, rel).map_err(&source_error)? {
                     ProbeValue::Known(id) => values[position] = Some(id),
@@ -2637,10 +2765,7 @@ impl NegatedAtom {
                 (None, Some(object)) => Bound::Object(object),
                 (None, None) => Bound::Any,
             };
-            for (index, partition) in rel
-                .partitions(values[POSITION_PREDICATE], values[POSITION_GRAPH])
-                .enumerate()
-            {
+            for (index, partition) in rel.partitions_for(values).enumerate() {
                 // The first probe was reserved above; broad predicate/graph scans also
                 // reserve every further partition, including an empty selected index.
                 if index != 0 && !governor.charge() {
@@ -2667,10 +2792,10 @@ impl NegatedAtom {
     /// Retain signed witnesses on the native path; keep the ordinary boolean probe.
     fn blocks<D: TermDictionary>(
         &self,
-        solution: &mut SlotSolution<D::Id>,
-        rel: &RelationStore<D>,
+        solution: &mut SlotSolution<D::Id, N>,
+        rel: &RelationStore<D, N>,
         governor: &mut StepGovernor,
-        evidence: &mut Option<&mut dyn evidence::RuleEvidence<D>>,
+        evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
         let Some(owner) = evidence.as_deref_mut() else {
             return self
@@ -2733,11 +2858,16 @@ struct GroupGuard {
 
 /// A negated conjunction ([`Negation`]), lowered once per evaluation.
 #[derive(Debug, Clone)]
-struct NegationRuntime {
+struct NegationRuntime<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The group's index in its rule.
     index: usize,
     /// The group's atoms, each with its four lowered arguments.
-    atoms: Vec<[GroupArg; ATOM_ARITY]>,
+    atoms: Vec<[GroupArg; N]>,
+    /// Source of each authored negative-conjunction atom.
+    sources: Vec<crate::clause::ReadSource>,
     /// The group's guards, in authored order.
     guards: Vec<GroupGuard>,
     /// How many local variables the group quantifies.
@@ -2745,37 +2875,49 @@ struct NegationRuntime {
 }
 
 /// What one probe of a negated conjunction needs besides the group itself.
-struct GroupProbe<'a, D: TermDictionary = TermInterner> {
+struct GroupProbe<'a, D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The enclosing rule's solution.
-    solution: &'a SlotSolution<D::Id>,
+    solution: &'a SlotSolution<D::Id, N>,
     /// The accumulated store.
-    rel: &'a RelationStore<D>,
+    rel: &'a RelationStore<D, N>,
     /// The caller's guard evaluator.
-    guards: &'a dyn GuardEvaluator<D>,
+    guards: &'a dyn GuardEvaluator<D, N>,
     /// The rule's index in authored program order.
     rule: usize,
     /// The rule itself, for its guards' declarations.
-    clause: &'a DlClause,
+    clause: &'a DlClause<N>,
 }
 
-impl<D: TermDictionary> Copy for GroupProbe<'_, D> {}
+impl<D: TermDictionary, const N: usize> Copy for GroupProbe<'_, D, N> where Arity<N>: StoreShape<N> {}
 
-impl<D: TermDictionary> Clone for GroupProbe<'_, D> {
+impl<D: TermDictionary, const N: usize> Clone for GroupProbe<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     fn clone(&self) -> Self {
         *self
     }
 }
 
 /// Evidence accumulated by the original conjunction search, without replaying it.
-struct GroupEvidence<'a, D: TermDictionary = TermInterner> {
-    owner: &'a mut dyn evidence::RuleEvidence<D>,
+struct GroupEvidence<'a, D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    owner: &'a mut dyn evidence::RuleEvidence<D, N>,
     current: purrdf_core::evidence::EvidenceId,
     witnesses: Option<purrdf_core::evidence::EvidenceId>,
 }
 
-impl NegationRuntime {
+impl<const N: usize> NegationRuntime<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Lower `negation` against the enclosing rule's frame.
-    fn new(index: usize, negation: &Negation, rule: &DlClause, variables: &[String]) -> Self {
+    fn new(index: usize, negation: &Negation<N>, rule: &DlClause<N>, variables: &[String]) -> Self {
         let bound = rule.bound_variables();
         let mut locals: Vec<String> = Vec::new();
         let arg = |term: &ClauseTerm, locals: &mut Vec<String>| -> GroupArg {
@@ -2794,7 +2936,7 @@ impl NegationRuntime {
                 ),
             }
         };
-        let atoms: Vec<[GroupArg; ATOM_ARITY]> = negation
+        let atoms: Vec<[GroupArg; N]> = negation
             .atoms()
             .iter()
             .map(|atom| {
@@ -2828,16 +2970,26 @@ impl NegationRuntime {
         Self {
             index,
             atoms,
+            sources: negation
+                .atoms()
+                .iter()
+                .map(ClauseAtom::read_source)
+                .collect(),
             guards,
             locals: locals.len(),
         }
     }
+}
 
+impl<const N: usize> NegationRuntime<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Whether the group HOLDS under `probe.solution`: some extension of its local
     /// variables matches every atom and passes every guard.
     fn holds<D: TermDictionary>(
         &self,
-        probe: GroupProbe<'_, D>,
+        probe: GroupProbe<'_, D, N>,
         governor: &mut StepGovernor,
     ) -> Result<bool, EvalError<D::Error>> {
         probe
@@ -2862,9 +3014,9 @@ impl NegationRuntime {
     /// Probe all signed conjunction witnesses through the same atom/guard traversal.
     fn blocks<D: TermDictionary>(
         &self,
-        probe: GroupProbe<'_, D>,
+        probe: GroupProbe<'_, D, N>,
         governor: &mut StepGovernor,
-        evidence: &mut Option<&mut dyn evidence::RuleEvidence<D>>,
+        evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     ) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError<D::Error>> {
         probe
             .rel
@@ -2901,7 +3053,7 @@ impl NegationRuntime {
     /// The store probe value of `arg` under the current bindings.
     fn probe_value<D: TermDictionary>(
         arg: &GroupArg,
-        probe: GroupProbe<'_, D>,
+        probe: GroupProbe<'_, D, N>,
         locals: &[Option<LocalValue<D::Id>>],
     ) -> Result<ProbeValue<D::Id>, D::Error> {
         Ok(match arg {
@@ -2929,15 +3081,15 @@ impl NegationRuntime {
     fn match_atom<D: TermDictionary>(
         &self,
         k: usize,
-        probe: GroupProbe<'_, D>,
+        probe: GroupProbe<'_, D, N>,
         locals: &mut Vec<Option<LocalValue<D::Id>>>,
         governor: &mut StepGovernor,
-        evidence: &mut Option<GroupEvidence<'_, D>>,
+        evidence: &mut Option<GroupEvidence<'_, D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
         let Some(atom) = self.atoms.get(k) else {
             return self.match_guard(0, probe, locals, governor, evidence);
         };
-        let mut values = [ProbeValue::Free; ATOM_ARITY];
+        let mut values = [ProbeValue::Free; N];
         for (position, arg) in atom.iter().enumerate() {
             values[position] = Self::probe_value(arg, probe, locals).map_err(EvalError::Source)?;
             if values[position] == ProbeValue::Absent {
@@ -2957,20 +3109,20 @@ impl NegationRuntime {
             (None, Some(object)) => Bound::Object(object),
             (None, None) => Bound::Any,
         };
-        for partition in probe.rel.partitions(
-            known(values[POSITION_PREDICATE]),
-            known(values[POSITION_GRAPH]),
-        ) {
+        for partition in probe
+            .rel
+            .read_source(self.sources[k])
+            .partitions_for(values.map(known))
+        {
             if !governor.charge() {
                 return Ok(false);
             }
-            let (predicate, graph) = (partition.predicate(), partition.graph());
             let mut cursor = partition.select(bound);
             while let Some((subject, object, row)) = cursor.next() {
                 if !governor.charge() {
                     return Ok(false);
                 }
-                let matched = [subject, predicate, object, graph];
+                let matched = partition.row(subject, object);
                 // Bind every free local position, requiring a local repeated inside
                 // the atom to agree with itself.
                 let mut newly: Vec<usize> = Vec::new();
@@ -3026,10 +3178,10 @@ impl NegationRuntime {
     fn match_guard<D: TermDictionary>(
         &self,
         j: usize,
-        probe: GroupProbe<'_, D>,
+        probe: GroupProbe<'_, D, N>,
         locals: &mut Vec<Option<LocalValue<D::Id>>>,
         governor: &mut StepGovernor,
-        evidence: &mut Option<GroupEvidence<'_, D>>,
+        evidence: &mut Option<GroupEvidence<'_, D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
         let Some(guard) = self.guards.get(j) else {
             if let Some(trace) = evidence.as_mut() {
@@ -3125,11 +3277,14 @@ impl NegationRuntime {
 /// [`EvalError::Guard`] when the evaluator reports an error, or answers a row whose
 /// width is not the guard's output count — a malformed answer is not read as some
 /// answer.
-fn call_guard<D: TermDictionary>(
-    guards: &dyn GuardEvaluator<D>,
-    call: &GuardCall<'_, D>,
+fn call_guard<D: TermDictionary, const N: usize>(
+    guards: &dyn GuardEvaluator<D, N>,
+    call: &GuardCall<'_, D, N>,
     governor: &mut StepGovernor,
-) -> Result<Vec<Vec<String>>, EvalError<D::Error>> {
+) -> Result<Vec<Vec<String>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     call.model
         .interner()
         .check_read()
@@ -3180,24 +3335,30 @@ struct GuardRuntime {
 /// Constant surfaces are rendered ONCE here rather than per candidate — including the head
 /// predicate's, which is now a term like any other and so may equally well be a slot.
 #[derive(Debug, Clone)]
-pub(crate) struct RuleRuntime {
+pub(crate) struct RuleRuntime<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Independent positive components, certified without opaque callbacks.
     factors: Vec<factors::Factor>,
     /// Each head atom's four lowered arguments, in `(subject, predicate, object, graph)`
     /// order. One atom under the stratified fixpoint; a conjunctive head under the ordered
     /// schedule ([`crate::schedule`]) asserts every conjunct from one solution.
-    head: Vec<[ArgShape; ATOM_ARITY]>,
+    head: Vec<[ArgShape; N]>,
     /// The rule's negated body atoms, in authored order.
-    negated: Vec<NegatedAtom>,
+    negated: Vec<NegatedAtom<N>>,
     /// The rule's body guards, in authored order.
     guards: Vec<GuardRuntime>,
     /// The rule's negated conjunctions, in authored order.
-    negations: Vec<NegationRuntime>,
+    negations: Vec<NegationRuntime<N>>,
 }
 
-impl RuleRuntime {
+impl<const N: usize> RuleRuntime<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Lower one rule's static shapes.
-    pub(crate) fn new(rule: &DlClause, plan: &RulePlan) -> Self {
+    pub(crate) fn new(rule: &DlClause<N>, plan: &RulePlan<N>) -> Self {
         let variables = plan.variables();
         let mut runtime = Self {
             factors: Vec::new(),
@@ -3209,6 +3370,7 @@ impl RuleRuntime {
                 .negated()
                 .iter()
                 .map(|&index| NegatedAtom {
+                    source: rule.body()[index].read_source(),
                     args: ArgShape::of_atom(&rule.body()[index], variables),
                 })
                 .collect(),
@@ -3276,10 +3438,13 @@ impl<I: TermIdentity> HeadTerm<'_, I> {
     }
 
     /// This argument's lexical surface.
-    fn surface<D: TermDictionary<Id = I>>(
+    fn surface<D: TermDictionary<Id = I>, const N: usize>(
         &self,
-        rel: &RelationStore<D>,
-    ) -> Result<String, D::Error> {
+        rel: &RelationStore<D, N>,
+    ) -> Result<String, D::Error>
+    where
+        Arity<N>: StoreShape<N>,
+    {
         let value = match self {
             Self::Interned(id) => SlotValue::Interned(*id),
             Self::Fresh(surface) => SlotValue::Computed(surface.as_ref()),
@@ -3294,53 +3459,65 @@ impl<I: TermIdentity> HeadTerm<'_, I> {
 
 /// The identity of a candidate head fact.
 ///
-/// All four positions are [`HeadTerm`]s: with the predicate carried as data, a head
+/// All stored positions are [`HeadTerm`]s: with the predicate carried as data, a head
 /// predicate can be a bound variable, so it cannot be a borrowed `&str` naming a relation.
-/// The field order is the [`Fact`] order, so the derived `Ord` groups candidates the way
+/// The field order is the [`ShapeFact<N>`] order, so the derived `Ord` groups candidates the way
 /// the commit sweep will emit them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct HeadKey<'r, I: TermIdentity = TermId> {
-    /// The head subject.
-    subject: HeadTerm<'r, I>,
-    /// The head predicate.
-    predicate: HeadTerm<'r, I>,
-    /// The head object.
-    object: HeadTerm<'r, I>,
-    /// The head graph.
-    graph: HeadTerm<'r, I>,
+struct HeadKey<'r, I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The head's actual ordered positions.
+    positions: [HeadTerm<'r, I>; N],
 }
 
-impl<I: TermIdentity> HeadKey<'_, I> {
-    /// The four positions, in fact order.
-    fn terms(&self) -> [&HeadTerm<'_, I>; ATOM_ARITY] {
-        [&self.subject, &self.predicate, &self.object, &self.graph]
+impl<I: TermIdentity, const N: usize> HeadKey<'_, I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The actual positions, in fact order.
+    fn terms(&self) -> [&HeadTerm<'_, I>; N] {
+        self.positions.each_ref()
     }
+}
 
+impl<I: TermIdentity, const N: usize> HeadKey<'_, I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Resolve a publication fact in position order, preserving the first refusal.
-    fn fact<D: TermDictionary<Id = I>>(&self, rel: &RelationStore<D>) -> Result<Fact, D::Error> {
-        Ok(Fact {
-            subject: self.subject.surface(rel)?,
-            predicate: self.predicate.surface(rel)?,
-            object: self.object.surface(rel)?,
-            graph: self.graph.surface(rel)?,
-        })
+    fn fact<D: TermDictionary<Id = I>>(
+        &self,
+        rel: &RelationStore<D, N>,
+    ) -> Result<ShapeFact<N>, D::Error> {
+        Ok(Arity::<N>::fact(crate::dictionary::try_map_row(
+            self.terms(),
+            |term| term.surface(rel),
+        )?))
     }
 }
 
 /// One rule firing, before the round's winner is chosen.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Candidate<I: TermIdentity = TermId> {
+struct Candidate<I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The producing rule's index in authored program order.
     rule: usize,
     /// The matched body rows, in authored body order.
-    sources: Vec<SourceRow<I>>,
+    sources: Vec<SourceRow<I, N>>,
     /// `1 + max(source proof heights)`.
     proof_height: u32,
     /// The sum of the source proof heights — the second tiebreak component.
     sum_source_height: u64,
 }
 
-impl<I: TermIdentity> Candidate<I> {
+impl<I: TermIdentity, const N: usize> Candidate<I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The candidate's source facts, in authored body order.
     ///
     /// Each source names the quad it actually matched, predicate included: a body atom
@@ -3348,8 +3525,8 @@ impl<I: TermIdentity> Candidate<I> {
     /// which.
     fn source_facts<D: TermDictionary<Id = I>>(
         &self,
-        rel: &RelationStore<D>,
-    ) -> Result<Vec<Fact>, D::Error> {
+        rel: &RelationStore<D, N>,
+    ) -> Result<Vec<ShapeFact<N>>, D::Error> {
         rel.interner().check_read()?;
         let facts = self
             .sources
@@ -3374,7 +3551,7 @@ impl<I: TermIdentity> Candidate<I> {
     fn preferred_over<D: TermDictionary<Id = I>>(
         &self,
         other: &Self,
-        rel: &RelationStore<D>,
+        rel: &RelationStore<D, N>,
     ) -> Result<bool, D::Error> {
         rel.interner().check_read()?;
         let order = witness_preference(
@@ -3400,13 +3577,16 @@ fn witness_preference<E>(
 }
 
 /// The lexical tail of the canonical witness law, shared with projected frontiers.
-fn source_preference<D: TermDictionary>(
-    mine: &[SourceRow<D::Id>],
+fn source_preference<D: TermDictionary, const N: usize>(
+    mine: &[SourceRow<D::Id, N>],
     my_rule: usize,
-    theirs: &[SourceRow<D::Id>],
+    theirs: &[SourceRow<D::Id, N>],
     their_rule: usize,
-    rel: &RelationStore<D>,
-) -> Result<std::cmp::Ordering, D::Error> {
+    rel: &RelationStore<D, N>,
+) -> Result<std::cmp::Ordering, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     rel.interner().check_read()?;
     let mine: Vec<_> = mine
         .iter()
@@ -3421,10 +3601,10 @@ fn source_preference<D: TermDictionary>(
 }
 
 /// The lexical tail over owned surfaces, also valid after a store rebuild.
-fn fact_preference(
-    mine: &[Fact],
+fn fact_preference<G: Clone + Ord>(
+    mine: &[crate::store::Fact<G>],
     my_rule: usize,
-    theirs: &[Fact],
+    theirs: &[crate::store::Fact<G>],
     their_rule: usize,
 ) -> std::cmp::Ordering {
     let mut mine_sorted = mine.to_vec();
@@ -3437,14 +3617,20 @@ fn fact_preference(
 /// An assumed fact's best proof, retaining the otherwise unobservable sum needed
 /// across schedule groups. Owned facts survive the layer's retraction/rebuild.
 #[derive(Debug, Clone)]
-pub(crate) struct Confirmation {
-    derivation: Derivation,
+pub(crate) struct Confirmation<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    derivation: Derivation<N>,
     sum_source_height: u64,
 }
 
-impl Confirmation {
+impl<const N: usize> Confirmation<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The confirmed fact, independent of store row identities.
-    pub(crate) fn fact(&self) -> &Fact {
+    pub(crate) fn fact(&self) -> &ShapeFact<N> {
         self.derivation.fact()
     }
 
@@ -3470,15 +3656,24 @@ impl Confirmation {
     }
 
     /// Commit only public provenance, after every group has competed.
-    pub(crate) fn into_derivation(self) -> Derivation {
+    pub(crate) fn into_derivation(self) -> Derivation<N> {
         self.derivation
     }
 }
 
 /// Raw maximum and saturated sum of a witness's source heights.
-fn source_heights<I: TermIdentity>(sources: &[SourceRow<I>], depth: &[u32]) -> (u32, u64) {
+fn source_heights<I: TermIdentity, const N: usize>(
+    sources: &[SourceRow<I, N>],
+    depth: &[u32],
+) -> (u32, u64)
+where
+    Arity<N>: StoreShape<N>,
+{
     sources.iter().fold((0, 0u64), |(maximum, sum), source| {
-        let height = depth[source.row.resident_index()];
+        let height = match source.source {
+            crate::clause::ReadSource::Evaluation => depth[source.row.resident_index()],
+            crate::clause::ReadSource::Base => 0,
+        };
         (maximum.max(height), sum.saturating_add(u64::from(height)))
     })
 }
@@ -3488,9 +3683,12 @@ fn source_heights<I: TermIdentity>(sources: &[SourceRow<I>], depth: &[u32]) -> (
 /// A `BTreeMap` rather than a hash table: the merge sweep and the commit sweep both
 /// iterate it, so its order reaches an output path and must be total and content-derived.
 #[derive(Debug)]
-pub(crate) struct RoundBuffer<'r, I: TermIdentity = TermId> {
+pub(crate) struct RoundBuffer<'r, I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The best candidate seen so far per head fact.
-    entries: BTreeMap<HeadKey<'r, I>, Candidate<I>>,
+    entries: BTreeMap<HeadKey<'r, I, N>, Candidate<I, N>>,
     /// Candidate solutions enumerated by the task that produced this buffer.
     join_steps: u64,
     /// A refused reservation; independent of saturated observable counts.
@@ -3504,10 +3702,13 @@ pub(crate) struct RoundBuffer<'r, I: TermIdentity = TermId> {
     /// Rows already in the store that the snapshot marks as ASSUMED and a rule of this
     /// round derived again, each with the derivation that did — see
     /// [`RoundSnapshot::assumed`].
-    confirmed: BTreeMap<RowId, Confirmation>,
+    confirmed: BTreeMap<RowId, Confirmation<N>>,
 }
 
-impl<'r, I: TermIdentity> RoundBuffer<'r, I> {
+impl<'r, I: TermIdentity, const N: usize> RoundBuffer<'r, I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// An empty buffer.
     fn new() -> Self {
         Self {
@@ -3526,16 +3727,16 @@ impl<'r, I: TermIdentity> RoundBuffer<'r, I> {
     }
 
     /// The assumed rows a rule of the round derived again, with the derivations.
-    pub(crate) fn confirmed(&self) -> impl Iterator<Item = &Confirmation> {
+    pub(crate) fn confirmed(&self) -> impl Iterator<Item = &Confirmation<N>> {
         self.confirmed.values()
     }
 
     /// Insert or quality-merge one candidate.
     fn insert<D: TermDictionary<Id = I>>(
         &mut self,
-        key: HeadKey<'r, I>,
-        candidate: Candidate<I>,
-        rel: &RelationStore<D>,
+        key: HeadKey<'r, I, N>,
+        candidate: Candidate<I, N>,
+        rel: &RelationStore<D, N>,
     ) -> Result<(), D::Error> {
         rel.interner().check_read()?;
         let replace = match self.entries.get(&key) {
@@ -3557,7 +3758,7 @@ impl<'r, I: TermIdentity> RoundBuffer<'r, I> {
     fn merge_from<D: TermDictionary<Id = I>>(
         &mut self,
         other: Self,
-        rel: &RelationStore<D>,
+        rel: &RelationStore<D, N>,
     ) -> Result<(), D::Error> {
         rel.interner().check_read()?;
         self.join_steps = self.join_steps.saturating_add(other.join_steps);
@@ -3582,9 +3783,12 @@ impl<'r, I: TermIdentity> RoundBuffer<'r, I> {
 /// No task may mutate any of it; the single sorted commit begins only after every task
 /// buffer has been collected and merged in program order.
 #[derive(Debug)]
-pub(crate) struct RoundSnapshot<'a, D: TermDictionary = TermInterner> {
+pub(crate) struct RoundSnapshot<'a, D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The accumulated store.
-    pub(crate) rel: &'a RelationStore<D>,
+    pub(crate) rel: &'a RelationStore<D, N>,
     /// Per-row proof heights, indexed by [`RowId`].
     pub(crate) depth: &'a [u32],
     /// Per-row ASSUMED flags, indexed by [`RowId`], or empty when nothing is assumed.
@@ -3595,8 +3799,14 @@ pub(crate) struct RoundSnapshot<'a, D: TermDictionary = TermInterner> {
     pub(crate) assumed: &'a [bool],
 }
 
-impl<D: TermDictionary> Copy for RoundSnapshot<'_, D> {}
-impl<D: TermDictionary> Clone for RoundSnapshot<'_, D> {
+impl<D: TermDictionary, const N: usize> Copy for RoundSnapshot<'_, D, N> where
+    Arity<N>: StoreShape<N>
+{
+}
+impl<D: TermDictionary, const N: usize> Clone for RoundSnapshot<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     fn clone(&self) -> Self {
         *self
     }
@@ -3604,15 +3814,18 @@ impl<D: TermDictionary> Clone for RoundSnapshot<'_, D> {
 
 /// One rule scheduled into a round, with the delta its positive join is decomposed over.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RuleEntry<'r> {
+pub(crate) struct RuleEntry<'r, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The rule's index in authored program order.
     pub(crate) index: usize,
     /// The rule.
-    pub(crate) rule: &'r DlClause,
+    pub(crate) rule: &'r DlClause<N>,
     /// Its store-independent join plan.
-    pub(crate) plan: &'r RulePlan,
+    pub(crate) plan: &'r RulePlan<N>,
     /// Its lowered static shapes.
-    pub(crate) runtime: &'r RuleRuntime,
+    pub(crate) runtime: &'r RuleRuntime<N>,
     /// The rows this evaluation treats as new.
     pub(crate) delta: Delta,
 }
@@ -3656,24 +3869,30 @@ impl RoundExecution {
 /// dropping each solution; then the negated atoms and negated conjunctions, each of which
 /// drops a solution it is satisfied under. Every surviving solution yields one candidate
 /// per head atom.
-fn evaluate_rule<'r, D: TermDictionary>(
-    entry: RuleEntry<'r>,
-    snapshot: RoundSnapshot<'_, D>,
+fn evaluate_rule<'r, D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'r, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     strategy: JoinStrategy,
     governor: StepGovernor,
-    guards: &dyn GuardEvaluator<D>,
-) -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+    guards: &dyn GuardEvaluator<D, N>,
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     evaluate_rule_with_evidence(entry, snapshot, strategy, governor, guards, None)
 }
 
-fn evaluate_rule_with_evidence<'r, D: TermDictionary>(
-    entry: RuleEntry<'r>,
-    snapshot: RoundSnapshot<'_, D>,
+fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'r, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     strategy: JoinStrategy,
     mut governor: StepGovernor,
-    guards: &dyn GuardEvaluator<D>,
-    mut evidence: Option<&mut dyn evidence::RuleEvidence<D>>,
-) -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+    guards: &dyn GuardEvaluator<D, N>,
+    mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     snapshot
         .rel
         .interner()
@@ -3828,23 +4047,23 @@ struct HeadEvidence {
 }
 
 /// Emit one head using the shared ordinary and factorized provenance path.
-fn emit_solution<'r, D: TermDictionary>(
-    buffer: &mut RoundBuffer<'r, D::Id>,
-    head: &'r [ArgShape; ATOM_ARITY],
-    solution: &SlotSolution<D::Id>,
+fn emit_solution<'r, D: TermDictionary, const N: usize>(
+    buffer: &mut RoundBuffer<'r, D::Id, N>,
+    head: &'r [ArgShape; N],
+    solution: &SlotSolution<D::Id, N>,
     rule: usize,
-    snapshot: RoundSnapshot<'_, D>,
-    evidence: &mut Option<&mut dyn evidence::RuleEvidence<D>>,
+    snapshot: RoundSnapshot<'_, D, N>,
+    evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     head_evidence: HeadEvidence,
-) -> Result<(), EvalError<D::Error>> {
+) -> Result<(), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     let rel = snapshot.rel;
     rel.interner().check_read().map_err(EvalError::Source)?;
     let (proof_height, sum_source_height) = source_heights(&solution.sources, snapshot.depth);
     let key = HeadKey {
-        subject: head_term(&head[POSITION_SUBJECT], solution),
-        predicate: head_term(&head[POSITION_PREDICATE], solution),
-        object: head_term(&head[POSITION_OBJECT], solution),
-        graph: head_term(&head[POSITION_GRAPH], solution),
+        positions: head.each_ref().map(|term| head_term(term, solution)),
     };
     let key = intern_key(key, rel).map_err(EvalError::Source)?;
     if let Some(owner) = evidence.as_mut() {
@@ -3911,19 +4130,18 @@ fn emit_solution<'r, D: TermDictionary>(
 }
 
 /// The store row of the fact `key` names, if it is present.
-fn present_row<D: TermDictionary>(
-    key: &HeadKey<'_, D::Id>,
-    rel: &RelationStore<D>,
-) -> Result<Option<RowId>, D::Error> {
+fn present_row<D: TermDictionary, const N: usize>(
+    key: &HeadKey<'_, D::Id, N>,
+    rel: &RelationStore<D, N>,
+) -> Result<Option<RowId>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     rel.interner().check_read()?;
     let result = (|| {
-        let (subject, predicate, object, graph) = (
-            key.subject.interned()?,
-            key.predicate.interned()?,
-            key.object.interned()?,
-            key.graph.interned()?,
-        );
-        let partition = rel.partition(predicate, graph)?;
+        let positions = key.terms().map(HeadTerm::interned);
+        let (subject, object) = (positions[0]?, positions[2]?);
+        let partition = rel.partition_for(&positions)?;
         let mut cursor = partition.select(Bound::Both(subject, object));
         cursor.next().map(|(_, _, row)| row)
     })();
@@ -3936,10 +4154,13 @@ fn present_row<D: TermDictionary>(
 /// A guard may compute a surface the store already holds, and a head constant may have
 /// been interned since the plan was lowered; keying either as fresh would let one fact be
 /// keyed two ways and committed twice.
-fn intern_key<'r, D: TermDictionary>(
-    key: HeadKey<'r, D::Id>,
-    rel: &RelationStore<D>,
-) -> Result<HeadKey<'r, D::Id>, D::Error> {
+fn intern_key<'r, D: TermDictionary, const N: usize>(
+    key: HeadKey<'r, D::Id, N>,
+    rel: &RelationStore<D, N>,
+) -> Result<HeadKey<'r, D::Id, N>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     rel.interner().check_read()?;
     let resolve = |term: HeadTerm<'r, D::Id>| {
         Ok::<_, D::Error>(match term {
@@ -3951,10 +4172,7 @@ fn intern_key<'r, D: TermDictionary>(
         })
     };
     let key = HeadKey {
-        subject: resolve(key.subject)?,
-        predicate: resolve(key.predicate)?,
-        object: resolve(key.object)?,
-        graph: resolve(key.graph)?,
+        positions: crate::dictionary::try_map_row(key.positions, resolve)?,
     };
     rel.interner().check_read()?;
     Ok(key)
@@ -3968,10 +4186,13 @@ fn intern_key<'r, D: TermDictionary>(
 /// variable nothing in its body binds, and every positive atom binds all four of its
 /// variable positions before the join completes (every guard output is bound by its guard),
 /// so an unbound head slot here would be a contradiction in the range-restriction check.
-fn head_term<'r, I: TermIdentity>(
+fn head_term<'r, I: TermIdentity, const N: usize>(
     shape: &'r ArgShape,
-    solution: &SlotSolution<I>,
-) -> HeadTerm<'r, I> {
+    solution: &SlotSolution<I, N>,
+) -> HeadTerm<'r, I>
+where
+    Arity<N>: StoreShape<N>,
+{
     match shape {
         ArgShape::Slot(slot) => match solution.value(*slot) {
             SlotValue::Interned(id) => HeadTerm::Interned(id),
@@ -3989,34 +4210,40 @@ fn head_term<'r, I: TermIdentity>(
 /// A round holding a guarded rule runs on the calling thread in program order: a guard is
 /// caller code, and the caller's thread-scoped evaluation context has to reach it. A
 /// guard-free round keeps the rule-parallel path, which cannot reach a guard at all.
-pub(crate) fn evaluate_round<'r, D: TermDictionary>(
-    entries: &[RuleEntry<'r>],
-    snapshot: RoundSnapshot<'_, D>,
+pub(crate) fn evaluate_round<'r, D: TermDictionary, const N: usize>(
+    entries: &[RuleEntry<'r, N>],
+    snapshot: RoundSnapshot<'_, D, N>,
     execution: RoundExecution,
     strategy: JoinStrategy,
     allowance: u64,
-    guards: &dyn GuardEvaluator<D>,
-) -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+    guards: &dyn GuardEvaluator<D, N>,
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     evaluate_round_with_evidence(
         entries, snapshot, execution, strategy, allowance, guards, None,
     )
 }
 
-fn evaluate_round_with_evidence<'r, D: TermDictionary>(
-    entries: &[RuleEntry<'r>],
-    snapshot: RoundSnapshot<'_, D>,
+fn evaluate_round_with_evidence<'r, D: TermDictionary, const N: usize>(
+    entries: &[RuleEntry<'r, N>],
+    snapshot: RoundSnapshot<'_, D, N>,
     execution: RoundExecution,
     strategy: JoinStrategy,
     allowance: u64,
-    guards: &dyn GuardEvaluator<D>,
-    mut evidence: Option<&mut dyn evidence::RuleEvidence<D>>,
-) -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+    guards: &dyn GuardEvaluator<D, N>,
+    mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     snapshot
         .rel
         .interner()
         .check_read()
         .map_err(EvalError::Source)?;
-    let result = (|| -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+    let result = (|| -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>> {
         let pool = StepGovernor::new(allowance);
         let guarded = entries.iter().any(|entry| entry.rule.is_guarded());
         let mut round = RoundBuffer::new();
@@ -4076,13 +4303,16 @@ fn evaluate_round_with_evidence<'r, D: TermDictionary>(
 
 /// The mutable working set carried across every stratum of one evaluation.
 #[derive(Debug)]
-pub(crate) struct FixpointState<D: TermDictionary = TermInterner> {
+pub(crate) struct FixpointState<D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The accumulated store: the seeded EDB plus everything derived so far.
-    pub(crate) rel: RelationStore<D>,
+    pub(crate) rel: RelationStore<D, N>,
     /// Per-row proof heights, indexed by [`RowId`] and pushed in lockstep with the store.
     pub(crate) depth: Vec<u32>,
     /// Every committed derivation.
-    pub(crate) derivations: Vec<Derivation>,
+    pub(crate) derivations: Vec<Derivation<N>>,
     /// Candidate solutions enumerated so far.
     pub(crate) join_steps: u64,
     /// A refused reservation, including an observation past u64::MAX.
@@ -4097,9 +4327,12 @@ pub(crate) struct FixpointState<D: TermDictionary = TermInterner> {
     generating_rules: BTreeSet<usize>,
 }
 
-impl<D: TermDictionary> FixpointState<D> {
+impl<D: TermDictionary, const N: usize> FixpointState<D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// A state over the seeded store `edb`, governed by `options`.
-    pub(crate) fn seeded(edb: RelationStore<D>, options: EvalOptions) -> Self {
+    pub(crate) fn seeded(edb: RelationStore<D, N>, options: EvalOptions) -> Self {
         let depth = vec![0u32; edb.row_count()];
         let input_terms = edb.interner().term_count();
         Self {
@@ -4119,7 +4352,7 @@ impl<D: TermDictionary> FixpointState<D> {
     pub(crate) fn report(&self) -> BudgetReport {
         BudgetReport {
             join_steps: self.join_steps,
-            stored_facts: self.rel.row_count(),
+            stored_facts: self.rel.retained_rows(),
             term_arena_bytes: self.rel.term_bytes(),
             term_generating_rounds: self.term_generating_rounds,
             generated_terms: self
@@ -4135,7 +4368,7 @@ impl<D: TermDictionary> FixpointState<D> {
     /// The report that would describe the state if it also held `extra` more facts.
     fn projected_report(&self, extra: usize) -> BudgetReport {
         BudgetReport {
-            stored_facts: self.rel.row_count().saturating_add(extra),
+            stored_facts: self.rel.retained_rows().saturating_add(extra),
             ..self.report()
         }
     }
@@ -4153,7 +4386,7 @@ impl<D: TermDictionary> FixpointState<D> {
     /// single surface is materialised where the fact count alone proves it.
     pub(crate) fn absorb(
         &mut self,
-        round: RoundBuffer<'_, D::Id>,
+        round: RoundBuffer<'_, D::Id, N>,
     ) -> Result<(), EvalError<D::Error>> {
         self.join_steps = self.join_steps.saturating_add(round.join_steps);
         self.join_refused |= round.join_refused;
@@ -4191,10 +4424,13 @@ impl<D: TermDictionary> FixpointState<D> {
 /// limit ([`EvalOptions::default`]) or the term-arena ceiling. There is no partial answer: a budget refusal is total. [`EvalError::Guard`] if the program
 /// carries a guard, which this entry point has no evaluator for — see
 /// [`evaluate_guarded`].
-pub fn evaluate<D: TermDictionary>(
-    exe: &Executable,
-    edb: RelationStore<D>,
-) -> Result<Evaluation<D>, EvalError<D::Error>> {
+pub fn evaluate<D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    edb: RelationStore<D, N>,
+) -> Result<Evaluation<D, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     evaluate_with(
         exe,
         edb,
@@ -4224,11 +4460,14 @@ pub fn evaluate<D: TermDictionary>(
 /// # Errors
 ///
 /// [`EvalError::Stopped`] if `stop` fired, and every error [`evaluate`] returns.
-pub fn evaluate_until<D: TermDictionary>(
-    exe: &Executable,
-    edb: RelationStore<D>,
+pub fn evaluate_until<D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    edb: RelationStore<D, N>,
     stop: Option<&dyn StopSignal>,
-) -> Result<Evaluation<D>, EvalError<D::Error>> {
+) -> Result<Evaluation<D, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     evaluate_with(
         exe,
         edb,
@@ -4255,13 +4494,16 @@ pub fn evaluate_until<D: TermDictionary>(
 ///
 /// [`EvalError::Guard`] when `guards` cannot evaluate a guard, and every error
 /// [`evaluate_until`] returns.
-pub fn evaluate_guarded<D: TermDictionary>(
-    exe: &Executable,
-    edb: RelationStore<D>,
-    guards: &dyn GuardEvaluator<D>,
+pub fn evaluate_guarded<D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    edb: RelationStore<D, N>,
+    guards: &dyn GuardEvaluator<D, N>,
     options: &EvalOptions,
     stop: Option<&dyn StopSignal>,
-) -> Result<Evaluation<D>, EvalError<D::Error>> {
+) -> Result<Evaluation<D, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     evaluate_with(
         exe,
         edb,
@@ -4277,15 +4519,18 @@ pub fn evaluate_guarded<D: TermDictionary>(
 ///
 /// The policies are private: a caller may neither weaken production scheduling nor
 /// override the planner's join choice. The tests use them to prove the alternatives agree.
-fn evaluate_with<D: TermDictionary>(
-    exe: &Executable,
-    edb: RelationStore<D>,
+fn evaluate_with<D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    edb: RelationStore<D, N>,
     stop: Option<&dyn StopSignal>,
-    guards: &dyn GuardEvaluator<D>,
+    guards: &dyn GuardEvaluator<D, N>,
     options: EvalOptions,
     execution: RoundExecution,
     strategy: JoinStrategy,
-) -> Result<Evaluation<D>, EvalError<D::Error>> {
+) -> Result<Evaluation<D, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     evaluate_with_evidence(
         exe,
         edb,
@@ -4308,9 +4553,12 @@ fn evaluate_with<D: TermDictionary>(
 pub struct EvidencedEvaluation<
     S: purrdf_lex::allocation::Admission,
     D: TermDictionary = TermInterner,
-> {
+    const N: usize = 4,
+> where
+    Arity<N>: StoreShape<N>,
+{
     /// The ordinary deterministic fact and preferred-provenance result.
-    pub evaluation: Evaluation<D>,
+    pub evaluation: Evaluation<D, N>,
     /// All independent row witnesses and their original admission.
     pub evidence: crate::evidence::DerivationEvidence<S>,
 }
@@ -4323,15 +4571,18 @@ pub struct EvidencedEvaluation<
 ///
 /// # Errors
 /// Returns the original execution failure or native evidence refusal.
-pub fn evaluate_evidenced<S: purrdf_lex::allocation::Admission, D: TermDictionary>(
-    exe: &Executable,
-    edb: RelationStore<D>,
+pub fn evaluate_evidenced<S: purrdf_lex::allocation::Admission, D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    edb: RelationStore<D, N>,
     options: &EvalOptions,
-    guards: &dyn GuardEvaluator<D>,
+    guards: &dyn GuardEvaluator<D, N>,
     stop: Option<&dyn StopSignal>,
     mut rows: crate::evidence::DerivationEvidence<S>,
     scope: NegationScope,
-) -> Result<EvidencedEvaluation<S, D>, EvalError<D::Error>> {
+) -> Result<EvidencedEvaluation<S, D, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     edb.interner().check_read().map_err(EvalError::Source)?;
     if rows.row_count() != edb.row_count() {
         return Err(EvalError::Evidence(
@@ -4379,15 +4630,21 @@ pub fn evaluate_evidenced<S: purrdf_lex::allocation::Admission, D: TermDictionar
     })
 }
 
-fn evaluate_with_evidence<D: TermDictionary>(
-    exe: &Executable,
-    edb: RelationStore<D>,
+fn evaluate_with_evidence<D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    edb: RelationStore<D, N>,
     options: EvalOptions,
-    run: StratumRun<'_, D>,
-    evidence: &mut Option<&mut dyn evidence::RuleEvidence<D>>,
-) -> Result<Evaluation<D>, EvalError<D::Error>> {
+    run: StratumRun<'_, D, N>,
+    evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
+) -> Result<Evaluation<D, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    if let Some(rule) = (0..exe.rule_count()).find(|&index| exe.rule_entry(index).0.reads_base()) {
+        return Err(EvalError::BaseReadRequiresSchedule { rule });
+    }
     edb.interner().check_read().map_err(EvalError::Source)?;
-    let runtimes: Vec<RuleRuntime> = (0..exe.rule_count())
+    let runtimes: Vec<RuleRuntime<N>> = (0..exe.rule_count())
         .map(|index| {
             let (rule, plan) = exe.rule_entry(index);
             RuleRuntime::new(rule, plan)
@@ -4403,7 +4660,7 @@ fn evaluate_with_evidence<D: TermDictionary>(
         }
         let owner = evidence
             .as_mut()
-            .map(|owner| &mut **owner as &mut dyn evidence::RuleEvidence<D>);
+            .map(|owner| &mut **owner as &mut dyn evidence::RuleEvidence<D, N>);
         run_stratum(exe, &runtimes, stratum, &mut state, run, owner)?;
     }
 
@@ -4415,13 +4672,16 @@ fn evaluate_with_evidence<D: TermDictionary>(
     Ok(state.finish())
 }
 
-impl<D: TermDictionary> FixpointState<D> {
+impl<D: TermDictionary, const N: usize> FixpointState<D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Seal the state into an [`Evaluation`].
     ///
     /// Derivations are produced in per-round lexical order; sorting the whole vector makes
     /// that one total order across strata as well, so the output is a pure function of the
     /// program and the facts rather than of the stratum boundaries.
-    pub(crate) fn finish(mut self) -> Evaluation<D> {
+    pub(crate) fn finish(mut self) -> Evaluation<D, N> {
         self.derivations.sort();
         Evaluation {
             budget: self.report(),
@@ -4432,9 +4692,12 @@ impl<D: TermDictionary> FixpointState<D> {
 }
 
 /// Whether any ceiling is already passed.
-pub(crate) fn check_budget<D: TermDictionary>(
-    state: &FixpointState<D>,
-) -> Result<(), EvalError<D::Error>> {
+pub(crate) fn check_budget<D: TermDictionary, const N: usize>(
+    state: &FixpointState<D, N>,
+) -> Result<(), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     state
         .rel
         .interner()
@@ -4475,33 +4738,42 @@ pub(crate) fn check_budget<D: TermDictionary>(
 }
 
 /// The per-evaluation policies one stratum runs under.
-struct StratumRun<'a, D: TermDictionary> {
+struct StratumRun<'a, D: TermDictionary, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The caller's stop signal.
     stop: Option<&'a dyn StopSignal>,
     /// The caller's guard evaluator.
-    guards: &'a dyn GuardEvaluator<D>,
+    guards: &'a dyn GuardEvaluator<D, N>,
     /// The round scheduling policy.
     execution: RoundExecution,
     /// The join-kernel policy.
     strategy: JoinStrategy,
 }
 
-impl<D: TermDictionary> Copy for StratumRun<'_, D> {}
-impl<D: TermDictionary> Clone for StratumRun<'_, D> {
+impl<D: TermDictionary, const N: usize> Copy for StratumRun<'_, D, N> where Arity<N>: StoreShape<N> {}
+impl<D: TermDictionary, const N: usize> Clone for StratumRun<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     fn clone(&self) -> Self {
         *self
     }
 }
 
 /// Run one stratum's semi-naive fixpoint into `state`.
-fn run_stratum<D: TermDictionary>(
-    exe: &Executable,
-    runtimes: &[RuleRuntime],
+fn run_stratum<D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    runtimes: &[RuleRuntime<N>],
     stratum: usize,
-    state: &mut FixpointState<D>,
-    run: StratumRun<'_, D>,
-    mut evidence: Option<&mut dyn evidence::RuleEvidence<D>>,
-) -> Result<(), EvalError<D::Error>> {
+    state: &mut FixpointState<D, N>,
+    run: StratumRun<'_, D, N>,
+    mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+) -> Result<(), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     // Seed the delta with EVERY accumulated row, so this stratum's rules fire against the
     // whole accumulated store in round one. Row ids are dense, so "everything" is the
     // contiguous span `[0, row_count)` — no per-key materialisation and no bitset.
@@ -4519,7 +4791,7 @@ fn run_stratum<D: TermDictionary>(
         }
         // A rule with no positive body atom has no delta to be decomposed over: its answer
         // is fixed by the relations below its stratum, so it runs in the first round only.
-        let entries: Vec<RuleEntry<'_>> = exe
+        let entries: Vec<RuleEntry<'_, N>> = exe
             .stratum_rule_indices(stratum)
             .iter()
             .filter_map(|&index| {
@@ -4539,7 +4811,7 @@ fn run_stratum<D: TermDictionary>(
         }
         let owner = evidence
             .as_mut()
-            .map(|owner| &mut **owner as &mut dyn evidence::RuleEvidence<D>);
+            .map(|owner| &mut **owner as &mut dyn evidence::RuleEvidence<D, N>);
         let round = evaluate_round_with_evidence(
             &entries,
             RoundSnapshot {
@@ -4589,10 +4861,13 @@ fn run_stratum<D: TermDictionary>(
 /// Lexical — never mint order — so store insertion order, row-id assignment and the
 /// derivation sequence are all byte-deterministic. Row-id assignment is a purely additive
 /// side effect of this sorted loop; it never orders the commit.
-fn commit_round<D: TermDictionary>(
-    round: RoundBuffer<'_, D::Id>,
-    state: &mut FixpointState<D>,
-) -> Result<(), EvalError<D::Error>> {
+fn commit_round<D: TermDictionary, const N: usize>(
+    round: RoundBuffer<'_, D::Id, N>,
+    state: &mut FixpointState<D, N>,
+) -> Result<(), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     let mut winners = round
         .entries
         .into_iter()
@@ -4635,6 +4910,7 @@ fn commit_round<D: TermDictionary>(
 
 #[cfg(test)]
 mod tests {
+    use crate::store::Fact;
     use std::collections::BTreeSet;
 
     use super::*;
@@ -4717,10 +4993,7 @@ mod tests {
                 let solution = &solutions[position];
                 let key = intern_key(
                     HeadKey {
-                        subject: head_term(&head[0], solution),
-                        predicate: head_term(&head[1], solution),
-                        object: head_term(&head[2], solution),
-                        graph: head_term(&head[3], solution),
+                        positions: head.each_ref().map(|term| head_term(term, solution)),
                     },
                     &store,
                 )
@@ -4748,7 +5021,7 @@ mod tests {
             assert_eq!(round.entries.len(), 1);
             let (key, winner) = round.entries.first_key_value().unwrap();
             assert_eq!(
-                winner.sources[0].subject, FIRST,
+                winner.sources[0].terms[0], FIRST,
                 "lexical witness order is independent of host ID order and scheduling"
             );
             let published = key.fact(&store).unwrap();
@@ -4759,7 +5032,7 @@ mod tests {
             let key = key.clone();
             let expected = winner.clone();
             let mut refused = expected.clone();
-            refused.sources[0].subject = 404;
+            refused.sources[0].terms[0] = 404;
             assert_eq!(
                 round.insert(key.clone(), refused, &store),
                 Err(SourceLost(404))
@@ -4789,10 +5062,8 @@ mod tests {
                 .interner()
                 .lose_after_lookup
                 .store(true, Ordering::Relaxed);
-            let fresh = HeadKey {
-                subject: HeadTerm::Fresh(Cow::Borrowed("missing")),
-                ..key
-            };
+            let mut fresh = key;
+            fresh.positions[0] = HeadTerm::Fresh(Cow::Borrowed("missing"));
             assert_eq!(intern_key(fresh, &store), Err(SourceLost(99)));
             store.interner().lost.store(false, Ordering::Relaxed);
             store
@@ -4840,7 +5111,7 @@ mod tests {
         }
         assert_eq!(emitted.entries.len(), 1);
         assert_eq!(
-            emitted.entries.first_key_value().unwrap().1.sources[0].subject,
+            emitted.entries.first_key_value().unwrap().1.sources[0].terms[0],
             FIRST
         );
         let (_, _, row) = store.insert_ids([10, 9, 11, GRAPH]).unwrap().unwrap();
@@ -5099,6 +5370,7 @@ mod tests {
         let resolves = store.interner().resolves.load(Ordering::Relaxed);
         let variables = vec!["?a".into(), "?b".into()];
         let probe = NegatedAtom {
+            source: crate::clause::ReadSource::Evaluation,
             args: ArgShape::of_atom(&atom("?a", P, "?b"), &variables),
         };
         let mut frame = SlotSolution::empty(2);
@@ -5122,6 +5394,7 @@ mod tests {
                 .unwrap()
         );
         let absent = NegatedAtom {
+            source: crate::clause::ReadSource::Evaluation,
             args: ArgShape::of_atom(&atom("?a", Q, "?b"), &variables),
         };
         assert!(

@@ -10,10 +10,12 @@
 //! first and build Old/Full context only for productive anchors. Source coordinates
 //! always remain authored.
 
+use crate::store::{Arity, StoreShape};
+
 use super::{
-    ATOM_ARITY, ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence,
-    JoinGroup, JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore,
-    RoundBuffer, RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
+    ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence, JoinGroup,
+    JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore, RoundBuffer,
+    RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
     TermDictionary, TermId, TermIdentity, delta_can_match, emit_solution, extend_slot_solutions,
     extend_solutions_leapfrog, source_heights, source_preference,
 };
@@ -50,7 +52,27 @@ fn couple(components: &mut [usize], slots: &[BTreeSet<usize>], outer: &[usize]) 
 }
 
 /// Statically certify factor independence in the existing global frame.
-pub(super) fn certify(plan: &RulePlan, runtime: &RuleRuntime) -> Vec<Factor> {
+pub(super) fn certify<const N: usize>(plan: &RulePlan<N>, runtime: &RuleRuntime<N>) -> Vec<Factor>
+where
+    Arity<N>: StoreShape<N>,
+{
+    // Immutable-base atoms use the original indexed binary join. Their row identities
+    // belong to another source, so evaluation-model delta frontiers do not apply.
+    if plan
+        .operators()
+        .iter()
+        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base)
+        || runtime
+            .negated
+            .iter()
+            .any(|atom| atom.source == crate::clause::ReadSource::Base)
+        || runtime
+            .negations
+            .iter()
+            .any(|group| group.sources.contains(&crate::clause::ReadSource::Base))
+    {
+        return Vec::new();
+    }
     // Even a bindings-only guard can mint state. A negative group's callbacks also
     // observe the whole model and authored evaluation order, so neither is replayable.
     if !runtime.guards.is_empty()
@@ -150,13 +172,16 @@ pub(super) fn certify(plan: &RulePlan, runtime: &RuleRuntime) -> Vec<Factor> {
 }
 
 /// Evaluate one factor Full with the existing indexed and certified cyclic kernels.
-fn full_matches<D: TermDictionary>(
+fn full_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
-    entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_, D>,
+    entry: RuleEntry<'_, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
-) -> Result<Vec<SlotSolution<D::Id>>, EvalError<D::Error>> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     factor_matches(
         factor,
         entry,
@@ -168,16 +193,19 @@ fn full_matches<D: TermDictionary>(
 }
 
 /// Match one factor using the existing scan-aware binary and cyclic kernels.
-fn factor_matches<D: TermDictionary>(
+fn factor_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
-    entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_, D>,
+    entry: RuleEntry<'_, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
     scan: JoinScan,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
-) -> Result<Vec<SlotSolution<D::Id>>, EvalError<D::Error>> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
-    let binary = |position, partial: &[SlotSolution<D::Id>], governor: &mut StepGovernor| {
+    let binary = |position, partial: &[SlotSolution<D::Id, N>], governor: &mut StepGovernor| {
         extend_slot_solutions(
             entry.plan.operator_at(position),
             snapshot.rel,
@@ -276,9 +304,12 @@ fn factor_matches<D: TermDictionary>(
 
 /// A borrowed factor witness, with its content-derived numeric prefix.
 #[derive(Debug, Clone, Copy)]
-struct Witness<'a, I: TermIdentity = TermId> {
+struct Witness<'a, I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The stored factor match; mode and projection tables never clone it.
-    solution: &'a SlotSolution<I>,
+    solution: &'a SlotSolution<I, N>,
     /// Raw maximum source height, before the head's saturating increment.
     maximum: u32,
     /// Saturated sum of source heights.
@@ -286,13 +317,16 @@ struct Witness<'a, I: TermIdentity = TermId> {
 }
 
 /// Match only tuples containing a delta source, using disjoint last-new-atom anchors.
-fn new_matches<D: TermDictionary>(
+fn new_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
-    entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_, D>,
+    entry: RuleEntry<'_, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
-) -> Result<Vec<SlotSolution<D::Id>>, EvalError<D::Error>> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     let join = JoinSnapshot {
         rel: snapshot.rel,
         delta: entry.delta,
@@ -318,15 +352,18 @@ fn new_matches<D: TermDictionary>(
 }
 
 /// Matching solutions for each independent positive factor.
-type FactorRelations<I> = Vec<Vec<SlotSolution<I>>>;
+type FactorRelations<I, const N: usize> = Vec<Vec<SlotSolution<I, N>>>;
 
 /// Discover productive anchors before building the old/full context they actually need.
-fn partial_relations<D: TermDictionary>(
-    entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_, D>,
+fn partial_relations<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
-) -> Result<FactorRelations<D::Id>, EvalError<D::Error>> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+) -> Result<FactorRelations<D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     let mut relations = Vec::with_capacity(entry.runtime.factors.len());
     for factor in &entry.runtime.factors {
         relations.push(new_matches(factor, entry, snapshot, governor, evidence)?);
@@ -367,41 +404,50 @@ fn partial_relations<D: TermDictionary>(
 
 /// Both prefix winners at a raw-height threshold.
 #[derive(Debug, Clone, Copy)]
-struct Threshold<'a, I: TermIdentity = TermId> {
+struct Threshold<'a, I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Inclusive raw source-height threshold.
     height: u32,
     /// Best sum followed by lexical witness at or below this threshold.
-    summed: Witness<'a, I>,
+    summed: Witness<'a, I, N>,
     /// Best purely lexical witness at or below this threshold.
-    lexical: Witness<'a, I>,
+    lexical: Witness<'a, I, N>,
 }
 
 /// Exact prefix frontiers for one projected binding and one scan mode.
 #[derive(Debug)]
-pub(super) struct Frontier<'a, I: TermIdentity = TermId> {
+pub(super) struct Frontier<'a, I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Sorted distinct height thresholds; each stores both cumulative winners.
-    thresholds: Vec<Threshold<'a, I>>,
+    thresholds: Vec<Threshold<'a, I, N>>,
     /// Original projected witnesses retained only by an evidence-enabled query.
-    witnesses: Option<Vec<Witness<'a, I>>>,
+    witnesses: Option<Vec<Witness<'a, I, N>>>,
 }
 
-impl<'a, I: TermIdentity> Frontier<'a, I> {
+impl<'a, I: TermIdentity, const N: usize> Frontier<'a, I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Build cumulative frontiers without assuming local height preference composes.
     fn new<D: TermDictionary<Id = I>>(
-        mut witnesses: Vec<Witness<'a, I>>,
-        rel: &RelationStore<D>,
+        mut witnesses: Vec<Witness<'a, I, N>>,
+        rel: &RelationStore<D, N>,
         retain_witnesses: bool,
     ) -> Result<Self, D::Error> {
         rel.interner().check_read()?;
         witnesses.sort_by_key(|witness| witness.maximum);
-        let mut thresholds: Vec<Threshold<'a, I>> = Vec::new();
+        let mut thresholds: Vec<Threshold<'a, I, N>> = Vec::new();
         for witness in witnesses.iter().copied() {
             let mut next = thresholds.last().copied().unwrap_or(Threshold {
                 height: witness.maximum,
                 summed: witness,
                 lexical: witness,
             });
-            let lexical = |left: Witness<'_, I>, right: Witness<'_, I>| {
+            let lexical = |left: Witness<'_, I, N>, right: Witness<'_, I, N>| {
                 source_preference(&left.solution.sources, 0, &right.solution.sources, 0, rel)
                     .map(core::cmp::Ordering::is_lt)
             };
@@ -430,7 +476,7 @@ impl<'a, I: TermIdentity> Frontier<'a, I> {
         })
     }
 
-    pub(super) fn witnesses(&self) -> impl Iterator<Item = &SlotSolution<I>> {
+    pub(super) fn witnesses(&self) -> impl Iterator<Item = &SlotSolution<I, N>> {
         self.witnesses
             .as_deref()
             .unwrap_or_default()
@@ -444,7 +490,7 @@ impl<'a, I: TermIdentity> Frontier<'a, I> {
     }
 
     /// Both exact winners under a feasible global raw-height threshold.
-    fn at(&self, maximum: u32) -> Threshold<'a, I> {
+    fn at(&self, maximum: u32) -> Threshold<'a, I, N> {
         let end = self
             .thresholds
             .partition_point(|threshold| threshold.height <= maximum);
@@ -453,31 +499,37 @@ impl<'a, I: TermIdentity> Frontier<'a, I> {
 }
 
 /// Projected head identities and their source witness frontiers.
-type FrontierTable<'a, I> = BTreeMap<Vec<I>, Frontier<'a, I>>;
+type FrontierTable<'a, I, const N: usize> = BTreeMap<Vec<I>, Frontier<'a, I, N>>;
 
 /// Mode frontiers borrowing one frozen factor relation containing its needed modes.
 #[derive(Debug)]
-struct Projection<'a, I: TermIdentity = TermId> {
+struct Projection<'a, I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Any matching source tuple.
-    full: FrontierTable<'a, I>,
+    full: FrontierTable<'a, I, N>,
     /// Tuples having no source in the current delta.
-    old: FrontierTable<'a, I>,
+    old: FrontierTable<'a, I, N>,
     /// Tuples having at least one source in the current delta.
-    new: FrontierTable<'a, I>,
+    new: FrontierTable<'a, I, N>,
 }
 
 /// Project one head's factor relation; callers consume only its required modes.
-fn project<'a, D: TermDictionary>(
-    matches: &'a [SlotSolution<D::Id>],
+fn project<'a, D: TermDictionary, const N: usize>(
+    matches: &'a [SlotSolution<D::Id, N>],
     slots: &[usize],
-    snapshot: RoundSnapshot<'_, D>,
+    snapshot: RoundSnapshot<'_, D, N>,
     delta: Delta,
     retain_witnesses: bool,
-) -> Result<Projection<'a, D::Id>, D::Error> {
+) -> Result<Projection<'a, D::Id, N>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     snapshot.rel.interner().check_read()?;
-    let mut full: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id>>> = BTreeMap::new();
-    let mut old: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id>>> = BTreeMap::new();
-    let mut new: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id>>> = BTreeMap::new();
+    let mut full: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id, N>>> = BTreeMap::new();
+    let mut old: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id, N>>> = BTreeMap::new();
+    let mut new: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id, N>>> = BTreeMap::new();
     for solution in matches {
         let key: Vec<_> = slots
             .iter()
@@ -505,7 +557,7 @@ fn project<'a, D: TermDictionary>(
         };
         mode.entry(key).or_default().push(witness);
     }
-    let seal = |table: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id>>>| {
+    let seal = |table: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id, N>>>| {
         table
             .into_iter()
             .map(|(key, witnesses)| {
@@ -541,24 +593,30 @@ fn saturated_sum(sums: impl IntoIterator<Item = u64>) -> bool {
 }
 
 /// Immutable state for streamed projected products.
-struct Product<'a, 'r, D: TermDictionary> {
+struct Product<'a, 'r, D: TermDictionary, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// One mode table per certified factor.
-    tables: Vec<&'a FrontierTable<'a, D::Id>>,
+    tables: Vec<&'a FrontierTable<'a, D::Id, N>>,
     /// The authored head currently emitted.
-    head: &'r [ArgShape; ATOM_ARITY],
+    head: &'r [ArgShape; N],
     /// Rule identity and variable-frame width.
-    entry: RuleEntry<'r>,
+    entry: RuleEntry<'r, N>,
     /// Store and source proof heights.
-    snapshot: RoundSnapshot<'a, D>,
+    snapshot: RoundSnapshot<'a, D, N>,
 }
 
-impl<'r, D: TermDictionary> Product<'_, 'r, D> {
+impl<'r, D: TermDictionary, const N: usize> Product<'_, 'r, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Stream necessary projected combinations with a borrowed heap odometer.
     fn visit(
         &self,
-        buffer: &mut RoundBuffer<'r, D::Id>,
+        buffer: &mut RoundBuffer<'r, D::Id, N>,
         governor: &mut StepGovernor,
-        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         let mut cursors: Vec<_> = self.tables.iter().map(|table| table.values()).collect();
         let mut chosen = Vec::with_capacity(self.tables.len());
@@ -586,10 +644,10 @@ impl<'r, D: TermDictionary> Product<'_, 'r, D> {
     /// Choose the exact global witness for one projected combination, then emit it.
     fn emit(
         &self,
-        chosen: &[&Frontier<'_, D::Id>],
-        buffer: &mut RoundBuffer<'r, D::Id>,
+        chosen: &[&Frontier<'_, D::Id, N>],
+        buffer: &mut RoundBuffer<'r, D::Id, N>,
         governor: &mut StepGovernor,
-        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
     ) -> Result<(), EvalError<D::Error>> {
         if !governor.charge() {
             return Ok(());
@@ -647,26 +705,32 @@ impl<'r, D: TermDictionary> Product<'_, 'r, D> {
 
 /// Evaluate independent factors and stream each conjunctive head's necessary product.
 #[cfg(test)]
-pub(super) fn evaluate<'r, D: TermDictionary>(
-    entry: RuleEntry<'r>,
-    snapshot: RoundSnapshot<'_, D>,
+pub(super) fn evaluate<'r, D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'r, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
-) -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     evaluate_with_evidence(entry, snapshot, governor, None)
 }
 
-pub(super) fn evaluate_with_evidence<'r, D: TermDictionary>(
-    entry: RuleEntry<'r>,
-    snapshot: RoundSnapshot<'_, D>,
+pub(super) fn evaluate_with_evidence<'r, D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'r, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
-    mut evidence: Option<&mut dyn super::evidence::RuleEvidence<D>>,
-) -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+    mut evidence: Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     snapshot
         .rel
         .interner()
         .check_read()
         .map_err(EvalError::Source)?;
-    let result = (|| -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+    let result = (|| -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>> {
         let mut buffer = RoundBuffer::new();
         let join = JoinSnapshot {
             rel: snapshot.rel,
@@ -777,12 +841,15 @@ pub(super) fn evaluate_with_evidence<'r, D: TermDictionary>(
 
 /// Negative predicates with no positive outer slot are round-wide preconditions.
 /// Local variables remain local even when their authored name appears in another group.
-fn ground_blocked<D: TermDictionary>(
-    entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_, D>,
+fn ground_blocked<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
-) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError<D::Error>> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     let mut empty = SlotSolution::empty(entry.plan.variables().len());
     for (index, atom) in entry.runtime.negated.iter().enumerate() {
         if governor.spent() {
@@ -938,8 +1005,8 @@ mod tests {
         let delta = Delta { lo: 1, hi: 2 };
         let projection = project(&matches, &[], snapshot, delta, true).unwrap();
         let full = projection.full.values().next().unwrap();
-        assert_eq!(full.at(0).lexical.solution.sources[0].subject, FIRST);
-        assert_eq!(full.at(0).summed.solution.sources[0].subject, FIRST);
+        assert_eq!(full.at(0).lexical.solution.sources[0].terms[0], FIRST);
+        assert_eq!(full.at(0).summed.solution.sources[0].terms[0], FIRST);
         assert_eq!(full.witnesses().count(), 2);
         assert_eq!(
             projection
@@ -951,7 +1018,7 @@ mod tests {
                 .lexical
                 .solution
                 .sources[0]
-                .subject,
+                .terms[0],
             0
         );
         assert_eq!(
@@ -964,7 +1031,7 @@ mod tests {
                 .lexical
                 .solution
                 .sources[0]
-                .subject,
+                .terms[0],
             FIRST
         );
         let slot = plan
@@ -1022,9 +1089,9 @@ mod tests {
             );
             assert_eq!(planned.entries.len(), binary.entries.len());
             for (key, witness) in &planned.entries {
-                assert!(matches!(key.subject.interned(), Some(0 | FIRST)));
-                assert!(matches!(key.object.interned(), Some(0 | FIRST)));
-                assert_eq!(key.graph.interned(), Some(1));
+                assert!(matches!(key.positions[0].interned(), Some(0 | FIRST)));
+                assert!(matches!(key.positions[2].interned(), Some(0 | FIRST)));
+                assert_eq!(key.positions[3].interned(), Some(1));
                 assert_eq!(
                     witness.source_facts(&rel).unwrap(),
                     binary.entries.get(key).unwrap().source_facts(&rel).unwrap()
@@ -1053,14 +1120,14 @@ mod tests {
             assert_eq!(round.entries.len(), 4);
             assert!(round.entries.values().all(|candidate| candidate.rule == 0));
             for key in round.entries.keys() {
-                assert!(matches!(key.subject.interned(), Some(0 | FIRST)));
-                assert!(matches!(key.object.interned(), Some(0 | FIRST)));
+                assert!(matches!(key.positions[0].interned(), Some(0 | FIRST)));
+                assert!(matches!(key.positions[2].interned(), Some(0 | FIRST)));
             }
         }
         // An omitted dictionary entry fails the actual lexical tie comparison and
         // releases the earlier lexical pins; it must not choose by numeric ID.
         let mut missing = matches.clone();
-        missing[1].sources[0].object = 17;
+        missing[1].sources[0].terms[2] = 17;
         let snapshot = RoundSnapshot {
             rel: &rel,
             depth: &[0, 0],
@@ -2285,13 +2352,15 @@ mod tests {
                 .expect("unique source");
             let mut solution = SlotSolution::empty(0);
             solution.sources.push(SourceRow {
+                source: crate::clause::ReadSource::Evaluation,
                 body_index,
-                subject: rel.term_id(&subject).expect("interned subject"),
-                predicate: rel.term_id(&predicate).expect("interned predicate"),
-                object: rel.term_id(&object).expect("interned object"),
-                graph: rel
-                    .term_id(RelationStore::DEFAULT_GRAPH)
-                    .expect("interned graph"),
+                terms: [
+                    rel.term_id(&subject).expect("interned subject"),
+                    rel.term_id(&predicate).expect("interned predicate"),
+                    rel.term_id(&object).expect("interned object"),
+                    rel.term_id(RelationStore::DEFAULT_GRAPH)
+                        .expect("interned graph"),
+                ],
                 row,
             });
             solution

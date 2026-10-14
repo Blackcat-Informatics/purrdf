@@ -35,6 +35,224 @@ const POS: &str = "https://example.org/position";
 const SEQUENCE: &str = "https://example.org/sequence";
 const TIME: &str = "https://example.org/time";
 
+/// Execute the original property-function seam with either physical corpus law.
+fn corpus_query<D, P>(
+    dataset: &D,
+    index: Arc<TextIndex<P>>,
+    query: &str,
+) -> purrdf_sparql_eval::RetainedSparqlResult
+where
+    D: purrdf_core::FallibleDatasetView + Sync,
+    P: purrdf_text::CorpusProfile,
+{
+    let mut relations = PropertyFunctionRegistry::new();
+    relations.register(OCCURS, Arc::new(TermOccurrenceRelation::new(index.clone())));
+    relations.register(
+        PHRASE,
+        Arc::new(PhraseOccurrenceRelation::new(index.clone())),
+    );
+    relations.register(
+        "https://example.org/search",
+        Arc::new(purrdf_text::TextSearchRelation::new(index)),
+    );
+    let env = ExtensionEnv::over_relations(relations).unwrap();
+    NativeSparqlEngine::new()
+        .query_fallible_view(dataset, request(query), QueryOptions::new().with_env(&env))
+        .expect("the original physical corpus query completes")
+        .result
+}
+
+pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
+    use purrdf_core::ir::TripleDataset;
+    use purrdf_text::{Document, GraphFree, PartitionFilter, PartitionKey, select};
+
+    let fixture = Fixture::text(&[
+        ("urn:first".into(), "river river bank".into(), None, false),
+        ("urn:second".into(), "river valley".into(), None, false),
+        ("urn:third".into(), "bank meadow".into(), None, true),
+    ]);
+    let queries = [
+        "SELECT ?s ?score ?rank ?lang ?matched WHERE { ?s <https://example.org/search> (\"river\" ?score ?rank ?lang ?matched) } ORDER BY ?rank ?s",
+        "SELECT ?s ?lang ?position WHERE { ?s <https://example.org/occurs> (\"river\" ?lang ?position) } ORDER BY ?s ?position",
+        "SELECT ?s ?lang ?start ?end WHERE { ?s <https://example.org/phrase> (\"river bank\" ?lang ?start ?end) } ORDER BY ?s ?start ?end",
+        "SELECT ?s ?rank WHERE { ?s <https://example.org/search> (\"river\" ?score ?rank ?lang ?matched) FILTER NOT EXISTS { ?s <https://example.org/other> ?excluded } } ORDER BY ?rank ?s",
+    ];
+    let expected =
+        queries.map(|query| corpus_query(&*fixture.dataset, fixture.index.clone(), query));
+    let (_, phrase_rows) = expected[2].solutions().unwrap();
+    assert_eq!(
+        phrase_rows,
+        vec![vec![
+            Some(TermValue::iri("urn:first")),
+            Some(TermValue::simple_literal("")),
+            Some(TermValue::typed_literal(
+                "1",
+                purrdf_core::datatype::XSD_INTEGER
+            )),
+            Some(TermValue::typed_literal(
+                "3",
+                purrdf_core::datatype::XSD_INTEGER
+            )),
+        ]]
+    );
+    let Fixture {
+        dataset,
+        index: quad,
+        ..
+    } = fixture;
+    let compact = TripleDataset::try_from(Arc::try_unwrap(dataset).unwrap()).unwrap();
+    let read = compact.read().unwrap();
+    let config = TextIndexConfig::<GraphFree>::for_triples(
+        vec![TermValue::iri(NOTE), TermValue::iri(OTHER)],
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    let index = Arc::new(TextIndex::from_dataset(&read, &config).unwrap());
+    purrdf_text::verify_binding(&index, &read, &config).unwrap();
+    assert_eq!(
+        size_of::<PartitionKey<GraphFree>>(),
+        size_of::<Option<String>>()
+    );
+    assert_eq!(
+        size_of::<Document>() - size_of::<Document<GraphFree>>(),
+        size_of::<Option<TermValue>>()
+    );
+    assert_eq!(index.document_count(), 3);
+    assert_eq!(index.partition_count(), 1);
+    assert_eq!(
+        index.corpus_profile(),
+        "purrdf-text-corpus-subject-language-v1"
+    );
+    assert_eq!(quad.corpus_profile(), purrdf_text::INDEX_CORPUS_PROFILE_ID);
+    assert_ne!(index.fingerprint(), quad.fingerprint());
+    assert_ne!(index.source_fingerprint(), quad.source_fingerprint());
+    assert_eq!(
+        purrdf_hash::hex::encode(&index.fingerprint()),
+        "f3db46450a4276ea8b854b8e7b3c2746c625603e9f60884650c0ae4b71bc0806",
+        "the graph-free index identity"
+    );
+    assert_eq!(
+        purrdf_hash::hex::encode(&index.source_fingerprint()),
+        "437159b6041d315f3d10e109b0e977c2301615708e64eae09e6eaf6b9319a9fa",
+        "the graph-free source identity"
+    );
+
+    let lexical_config = config.with_surface_index(false);
+    let lexical = Arc::new(TextIndex::from_dataset(&read, &lexical_config).unwrap());
+    purrdf_text::verify_binding(&lexical, &read, &lexical_config).unwrap();
+    assert_ne!(lexical.fingerprint(), index.fingerprint());
+    assert_eq!(lexical.source_fingerprint(), index.source_fingerprint());
+    assert!(lexical.surface_index().is_none());
+    assert!(index.surface_index().is_some());
+
+    assert_eq!(
+        select(
+            &index,
+            &["river".into()],
+            &PartitionFilter::unconstrained(),
+            None,
+            None
+        )
+        .unwrap(),
+        select(
+            &quad,
+            &["river".into()],
+            &PartitionFilter::unconstrained(),
+            None,
+            None
+        )
+        .unwrap()
+    );
+    for (query, expected) in queries.into_iter().zip(expected) {
+        let actual = corpus_query(&read, index.clone(), query);
+        assert_eq!(actual.solutions(), expected.solutions(), "{query}");
+        let without_surface = corpus_query(&read, lexical.clone(), query);
+        assert_eq!(without_surface.solutions(), expected.solutions(), "{query}");
+    }
+}
+
+pub(crate) fn graph_free_rdf12_partitions_and_named_refusal() {
+    use purrdf_core::ir::{TripleDatasetBuilder, TripleReadError};
+    use purrdf_core::{BlankScope, DatasetView};
+    use purrdf_text::{GraphFree, PartitionKey, TextError};
+
+    let mut builder = TripleDatasetBuilder::default();
+    let subject = builder.intern_blank("shared", BlankScope(7)).unwrap();
+    let predicate = builder.intern_iri(NOTE).unwrap();
+    let object = builder.intern_iri("urn:object").unwrap();
+    let quoted = builder.intern_triple(subject, predicate, object).unwrap();
+    builder.push_reifier(subject, quoted).unwrap();
+    for (text, language, annotation) in [
+        ("river bank", "en", false),
+        ("river valley", "en", true),
+        ("fleuve rive", "fr", true),
+    ] {
+        let literal = builder
+            .intern_literal(RdfLiteral::language_tagged(text, language))
+            .unwrap();
+        if annotation {
+            builder
+                .push_annotation(subject, predicate, literal)
+                .unwrap();
+        } else {
+            builder.push_triple(subject, predicate, literal).unwrap();
+        }
+    }
+    let dataset = builder.freeze().unwrap();
+    let read = dataset.read().unwrap();
+    let config = TextIndexConfig::<GraphFree>::for_triples(
+        vec![TermValue::iri(NOTE)],
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    let index = TextIndex::from_dataset(&read, &config).unwrap();
+    assert_eq!(index.document_count(), 2);
+    assert_eq!(index.partition_count(), 2);
+    let english = PartitionKey::<GraphFree>::for_language(Some("en".into()));
+    assert_eq!(index.document_frequency(&english, "river"), 1);
+    assert_eq!(
+        index.document(0).unwrap().subject(),
+        &TermValue::Blank {
+            label: "shared".into(),
+            scope: BlankScope(7),
+        }
+    );
+    assert_eq!(index.document(0).unwrap().length(), 4);
+    purrdf_text::verify_binding(&index, &read, &config).unwrap();
+
+    let empty = TripleDatasetBuilder::default().freeze().unwrap();
+    assert!(purrdf_text::verify_binding(&index, &empty.read().unwrap(), &config).is_err());
+    let named = TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Named(TermValue::iri("urn:missing:graph")),
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    for source in [&dataset, &empty] {
+        let read = source.read().unwrap();
+        assert!(matches!(
+            TextIndex::from_dataset(&read, &named),
+            Err(TextError::SourceRead(_))
+        ));
+        assert_eq!(
+            read.read_error(),
+            Some(TripleReadError::NamedGraphsUnsupported)
+        );
+        assert!(TextIndex::from_dataset(&source.read().unwrap(), &config).is_ok());
+    }
+    let quad = RdfDatasetBuilder::new().freeze().unwrap();
+    assert_eq!(
+        TextIndex::from_dataset(&*quad, &named)
+            .unwrap()
+            .document_count(),
+        0
+    );
+    assert!(matches!(
+        TextIndex::from_dataset(&*quad, &config),
+        Err(TextError::Config(_))
+    ));
+}
+
 pub(crate) struct Fixture {
     pub(crate) dataset: Arc<RdfDataset>,
     pub(crate) index: Arc<TextIndex>,

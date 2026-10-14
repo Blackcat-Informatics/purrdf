@@ -5548,6 +5548,12 @@ pub fn eval<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
+    crate::dataset_spec::require_pattern_graph_support(
+        pattern,
+        ctx.dataset,
+        &ctx.growth,
+        |error| ctx.workspace.source_error(error),
+    )?;
     pattern.validate_hidden_variables()?;
     if ctx.dataset.storage_live_budget().is_some()
         && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
@@ -5823,6 +5829,9 @@ pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
     kept: Option<&crate::plan::PlanCache>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
+    crate::dataset_spec::require_query_graph_support(query, ctx.dataset, &ctx.growth, |error| {
+        ctx.workspace.source_error(error)
+    })?;
     admit_version(AdmittedRequest::Query(query))?;
     ctx.user_functions
         .declarations()

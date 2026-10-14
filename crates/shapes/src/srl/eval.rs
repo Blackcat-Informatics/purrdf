@@ -9,10 +9,12 @@
 //! a base triple's, a data block's, a guard's output — passes through one [`Codec`],
 //! which renders it with [`Term`]'s own N-Triples-shaped `Display` and remembers the
 //! term under that surface, so every surface the store can hand back decodes to exactly
-//! the term that produced it. Base triples live in the store's default graph, which is
-//! the EVALUATION graph ("The evaluation graph is the union of the base graph and the
-//! inference graph"); a base-graph mirror is added only when a rule matches the base
-//! graph alone ([`super::lower::BASE_GRAPH`]).
+//! the term that produced it. The evaluation store starts with the base triples and
+//! grows with inferred triples ("The evaluation graph is the union of the base graph
+//! and the inference graph"). Quad execution uses its default graph for that model
+//! and a separate base-graph mirror when a rule reads the base alone. Triple execution
+//! has no graph position: an explicit Base read selects the retained immutable store,
+//! whose original dictionary IDs are shared with the growing evaluation store.
 //!
 //! # The graph a SHACL rule reads
 //!
@@ -68,14 +70,20 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ::purrdf_rdf::{FastMap, FastSet, MutableDataset, RdfDataset, RdfDatasetBuilder};
+use ::purrdf_rdf::{DatasetView, FastMap, FastSet, MutableDataset, RdfDataset, RdfDatasetBuilder};
+use purrdf_core::{TripleDataset, TripleDatasetBuilder, TripleRead};
 use purrdf_datalog::guard::{GuardCall, GuardEvaluator, GuardSite};
 use purrdf_datalog::schedule::{self, Layer, LayerHooks, Schedule};
 use purrdf_datalog::seminaive::{BudgetResource, EvalError};
-use purrdf_datalog::store::{Fact, RelationStore};
+use purrdf_datalog::store::{Arity, RelationStore, ShapeFact, StoreShape, TermInterner};
+
+/// The native statically shaped rule store; Base source role is outside its terms.
+type RuleStore<const N: usize> = RelationStore<TermInterner, N>;
+/// An emitted fact in the selected physical rule shape.
+type RuleFact<const N: usize> = ShapeFact<N>;
 
 use super::ir::{IrRuleBody, RuleSet, Scheduling};
-use super::lower::{self, BASE_GRAPH, GuardImpl, LoweredPosition, LoweredTriple};
+use super::lower::{self, GuardImpl, LoweredPosition, LoweredTriple, RuleShape};
 use super::reads::{ReadPattern, RuleReads};
 use crate::data::ShaclData;
 use crate::data_view::ShaclDatasetView;
@@ -112,10 +120,10 @@ impl Explanation {
 }
 
 /// A completed rule-set evaluation.
-#[derive(Debug, Clone)]
-pub struct Inference {
+#[derive(Debug)]
+pub struct Inference<D = RdfDataset> {
     /// The base graph plus every inferred triple.
-    dataset: Arc<RdfDataset>,
+    dataset: Arc<D>,
     /// The inferred triples, in canonical order.
     inferred: Vec<[Term; 3]>,
     /// The derivation of every inferred triple a rule derived.
@@ -124,10 +132,30 @@ pub struct Inference {
     contract: String,
 }
 
-impl Inference {
+impl<D> Clone for Inference<D> {
+    fn clone(&self) -> Self {
+        Self {
+            dataset: Arc::clone(&self.dataset),
+            inferred: self.inferred.clone(),
+            explanations: self.explanations.clone(),
+            contract: self.contract.clone(),
+        }
+    }
+}
+
+impl<D> Inference<D> {
+    /// One classification/publication pass for either inferred-only carrier.
+    fn publish_inferred<B: rules::RuleFactSink>(
+        &self,
+        builder: B,
+    ) -> Result<Arc<B::Dataset>, crate::error::ShapesError> {
+        let reifiers = rules::reifier_subjects(self.inferred.iter());
+        rules::publish_inference(builder, &self.inferred, &[], &reifiers)
+    }
+
     /// The base graph plus every inferred triple.
     #[must_use]
-    pub fn dataset(&self) -> &Arc<RdfDataset> {
+    pub fn dataset(&self) -> &Arc<D> {
         &self.dataset
     }
 
@@ -152,24 +180,6 @@ impl Inference {
     #[must_use]
     pub fn contract_hash(&self) -> &str {
         &self.contract
-    }
-
-    /// The inference graph alone — the inferred triples, WITHOUT the base graph
-    /// [`Self::dataset`] carries — as a dataset. A `r rdf:reifies <<( s p o )>>`
-    /// triple is a reifier declaration and a triple whose subject is such a reifier
-    /// its annotation, exactly as a parsed graph classifies them.
-    ///
-    /// # Errors
-    ///
-    /// An internal-invariant breach: an inferred triple with a non-IRI predicate,
-    /// which the evaluation refuses before it returns.
-    pub fn inferred_dataset(&self) -> Result<Arc<RdfDataset>, crate::error::ShapesError> {
-        let reifiers = rules::reifier_subjects(self.inferred.iter());
-        let mut builder = RdfDatasetBuilder::new();
-        for triple in &self.inferred {
-            rules::push_fact(&mut builder, triple, &reifiers)?;
-        }
-        builder.freeze().map_err(crate::error::ShapesError::from)
     }
 
     /// The inferred triples as N-Triples 1.2, one `S P O .` line each, in the canonical
@@ -221,6 +231,28 @@ impl Inference {
     }
 }
 
+/// Declare the same inferred-only operation with each concrete carrier's return type.
+macro_rules! inference_dataset {
+    ($carrier:ty, $builder:ty) => {
+        impl Inference<$carrier> {
+            /// The inference graph alone — the inferred triples, WITHOUT the base graph
+            /// [`Self::dataset`] carries — as a dataset. A `r rdf:reifies <<( s p o )>>`
+            /// triple is a reifier declaration and a triple whose subject is such a reifier
+            /// its annotation, exactly as a parsed graph classifies them.
+            ///
+            /// # Errors
+            ///
+            /// An internal-invariant breach: an inferred triple with a non-IRI predicate,
+            /// which the evaluation refuses before it returns.
+            pub fn inferred_dataset(&self) -> Result<Arc<$carrier>, crate::error::ShapesError> {
+                self.publish_inferred(<$builder>::default())
+            }
+        }
+    };
+}
+inference_dataset!(RdfDataset, RdfDatasetBuilder);
+inference_dataset!(TripleDataset, TripleDatasetBuilder);
+
 /// Evaluate `set` over `data`. `shapes` supplies the shapes graph a SHACL rule reads and
 /// the expected derived triples; `options` supplies the term-generating round limit and
 /// whether to add `sh:sourceRule` reifiers (its processor and rule-set selections concern
@@ -261,6 +293,100 @@ pub(crate) fn evaluate_with(
     options: &rules::RuleOptions,
     reexecution: Reexecution,
 ) -> Result<Inference, rules::RulesError> {
+    evaluate_shape::<4, RdfDataset, _>(set, shapes, options, reexecution, || {
+        let base = data.core_arc()?;
+        let triples = rules::base_triples(&base);
+        Ok(PreparedRuleSource {
+            data: Some(data),
+            base: Some(Arc::clone(&base)),
+            triples,
+            finish: move |inferred: &[[Term; 3]],
+                          sources: &[[Term; 3]],
+                          reifiers: &FastSet<Term>| {
+                let mut builder = RdfDatasetBuilder::new();
+                rules::push_projection(&mut builder, base.as_ref())?;
+                rules::publish_inference(builder, inferred, sources, reifiers)
+            },
+        })
+    })
+}
+
+/// Evaluate a checked parsed RL program directly over its graph-free read owner.
+///
+/// Parsed RL documents contain Elements, never SHACL Producer guards or expected
+/// predicates. Their expression guards use the existing empty expression context.
+pub(crate) fn evaluate_triples(
+    set: &RuleSet<'_>,
+    base: &TripleRead<'_>,
+    options: &rules::RuleOptions,
+) -> Result<Inference<TripleDataset>, rules::RulesError> {
+    evaluate_shape::<3, TripleDataset, _>(
+        set,
+        &Shapes::default(),
+        options,
+        Reexecution::Incremental,
+        || {
+            let mut builder = TripleDatasetBuilder::default();
+            let mut triples = Vec::new();
+            let rows = base
+                .quads()
+                .map(|row| (rules::RuleRow::Triple, row))
+                .chain(
+                    base.reifier_quads()
+                        .map(|row| (rules::RuleRow::Reifier, row)),
+                )
+                .chain(
+                    base.annotation_quads()
+                        .map(|row| (rules::RuleRow::Annotation, row)),
+                );
+            for (role, row) in rows {
+                let convert = |id| {
+                    crate::term::try_term_id_to_native(base, id).map_err(|error| {
+                        crate::error::ShapesError::from(purrdf_core::RdfDiagnostic::from(error))
+                    })
+                };
+                let triple = [convert(row.s)?, convert(row.p)?, convert(row.o)?];
+                rules::push_rule_row(&mut builder, &triple, role)?;
+                triples.push(triple);
+            }
+            Ok(PreparedRuleSource {
+                data: None,
+                base: None,
+                triples,
+                finish: move |inferred: &[[Term; 3]],
+                              sources: &[[Term; 3]],
+                              reifiers: &FastSet<Term>| {
+                    rules::publish_inference(builder, inferred, sources, reifiers)
+                },
+            })
+        },
+    )
+}
+
+/// Input and publication owners prepared only after rule/program validation.
+struct PreparedRuleSource<'a, F> {
+    data: Option<&'a ShaclData>,
+    base: Option<Arc<RdfDataset>>,
+    triples: Vec<[Term; 3]>,
+    finish: F,
+}
+
+/// Evaluate the selected physical carrier through the same rule and guard engine.
+fn evaluate_shape<'a, const N: usize, D, F>(
+    set: &RuleSet<'_>,
+    shapes: &Shapes,
+    options: &rules::RuleOptions,
+    reexecution: Reexecution,
+    prepare: impl FnOnce() -> Result<PreparedRuleSource<'a, F>, rules::RulesError>,
+) -> Result<Inference<D>, rules::RulesError>
+where
+    Arity<N>: RuleShape<N>,
+    F: FnOnce(
+        &[[Term; 3]],
+        &[[Term; 3]],
+        &FastSet<Term>,
+    ) -> Result<Arc<D>, crate::error::ShapesError>,
+{
     let source_rules = options.source_rules();
     let governors = options.eval_options();
     for rule in &set.rules {
@@ -276,7 +402,7 @@ pub(crate) fn evaluate_with(
     } else {
         None
     };
-    let lowered = lower::lower(set, now.as_ref());
+    let lowered = lower::lower::<N>(set, now.as_ref());
     let schedule = match set.scheduling {
         Scheduling::Declared => declared_schedule(set),
         Scheduling::Stratified => super::depend::stratify(set).map_err(|e| describe(&e, set))?,
@@ -301,8 +427,13 @@ pub(crate) fn evaluate_with(
     let program =
         schedule::compile_scheduled(lowered.clauses, schedule).map_err(|e| describe(&e, set))?;
 
-    let base = data.core_arc()?;
-    let base_triples = rules::base_triples(&base);
+    let PreparedRuleSource {
+        data,
+        base,
+        triples: base_triples,
+        finish,
+    } = prepare()?;
+
     // Every label this evaluation mints — a head blank node, a blank node an assignment
     // computes, a data block's blank node standardized apart from the base graph ("rdf
     // merge") — starts with a prefix no base-graph or data-block label starts with.
@@ -313,14 +444,15 @@ pub(crate) fn evaluate_with(
             .flat_map(|triple| triple.iter()),
     );
     let shapes_graph_iri = data
-        .shapes_graph_iri()
+        .and_then(ShaclData::shapes_graph_iri)
         .map(ToOwned::to_owned)
         .or_else(|| shapes.shapes_graph.clone())
         .filter(|_| shapes.shapes_dataset.quad_count() > 0);
-    let mut engine = Engine {
+    let mut engine = Engine::<N> {
+        shape: std::marker::PhantomData,
         codec: Codec::default(),
         guards: lowered.guards,
-        base: Arc::clone(&base),
+        base,
         originals: FastSet::default(),
         shapes,
         shapes_graph_iri,
@@ -340,24 +472,35 @@ pub(crate) fn evaluate_with(
             register_constants(&engine.codec, element_rule);
         }
     }
-    let mut edb = RelationStore::new();
+    let mut edb = RuleStore::<N>::with_dictionary(TermInterner::default());
     for triple in base_triples {
         let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
-        edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH)
-            .map_err(crate::error::ShapesError::from)?;
+        edb.insert_row(Arity::<N>::surface_row([
+            s.as_str(),
+            p.as_str(),
+            o.as_str(),
+        ]))
+        .map_err(crate::error::ShapesError::from)?;
         if lowered.uses_base {
-            edb.insert(&s, &p, &o, BASE_GRAPH)
+            Arity::<N>::seed_base(&mut edb, [&s, &p, &o])
                 .map_err(crate::error::ShapesError::from)?;
         }
         engine.originals.insert(triple);
+    }
+    if lowered.uses_base {
+        edb = Arity::<N>::capture_base(edb).map_err(crate::error::ShapesError::from)?;
     }
     for triple in &set.data {
         let triple = triple
             .each_ref()
             .map(|term| data_block_term(term, &engine.mint_prefix));
         let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
-        edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH)
-            .map_err(crate::error::ShapesError::from)?;
+        edb.insert_row(Arity::<N>::surface_row([
+            s.as_str(),
+            p.as_str(),
+            o.as_str(),
+        ]))
+        .map_err(crate::error::ShapesError::from)?;
     }
 
     let evaluation = schedule::evaluate_scheduled(
@@ -381,7 +524,7 @@ pub(crate) fn evaluate_with(
 
     let mut explanations: FastMap<[Term; 3], Explanation> = FastMap::default();
     for derivation in evaluation.derivations() {
-        if derivation.fact().graph != RelationStore::DEFAULT_GRAPH {
+        if !Arity::<N>::is_output(derivation.fact()) {
             continue;
         }
         let triple = engine.decode_fact(derivation.fact())?;
@@ -445,12 +588,7 @@ pub(crate) fn evaluate_with(
         all.extend(sources.iter());
     }
     let reifiers = rules::reifier_subjects(all.iter().copied());
-    let mut builder = RdfDatasetBuilder::new();
-    rules::push_projection(&mut builder, base.as_ref())?;
-    for triple in inferred.iter().chain(&sources) {
-        rules::push_fact(&mut builder, triple, &reifiers)?;
-    }
-    let dataset = builder.freeze().map_err(crate::error::ShapesError::from)?;
+    let dataset = finish(&inferred, &sources, &reifiers)?;
     Ok(Inference {
         dataset,
         inferred,
@@ -701,13 +839,16 @@ struct LiveView {
 
 impl LiveView {
     /// A view with no delta over the compacted `core` and `sparql` datasets.
-    fn compacted(
+    fn compacted<const N: usize>(
         generation: u64,
         rows: usize,
         core: Arc<RdfDataset>,
         sparql: Arc<RdfDataset>,
-        engine: &Engine<'_, '_>,
-    ) -> Self {
+        engine: &Engine<'_, '_, N>,
+    ) -> Self
+    where
+        Arity<N>: RuleShape<N>,
+    {
         let shared = Arc::ptr_eq(&core, &sparql);
         let data = Rc::new(ShaclData::new(
             Arc::clone(&core),
@@ -743,13 +884,15 @@ fn term_bytes(term: &Term) -> usize {
 }
 
 /// The evaluation state the guard evaluator and the layer hooks share.
-struct Engine<'r, 'a> {
+struct Engine<'r, 'a, const N: usize> {
+    /// Compile-time physical rule carrier.
+    shape: std::marker::PhantomData<Arity<N>>,
     /// Surface ↔ term.
     codec: Codec,
     /// How every guard is evaluated.
     guards: BTreeMap<(usize, GuardSite), GuardImpl<'r, 'a>>,
     /// The base graph.
-    base: Arc<RdfDataset>,
+    base: Option<Arc<RdfDataset>>,
     /// The base graph's triples.
     originals: FastSet<[Term; 3]>,
     /// The shapes.
@@ -800,7 +943,10 @@ fn read_patterns(rule: &rules::Rule) -> Option<Vec<ReadPattern>> {
     Some(patterns)
 }
 
-impl Engine<'_, '_> {
+impl<const N: usize> Engine<'_, '_, N>
+where
+    Arity<N>: RuleShape<N>,
+{
     /// The next execution number.
     fn mint(&self) -> u64 {
         let next = self.mints.get() + 1;
@@ -809,7 +955,7 @@ impl Engine<'_, '_> {
     }
 
     /// A store fact as a triple.
-    fn decode_fact(&self, fact: &Fact) -> Result<[Term; 3], String> {
+    fn decode_fact(&self, fact: &RuleFact<N>) -> Result<[Term; 3], String> {
         Ok([
             self.codec.term(&fact.subject)?,
             self.codec.term(&fact.predicate)?,
@@ -818,24 +964,19 @@ impl Engine<'_, '_> {
     }
 
     /// The evaluation graph's triples, in lexical surface order.
-    fn model_facts(&self, model: &RelationStore) -> Result<Vec<[Term; 3]>, String> {
+    fn model_facts(&self, model: &RuleStore<N>) -> Result<Vec<[Term; 3]>, String> {
         model
             .facts_sorted()
             .iter()
-            .filter(|fact| fact.graph == RelationStore::DEFAULT_GRAPH)
+            .filter(|fact| Arity::<N>::is_output(fact))
             .map(|fact| self.decode_fact(fact))
             .collect()
     }
 
     /// A triple as a default-graph store fact.
-    fn fact(&self, triple: &[Term; 3]) -> Fact {
+    fn fact(&self, triple: &[Term; 3]) -> RuleFact<N> {
         let [subject, predicate, object] = triple.each_ref().map(|t| self.codec.surface(t));
-        Fact {
-            subject,
-            predicate,
-            object,
-            graph: RelationStore::DEFAULT_GRAPH.to_owned(),
-        }
+        Arity::<N>::fact(Arity::<N>::surface_row([subject, predicate, object]))
     }
 
     /// The evaluation graph as SHACL data — see the [module docs](self), "The graph a
@@ -848,7 +989,7 @@ impl Engine<'_, '_> {
     /// an `r rdf:reifies t` declaration or mentions a blank node (whose identity the
     /// compacted view keeps by label), and once re-freezing the delta has cost as much as
     /// a compaction would.
-    fn view(&self, model: &RelationStore) -> Result<Rc<ShaclData>, crate::error::ShapesError> {
+    fn view(&self, model: &RuleStore<N>) -> Result<Rc<ShaclData>, crate::error::ShapesError> {
         let generation = self.generation.get();
         let rows = model.row_count();
         let mut live = self.view.borrow_mut();
@@ -876,13 +1017,18 @@ impl Engine<'_, '_> {
     /// The evaluation graph rebuilt from the whole store.
     fn compact(
         &self,
-        model: &RelationStore,
+        model: &RuleStore<N>,
         generation: u64,
     ) -> Result<LiveView, crate::error::ShapesError> {
         let facts = self.model_facts(model)?;
         let reifiers = rules::reifier_subjects(facts.iter());
         let mut builder = RdfDatasetBuilder::new();
-        rules::push_projection(&mut builder, self.base.as_ref())?;
+        let base = self.base.as_ref().ok_or_else(|| {
+            crate::error::ShapesError::from(
+                "internal error: a parsed SPARQL RL program cannot contain a SHACL producer",
+            )
+        })?;
+        rules::push_projection(&mut builder, base.as_ref())?;
         for triple in facts.iter().filter(|t| !self.originals.contains(*t)) {
             rules::push_fact(&mut builder, triple, &reifiers)?;
         }
@@ -902,7 +1048,7 @@ impl Engine<'_, '_> {
     fn extend(
         &self,
         view: &mut LiveView,
-        model: &RelationStore,
+        model: &RuleStore<N>,
     ) -> Result<Option<Rc<ShaclData>>, crate::error::ShapesError> {
         let rows = model.row_count();
         let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
@@ -1017,10 +1163,13 @@ impl Engine<'_, '_> {
     }
 }
 
-impl GuardEvaluator for Engine<'_, '_> {
+impl<const N: usize> GuardEvaluator<TermInterner, N> for Engine<'_, '_, N>
+where
+    Arity<N>: RuleShape<N>,
+{
     fn evaluate(
         &self,
-        call: &GuardCall<'_>,
+        call: &GuardCall<'_, TermInterner, N>,
     ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
         let implementation = self
             .guards
@@ -1110,7 +1259,10 @@ impl GuardEvaluator for Engine<'_, '_> {
     }
 }
 
-impl Engine<'_, '_> {
+impl<const N: usize> Engine<'_, '_, N>
+where
+    Arity<N>: RuleShape<N>,
+{
     /// Which focus nodes shape rule `rule` executes against `model` — see the [module
     /// docs](self), "Re-executing a shape rule".
     ///
@@ -1122,7 +1274,7 @@ impl Engine<'_, '_> {
         records: &'m mut FastMap<usize, Option<ProducerRecord>>,
         rule: usize,
         producer: &super::ir::ShaclProducer<'_>,
-        model: &RelationStore,
+        model: &RuleStore<N>,
     ) -> Result<rules::FocusSelection<'m>, String> {
         if self.reexecution == Reexecution::Full || producer.shapes.is_empty() {
             return Ok(rules::FocusSelection::Every);
@@ -1159,14 +1311,12 @@ impl Engine<'_, '_> {
     /// # Errors
     ///
     /// An internal-invariant breach: a store surface the codec never saw.
-    fn new_triples(&self, model: &RelationStore, since: usize) -> Result<Vec<[Term; 3]>, String> {
-        let Some(graph) = model.term_id(RelationStore::DEFAULT_GRAPH) else {
-            return Ok(Vec::new());
-        };
+    fn new_triples(&self, model: &RuleStore<N>, since: usize) -> Result<Vec<[Term; 3]>, String> {
         model
             .rows_from(since)
-            .filter(|(_, [.., g])| *g == graph)
-            .map(|(_, [s, p, o, _])| {
+            .filter(|(_, row)| Arity::<N>::is_output_row(model, row))
+            .map(|(_, row)| {
+                let [s, p, o] = [row[0], row[1], row[2]];
                 let [s, p, o] = [s, p, o].map(|id| self.codec.term(model.interner().resolve(id)));
                 Ok([s?, p?, o?])
             })
@@ -1322,18 +1472,21 @@ fn data_block_term(term: &Term, prefix: &str) -> Term {
 }
 
 /// The SHACL layer-boundary actions.
-struct Hooks<'e, 'r, 'a> {
+struct Hooks<'e, 'r, 'a, const N: usize> {
     /// The shared evaluation state.
-    engine: &'e Engine<'r, 'a>,
+    engine: &'e Engine<'r, 'a, N>,
 }
 
-impl LayerHooks for Hooks<'_, '_, '_> {
+impl<const N: usize> LayerHooks<N> for Hooks<'_, '_, '_, N>
+where
+    Arity<N>: RuleShape<N>,
+{
     /// "Compute the expected derived triples for all rules in the layer".
     fn assume(
         &mut self,
         layer: usize,
-        model: &RelationStore,
-    ) -> Result<Vec<Fact>, purrdf_datalog::guard::CallbackError> {
+        model: &RuleStore<N>,
+    ) -> Result<Vec<RuleFact<N>>, purrdf_datalog::guard::CallbackError> {
         let expected = &self.engine.expectations[layer];
         if expected.is_empty() {
             return Ok(Vec::new());
@@ -1355,9 +1508,9 @@ impl LayerHooks for Hooks<'_, '_, '_> {
     fn retract(
         &mut self,
         _layer: usize,
-        model: &RelationStore,
-        withdrawn: &[Fact],
-    ) -> Result<Vec<Fact>, purrdf_datalog::guard::CallbackError> {
+        model: &RuleStore<N>,
+        withdrawn: &[RuleFact<N>],
+    ) -> Result<Vec<RuleFact<N>>, purrdf_datalog::guard::CallbackError> {
         self.engine.generation.set(self.engine.generation.get() + 1);
         if withdrawn.is_empty() {
             return Ok(Vec::new());
@@ -1380,8 +1533,8 @@ impl LayerHooks for Hooks<'_, '_, '_> {
     /// sh:tempTriple true."
     fn finish(
         &mut self,
-        model: &RelationStore,
-    ) -> Result<Vec<Fact>, purrdf_datalog::guard::CallbackError> {
+        model: &RuleStore<N>,
+    ) -> Result<Vec<RuleFact<N>>, purrdf_datalog::guard::CallbackError> {
         self.engine.generation.set(self.engine.generation.get() + 1);
         let facts = self.engine.model_facts(model)?;
         let temp = Term::NamedNode(NamedNode::from(sh::TEMP_TRIPLE));

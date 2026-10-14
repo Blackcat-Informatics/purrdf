@@ -94,7 +94,7 @@ change must not silently reorder any hash-iteration-dependent output.
 
 ### C1 — Frozen, validated dataset; single compile-time backend via static generics
 
-The production read view is the immutable, value-interned `RdfDataset`: a frozen,
+The resident quad read view is the immutable, value-interned `RdfDataset`: a frozen,
 validated dataset over which every read method is infallible. Backend selection is
 **compile-time and static**. This is realized as **static generics**
 (`impl DatasetView`, monomorphized), NOT dynamic dispatch: the `DatasetView`
@@ -896,6 +896,45 @@ understood or rejected according to its critical flag; PurRDF supplies no
 vocabulary or policy defaults.
 
 ---
+
+## Explicit graph-free resident storage
+
+`TripleDataset` is an immutable RDF 1.2 carrier with three-coordinate asserted
+rows, two-coordinate reifier bindings and three-coordinate annotations. Their
+physical row widths are respectively 12, 8 and 12 bytes. The carrier shares the
+native frozen term owner with `RdfDataset`; it retains no graph table, quad row
+or graph sentinel. SPO is its stored order, with POS and OSP ordinal indexes
+built on demand and separate indexes for statement metadata.
+
+`TripleDatasetBuilder` has no graph argument. Converting an existing
+`RdfDataset` transfers its lexical owner after checking every physical role
+and declared graph. Any named graph, including an empty declaration, produces
+`TripleReadError::NamedGraphsUnsupported`. Conversion never discards graph
+information.
+
+A frozen carrier opens an explicit fallible `TripleRead`. Each read operation
+owns its sticky first failure, shared by its forks and returned guards; a fresh
+read over the same immutable payload is independent. The existing view protocol
+can expose transient default-graph quad coordinates, but these are not retained
+storage. Named-graph support is checked before graph enumeration or missing-term
+shortcuts. The SPARQL entry points preflight nested and prepared graph requests,
+so an empty source or missing graph IRI cannot conceal an unsupported operation.
+
+Flat canonical presentation uses the original fallible canonicalizer and digest
+home. Its canonical bytes and digest have the same law as the equivalent
+all-default quad input, including statement metadata; the overlay presentation
+is a different choice. Text's explicit `GraphFree` corpus instead uses
+subject/language documents and language-only partitions with distinct corpus,
+index and retrieval-source identity domains. No graph field enters those
+preimages.
+
+Datalog's static arity-three shape stores three term positions and a
+predicate-only partition key. Immutable Base reads are source metadata outside
+the term row, and legal empty rule output is `NoOutput`, distinct from
+inconsistency. The same compiler, joins, schedule, chase and proof machinery
+also serves the unchanged four-position shape. Public SPARQL RL
+`srl::infer_triples` returns a `TripleDataset`; `srl::infer` retains its
+quad result.
 
 ## Determinism & wasm
 

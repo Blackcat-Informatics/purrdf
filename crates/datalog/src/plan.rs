@@ -81,7 +81,7 @@ pub const ANY_PREDICATE: &str = "*";
 /// A constant predicate is keyed by its LEXICAL SURFACE — the same bytes the store keys
 /// its partitions by, so a stratum key and a relation key are the same string. A variable
 /// predicate is keyed by [`ANY_PREDICATE`].
-pub fn predicate_symbol(atom: &ClauseAtom) -> String {
+pub fn predicate_symbol<const N: usize>(atom: &ClauseAtom<N>) -> String {
     atom.predicate()
         .surface()
         .unwrap_or_else(|| ANY_PREDICATE.to_owned())
@@ -128,7 +128,7 @@ pub fn predicate_symbol(atom: &ClauseAtom) -> String {
 /// The predicate set is gathered through a `BTreeSet` and the edges are a `Vec` in
 /// program order, so the relaxation sequence — and therefore the result — is a pure
 /// function of the rule program.
-pub fn stratify(rules: &[DlClause]) -> Option<BTreeMap<String, usize>> {
+pub fn stratify<const N: usize>(rules: &[DlClause<N>]) -> Option<BTreeMap<String, usize>> {
     let (preds, edges) = dependency_edges(rules);
 
     let mut stratum: BTreeMap<String, usize> = preds.iter().map(|p| (p.clone(), 0usize)).collect();
@@ -158,16 +158,16 @@ pub fn stratify(rules: &[DlClause]) -> Option<BTreeMap<String, usize>> {
 /// names, so both are derived from ONE function: a diagnostic that searched a smaller
 /// graph than the decision was taken over could fail to find the cycle it was told exists.
 /// That includes the wildcard coupling edges a variable predicate position adds.
-pub(crate) fn dependency_edges(
-    rules: &[DlClause],
+pub(crate) fn dependency_edges<const N: usize>(
+    rules: &[DlClause<N>],
 ) -> (BTreeSet<String>, Vec<(String, String, bool)>) {
     dependency_edges_with(rules, |_, head, body, negative| (head, body, negative))
 }
 
 /// The original dependency walk, with each authored edge's producing rule.
 /// Wildcard coupling is graph structure rather than an authored rule and has no index.
-pub(crate) fn dependency_edges_with<T>(
-    rules: &[DlClause],
+pub(crate) fn dependency_edges_with<T, const N: usize>(
+    rules: &[DlClause<N>],
     mut edge: impl FnMut(Option<usize>, String, String, bool) -> T,
 ) -> (BTreeSet<String>, Vec<T>) {
     // Every predicate symbol, heads and body atoms alike.
@@ -334,10 +334,10 @@ fn term_is_known(term: &ClauseTerm, bound: &BTreeSet<String>) -> bool {
     }
 }
 
-/// Record every variable of `atom` as bound: the atom has been scanned, so ALL FOUR of its
+/// Record every variable of `atom` as bound: the atom has been scanned, so ALL of its
 /// positions carry values from here on — including a variable predicate, which the
 /// partition key binds, and a variable graph.
-fn bind_atom_variables(atom: &ClauseAtom, bound: &mut BTreeSet<String>) {
+fn bind_atom_variables<const N: usize>(atom: &ClauseAtom<N>, bound: &mut BTreeSet<String>) {
     for term in atom.terms() {
         if let ClauseTerm::Var(variable) = term {
             bound.insert(variable.clone());
@@ -346,8 +346,8 @@ fn bind_atom_variables(atom: &ClauseAtom, bound: &mut BTreeSet<String>) {
 }
 
 /// Whether two of `atom`'s positions hold the SAME variable — an equality filter the atom
-/// carries on its own, over any pair of its four positions.
-fn atom_has_repeated_variable(atom: &ClauseAtom) -> bool {
+/// carries on its own, over any pair of its stored positions.
+fn atom_has_repeated_variable<const N: usize>(atom: &ClauseAtom<N>) -> bool {
     let terms = atom.terms();
     (0..terms.len()).any(|left| {
         ((left + 1)..terms.len()).any(|right| match (terms[left], terms[right]) {
@@ -362,8 +362,11 @@ fn atom_has_repeated_variable(atom: &ClauseAtom) -> bool {
 /// A shared bound VARIABLE connects the atom to the current join; a shared constant
 /// does not. Connectivity takes precedence over known-position, constant and repeated-
 /// variable counts, so a selective disconnected atom cannot force a cross product while
-/// a connected atom remains. All four positions participate, including predicate/graph.
-fn atom_priority(atom: &ClauseAtom, bound: &BTreeSet<String>) -> (bool, usize, usize, usize) {
+/// a connected atom remains. All stored positions participate, including predicate and, for quads, graph.
+fn atom_priority<const N: usize>(
+    atom: &ClauseAtom<N>,
+    bound: &BTreeSet<String>,
+) -> (bool, usize, usize, usize) {
     let connected = atom
         .terms()
         .into_iter()
@@ -415,7 +418,7 @@ fn binding_aware_order<T>(
 ///
 /// Connected atoms run first; ties retain the known/constant/repeated-variable preference
 /// and finally authored position. After a choice, all of its variables become bound.
-fn sips_order(rule: &DlClause, positive: &[usize]) -> Vec<usize> {
+fn sips_order<const N: usize>(rule: &DlClause<N>, positive: &[usize]) -> Vec<usize> {
     binding_aware_order(
         (0..positive.len()).collect(),
         |&position, bound| {
@@ -437,7 +440,7 @@ pub const POSITION_PREDICATE: usize = 1;
 pub const POSITION_OBJECT: usize = 2;
 /// Argument position 3 of an atom: the graph.
 pub const POSITION_GRAPH: usize = 3;
-/// The number of argument positions every atom has.
+/// The number of argument positions in the default quad shape.
 pub const ATOM_ARITY: usize = 4;
 
 /// The statically selected shape of ONE argument position.
@@ -478,15 +481,17 @@ impl PositionPlan {
     }
 }
 
-/// One positive atom lowered to a plan over all FOUR of its positions.
+/// One positive atom lowered to a plan over its statically selected positions.
 ///
 /// The subject and object positions drive the arrangement's `(subject, object)` index; the
 /// predicate and graph positions address the store PARTITION. Both are the same kind of
 /// plan value, because the predicate is a term like any other: nothing here privileges it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AtomShape {
-    /// The four positions, in `(subject, predicate, object, graph)` order.
-    positions: [PositionPlan; ATOM_ARITY],
+pub struct AtomShape<const N: usize = 4> {
+    /// The RDF positions in subject, predicate, object, then optional quad graph order.
+    positions: [PositionPlan; N],
+    /// Body read authority, outside the RDF coordinates.
+    source: crate::clause::ReadSource,
     /// Position pairs `(left, right)` with `left < right` that hold the SAME variable, in
     /// ascending order. A row matches only where those positions agree — the general form
     /// of the repeated-variable diagonal filter, over any pair of the four positions
@@ -494,9 +499,21 @@ pub struct AtomShape {
     equalities: Box<[(usize, usize)]>,
 }
 
-impl AtomShape {
-    /// The four position plans, in `(subject, predicate, object, graph)` order.
-    pub fn positions(&self) -> &[PositionPlan; ATOM_ARITY] {
+impl AtomShape<4> {
+    /// The graph position's plan.
+    pub fn graph(&self) -> &PositionPlan {
+        &self.positions[POSITION_GRAPH]
+    }
+}
+
+impl<const N: usize> AtomShape<N> {
+    /// The immutable relation selected by this body atom.
+    pub const fn read_source(&self) -> crate::clause::ReadSource {
+        self.source
+    }
+
+    /// The stored position plans, with a fourth graph plan only for quad atoms.
+    pub fn positions(&self) -> &[PositionPlan; N] {
         &self.positions
     }
 
@@ -515,17 +532,12 @@ impl AtomShape {
         &self.positions[POSITION_OBJECT]
     }
 
-    /// The graph position's plan.
-    pub fn graph(&self) -> &PositionPlan {
-        &self.positions[POSITION_GRAPH]
-    }
-
     /// The position pairs that must agree for a row to match.
     pub fn equalities(&self) -> &[(usize, usize)] {
         &self.equalities
     }
 
-    /// This atom's arity-4 adornment: bound where the position's value is known before the
+    /// This atom's static-arity adornment: bound where the position's value is known before the
     /// scan, free where the scan binds it.
     ///
     /// The same [`BindingPattern`] lattice a backward magic-sets demand is keyed by, now
@@ -537,14 +549,18 @@ impl AtomShape {
     }
 
     /// Whether this atom addresses exactly ONE store partition — its predicate and graph
-    /// are both known before the scan.
+    /// are known before the scan; a triple partition has only a predicate.
     ///
     /// This is the plan-time statement of the performance contract: an atom for which this
     /// holds reaches its arrangement through one ordered-map probe and then uses the very
     /// same `(subject, object)` index it always did. Only an atom for which it does NOT
     /// hold sweeps partitions.
     pub fn addresses_one_partition(&self) -> bool {
-        self.predicate().is_known() && self.graph().is_known()
+        self.predicate().is_known()
+            && self
+                .positions
+                .get(POSITION_GRAPH)
+                .is_none_or(PositionPlan::is_known)
     }
 }
 
@@ -571,16 +587,16 @@ fn position_plan(
 }
 
 /// The shape of `atom` against the variables bound before it runs.
-fn atom_shape(
-    atom: &ClauseAtom,
+fn atom_shape<const N: usize>(
+    atom: &ClauseAtom<N>,
     bound: &BTreeSet<String>,
     slots: &BTreeMap<String, usize>,
-) -> AtomShape {
+) -> AtomShape<N> {
     let terms = atom.terms();
     let positions = std::array::from_fn(|position| position_plan(terms[position], bound, slots));
     let mut equalities = Vec::new();
-    for left in 0..ATOM_ARITY {
-        for right in (left + 1)..ATOM_ARITY {
+    for left in 0..N {
+        for right in (left + 1)..N {
             if let (ClauseTerm::Var(left_name), ClauseTerm::Var(right_name)) =
                 (terms[left], terms[right])
                 && left_name == right_name
@@ -590,20 +606,21 @@ fn atom_shape(
         }
     }
     AtomShape {
+        source: atom.read_source(),
         positions,
         equalities: equalities.into_boxed_slice(),
     }
 }
 
 /// The guaranteed index shape of a lowered atom: the `(subject, object)` face of its
-/// arity-4 adornment, read off the SHAPE rather than re-derived from the clause, so the
+/// adornment, read off the SHAPE rather than re-derived from the clause, so the
 /// index tag and the adornment cannot drift apart.
 ///
 /// Only those two positions take part: the predicate and graph positions choose the
 /// PARTITION, and the partition's arrangement is what the index is built over. That split
 /// is why an atom with a free predicate keeps the very same subject/object index it would
 /// have had with a constant one — it just applies it once per partition.
-fn index_choice(shape: &AtomShape) -> IndexChoice {
+fn index_choice<const N: usize>(shape: &AtomShape<N>) -> IndexChoice {
     IndexChoice::from_pattern(BindingPattern::from_bools([
         shape.subject().is_known(),
         shape.object().is_known(),
@@ -616,18 +633,18 @@ fn index_choice(shape: &AtomShape) -> IndexChoice {
 /// [`IndexChoice::bound`]), but variable-name and term-enum interpretation is absent from
 /// the tuple loop entirely.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AtomOperator {
+pub struct AtomOperator<const N: usize = 4> {
     /// Index into the rule's authored body.
     body_index: usize,
     /// Index within the rule's positive-atom sequence.
     positive_position: usize,
     /// The guaranteed `(subject, object)` index shape at this point in the execution order.
     index: IndexChoice,
-    /// The statically selected shape of all four positions.
-    shape: AtomShape,
+    /// The statically selected shape of all stored positions.
+    shape: AtomShape<N>,
 }
 
-impl AtomOperator {
+impl<const N: usize> AtomOperator<N> {
     /// Index into the rule's authored body.
     pub fn body_index(&self) -> usize {
         self.body_index
@@ -643,8 +660,8 @@ impl AtomOperator {
         self.index
     }
 
-    /// The statically selected shape of all four positions.
-    pub fn shape(&self) -> &AtomShape {
+    /// The statically selected shape of all stored positions.
+    pub fn shape(&self) -> &AtomShape<N> {
         &self.shape
     }
 }
@@ -652,12 +669,12 @@ impl AtomOperator {
 /// Lower every positive atom, in execution order, to its operator — computing each
 /// atom's index shape and position plans against exactly the variables bound before it
 /// runs.
-fn lower_operators(
-    rule: &DlClause,
+fn lower_operators<const N: usize>(
+    rule: &DlClause<N>,
     positive: &[usize],
     execution_order: &[usize],
     slots: &BTreeMap<String, usize>,
-) -> Vec<AtomOperator> {
+) -> Vec<AtomOperator<N>> {
     let mut bound = BTreeSet::new();
     let mut operators = Vec::with_capacity(execution_order.len());
     for &positive_position in execution_order {
@@ -773,7 +790,7 @@ impl JoinGroup {
 /// A group connects when ANY member shares a bound variable. Its best member supplies
 /// the remaining selectivity preferences, and its earliest authored atom breaks ties.
 /// Selecting a cycle binds all of its variables without changing its internal descent.
-fn sips_group_order(rule: &DlClause, groups: Vec<JoinGroup>) -> Vec<JoinGroup> {
+fn sips_group_order<const N: usize>(rule: &DlClause<N>, groups: Vec<JoinGroup>) -> Vec<JoinGroup> {
     binding_aware_order(
         groups,
         |group, bound| {
@@ -928,8 +945,8 @@ fn bridge_edges(node_count: usize, edges: &[(usize, usize)]) -> BTreeSet<usize> 
 /// Components are keyed by their SMALLEST variable node, so the emitted order depends on
 /// the (lexically ordered) variable numbering alone and never on a disjoint-set forest's
 /// internal choice of representative.
-fn certified_cyclic_components(
-    rule: &DlClause,
+fn certified_cyclic_components<const N: usize>(
+    rule: &DlClause<N>,
     positive: &[usize],
     slots: &BTreeMap<String, usize>,
 ) -> Vec<CyclicPlan> {
@@ -949,7 +966,12 @@ fn certified_cyclic_components(
                 occurrence += 1;
             }
         }
-        if atom.predicate().is_var() || atom.graph().is_var() {
+        if atom.predicate().is_var()
+            || atom
+                .terms()
+                .get(POSITION_GRAPH)
+                .is_some_and(|term| term.is_var())
+        {
             // Not a single trie level — see the doc comment.
             continue;
         }
@@ -1079,7 +1101,7 @@ struct HybridPlan {
 /// Store-local term ids remain runtime values, but which columns are bound and which
 /// concrete kernel consumes them are decided here, once.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RulePlan {
+pub struct RulePlan<const N: usize = 4> {
     /// Body indices of the POSITIVE atoms, in body order (the join drivers).
     positive: Box<[usize]>,
     /// Body indices of the NEGATED atoms, in body order (the negation filters).
@@ -1089,7 +1111,7 @@ pub struct RulePlan {
     variables: Box<[String]>,
     /// One statically-shaped operator per positive body atom, in physical execution
     /// order. Each retains its authored positive position for provenance restoration.
-    operators: Box<[AtomOperator]>,
+    operators: Box<[AtomOperator<N>]>,
     /// In-place swaps restoring positive-source provenance from physical execution order
     /// to authored body order.
     operator_source_order_swaps: Box<[(usize, usize)]>,
@@ -1097,7 +1119,7 @@ pub struct RulePlan {
     hybrid: Option<Box<HybridPlan>>,
 }
 
-impl RulePlan {
+impl<const N: usize> RulePlan<N> {
     /// Plan one rule.
     ///
     /// The body is partitioned into positive (join) and negated (filter) atoms,
@@ -1108,7 +1130,7 @@ impl RulePlan {
     /// join's natural binding order, and including the head gives diagnostics a complete
     /// rule layout without changing the positive operators. For the atomic head this crate
     /// evaluates, "the head atoms" is the one head atom.
-    pub(crate) fn for_rule(rule: &DlClause) -> Self {
+    pub(crate) fn for_rule(rule: &DlClause<N>) -> Self {
         let mut positive = Vec::new();
         let mut negated = Vec::new();
         for (i, atom) in rule.body().iter().enumerate() {
@@ -1239,7 +1261,7 @@ impl RulePlan {
     }
 
     /// The prelowered positive atom operators, in physical execution order.
-    pub fn operators(&self) -> &[AtomOperator] {
+    pub fn operators(&self) -> &[AtomOperator<N>] {
         &self.operators
     }
 
@@ -1248,7 +1270,7 @@ impl RulePlan {
     /// # Panics
     ///
     /// Panics if `positive_position` is not a positive coordinate of this rule.
-    pub fn operator_at(&self, positive_position: usize) -> &AtomOperator {
+    pub fn operator_at(&self, positive_position: usize) -> &AtomOperator<N> {
         self.operators
             .iter()
             .find(|operator| operator.positive_position == positive_position)
@@ -1301,18 +1323,18 @@ impl RulePlan {
 /// Owns the rules behind an [`Arc`], so the terminal executable can be shared across
 /// calls without borrowing a caller's scratch buffer.
 #[derive(Debug, Clone)]
-pub struct Parsed {
+pub struct Parsed<const N: usize = 4> {
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
-    rules: Arc<[DlClause]>,
+    rules: Arc<[DlClause<N>]>,
 }
 
-impl Parsed {
+impl<const N: usize> Parsed<N> {
     /// Admit the complete clause IR under every supplied declaration source.
     /// # Errors
     /// Returns exact admission or ordinary Datalog fragment refusal.
     pub fn with_declarations(
-        rules: Vec<DlClause>,
+        rules: Vec<DlClause<N>>,
         declarations: &crate::admission::NeverDeriveDeclarations,
     ) -> Result<Self, crate::seminaive::EvalError> {
         let certificate = declarations
@@ -1344,7 +1366,7 @@ impl Parsed {
     /// those four forms are outside the class of definite clauses a least-fixpoint
     /// evaluator computes over, and accepting one as if it were atomic — or dropping
     /// it — would return an answer that is not the model of the program supplied.
-    pub fn new(rules: Vec<DlClause>) -> Result<Self, NonDatalogClause> {
+    pub fn new(rules: Vec<DlClause<N>>) -> Result<Self, NonDatalogClause> {
         for (index, rule) in rules.iter().enumerate() {
             let form = rule.head_form();
             if !form.is_datalog() {
@@ -1365,7 +1387,7 @@ impl Parsed {
     ///
     /// A rule belongs to the stratum of its HEAD predicate, and within a stratum the
     /// authored program order is preserved, so rules fire in a stable order.
-    pub fn stratify(self) -> Option<Stratified> {
+    pub fn stratify(self) -> Option<Stratified<N>> {
         let stratum_of = stratify(&self.rules)?;
 
         let max_stratum = self
@@ -1395,7 +1417,7 @@ impl Parsed {
 /// [`Parsed::new`], which admits only
 /// [`HeadForm::Atomic`](crate::clause::HeadForm::Atomic), so reaching this would be a
 /// contradiction in that gate rather than a caller error.
-pub(crate) fn datalog_head(rule: &DlClause) -> &ClauseAtom {
+pub(crate) fn datalog_head<const N: usize>(rule: &DlClause<N>) -> &ClauseAtom<N> {
     rule.datalog_head().unwrap_or_else(|| {
         unreachable!("the plan pipeline admits only atomic-head clauses (Parsed::new)")
     })
@@ -1403,18 +1425,18 @@ pub(crate) fn datalog_head(rule: &DlClause) -> &ClauseAtom {
 
 /// Stage 2: a stratifiable program with its per-stratum rule grouping memoized.
 #[derive(Debug, Clone)]
-pub struct Stratified {
+pub struct Stratified<const N: usize = 4> {
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
-    rules: Arc<[DlClause]>,
+    rules: Arc<[DlClause<N>]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
     strata: Vec<Vec<usize>>,
 }
 
-impl Stratified {
+impl<const N: usize> Stratified<N> {
     /// Precompute one complete store-independent [`RulePlan`] per rule.
-    pub fn plan(self) -> Planned {
-        let plans: Vec<RulePlan> = self.rules.iter().map(RulePlan::for_rule).collect();
+    pub fn plan(self) -> Planned<N> {
+        let plans: Vec<RulePlan<N>> = self.rules.iter().map(RulePlan::for_rule).collect();
         Planned {
             admission: self.admission,
             rules: self.rules,
@@ -1426,20 +1448,20 @@ impl Stratified {
 
 /// Stage 3: a stratified program with its per-rule join plans memoized.
 #[derive(Debug, Clone)]
-pub struct Planned {
+pub struct Planned<const N: usize = 4> {
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
-    rules: Arc<[DlClause]>,
+    rules: Arc<[DlClause<N>]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
     strata: Vec<Vec<usize>>,
     /// One entry per rule, parallel to `rules` by index.
-    plans: Vec<RulePlan>,
+    plans: Vec<RulePlan<N>>,
 }
 
-impl Planned {
+impl<const N: usize> Planned<N> {
     /// Seal the plan into the terminal [`Executable`], memoizing the head-predicate set a
     /// completion frontier reads.
-    pub fn into_executable(self) -> Executable {
+    pub fn into_executable(self) -> Executable<N> {
         let head_predicates: BTreeSet<String> = self
             .rules
             .iter()
@@ -1461,19 +1483,19 @@ impl Planned {
 /// constructor is [`Planned::into_executable`], so a value of this type is a proof that
 /// the program was stratified (stage 1 → 2) and planned (stage 2 → 3).
 #[derive(Debug, Clone)]
-pub struct Executable {
+pub struct Executable<const N: usize = 4> {
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
-    rules: Arc<[DlClause]>,
+    rules: Arc<[DlClause<N>]>,
     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
     strata: Vec<Vec<usize>>,
     /// One entry per rule, parallel to `rules` by index.
-    plans: Vec<RulePlan>,
+    plans: Vec<RulePlan<N>>,
     /// The IDB-derivable (rule-head) predicates, in lexical order.
     head_predicates: BTreeSet<String>,
 }
 
-impl Executable {
+impl<const N: usize> Executable<N> {
     /// Every declaration source admitted with this immutable program.
     #[must_use]
     pub fn declarations(&self) -> Option<&crate::admission::NeverDeriveDeclarations> {
@@ -1539,7 +1561,7 @@ impl Executable {
     /// # Panics
     ///
     /// Panics if `index` is not a rule of this program.
-    pub fn rule_entry(&self, index: usize) -> (&DlClause, &RulePlan) {
+    pub fn rule_entry(&self, index: usize) -> (&DlClause<N>, &RulePlan<N>) {
         (&self.rules[index], &self.plans[index])
     }
 
@@ -2247,7 +2269,7 @@ mod tests {
 
     #[test]
     fn stratify_of_an_empty_program_is_empty() {
-        assert_eq!(stratify(&[]), Some(BTreeMap::new()));
+        assert_eq!(stratify::<4>(&[]), Some(BTreeMap::new()));
     }
 
     /// The pipeline is the only way to reach an [`Executable`], and it memoizes the

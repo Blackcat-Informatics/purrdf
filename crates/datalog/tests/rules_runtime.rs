@@ -572,7 +572,444 @@ fn public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error() {
     }
 }
 
+fn triple_compiler_preserves_static_arity_and_original_admission() {
+    use purrdf_datalog::admission::{
+        AdmissionRefusal, DeclarationLayer, DeclarationSource, NeverDeriveDeclarations,
+    };
+    use purrdf_datalog::cache::{PlanCache, canonical_rule_hash};
+    use purrdf_datalog::guard::NoGuards;
+    use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext};
+    use purrdf_datalog::schedule::{
+        NoHooks, compile_scheduled, evaluate_scheduled, stratify_rules,
+    };
+    use purrdf_datalog::seminaive::{EvalError, compile_with_declarations};
+    use purrdf_datalog::store::{Arity, StoreShape, TermInterner};
+
+    let atom = |s: &str, p: &str, o: &str| {
+        ClauseAtom::triple(ClauseTerm::var(s), ClauseTerm::iri(p), ClauseTerm::var(o))
+    };
+    let predicate = "https://example.org/transitive";
+    let rule = DlClause::datalog(
+        atom("?s", predicate, "?o"),
+        vec![atom("?s", predicate, "?m"), atom("?m", predicate, "?o")],
+    );
+    let rules = vec![rule];
+    let program = compile(rules.clone()).unwrap();
+    let (rule, plan) = program.rule_entry(0);
+    assert_eq!(rule.body()[0].terms().len(), 3);
+    assert_eq!(plan.variables(), &["?s", "?m", "?o"]);
+    for operator in plan.operators() {
+        assert_eq!(operator.shape().positions().len(), 3);
+        assert_eq!(operator.shape().adornment().arity(), 3);
+        assert!(operator.shape().addresses_one_partition());
+    }
+    assert_eq!(
+        size_of::<ClauseAtom<4>>() - size_of::<ClauseAtom<3>>(),
+        size_of::<ClauseTerm>()
+    );
+    let quad = DlClause::datalog(
+        ClauseAtom::positive(ClauseTerm::var("?s"), predicate, ClauseTerm::var("?o")),
+        rules[0]
+            .body()
+            .iter()
+            .map(|atom| {
+                ClauseAtom::quad(
+                    atom.subject().clone(),
+                    atom.predicate().clone(),
+                    atom.object().clone(),
+                    ClauseTerm::DefaultGraph,
+                )
+            })
+            .collect(),
+    );
+    assert_ne!(
+        canonical_rule_hash(&rules),
+        canonical_rule_hash(std::slice::from_ref(&quad))
+    );
+    let mut triple_input =
+        RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    let mut quad_input = RelationStore::new();
+    let p = format!("<{predicate}>");
+    for (s, o) in [("a", "b"), ("b", "c"), ("c", "d"), ("e", "b")] {
+        triple_input.insert_row([s, &p, o]).unwrap();
+        quad_input
+            .insert(s, &p, o, RelationStore::DEFAULT_GRAPH)
+            .unwrap();
+    }
+    let triples = evaluate(&program, triple_input.clone()).unwrap();
+    let quads = evaluate(&compile(vec![quad]).unwrap(), quad_input).unwrap();
+    assert_eq!(triples.facts().row_count(), 9);
+    assert_eq!(triples.facts().partition_count(), 1);
+    assert!(triples.facts().interner().lookup("").is_none());
+    assert_eq!(
+        triples
+            .facts()
+            .facts_sorted()
+            .iter()
+            .map(|fact| Arity::<3>::fact_terms(fact).map(str::to_owned))
+            .collect::<Vec<_>>(),
+        quads
+            .facts()
+            .facts_sorted()
+            .into_iter()
+            .map(|fact| [fact.subject, fact.predicate, fact.object])
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(triples.derivations().len(), quads.derivations().len());
+    for (triple, quad) in triples.derivations().iter().zip(quads.derivations()) {
+        assert_eq!(triple.rule(), quad.rule());
+        assert_eq!(triple.proof_height(), quad.proof_height());
+        assert_eq!(triple.sources().len(), 2);
+        for (actual, expected) in triple.sources().iter().zip(quad.sources()) {
+            assert_eq!(
+                Arity::<3>::fact_terms(actual),
+                [
+                    expected.subject.as_str(),
+                    expected.predicate.as_str(),
+                    expected.object.as_str()
+                ]
+            );
+        }
+    }
+    let proofs = EvaluationProofs::of(&triples).unwrap();
+    let context = ProofContext::new(&rules, &triple_input, triples.facts());
+    for (fact, root) in proofs.roots() {
+        assert_eq!(&proofs.arena().check(*root, &context).unwrap(), fact);
+        let bytes = proofs.arena().encode(*root);
+        let (decoded, decoded_root) = ProofArena::<3>::decode(&bytes).unwrap();
+        assert_eq!(decoded.encode(decoded_root), bytes);
+        assert_eq!(decoded.digest(decoded_root), proofs.arena().digest(*root));
+        assert_eq!(&decoded.check(decoded_root, &context).unwrap(), fact);
+        assert!(ProofArena::<4>::decode(&bytes).is_err());
+    }
+    let chase = purrdf_datalog::chase::chase(&rules, triple_input.clone()).unwrap();
+    assert_eq!(chase.facts().facts_sorted(), triples.facts().facts_sorted());
+    let mut cache = PlanCache::<3>::new(2);
+    let cold = cache.get_or_compile("https://example.org/contract", rules.clone());
+    assert!(!cold.cache_hit());
+    assert!(cold.plan().is_ok());
+    let warm = cache.get_or_compile("https://example.org/contract", rules.clone());
+    assert!(warm.cache_hit());
+    assert_eq!(warm.planning_units(), 0);
+    let schedule = stratify_rules(&rules, &[false]).unwrap();
+    let scheduled = compile_scheduled(rules.clone(), schedule).unwrap();
+    assert_eq!(scheduled.rules(), rules);
+    let scheduled_result = evaluate_scheduled(
+        &scheduled,
+        triple_input,
+        &NoGuards,
+        &mut NoHooks,
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        scheduled_result.facts().facts_sorted(),
+        triples.facts().facts_sorted()
+    );
+    assert_eq!(scheduled_result.derivations(), triples.derivations());
+    let mut declarations = NeverDeriveDeclarations::default();
+    declarations.declare(
+        predicate.into(),
+        DeclarationSource {
+            layer: DeclarationLayer::StoreProfile,
+            identity: "https://example.org/authority".into(),
+        },
+    );
+    assert!(matches!(
+        compile_with_declarations(rules, &declarations),
+        Err(EvalError::NeverDerive(
+            AdmissionRefusal::ProtectedHead { .. }
+        ))
+    ));
+    assert!(matches!(
+        compile(vec![DlClause::datalog(
+            atom("?unbound", predicate, "?o"),
+            vec![atom("?s", predicate, "?o")]
+        )]),
+        Err(EvalError::UnboundHeadVariable { .. })
+    ));
+}
+
+fn triple_base_authority_survives_data_growth_and_layer_retraction() {
+    use purrdf_datalog::cache::canonical_rule_hash;
+    use purrdf_datalog::guard::{CallbackError, Negation, NoGuards};
+    use purrdf_datalog::proof::{EvaluationProofs, ProofContext};
+    use purrdf_datalog::schedule::{
+        Layer, LayerHooks, Schedule, compile_scheduled, evaluate_scheduled, stratify_rules,
+    };
+    use purrdf_datalog::seminaive::EvalError;
+    use purrdf_datalog::store::{Fact, TermInterner};
+
+    struct WithdrawOriginal;
+    impl LayerHooks<3> for WithdrawOriginal {
+        fn retract(
+            &mut self,
+            layer: usize,
+            _: &RelationStore<TermInterner, 3>,
+            _: &[Fact<()>],
+        ) -> Result<Vec<Fact<()>>, CallbackError> {
+            Ok(if layer == 0 {
+                vec![Fact {
+                    subject: "a".into(),
+                    predicate: "p".into(),
+                    object: "b".into(),
+                    graph: (),
+                }]
+            } else {
+                Vec::new()
+            })
+        }
+    }
+    let atom = |s: &str, p: &str, o: &str| {
+        ClauseAtom::triple(
+            ClauseTerm::var(s),
+            ClauseTerm::literal(p),
+            ClauseTerm::var(o),
+        )
+    };
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    input.insert_row(["a", "p", "b"]).unwrap();
+    let missing_base = input.clone();
+    input = input.with_base_snapshot().unwrap();
+    // DATA is visible to ordinary patterns but not to WHERE DATA.
+    input.insert_row(["c", "p", "d"]).unwrap();
+    let rules = vec![
+        DlClause::datalog(
+            ClauseAtom::triple(
+                ClauseTerm::literal("b"),
+                ClauseTerm::literal("p"),
+                ClauseTerm::literal("e"),
+            ),
+            Vec::new(),
+        ),
+        DlClause::datalog(
+            atom("?s", "q", "?o"),
+            vec![atom("?s", "p", "?o").from_base()],
+        ),
+        DlClause::datalog(atom("?s", "r", "?o"), vec![atom("?s", "p", "?o")]),
+        DlClause::datalog(
+            atom("?s", "n", "?o"),
+            vec![
+                atom("?s", "p", "?o"),
+                atom("?s", "p", "?o").from_base().into_negated(),
+            ],
+        ),
+        DlClause::datalog(atom("?s", "g", "?o"), vec![atom("?s", "p", "?o")]).with_negations(vec![
+            Negation::new(vec![atom("?s", "p", "?o").from_base()], Vec::new()),
+        ]),
+    ];
+    let same_evaluation_read =
+        DlClause::datalog(atom("?s", "q", "?o"), vec![atom("?s", "p", "?o")]);
+    assert_ne!(
+        canonical_rule_hash(&rules[1..2]),
+        canonical_rule_hash(&[same_evaluation_read])
+    );
+    assert!(matches!(
+        compile(vec![rules[1].clone()]),
+        Err(EvalError::BaseReadRequiresSchedule { rule: 0 })
+    ));
+    // A closed Base read does not acquire a recursive dependency on model writes.
+    let base_negative = DlClause::datalog(
+        atom("?s", "p", "?o"),
+        vec![
+            atom("?s", "p", "?o").from_base(),
+            atom("?s", "p", "?o").from_base().into_negated(),
+        ],
+    );
+    assert!(stratify_rules(&[base_negative], &[false]).is_ok());
+    let schedule = Schedule::new(vec![
+        Layer::new(vec![vec![0]], Vec::new()),
+        Layer::new(vec![vec![1, 2, 3, 4]], Vec::new()),
+    ]);
+    let program = compile_scheduled(rules.clone(), schedule).unwrap();
+    assert!(matches!(
+        evaluate_scheduled(
+            &program,
+            missing_base,
+            &NoGuards,
+            &mut WithdrawOriginal,
+            &EvalOptions::default(),
+            None
+        ),
+        Err(EvalError::MissingBase { rule: 1 })
+    ));
+    let result = evaluate_scheduled(
+        &program,
+        input.clone(),
+        &NoGuards,
+        &mut WithdrawOriginal,
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    let model = result.facts();
+    assert!(!model.contains_row(["a", "p", "b"]));
+    assert!(model.contains_row(["a", "q", "b"]));
+    assert!(!model.contains_row(["c", "q", "d"]));
+    assert!(!model.contains_row(["b", "q", "e"]));
+    for predicate in ["r", "n", "g"] {
+        assert!(model.contains_row(["c", predicate, "d"]));
+        assert!(model.contains_row(["b", predicate, "e"]));
+        assert!(!model.contains_row(["a", predicate, "b"]));
+    }
+    assert_eq!(model.row_count(), 9);
+    assert_eq!(result.budget().stored_facts(), 10); // nine live model rows plus one retained base row
+    assert!(model.interner().lookup("").is_none());
+    let base_derivation = result
+        .derivations()
+        .iter()
+        .find(|d| d.fact().predicate == "q")
+        .unwrap();
+    assert_eq!(base_derivation.proof_height(), 1);
+    assert_eq!(base_derivation.sources()[0].subject, "a");
+    let proofs = EvaluationProofs::of(&result).unwrap();
+    let context = ProofContext::new(&rules, &input, model);
+    let (fact, root) = proofs
+        .roots()
+        .iter()
+        .find(|(fact, _)| fact.predicate == "q")
+        .unwrap();
+    assert_eq!(&proofs.arena().check(*root, &context).unwrap(), fact);
+}
+
+fn triple_no_output_runs_the_body_without_fabricating_a_fact() {
+    use purrdf_datalog::cache::canonical_rule_hash;
+    use purrdf_datalog::clause::HeadForm;
+    use purrdf_datalog::guard::NoGuards;
+    use purrdf_datalog::schedule::{
+        Layer, NoHooks, Schedule, compile_scheduled, evaluate_scheduled,
+    };
+    use purrdf_datalog::seminaive::EvalError;
+    use purrdf_datalog::store::TermInterner;
+
+    let body = vec![ClauseAtom::triple(
+        ClauseTerm::var("?s"),
+        ClauseTerm::literal("p"),
+        ClauseTerm::var("?o"),
+    )];
+    let rule = DlClause::no_output(body.clone());
+    let logical_false = DlClause::<3>::new(Vec::new(), Vec::new(), body);
+    assert_eq!(rule.head_form(), HeadForm::NoOutput);
+    assert_ne!(
+        canonical_rule_hash(std::slice::from_ref(&rule)),
+        canonical_rule_hash(std::slice::from_ref(&logical_false))
+    );
+    assert!(matches!(
+        compile(vec![rule.clone()]),
+        Err(EvalError::NonDatalogHead {
+            form: HeadForm::NoOutput,
+            ..
+        })
+    ));
+    let schedule = Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]);
+    let program = compile_scheduled(vec![rule.clone()], schedule.clone()).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    input.insert_row(["a", "p", "b"]).unwrap();
+    let result = evaluate_scheduled(
+        &program,
+        input.clone(),
+        &NoGuards,
+        &mut NoHooks,
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.facts().facts_sorted(), input.facts_sorted());
+    assert_eq!(result.derivations(), []);
+    assert_eq!(result.facts().interner().len(), 3);
+    assert!(matches!(
+        evaluate_scheduled(
+            &program,
+            input.clone(),
+            &NoGuards,
+            &mut NoHooks,
+            &EvalOptions::default().with_max_join_steps(0),
+            None,
+        ),
+        Err(EvalError::BudgetExhausted { .. })
+    ));
+    let guarded = rule.with_guards(vec![Guard::filter("must-run", vec!["?s".into()])]);
+    let program = compile_scheduled(vec![guarded], schedule).unwrap();
+    assert!(matches!(
+        evaluate_scheduled(
+            &program, input, &NoGuards, &mut NoHooks, &EvalOptions::default(), None,
+        ),
+        Err(EvalError::Guard { guard, .. }) if guard == "must-run"
+    ));
+}
+
+fn triple_store_has_predicate_only_keys_and_transactional_original_ids() {
+    use host_dictionary::{HostDictionary, SourceLost};
+    use purrdf_datalog::dictionary::{DictionaryError, DictionaryTerm};
+    use purrdf_datalog::store::{Arity, ShapeFact, StoreKey, StoreShape, TermInterner};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    assert_eq!(size_of::<StoreKey<u64, 3>>(), size_of::<u64>());
+    assert_eq!(size_of::<StoreKey<u64, 4>>(), 2 * size_of::<u64>());
+    assert_eq!(size_of::<ShapeFact<3>>(), 3 * size_of::<String>());
+    assert_eq!(size_of::<ShapeFact<4>>(), 4 * size_of::<String>());
+    let mut triples = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [["a", "p", "b"], ["b", "p", "c"], ["a", "p", "b"]] {
+        triples
+            .insert_terms(row.map(DictionaryTerm::Surface))
+            .unwrap();
+    }
+    assert_eq!(triples.row_count(), 2);
+    assert_eq!(triples.partition_count(), 1);
+    assert_eq!(triples.interner().len(), 4);
+    assert!(triples.interner().lookup("").is_none());
+    assert_eq!(triples.interner().lookup("p").unwrap().index(), 0);
+    let rows = triples
+        .rows_from(0)
+        .map(|(_, row)| row.map(|id| triples.interner().resolve(id)))
+        .collect::<Vec<_>>();
+    assert_eq!(rows, [["a", "p", "b"], ["b", "p", "c"]]);
+    let facts = triples.facts_sorted();
+    assert_eq!(
+        facts.iter().map(Arity::<3>::fact_terms).collect::<Vec<_>>(),
+        rows
+    );
+    let partition = triples.partitions_for([None; 3]).next().unwrap();
+    assert_eq!(partition.row_count(), 2);
+    let predicate = partition.predicate();
+    assert_eq!(
+        triples
+            .partition_for(&[None, Some(predicate), None])
+            .unwrap()
+            .id(),
+        partition.id()
+    );
+
+    const P: u64 = 0xf000_0000_0000_0007;
+    const S: u64 = 0xa000_0000_1234_5678;
+    let dictionary = HostDictionary {
+        surfaces: std::iter::once((P, "<https://example.org/p>".into())).collect(),
+        extra_terms: 0,
+        resolves: AtomicUsize::default(),
+        lookups: AtomicUsize::default(),
+        lost: AtomicBool::default(),
+        lose_after_lookup: AtomicBool::default(),
+        pins: AtomicUsize::default(),
+    };
+    let mut host = RelationStore::<_, 3>::with_dictionary(dictionary);
+    host.insert_ids([S, P, 0]).unwrap().unwrap();
+    assert!(host.insert_ids([S, P, 0]).unwrap().is_none());
+    assert_eq!(host.rows_from(0).next().unwrap().1, [S, P, 0]);
+    assert_eq!(host.interner().pins.load(Ordering::Relaxed), 0);
+    host.interner().lost.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        host.insert_ids([0, P, S]),
+        Err(DictionaryError::Source(SourceLost(99)))
+    ));
+    assert_eq!(host.row_count(), 1);
+}
+
 purrdf_testkit::harness_main!(
+    triple_base_authority_survives_data_growth_and_layer_retraction,
+    triple_no_output_runs_the_body_without_fabricating_a_fact,
+    triple_store_has_predicate_only_keys_and_transactional_original_ids,
+    triple_compiler_preserves_static_arity_and_original_admission,
     public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error,
     later_partial_delta_keeps_both_productive_anchors,
     original_guarded_pair_has_exact_connected_work_and_authored_proofs,

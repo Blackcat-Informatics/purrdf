@@ -563,9 +563,12 @@ source on every run.
 | `b"purrdf-datalog-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-dl-clause-ir-v3"` | `CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-guarded-dl-clause-ir-v1"` | `GUARDED_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-guarded-triple-clause-ir-v1"` | `GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-plan-identity-v1"` | `PLAN_IDENTITY_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-proof-v1"` | `PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
 | `b"purrdf-datalog-scheduled-contract-v1"` | `SCHEDULED_CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-triple-clause-ir-v1"` | `TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-triple-proof-v1"` | `TRIPLE_PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
 | `b"purrdf-datalog/never-derive-declarations/v1"` | `(inline)` | `crates/datalog/src/admission.rs` |
 | `b"purrdf-datalog/never-derive-plan/v1"` | `DOMAIN` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-dl-service-proof-v2"` | `SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
@@ -630,6 +633,8 @@ source on every run.
 | `b"purrdf-text/source/v1"` | `SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
 | `b"purrdf-text/surface-generation/v1\0"` | `GENERATION_DOMAIN` | `crates/text/src/surface.rs` |
 | `b"purrdf-text/surface-literal/v1\0"` | `LITERAL_DOMAIN` | `crates/text/src/surface.rs` |
+| `b"purrdf-text/triples/index/v1"` | `TRIPLE_INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/triples/source/v1"` | `TRIPLE_SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
 | `b"purrdf.pipeline-root.v1"` | `PIPELINE_ROOT_DOMAIN` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |
 | `b"purrdf.purremb.v1.artifact\0"` | `D_ARTIFACT` | `crates/rdf-core/src/ir/embedding/identity.rs` |
 | `b"purrdf.purremb.v1.chunking\0"` | `D_CHUNKING` | `crates/rdf-core/src/ir/embedding/identity.rs` |
