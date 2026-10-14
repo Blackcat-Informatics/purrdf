@@ -1,0 +1,103 @@
+{
+  "issue": 545,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Complete evaluator acceptance ",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 495,
+      "title": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment",
+      "state": "OPEN"
+    },
+    {
+      "number": 481,
+      "title": "perf(sparql-eval): reduce grouped-output buffer traffic through fallible admission",
+      "state": "OPEN"
+    },
+    {
+      "number": 443,
+      "title": "Optimize the exact numeric tower: small-value parity and subquadratic large-value arithmetic",
+      "state": "OPEN"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "OPEN"
+    },
+    {
+      "number": 533,
+      "title": "Complete geo qualification and repair final-round findings",
+      "state": "OPEN"
+    },
+    {
+      "number": 365,
+      "title": "Post-v3.0: asynchronous Wasm lane and parse/serialize follow-ups from #358",
+      "state": "OPEN"
+    },
+    {
+      "number": 492,
+      "title": "Triple-only carrier for RDF 1.2 consumers that use no named graphs (rows, permutations, Datalog atoms, identities)",
+      "state": "OPEN"
+    },
+    {
+      "number": 531,
+      "title": "Evaluator delivery follow-up: relocated test artifact and unqualified performance evidence",
+      "state": "CLOSED"
+    },
+    {
+      "number": 486,
+      "title": "One measured memory budget for every allocation, with spill to a host-provided seam instead of refusal",
+      "state": "OPEN"
+    },
+    {
+      "number": 515,
+      "title": "sparql-eval/datalog: per-row evidence -- information state per standpoint, completeness, frame -- combined by the bilattice",
+      "state": "CLOSED"
+    },
+    {
+      "number": 542,
+      "title": "rdf-core: MutableDataset::freeze uses fixed default ViewLimits; allow caller limits",
+      "state": "CLOSED"
+    },
+    {
+      "number": 516,
+      "title": "Loss ledger as queryable RDF 1.2: content-identified reasons, and merging accepted reasons into the answer",
+      "state": "CLOSED"
+    },
+    {
+      "number": 511,
+      "title": "retrieval: field scoping applied inside each stratum's candidate generation, before depth, with undecided counts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 26,
+    "performance": 3,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/545-complete-evaluator-acceptance"
+  },
+  "coverage": [
+    "issue #545 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Complete', 'evaluator', 'acceptance']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #545 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #545: 0",
+    "requirement candidates: 8 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 3 identifier(s), 0 workspace package(s), 1 URL(s)"
+  ]
+}

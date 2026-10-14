@@ -1,0 +1,16 @@
+{
+  "issue": 545,
+  "branch": "paudley/545-complete-evaluator-acceptance",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "88dfc2b7c5cf1bea9891cdcae6d740c59ea39ff8",
+      "subject": "Restore entered evaluator boundaries after callback unwind",
+      "date": "2026-10-14"
+    }
+  ],
+  "files": [
+    "crates/sparql-eval/src/eval.rs"
+  ],
+  "adrs_touched": []
+}
