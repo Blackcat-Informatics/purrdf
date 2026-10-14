@@ -554,9 +554,17 @@ pub(crate) fn clone_tree_with_memory<const MAP_EXISTS: bool, S: Admission + ?Siz
     let mut stack: WorkList<Step<'_>, 32> = WorkList::new();
     stack.try_push_admitted(Step::Enter(root), memory)?;
     let mut copies = CopyStack::new();
+    let mut shared_nodes = purrdf_lex::allocation::OrderedTable::default();
     while let Some(step) = stack.pop() {
         match step {
             Step::Enter(node) => {
+                if let NodeRef::Pattern(GraphPattern::ProjectStar { variables, .. }) = node {
+                    // The clone retains these roots after the source owner dies.
+                    // Its raw AST grant must cover each shared node exactly once,
+                    // matching the retained-storage census used by publication.
+                    let retained = variables.reachable_bytes(&mut shared_nodes, memory, true)?;
+                    memory.add_bytes(retained)?;
+                }
                 if MAP_EXISTS && let NodeRef::Expr(Expression::Exists(body)) = node {
                     let mapped = map_exists(body, memory)?;
                     let child = Child::try_new(mapped, memory)?;
@@ -603,6 +611,7 @@ pub(crate) fn clone_tree_with_memory<const MAP_EXISTS: bool, S: Admission + ?Siz
         .expect("the root's copy is the last one assembled");
     stack.release_admitted(memory)?;
     copies.release_admitted(memory)?;
+    shared_nodes.release(memory)?;
     Ok(copy)
 }
 

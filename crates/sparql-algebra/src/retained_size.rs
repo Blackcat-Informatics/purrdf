@@ -551,12 +551,47 @@ mod tests {
             query.raw_owned_bytes_with_memory(&mut memory).unwrap(),
             live_nodes + size_of::<GraphPattern>()
         );
-        let copied = query.clone();
+        let mut copy_resident = Resident;
+        let mut copy_memory = Memory::new(&mut copy_resident);
+        let copied = query.clone_with_memory(&mut copy_memory).unwrap();
+        assert_eq!(
+            copy_memory.admitted_bytes(),
+            copied
+                .raw_owned_bytes_with_memory(&mut copy_memory)
+                .unwrap(),
+            "the clone's surviving grant covers its original shared roots"
+        );
         drop(query);
         assert_eq!(
             copied.raw_owned_bytes_with_memory(&mut memory).unwrap(),
             live_nodes + size_of::<GraphPattern>()
         );
+    }
+
+    #[test]
+    fn nested_star_clone_counts_shared_roots_once() {
+        for levels in [1, 16, 128] {
+            let query = crate::SparqlParser::new()
+                .parse_query(&format!(
+                    "SELECT * WHERE {{ {} ?s ?p ?o {} }}",
+                    "{ SELECT * WHERE { ".repeat(levels),
+                    " } }".repeat(levels)
+                ))
+                .expect("nested shared star roots");
+            let mut resident = Resident;
+            let mut memory = Memory::new(&mut resident);
+            let copy = query.clone_with_memory(&mut memory).unwrap();
+            let retained = copy.raw_owned_bytes_with_memory(&mut memory).unwrap();
+            assert_eq!(memory.admitted_bytes(), retained);
+            drop(query);
+            assert_eq!(
+                copy.raw_owned_bytes_with_memory(&mut memory).unwrap(),
+                retained
+            );
+            drop(copy);
+            memory.release_bytes(retained).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
     }
 
     #[test]

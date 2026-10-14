@@ -59,24 +59,30 @@ fn a_declared_used_parameter_passes_and_runs() {
     let dataset = builder.freeze().expect("the one-triple fixture");
 
     let engine = NativeSparqlEngine::new();
-    let mut execution = engine
-        .prepare_execution(SELECT, None, &["this"], QueryOptions::EMPTY)
-        .expect("prepare");
-    execution
-        .check_parameters_mentioned()
-        .expect("a mentioned parameter");
-    execution
-        .bind(0, TermValue::Iri("http://example.org/s".to_owned()))
-        .expect("bind");
-    let rows = engine
-        .execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
-            let InternedOutcome::Solutions(solutions) = outcome else {
-                panic!("expected solutions");
-            };
-            solutions.len()
-        })
-        .expect("execute");
-    assert_eq!(rows, 1);
+    for query in [
+        SELECT,
+        "SELECT * WHERE { ?this <http://example.org/p> ?o }",
+        "SELECT * WHERE { { SELECT * WHERE { ?this <http://example.org/p> ?o } } }",
+    ] {
+        let mut execution = engine
+            .prepare_execution(query, None, &["this"], QueryOptions::EMPTY)
+            .expect("prepare");
+        execution
+            .check_parameters_mentioned()
+            .expect("a mentioned parameter");
+        execution
+            .bind(0, TermValue::Iri("http://example.org/s".to_owned()))
+            .expect("bind");
+        let rows = engine
+            .execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
+                let InternedOutcome::Solutions(solutions) = outcome else {
+                    panic!("expected solutions");
+                };
+                solutions.len()
+            })
+            .expect("execute");
+        assert_eq!(rows, 1, "{query}");
+    }
 }
 
 #[test]
