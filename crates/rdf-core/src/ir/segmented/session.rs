@@ -891,6 +891,12 @@ impl SegmentedSession {
             return self.fail(SegmentedError::Corrupt("block outside certified directory"));
         }
         let mut state = lock_read_state(&self.state);
+        // Another operation can fail after ready() releases State. Inspect the
+        // original fault again under this lock, before cache reuse or preflight.
+        if let Some(error) = state.error.clone() {
+            drop(state);
+            return Err(error);
+        }
         if let Some(index) = state
             .cache
             .iter()
@@ -1805,6 +1811,64 @@ mod operation_tests {
             })
             .unwrap();
         (builder.seal().unwrap(), id)
+    }
+
+    #[test]
+    fn fault_between_ready_and_block_lock_preserves_the_first_cause() {
+        const FIRST: SegmentedError = SegmentedError::Provider {
+            operation: "interleaved first failure",
+            host_code: Some(17),
+        };
+        #[derive(Debug)]
+        struct InterleavedProvider {
+            inner: super::super::SegmentedBytes,
+            pending: Mutex<Option<std::sync::Weak<Mutex<State>>>>,
+        }
+        impl SegmentedProvider for InterleavedProvider {
+            fn snapshot(&self) -> SegmentedSnapshot {
+                let pending = lock_read_state(&self.pending).take();
+                if let Some(state) = pending.and_then(|owner| owner.upgrade()) {
+                    lock_read_state(&state).error = Some(FIRST);
+                }
+                self.inner.snapshot()
+            }
+            fn byte_len(&self) -> u64 {
+                self.inner.byte_len()
+            }
+            fn read_at(&self, position: u64, output: &mut [u8]) -> Result<(), SegmentedError> {
+                self.inner.read_at(position, output)
+            }
+        }
+        let (image, _) = image("urn:interleaved-first-fault");
+        for (cached, requests_tight) in [(false, true), (false, false), (true, true)] {
+            let provider = Arc::new(InterleavedProvider {
+                inner: image.provider(),
+                pending: Mutex::new(None),
+            });
+            let mut session = SegmentedSession::open(
+                provider.clone(),
+                image.receipt(),
+                SegmentedReadLimits::new(2_000_000, 2, 2000, 10_000_000, 4),
+            )
+            .unwrap();
+            let before = session.evidence();
+            if requests_tight {
+                session.limits.requests = u32::try_from(before.request_count()).unwrap();
+            } else {
+                session.limits.io_bytes = before.io_bytes();
+            }
+            *lock_read_state(&provider.pending) = Some(Arc::downgrade(&session.state));
+            // The provider callback deterministically latches another operation's
+            // fault after ready inspected State and before block takes its lock.
+            let slot = if cached {
+                0
+            } else {
+                session.header.dictionary.first
+            };
+            assert!(matches!(session.block(slot), Err(error) if error == FIRST));
+            assert_eq!(session.read_error(), Some(FIRST));
+            assert_eq!(session.evidence().request_count(), before.request_count());
+        }
     }
 
     #[test]
