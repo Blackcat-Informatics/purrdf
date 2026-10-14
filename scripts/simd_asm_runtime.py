@@ -185,8 +185,6 @@ class Runner:
                 messages = [json.loads(line) for line in proc.stdout.splitlines() if line.startswith("{")]
                 artifacts = [m for m in messages if m.get("reason") == "compiler-artifact"
                              and set(m["target"]["kind"]) & {"lib", "rlib", "bench"}
-                             # Check dependency metadata is not a runtime copy.
-                             and (cmd[1] != "check" or "bench" in m["target"]["kind"])
                              and any(f"/{config.triple}/" in f for f in m["filenames"])]
                 t = time.monotonic()
                 for artifact in artifacts:
@@ -205,7 +203,9 @@ class Runner:
                     if not invocations or gate.verify_command_lines("\n".join(invocations), config):
                         raise gate.GateError(f"{config.name}: no verified compiler invocation for {path}; rerun with --fresh")
                     atomic_json(receipt_path, dict(context=key, assembly=asm_hash, commands=invocations))
-                    # Retain every codegen graph; deduplicate only repeated messages.
+                    # Cargo may repeat an artifact message within one graph. A
+                    # reused unit belongs to every graph reporting it: dropping
+                    # that membership would hide a second copy in a later graph.
                     unit = (graph, artifact["package_id"], name, tuple(artifact.get("features", [])), str(path), asm_hash)
                     if unit in seen:
                         continue
