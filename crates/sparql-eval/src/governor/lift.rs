@@ -484,7 +484,38 @@ pub(crate) struct Lift<'p> {
     schema: Option<crate::solution::SharedSchema>,
 }
 
+/// The already-admitted child composition while an immutable copied pattern
+/// is retained by an explicit evaluator frame. Reattach the checked node
+/// before absorbing its child; the certificate still uses the one Lift home.
+#[must_use]
+pub(crate) struct DetachedLift {
+    edges: ChildEdges,
+    certificate: Option<Certificate>,
+    schema: Option<crate::solution::SharedSchema>,
+}
+
+impl DetachedLift {
+    pub(crate) fn attach(self, node: &GraphPattern) -> Lift<'_> {
+        Lift {
+            node,
+            edges: self.edges,
+            certificate: self.certificate,
+            schema: self.schema,
+        }
+    }
+}
+
 impl<'p> Lift<'p> {
+    /// Keep the pre-child edge admission while releasing the node borrow for
+    /// a movable continuation. The owning frame retains the immutable node.
+    pub(crate) fn detach(self) -> DetachedLift {
+        DetachedLift {
+            edges: self.edges,
+            certificate: self.certificate,
+            schema: self.schema,
+        }
+    }
+
     /// A lift for `node`, reading its child classification from
     /// [`crate::governor::soundness::child_edges_admitted`].
     #[cfg(test)]

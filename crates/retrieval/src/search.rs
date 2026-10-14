@@ -469,7 +469,7 @@ impl From<FusionError> for SearchError {
 /// — and a caller that wants the whole of every stratum says so with
 /// [`ReadBound::Complete`](crate::ReadBound::Complete).
 ///
-/// [`crate::fuse`] remains the lower-level entry and still takes a bound, because a
+/// [`fuse`](crate::fuse()) remains the lower-level entry and still takes a bound, because a
 /// caller assembling its own streams has no request to read one from. That entry
 /// refuses a bound the streams were not planned for
 /// ([`FusionError::ReadBoundMismatch`]), so the two cannot drift.
@@ -962,7 +962,7 @@ struct Attempt {
 /// the profile is
 /// deliberately not a planning input, and keeping the executor profile-free is
 /// what lets the unfused rung be consumed with no fusion law in the path.
-/// [`crate::fuse`] nonetheless
+/// [`fuse`](crate::fuse()) nonetheless
 /// requires a [`RankedRow`], which carries the contribution beside them. This
 /// adapter is that conversion, and
 /// it is the *only* place the crate performs it.
@@ -1050,7 +1050,7 @@ impl<'d> RankedStreamAdapter<'d> {
     /// [`execute`](crate::execute) tags every stream it returns with the bound
     /// the bundle was compiled for
     /// ([`StratumStream::fused_bound`](crate::StratumStream)), and
-    /// this is how that tag continues into the fusion: [`crate::fuse`] reads it back
+    /// this is how that tag continues into the fusion: [`fuse`](crate::fuse()) reads it back
     /// through [`RankedStream::fused_bound`] and refuses a `top_k` that disagrees
     /// with it, so a read taken for one bound is never served as an answer to
     /// another.
@@ -1071,7 +1071,7 @@ impl<'d> RankedStreamAdapter<'d> {
     /// [`execute`](crate::execute) tags every stream it returns with the plan its
     /// unit was compiled from
     /// ([`StratumStream::plan_id`](crate::StratumStream)), and
-    /// this is how that tag continues into the fusion: [`crate::fuse`] reads it back
+    /// this is how that tag continues into the fusion: [`fuse`](crate::fuse()) reads it back
     /// through [`RankedStream::plan_id`] and names it in the trailer, so the
     /// identity in a fused answer is the one that travelled with the rows.
     ///

@@ -174,7 +174,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 10, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 11, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -1413,7 +1413,11 @@ unsafe fn graph_of(doc: &str) -> *mut PurrdfGraph {
         let dataset = parse("application/n-triples", doc);
         let mut graph: *mut PurrdfGraph = std::ptr::null_mut();
         assert_eq!(
-            purrdf_graph_from_dataset(dataset, &raw mut graph),
+            purrdf_graph_from_dataset(
+                dataset,
+                purrdf::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
+                &raw mut graph,
+            ),
             PurrdfStatus::Ok as i32
         );
         purrdf_dataset_free(dataset);
@@ -3067,6 +3071,7 @@ fn governed_update_parse_refusals_carry_typed_presentations() {
                 request.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
+                purrdf::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
                 &raw mut outcome,
                 evidence.as_mut_ptr(),
@@ -3095,5 +3100,242 @@ fn governed_update_parse_refusals_carry_typed_presentations() {
             assert_eq!(quad_count(dataset), 3);
         }
         purrdf_dataset_free(dataset);
+    }
+}
+
+/// One quad in the named graph `<http://example.org/g>`.
+const ONE_NAMED_QUAD: &str = "<http://example.org/s> <http://example.org/p> <http://example.org/o> <http://example.org/g> .\n";
+
+/// Whether `dataset` reports the named-graph capability: it carries any named graph,
+/// a declared empty one included.
+unsafe fn has_named_graphs(dataset: *const PurrdfDataset) -> bool {
+    unsafe {
+        let mut caps = std::mem::MaybeUninit::<PurrdfCapabilities>::uninit();
+        assert_eq!(
+            purrdf_capabilities(dataset, caps.as_mut_ptr()),
+            PurrdfStatus::Ok as i32
+        );
+        caps.assume_init().named_graphs == 1
+    }
+}
+
+/// The message of `error`, which this call then frees.
+unsafe fn take_error_message(error: *mut PurrdfError) -> String {
+    unsafe {
+        assert!(!error.is_null());
+        let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+            .to_string_lossy()
+            .into_owned();
+        purrdf_error_free(error);
+        message
+    }
+}
+
+/// Remove `ONE_NAMED_QUAD`'s quad through a graph branched under `graph_existence` and
+/// report whether the frozen result still carries a named graph.
+unsafe fn named_graph_survives_last_quad_removal(graph_existence: i32) -> bool {
+    unsafe {
+        let dataset = parse("application/n-quads", ONE_NAMED_QUAD);
+        let mut graph: *mut PurrdfGraph = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_graph_from_dataset(dataset, graph_existence, &raw mut graph),
+            PurrdfStatus::Ok as i32
+        );
+        purrdf_dataset_free(dataset);
+        let (s, p, o, g) = (
+            iri_view("http://example.org/s"),
+            iri_view("http://example.org/p"),
+            iri_view("http://example.org/o"),
+            iri_view("http://example.org/g"),
+        );
+        let mut changed: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_graph_remove(
+                graph,
+                &raw const s,
+                &raw const p,
+                &raw const o,
+                &raw const g,
+                &raw mut changed,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(changed, 1);
+        let frozen = freeze(graph);
+        assert_eq!(quad_count(frozen), 0);
+        let survives = has_named_graphs(frozen);
+        purrdf_dataset_free(frozen);
+        purrdf_graph_free(graph);
+        survives
+    }
+}
+
+/// A graph branched under the default `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` remembers
+/// a named graph after its last quad is removed; `PURRDF_GRAPH_EXISTENCE_IMPLICIT` opts
+/// out, and a value no variant has is refused while its valid neighbours are accepted.
+#[test]
+fn graph_existence_selects_whether_an_emptied_named_graph_survives() {
+    use purrdf::graph::{PURRDF_GRAPH_EXISTENCE_IMPLICIT, PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY};
+    assert_eq!(PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY, 0);
+    assert_eq!(PURRDF_GRAPH_EXISTENCE_IMPLICIT, 1);
+    unsafe {
+        assert!(named_graph_survives_last_quad_removal(
+            PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY
+        ));
+        assert!(!named_graph_survives_last_quad_removal(
+            PURRDF_GRAPH_EXISTENCE_IMPLICIT
+        ));
+
+        let dataset = parse("application/n-quads", ONE_NAMED_QUAD);
+        for invalid in [2, -1] {
+            let mut graph: *mut PurrdfGraph = std::ptr::null_mut();
+            let status = purrdf_graph_from_dataset(dataset, invalid, &raw mut graph);
+            assert_eq!(status, PurrdfStatus::InvalidArgument as i32, "{invalid}");
+            assert!(graph.is_null(), "{invalid}: nothing is written on refusal");
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Apply `update` to a fresh `ONE_NAMED_QUAD` dataset under `graph_existence`. The
+/// status, the error message on failure, whether the result carries a named graph,
+/// and its quad count.
+unsafe fn governed_update_in(
+    update: &str,
+    graph_existence: i32,
+    entry: u8,
+) -> (i32, Option<String>, bool, usize) {
+    use purrdf::governor::{
+        PurrdfGovernorEvidence, PurrdfQueryGovernors, purrdf_query_governors_init,
+    };
+    use purrdf::query::{
+        purrdf_update_governed, purrdf_update_governed_with_geo, purrdf_update_governed_xpath_regex,
+    };
+    unsafe {
+        let dataset = parse("application/n-quads", ONE_NAMED_QUAD);
+        let mut governors = std::mem::MaybeUninit::<PurrdfQueryGovernors>::uninit();
+        assert_eq!(
+            purrdf_query_governors_init(governors.as_mut_ptr()),
+            PurrdfStatus::Ok as i32
+        );
+        let governors = governors.assume_init();
+        let request = CString::new(update).unwrap();
+        let mut outcome = -1;
+        // All fields are integer scalars. Keep an initialized nonempty receipt to
+        // prove a rejected selector does not write any output field.
+        let mut evidence = std::mem::MaybeUninit::<PurrdfGovernorEvidence>::zeroed().assume_init();
+        evidence.consumed.fuel = 987;
+        evidence.limits.fuel = 998;
+        let before = evidence;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = if entry == 2 {
+            purrdf_update_governed_with_geo(
+                std::ptr::null(),
+                dataset,
+                request.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                c"xpath-3.1-2017-03-21".as_ptr(),
+                graph_existence,
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut evidence,
+                &raw mut error,
+            )
+        } else if entry == 1 {
+            purrdf_update_governed_xpath_regex(
+                dataset,
+                request.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                c"xpath-3.1-2017-03-21".as_ptr(),
+                graph_existence,
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut evidence,
+                &raw mut error,
+            )
+        } else {
+            purrdf_update_governed(
+                dataset,
+                request.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                graph_existence,
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut evidence,
+                &raw mut error,
+            )
+        };
+        if status == PurrdfStatus::Ok as i32 {
+            assert_eq!(outcome, 0, "applied");
+        } else {
+            assert_eq!(outcome, -1, "refusal leaves outcome unchanged");
+            assert_eq!(evidence, before, "refusal leaves evidence unchanged");
+        }
+        let message = (!error.is_null()).then(|| take_error_message(error));
+        let named = has_named_graphs(dataset);
+        let quads = quad_count(dataset);
+        purrdf_dataset_free(dataset);
+        (status, message, named, quads)
+    }
+}
+
+/// `purrdf_update_governed` applies under the selected lifetime: `CLEAR` keeps the
+/// graph only when remembering, and a missing `CLEAR` target is refused only when
+/// remembering, as SPARQL 1.1 Update section 3.1.5 directs a store that records empty
+/// graphs to (`SILENT` and the implicit opt-out are the valid neighbours).
+#[test]
+fn governed_update_applies_under_the_selected_graph_existence() {
+    use purrdf::graph::{PURRDF_GRAPH_EXISTENCE_IMPLICIT, PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY};
+    let remember = PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY;
+    let implicit = PURRDF_GRAPH_EXISTENCE_IMPLICIT;
+    let ok = PurrdfStatus::Ok as i32;
+    for entry in 0..3 {
+        unsafe {
+            let clear = "CLEAR GRAPH <http://example.org/g>";
+            assert_eq!(
+                governed_update_in(clear, remember, entry),
+                (ok, None, true, 0)
+            );
+            assert_eq!(
+                governed_update_in(clear, implicit, entry),
+                (ok, None, false, 0)
+            );
+
+            let missing = "CLEAR GRAPH <http://example.org/missing>";
+            let (status, message, named, quads) = governed_update_in(missing, remember, entry);
+            assert_eq!(status, PurrdfStatus::QueryError as i32);
+            let message = message.expect("a refusal carries its error");
+            assert!(
+                message.contains("native-sparql-update-graph-missing"),
+                "{message}"
+            );
+            assert_eq!((named, quads), (true, 1), "a refusal changes nothing");
+            let silent = "CLEAR SILENT GRAPH <http://example.org/missing>";
+            assert_eq!(
+                governed_update_in(silent, remember, entry),
+                (ok, None, true, 1)
+            );
+            assert_eq!(
+                governed_update_in(missing, implicit, entry),
+                (ok, None, true, 1)
+            );
+
+            for invalid in [2, -1] {
+                let (status, message, named, quads) =
+                    governed_update_in("DELETE WHERE {", invalid, entry);
+                assert_eq!(status, PurrdfStatus::InvalidArgument as i32, "{invalid}");
+                assert!(
+                    message
+                        .expect("a refusal carries its error")
+                        .contains("PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY"),
+                );
+                assert_eq!((named, quads), (true, 1), "the dataset is untouched");
+            }
+        }
     }
 }

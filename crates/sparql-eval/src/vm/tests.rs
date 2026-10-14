@@ -547,9 +547,9 @@ fn run_vm(expr: &Expression, ebv: bool, ds: &Arc<RdfDataset>, now: &purrdf_xsd::
         for (index, row) in rows.iter().enumerate() {
             ctx.current_row = index as u64;
             outcomes.push(if ebv {
-                ebv_outcome(linked.ebv(row, &schema, &mut ctx))
+                ebv_outcome(linked.ebv(Some(expr), row, &schema, &mut ctx))
             } else {
-                let result = linked.term(row, &schema, &mut ctx);
+                let result = linked.term(Some(expr), row, &schema, &mut ctx);
                 outcome(&ctx, result)
             });
         }
@@ -1160,7 +1160,9 @@ fn evaluate(expr: &Expression) -> Option<TermValue> {
     let schema = VarSchema::default();
     let program = Arc::new(ExprProgram::compile(expr));
     let mut linked = Linked::link(program, expr, &schema, &mut ctx);
-    let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
+    let term = linked
+        .term(Some(expr), &[], &schema, &mut ctx)
+        .expect("no hard error");
     term.map(|term| helpers::value_of(&ctx, term).unwrap())
 }
 
@@ -1201,7 +1203,9 @@ fn a_deep_triple_constructor_chain_interns_its_outermost_term_once() {
         let schema = VarSchema::default();
         let program = Arc::new(ExprProgram::compile(&expr));
         let mut linked = Linked::link(program, &expr, &schema, &mut ctx);
-        let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
+        let term = linked
+            .term(Some(&expr), &[], &schema, &mut ctx)
+            .expect("no hard error");
         let value = term.map(|term| helpers::value_of(&ctx, term).unwrap());
         let computed = ctx.scratch.computed_count();
         drop(linked);
@@ -1294,6 +1298,79 @@ fn a_deep_not_nest_evaluates_on_a_small_stack() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn exists_link_refuses_a_different_expression_owner() {
+    let ds = dataset();
+    let mut ctx = EvalCtx::new(&ds);
+    let schema = VarSchema::default();
+    let expr = Expression::Exists(Child::new(GraphPattern::Values {
+        variables: Vec::new(),
+        bindings: vec![Vec::new()],
+    }));
+    let other = expr.clone();
+    let program = Arc::new(ExprProgram::compile(&expr));
+    let mut linked = Linked::link(program, &expr, &schema, &mut ctx);
+    assert_eq!(
+        linked.ebv(Some(&expr), &[], &schema, &mut ctx).unwrap(),
+        Some(true)
+    );
+    assert!(matches!(
+        linked.ebv(Some(&other), &[], &schema, &mut ctx),
+        Err(EvalError::Internal(_))
+    ));
+}
+
+#[test]
+fn copied_filter_exists_resolves_through_its_retained_pattern_owner() {
+    let ds = dataset();
+    let mut ctx = EvalCtx::new(&ds);
+    let source = GraphPattern::Filter {
+        expr: Expression::Exists(Child::new(GraphPattern::Values {
+            variables: Vec::new(),
+            bindings: vec![Vec::new()],
+        })),
+        inner: Child::new(GraphPattern::Values {
+            variables: Vec::new(),
+            bindings: vec![Vec::new()],
+        }),
+    };
+    let copied = crate::expr::CorrelatedPattern::copy(&source, &ctx.growth).unwrap();
+    let owner = crate::expr::PreparedPattern::new(copied, &ctx.growth).unwrap();
+    let GraphPattern::Filter { expr, .. } = owner.as_ref() else {
+        unreachable!("the copied filter keeps its variant")
+    };
+    ctx.active_copied_pattern = Some(owner.clone());
+    let schema = VarSchema::default();
+    let program = Arc::new(ExprProgram::compile(expr));
+    let mut linked = Linked::link_filter_admitted(program, expr, &schema, &mut ctx).unwrap();
+    assert_eq!(
+        linked.ebv(None, &[], &schema, &mut ctx).unwrap(),
+        Some(true)
+    );
+    let other = expr.clone();
+    assert!(matches!(
+        linked.ebv(Some(&other), &[], &schema, &mut ctx),
+        Err(EvalError::Internal(_))
+    ));
+}
+
+#[test]
+fn two_ordered_exists_sites_resolve_with_their_original_patterns() {
+    let present = GraphPattern::Values {
+        variables: Vec::new(),
+        bindings: vec![Vec::new()],
+    };
+    let absent = GraphPattern::Values {
+        variables: Vec::new(),
+        bindings: Vec::new(),
+    };
+    let expr = Expression::and(
+        Expression::Exists(Child::new(present)),
+        Expression::Not(Child::new(Expression::Exists(Child::new(absent)))),
+    );
+    assert_eq!(evaluate(&expr), Some(literal("true", "boolean")));
+}
+
+#[test]
 fn a_link_resolves_each_variable_once_not_once_per_row() {
     let ds = dataset();
     let mut ctx = EvalCtx::new(&ds);
@@ -1316,7 +1393,9 @@ fn a_link_resolves_each_variable_once_not_once_per_row() {
     let linked_calls = VarSchema::index_of_call_count();
     for _ in 0..100 {
         assert_eq!(
-            linked.ebv(&[one, two], &schema, &mut ctx).expect("ebv"),
+            linked
+                .ebv(Some(&expr), &[one, two], &schema, &mut ctx)
+                .expect("ebv"),
             Some(true)
         );
     }

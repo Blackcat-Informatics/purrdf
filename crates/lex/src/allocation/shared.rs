@@ -75,6 +75,61 @@ pub struct Shared<T> {
     _owner: PhantomData<Header<T>>,
 }
 
+/// An immutable descendant of one retained shared allocation. Projection is
+/// available only from a live owner or another view of that same allocation.
+/// The projected value has no independent allocation or destruction path.
+pub struct SharedView<T, U> {
+    owner: Shared<T>,
+    value: NonNull<U>,
+}
+
+impl<T, U: fmt::Debug> fmt::Debug for SharedView<T, U> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, formatter)
+    }
+}
+
+impl<T, U> SharedView<T, U> {
+    /// Retain the original immutable allocation without copying its payload.
+    #[must_use]
+    pub fn owner(&self) -> Shared<T> {
+        self.owner.clone()
+    }
+
+    /// Select an optional descendant without cloning the owner on a miss.
+    #[must_use]
+    pub fn try_project<V>(
+        &self,
+        select: impl for<'a> FnOnce(&'a U) -> Option<&'a V>,
+    ) -> Option<SharedView<T, V>> {
+        let value = NonNull::from(select(self)?);
+        Some(SharedView {
+            owner: self.owner.clone(),
+            value,
+        })
+    }
+}
+
+impl<T, U> Clone for SharedView<T, U> {
+    fn clone(&self) -> Self {
+        Self {
+            owner: self.owner.clone(),
+            value: self.value,
+        }
+    }
+}
+
+impl<T, U> Deref for SharedView<T, U> {
+    type Target = U;
+    fn deref(&self) -> &U {
+        // SAFETY: construction projects from the live Shared<T> payload and
+        // subsequent projections use only descendants of an existing view.
+        // Shared<T> is immutable after publication and its allocation cannot
+        // move while this view retains a strong owner.
+        unsafe { self.value.as_ref() }
+    }
+}
+
 // Moving the owner moves only its pointer, never the allocated payload. Like
 // Arc, this pointer is Unpin even when the pointee is not; pinning the owner
 // does not structurally pin T. Avoid deriving this property through T's entire
@@ -88,6 +143,13 @@ unsafe impl<T: Send + Sync> Send for Shared<T> {}
 unsafe impl<T: Send + Sync> Sync for Shared<T> {}
 
 impl<T> Shared<T> {
+    /// Retain one immutable allocation while selecting a descendant of it.
+    #[must_use]
+    pub fn into_view<U>(self, select: impl for<'a> FnOnce(&'a T) -> &'a U) -> SharedView<T, U> {
+        let value = NonNull::from(select(&self));
+        SharedView { owner: self, value }
+    }
+
     /// Observe the current strong-owner count without allocating or cloning.
     /// A live reference keeps the header valid; concurrent owners may change
     /// the returned snapshot immediately after the atomic load.
@@ -600,6 +662,33 @@ mod tests {
         drop(original);
         assert_eq!(drops.load(Ordering::Relaxed), 0);
         drop(survivor);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn projected_view_retains_the_original_owner_through_move_and_last_drop() {
+        struct Payload {
+            values: [u32; 2],
+            _drops: DropProbe,
+        }
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut owner = Shared::try_new(Payload {
+            values: [7, 11],
+            _drops: DropProbe(drops.clone()),
+        })
+        .expect("test allocation");
+        let projected = owner.clone().into_view(|payload| &payload.values);
+        assert!(owner.get_mut().is_none());
+        let element = projected
+            .try_project(|values| values.get(1))
+            .expect("second element");
+        let moved = [element.clone()];
+        drop(projected);
+        drop(owner);
+        drop(element);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        assert_eq!(**moved.first().expect("retained projected element"), 11);
+        drop(moved);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 

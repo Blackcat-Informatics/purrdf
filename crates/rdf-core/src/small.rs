@@ -57,7 +57,8 @@ use core::ptr::{self, NonNull};
 use core::slice::{self, SliceIndex};
 
 pub use purrdf_lex::allocation::{
-    Shared, SharedAllocError, SharedCloneError, SharedOwned, shared, try_boxed, try_boxed_one,
+    Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedView, shared, try_boxed,
+    try_boxed_one,
 };
 
 mod sealed {
