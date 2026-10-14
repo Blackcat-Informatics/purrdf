@@ -147,7 +147,10 @@ pub fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
 /// carried.
 fn grade_report_details(tc: &W3cCase, report: &ValidationReport) -> Result<(), String> {
     if !tc.conformance_disallows.is_empty() {
-        let echoed = crate::report::conformance_disallows_from_dataset(&report.to_dataset())
+        let dataset = report
+            .to_dataset()
+            .map_err(|error| format!("report graph emission failed: {error}"))?;
+        let echoed = crate::report::conformance_disallows_from_dataset(&dataset)
             .map_err(|e| format!("the report's own sh:conformanceDisallows: {e}"))?;
         let requested = ConformanceDisallows::from_iris(&tc.conformance_disallows)
             .map_err(|e| format!("the expected report's sh:conformanceDisallows: {e}"))?;

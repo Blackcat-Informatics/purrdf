@@ -15,6 +15,9 @@
 //!   condition of the same shape, such as an IRI refusal's `iri-*` cause.
 //!
 //! A host reads the condition and its typed arguments without parsing English.
+//! Native storage refusals additionally retain `code` and `diagnostic_json` (the
+//! original `purrdf-diagnostic-v1` record). Its capacity counts are decimal strings,
+//! preserving the exact attempted count and limit without a floating-point conversion.
 //!
 //! Every `ValueError` that leaves `query`, `query_governed`,
 //! `query_entailment_governed`, `prepare`, `update` or `update_governed` carries both
@@ -39,10 +42,21 @@ use pyo3::types::PyDict;
 
 /// The `ValueError` reading `message` for `diagnostic`, carrying its typed
 /// presentation as `message_id` and `presentation` (both `None` without one).
+/// Storage refusal also carries `code` and the lossless `diagnostic_json` record.
 ///
 /// Callable with or without the GIL held: the attributes are set under
 /// [`Python::attach`], which the detached engine calls reach only on this error path.
-pub(super) fn value_error(message: String, diagnostic: &RdfDiagnostic) -> PyErr {
+pub(crate) fn value_error(message: String, diagnostic: &RdfDiagnostic) -> PyErr {
+    if diagnostic.storage_error().is_some() {
+        let error = presented_value_error(message, diagnostic.presentation());
+        return Python::attach(|py| {
+            error
+                .value(py)
+                .setattr("diagnostic_json", diagnostic.to_json().to_string())
+                .and_then(|()| error.value(py).setattr("code", &diagnostic.code))
+                .map_or_else(|failure| failure, |()| error)
+        });
+    }
     match (
         diagnostic.presentation(),
         purrdf_validate::xpath_regex::diagnostic_refusal_code(&diagnostic.code),

@@ -20,17 +20,17 @@ const EX: &str = "http://example.org/";
 /// 2 000 default-graph rows and the same in named graph `big`; `small` holds one.
 fn dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&format!("{EX}p"));
-    let big = b.intern_iri(&format!("{EX}big"));
-    let small = b.intern_iri(&format!("{EX}small"));
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let big = b.intern_iri(&format!("{EX}big")).unwrap();
+    let small = b.intern_iri(&format!("{EX}small")).unwrap();
     for i in 0..2_000 {
-        let s = b.intern_iri(&format!("{EX}s{i}"));
-        let o = b.intern_iri(&format!("{EX}o{i}"));
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, p, o, Some(big));
+        let s = b.intern_iri(&format!("{EX}s{i}")).unwrap();
+        let o = b.intern_iri(&format!("{EX}o{i}")).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, p, o, Some(big)).unwrap();
     }
-    let s = b.intern_iri(&format!("{EX}only"));
-    b.push_quad(s, p, s, Some(small));
+    let s = b.intern_iri(&format!("{EX}only")).unwrap();
+    b.push_quad(s, p, s, Some(small)).unwrap();
     b.freeze().expect("fixture freezes")
 }
 

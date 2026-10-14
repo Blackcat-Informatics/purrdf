@@ -42,15 +42,19 @@ fn options() -> SerializeOptions<'static> {
 /// A dataset whose rendering crosses the drain window many times.
 fn dataset(rows: usize, tag: &str) -> Arc<purrdf_core::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/predicate");
+    let p = b.intern_iri("https://example.org/predicate").unwrap();
     for i in 0..rows {
-        let s = b.intern_owned_term(&RdfTerm::iri(format!(
-            "https://example.org/{tag}/subject/{i}/with/a/long/path"
-        )));
-        let o = b.intern_literal(RdfLiteral::simple(format!(
-            "{tag} value {i}, padded out so the document crosses the staging window"
-        )));
-        b.push_quad(s, p, o, None);
+        let s = b
+            .intern_owned_term(&RdfTerm::iri(format!(
+                "https://example.org/{tag}/subject/{i}/with/a/long/path"
+            )))
+            .unwrap();
+        let o = b
+            .intern_literal(RdfLiteral::simple(format!(
+                "{tag} value {i}, padded out so the document crosses the staging window"
+            )))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("dataset freezes")
 }

@@ -98,7 +98,9 @@ use std::sync::OnceLock;
 use hashbrown::HashTable;
 
 use crate::cursor::{RowCursor, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
+use crate::dictionary::{DictionaryError, DictionaryTerm, TermDictionary, TermIdentity};
 use crate::id::{PartitionId, RowId, TermId};
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 // ── Interners ───────────────────────────────────────────────────────────────────
 
@@ -131,35 +133,69 @@ pub struct TermInterner {
     /// Running total of `surfaces`' bytes, maintained on intern so the dictionary's
     /// footprint is an O(1) read rather than an O(n) sweep. See [`Self::byte_len`].
     bytes: usize,
+    /// Reduced-width owner model, absent from the shipping representation.
+    #[cfg(test)]
+    term_limit: Option<u64>,
 }
 
 impl TermInterner {
     /// Intern `surface`, minting a new insertion-ordered id if it is new, else
     /// returning the existing id.
-    pub fn intern(&mut self, surface: &str) -> TermId {
+    pub fn intern(&mut self, surface: &str) -> Result<TermId, StorageError> {
         let hash = surface_hash(surface);
         let surfaces = &self.surfaces;
         if let Some(&id) = self
             .by_surface
-            .find(hash, |&id| surfaces[id.index()] == surface)
+            .find(hash, |&id| surfaces[id.resident_index()] == surface)
         {
-            return id;
+            return Ok(id);
         }
-        let id = TermId::from_index(self.surfaces.len());
-        self.bytes += surface.len();
-        self.surfaces.push(surface.to_owned());
+        let limit = u64::MAX;
+        #[cfg(test)]
+        let limit = self.term_limit.unwrap_or(limit);
+        let id = TermId::from_address_with_limit(self.surfaces.len(), limit)?;
+        let bytes = self
+            .bytes
+            .checked_add(surface.len())
+            .ok_or(StorageError::SizeOverflow)?;
+        self.surfaces
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
         let surfaces = &self.surfaces;
         self.by_surface
-            .insert_unique(hash, id, |&id| surface_hash(&surfaces[id.index()]));
-        id
+            .try_reserve(1, |&id| surface_hash(&surfaces[id.resident_index()]))
+            .map_err(|_| StorageError::AllocationFailed)?;
+        let mut resident = Resident;
+        let value = Memory::new(&mut resident).string(surface)?;
+        self.surfaces.push(value);
+        self.bytes = bytes;
+        let surfaces = &self.surfaces;
+        self.by_surface
+            .insert_unique(hash, id, |&id| surface_hash(&surfaces[id.resident_index()]));
+        Ok(id)
     }
 
     /// The id of the term with this surface, if already interned; never inserts.
     pub fn lookup(&self, surface: &str) -> Option<TermId> {
         let hash = surface_hash(surface);
         self.by_surface
-            .find(hash, |&id| self.surfaces[id.index()] == surface)
+            .find(hash, |&id| self.surfaces[id.resident_index()] == surface)
             .copied()
+    }
+
+    /// Undo only the new lexical identities of a failed enclosing insertion.
+    fn rollback_to(&mut self, checkpoint: usize) {
+        while self.surfaces.len() > checkpoint {
+            let index = self.surfaces.len() - 1;
+            let value = &self.surfaces[index];
+            let entry = self
+                .by_surface
+                .find_entry(surface_hash(value), |id| id.resident_index() == index)
+                .expect("every retained lexical identity has its original index entry");
+            entry.remove();
+            self.bytes -= value.len();
+            self.surfaces.pop();
+        }
     }
 
     /// The lexical surface `id` was interned from.
@@ -169,7 +205,7 @@ impl TermInterner {
     /// Panics if `id` was not minted by this dictionary. Ids are per-store handles,
     /// so a foreign id is a programming error, never a data state.
     pub fn resolve(&self, id: TermId) -> &str {
-        self.surfaces.get(id.index()).map_or_else(
+        self.surfaces.get(id.resident_index()).map_or_else(
             || {
                 panic!(
                     "TermId {id:?} was not minted by this interner (len {}): \
@@ -202,6 +238,51 @@ impl TermInterner {
     }
 }
 
+impl TermDictionary for TermInterner {
+    type Id = TermId;
+    type Error = Infallible;
+    type Lexical<'a> = &'a str;
+    fn lookup_term(&self, surface: &str) -> Result<Option<TermId>, Infallible> {
+        Ok(self.lookup(surface))
+    }
+    fn resolve_term(&self, id: TermId) -> Result<&str, Infallible> {
+        Ok(self.resolve(id))
+    }
+    fn with_interned<T>(
+        &mut self,
+        terms: [DictionaryTerm<'_, TermId>; 4],
+        validate: impl FnOnce(&Self, [TermId; 4]) -> Result<T, DictionaryError<Infallible>>,
+    ) -> Result<T, DictionaryError<Infallible>> {
+        let checkpoint = self.len();
+        let result = (|| {
+            let mut ids = [None; 4];
+            for (slot, term) in ids.iter_mut().zip(terms) {
+                *slot = Some(match term {
+                    DictionaryTerm::Id(id) => id,
+                    DictionaryTerm::Surface(surface) => self.intern(surface)?,
+                });
+            }
+            validate(
+                self,
+                ids.map(|id| id.expect("every admitted term has an identity")),
+            )
+        })();
+        if result.is_err() {
+            self.rollback_to(checkpoint);
+        }
+        result
+    }
+    fn check_read(&self) -> Result<(), Infallible> {
+        Ok(())
+    }
+    fn term_count(&self) -> u64 {
+        u64::try_from(self.len()).expect("resident term count fits native64")
+    }
+    fn resident_bytes(&self) -> usize {
+        self.byte_len()
+    }
+}
+
 // ── Bounds ──────────────────────────────────────────────────────────────────────
 
 /// A position-pattern over one partition's `(subject, object)` columns.
@@ -215,15 +296,15 @@ impl TermInterner {
 /// [`RelationStore::term_id`]), so a join probes a relation without re-rendering or
 /// re-hashing a term surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Bound {
+pub enum Bound<I: TermIdentity = TermId> {
     /// No position bound — every tuple of the relation.
     Any,
     /// Subject bound to this interned term.
-    Subject(TermId),
+    Subject(I),
     /// Object bound to this interned term.
-    Object(TermId),
+    Object(I),
     /// Both positions bound, `(subject, object)`, to these interned terms.
-    Both(TermId, TermId),
+    Both(I, I),
 }
 
 // ── The weight monoid: the Z-set seam ───────────────────────────────────────────
@@ -333,7 +414,7 @@ impl Weight for i64 {
 /// This is the sorted-run lower bound the whole arrangement leans on (subject-run
 /// location, object-run location, dedup), and the exact primitive a multiway leapfrog
 /// triejoin composes.
-fn gallop_lower_bound(xs: &[TermId], from: usize, key: TermId) -> usize {
+fn gallop_lower_bound<I: TermIdentity>(xs: &[I], from: usize, key: I) -> usize {
     let len = xs.len();
     if from >= len {
         return len;
@@ -377,13 +458,13 @@ fn gallop_lower_bound(xs: &[TermId], from: usize, key: TermId) -> usize {
 /// Built ON FIRST object-bound demand — never eagerly, never at all for a subject-only
 /// relation — and memoized in a [`OnceLock`], which is write-once and `Sync`, so a
 /// parallel delta-partition firing that shares `&Batch` across threads initialises it
-/// cleanly. A permutation of `u32` positions, never a hash map and never a per-key
-/// `Vec`: four bytes per row, materialised only when an object bound is actually
+/// cleanly. A permutation of resident `usize` positions, never a hash map or per-key
+/// `Vec`: one address per row, materialised only when an object bound is actually
 /// probed.
 #[derive(Debug, Clone, Default)]
 struct ObjectIndex {
     /// Row positions of the batch, sorted by `(object_id, subject_id)`.
-    perm: Box<[u32]>,
+    perm: Box<[usize]>,
 }
 
 /// One immutable sorted batch: a relation's `(subject, object)` rows in canonical
@@ -394,11 +475,11 @@ struct ObjectIndex {
 /// `(object, subject)` access path is the lazily-built [`ObjectIndex`]. Generic over
 /// the weight monoid `W` (the Z-set seam); the production instantiation is `W = ()`.
 #[derive(Debug, Clone)]
-pub(crate) struct Batch<W: Weight = ()> {
+pub(crate) struct Batch<W: Weight = (), I: TermIdentity = TermId> {
     /// Subject column, ascending (subject-major within the `(subject, object)` sort).
-    subj: Vec<TermId>,
+    subj: Vec<I>,
     /// Object column, ascending within each subject run.
-    obj: Vec<TermId>,
+    obj: Vec<I>,
     /// Store-global dense [`RowId`] per row, parallel to the columns.
     row_id: Vec<RowId>,
     /// Multiplicity per row; `Vec<()>` is zero-sized under set semantics.
@@ -407,10 +488,10 @@ pub(crate) struct Batch<W: Weight = ()> {
     object_index: OnceLock<ObjectIndex>,
 }
 
-impl<W: Weight> Batch<W> {
+impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// Build a batch from rows ALREADY sorted ascending by `(subject_id, object_id)`
     /// and free of duplicate keys. Weights default to [`Weight::UNIT`].
-    fn from_sorted(rows: &[(TermId, TermId, RowId)]) -> Self {
+    fn from_sorted(rows: &[(I, I, RowId)]) -> Self {
         let mut subj = Vec::with_capacity(rows.len());
         let mut obj = Vec::with_capacity(rows.len());
         let mut row_id = Vec::with_capacity(rows.len());
@@ -438,13 +519,13 @@ impl<W: Weight> Batch<W> {
 
     /// The `(subject_id, object_id, row_id)` id row at column position `p`.
     #[inline]
-    pub(crate) fn row_at(&self, p: usize) -> (TermId, TermId, RowId) {
+    pub(crate) fn row_at(&self, p: usize) -> (I, I, RowId) {
         (self.subj[p], self.obj[p], self.row_id[p])
     }
 
     /// The `[lo, hi)` column-position run whose subject is `s`, located by galloping
     /// the sorted `subj` column (subject grouping is contiguous in the primary sort).
-    pub(crate) fn subject_run(&self, s: TermId) -> (usize, usize) {
+    pub(crate) fn subject_run(&self, s: I) -> (usize, usize) {
         let lo = gallop_lower_bound(&self.subj, 0, s);
         // `hi` is the first position past `s`'s contiguous run — a binary search of the
         // sorted suffix, so a `Both` probe stays O(log n) rather than O(run length).
@@ -454,23 +535,23 @@ impl<W: Weight> Batch<W> {
 
     /// The single column position of the unique `(s, o)` row, if present: gallop the
     /// subject run, then binary-search its ascending `obj` sub-column for `o`.
-    pub(crate) fn both_pos(&self, s: TermId, o: TermId) -> Option<usize> {
+    pub(crate) fn both_pos(&self, s: I, o: I) -> Option<usize> {
         let (lo, hi) = self.subject_run(s);
         let run = &self.obj[lo..hi];
         run.binary_search(&o).ok().map(|off| lo + off)
     }
 
     /// Whether the unique `(s, o)` key is present in this batch.
-    fn contains(&self, s: TermId, o: TermId) -> bool {
+    fn contains(&self, s: I, o: I) -> bool {
         self.both_pos(s, o).is_some()
     }
 
     /// The batch positions whose object is `o`, via the lazily-built [`ObjectIndex`].
     /// A subslice of the `(object, subject)`-sorted permutation.
-    pub(crate) fn object_positions(&self, o: TermId) -> &[u32] {
+    pub(crate) fn object_positions(&self, o: I) -> &[usize] {
         let perm = self.object_order();
-        let lo = perm.partition_point(|&p| self.obj[p as usize] < o);
-        let hi = perm.partition_point(|&p| self.obj[p as usize] <= o);
+        let lo = perm.partition_point(|&p| self.obj[p] < o);
+        let hi = perm.partition_point(|&p| self.obj[p] <= o);
         &perm[lo..hi]
     }
 
@@ -478,18 +559,17 @@ impl<W: Weight> Batch<W> {
     ///
     /// The same lazy, memoized permutation backs object-bound binary probes and
     /// object-major trie levels; it is built once and shared by both operators.
-    pub(crate) fn object_order(&self) -> &[u32] {
+    pub(crate) fn object_order(&self) -> &[usize] {
         &self
             .object_index
             .get_or_init(|| {
-                let mut perm: Vec<u32> = (0..self.len() as u32).collect();
+                let mut perm: Vec<usize> = (0..self.len()).collect();
                 // Sort positions by (object_id, subject_id) — the secondary access
                 // order. `(object, subject)` keys are unique within a batch (the
                 // primary sort is key-disjoint), so no equal elements exist whose order
                 // would need preserving: the unstable sort is a pure win (no scratch
                 // allocation, lower constants) and cannot introduce nondeterminism.
                 perm.sort_unstable_by(|&a, &b| {
-                    let (a, b) = (a as usize, b as usize);
                     (self.obj[a], self.subj[a]).cmp(&(self.obj[b], self.subj[b]))
                 });
                 ObjectIndex {
@@ -509,18 +589,21 @@ impl<W: Weight> Batch<W> {
 /// [`combine`](Weight::combine) and the surviving row keeps the LOWER [`RowId`]
 /// (deterministic, independent of which run it came from); an annihilated weight drops
 /// the row. For `W = ()` the collision arm is dead and this is a plain interleave.
-fn merge_batches<W: Weight>(left: &Batch<W>, right: &Batch<W>) -> Result<Batch<W>, W::Error> {
+fn merge_batches<W: Weight, I: TermIdentity>(
+    left: &Batch<W, I>,
+    right: &Batch<W, I>,
+) -> Result<Batch<W, I>, W::Error> {
     let cap = left.len() + right.len();
     let mut subj = Vec::with_capacity(cap);
     let mut obj = Vec::with_capacity(cap);
     let mut row_id = Vec::with_capacity(cap);
     let mut weight = Vec::with_capacity(cap);
     let (mut i, mut j) = (0usize, 0usize);
-    let push = |subj: &mut Vec<TermId>,
-                obj: &mut Vec<TermId>,
+    let push = |subj: &mut Vec<I>,
+                obj: &mut Vec<I>,
                 row_id: &mut Vec<RowId>,
                 weight: &mut Vec<W>,
-                b: &Batch<W>,
+                b: &Batch<W, I>,
                 p: usize| {
         subj.push(b.subj[p]);
         obj.push(b.obj[p]);
@@ -577,21 +660,44 @@ fn merge_batches<W: Weight>(left: &Batch<W>, right: &Batch<W>) -> Result<Batch<W
 /// order, held as three parallel columns.
 ///
 /// The key columns are separate so the duplicate probe on insert
-/// ([`Self::contains`]) reads two contiguous `u32` columns rather than
-/// twelve-byte `(subject, object, row)` tuples: over the tuples the compares
-/// stride three words apart and the loop stays scalar, over the columns they
-/// pack. Row `i` is `(subjects[i], objects[i], rows[i])`; the three columns
+/// ([`Self::contains`]) reads two contiguous identity columns rather than
+/// `(subject, object, row)` tuples: over the tuples the compares stride three
+/// identities apart and the loop stays scalar, over the columns they pack.
+/// Row `i` is `(subjects[i], objects[i], rows[i])`; the three columns
 /// always have the same length.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Tail {
-    subjects: Vec<TermId>,
-    objects: Vec<TermId>,
+#[derive(Debug, Clone)]
+pub(crate) struct Tail<I: TermIdentity = TermId> {
+    subjects: Vec<I>,
+    objects: Vec<I>,
     rows: Vec<RowId>,
 }
 
-impl Tail {
+impl<I: TermIdentity> Default for Tail<I> {
+    fn default() -> Self {
+        Self {
+            subjects: Vec::new(),
+            objects: Vec::new(),
+            rows: Vec::new(),
+        }
+    }
+}
+
+impl<I: TermIdentity> Tail<I> {
+    /// Reserve all three columns before publishing any part of a row.
+    fn reserve_row(&mut self) -> Result<(), StorageError> {
+        self.subjects
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.objects
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.rows
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)
+    }
+
     /// Append row `(subject, object, row)`.
-    fn push(&mut self, subject: TermId, object: TermId, row: RowId) {
+    fn push(&mut self, subject: I, object: I, row: RowId) {
         self.subjects.push(subject);
         self.objects.push(object);
         self.rows.push(row);
@@ -615,7 +721,7 @@ impl Tail {
     ///
     /// When `position` is not below [`Self::len`].
     #[inline]
-    pub(crate) fn row(&self, position: usize) -> (TermId, TermId, RowId) {
+    pub(crate) fn row(&self, position: usize) -> (I, I, RowId) {
         (
             self.subjects[position],
             self.objects[position],
@@ -624,7 +730,7 @@ impl Tail {
     }
 
     /// The rows in insertion order, as `(subject, object, row)`.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (TermId, TermId, RowId)> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (I, I, RowId)> + '_ {
         self.subjects
             .iter()
             .zip(&self.objects)
@@ -634,7 +740,7 @@ impl Tail {
 
     /// Whether some row has the key `(subject, object)`.
     ///
-    /// Every row is tested and the answers are OR-folded, with no exit on the
+    /// Every row is tested and the answers are counted, with no exit on the
     /// first hit: a loop that can leave early is not vectorized, and the tail is
     /// bounded by [`TAIL_SEAL_THRESHOLD`], so on a target with vector compares
     /// the whole scan is a handful of packed compares.
@@ -643,16 +749,21 @@ impl Tail {
         reason = "the non-short-circuit `&` is the point: a lazy `&&` puts a branch in the \
                   lane loop, and the compares of both key columns must be evaluated every row"
     )]
-    fn contains(&self, subject: TermId, object: TermId) -> bool {
-        let mut hit = false;
-        for (&s, &o) in self.subjects.iter().zip(&self.objects) {
-            hit |= (s == subject) & (o == object);
+    fn contains(&self, subject: I, object: I) -> bool {
+        let len = self.subjects.len().min(self.objects.len());
+        // The tail seals at 64 rows, so its match count fits in one u32 even
+        // when each key's identity is wider than a machine word.
+        let mut matches = 0u32;
+        for position in 0..len {
+            matches += u32::from(
+                (self.subjects[position] == subject) & (self.objects[position] == object),
+            );
         }
-        hit
+        matches != 0
     }
 
     /// Empty the tail, returning its rows in insertion order.
-    fn take_rows(&mut self) -> Vec<(TermId, TermId, RowId)> {
+    fn take_rows(&mut self) -> Vec<(I, I, RowId)> {
         let rows = self.iter().collect();
         self.subjects.clear();
         self.objects.clear();
@@ -675,14 +786,14 @@ pub(crate) const TAIL_SEAL_THRESHOLD: usize = 64;
 /// Term interning lives at the [`RelationStore`] level (one dictionary shared by every
 /// relation), so `insert` borrows the store's interner. Production set semantics fix
 /// the weight monoid at `W = ()`.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Relation {
+#[derive(Debug, Clone)]
+pub(crate) struct Relation<I: TermIdentity = TermId> {
     /// Immutable sorted batches (each `(subject_id, object_id)`-ordered and
     /// key-disjoint), newest last. Empty for a tail-only (never-sealed) relation.
-    batches: Vec<Batch>,
+    batches: Vec<Batch<(), I>>,
     /// The mutable tail: `(subject_id, object_id, row_id)` rows of the current epoch,
     /// in insertion order, sealed once it reaches [`TAIL_SEAL_THRESHOLD`].
-    tail: Tail,
+    tail: Tail<I>,
     /// The number of rows across batches + tail (the dense per-relation row count).
     len: usize,
     /// The store-global id of the newest row, or `None` for an empty relation. Row ids are
@@ -690,39 +801,37 @@ pub(crate) struct Relation {
     newest_row: Option<RowId>,
 }
 
-impl Relation {
-    /// Insert `(subject, object)` if its `(subject_id, object_id)` key is not already
-    /// present, stamping it with the store-assigned `row_id`; return
-    /// `Some((subject_id, object_id))` if newly inserted, or `None` on a duplicate.
+impl<I: TermIdentity> Default for Relation<I> {
+    fn default() -> Self {
+        Self {
+            batches: Vec::new(),
+            tail: Tail::default(),
+            len: 0,
+            newest_row: None,
+        }
+    }
+}
+
+impl<I: TermIdentity> Relation<I> {
+    /// Publish an already-admitted, absent `(subject_id, object_id)` row with
+    /// its original store-assigned `row_id`.
     ///
     /// Dedup is a GALLOPING probe of every sorted batch plus a linear scan of the small
     /// tail — no per-row hashing, no postings maintenance. A new row is appended to the
     /// unsorted tail; when the tail reaches [`TAIL_SEAL_THRESHOLD`] it is sealed into a
     /// sorted batch and the batch log consolidates.
-    fn insert(
-        &mut self,
-        interner: &mut TermInterner,
-        subject: &str,
-        object: &str,
-        row_id: RowId,
-    ) -> Option<(TermId, TermId)> {
-        let s_id = interner.intern(subject);
-        let o_id = interner.intern(object);
-        if self.contains(s_id, o_id) {
-            return None;
-        }
+    fn insert(&mut self, s_id: I, o_id: I, row_id: RowId) {
         self.tail.push(s_id, o_id, row_id);
         self.len += 1;
         self.newest_row = Some(self.newest_row.map_or(row_id, |newest| newest.max(row_id)));
         if self.tail.len() >= TAIL_SEAL_THRESHOLD {
             self.seal();
         }
-        Some((s_id, o_id))
     }
 
     /// Whether a tuple with these interned terms is present — a galloping probe of each
     /// sorted batch plus a linear scan of the tail (no hashing).
-    fn contains(&self, subject: TermId, object: TermId) -> bool {
+    fn contains(&self, subject: I, object: I) -> bool {
         self.batches.iter().any(|b| b.contains(subject, object))
             || self.tail.contains(subject, object)
     }
@@ -781,19 +890,19 @@ impl Relation {
     /// global merge sort; that is sound because the cursor's order never reaches an
     /// output path (see the [`crate::cursor`] module docs). The `(s, o)` key is unique,
     /// so a `Both` bound yields at most one row across the whole relation.
-    fn select(&self, bound: Bound) -> RowCursor<'_> {
+    fn select(&self, bound: Bound<I>) -> RowCursor<'_, I> {
         RowCursor::new(self, bound)
     }
 
     /// The batches of this relation, newest last — the cursor's per-batch sub-runs.
     #[inline]
-    pub(crate) fn batches(&self) -> &[Batch] {
+    pub(crate) fn batches(&self) -> &[Batch<(), I>] {
         &self.batches
     }
 
     /// The unsorted tail rows — the cursor's final (linear-scanned) leg.
     #[inline]
-    pub(crate) fn tail(&self) -> &Tail {
+    pub(crate) fn tail(&self) -> &Tail<I> {
         &self.tail
     }
 }
@@ -829,18 +938,18 @@ pub struct Fact {
 /// galloping `(subject, object)` access, so an atom whose predicate happens to be a
 /// variable pays for the extra partitions it visits and for nothing else.
 #[derive(Debug, Clone, Copy)]
-pub struct PartitionRef<'a> {
+pub struct PartitionRef<'a, I: TermIdentity = TermId> {
     /// The partition's dense slot handle.
     id: PartitionId,
     /// The interned predicate surface this partition is keyed by.
-    predicate: TermId,
+    predicate: I,
     /// The interned graph surface this partition is keyed by.
-    graph: TermId,
+    graph: I,
     /// The partition's arrangement.
-    relation: &'a Relation,
+    relation: &'a Relation<I>,
 }
 
-impl<'a> PartitionRef<'a> {
+impl<'a, I: TermIdentity> PartitionRef<'a, I> {
     /// The partition's dense slot handle.
     pub fn id(self) -> PartitionId {
         self.id
@@ -848,13 +957,13 @@ impl<'a> PartitionRef<'a> {
 
     /// The interned predicate this partition is keyed by — the value a free predicate
     /// position binds to.
-    pub fn predicate(self) -> TermId {
+    pub fn predicate(self) -> I {
         self.predicate
     }
 
     /// The interned graph this partition is keyed by — the value a free graph position
     /// binds to.
-    pub fn graph(self) -> TermId {
+    pub fn graph(self) -> I {
         self.graph
     }
 
@@ -869,43 +978,43 @@ impl<'a> PartitionRef<'a> {
     pub fn has_row_from(self, index: usize) -> bool {
         self.relation
             .newest_row
-            .is_some_and(|newest| newest.index() >= index)
+            .is_some_and(|newest| newest.resident_index() >= index)
     }
 
     /// A galloping lending [`RowCursor`] over the id rows selected by `bound`.
-    pub fn select(self, bound: Bound) -> RowCursor<'a> {
+    pub fn select(self, bound: Bound<I>) -> RowCursor<'a, I> {
         self.relation.select(bound)
     }
 
     /// A globally subject-value-ordered trie-level cursor; `other` optionally fixes the
     /// object position.
-    pub fn values_subject(self, other: Option<TermId>) -> ValueCursor<'a, VALUE_SUBJECT> {
+    pub fn values_subject(self, other: Option<I>) -> ValueCursor<'a, VALUE_SUBJECT, I> {
         ValueCursor::new(self.relation, other)
     }
 
     /// The object-ordered sibling of [`Self::values_subject`]; `other` optionally fixes
     /// the subject position.
-    pub fn values_object(self, other: Option<TermId>) -> ValueCursor<'a, VALUE_OBJECT> {
+    pub fn values_object(self, other: Option<I>) -> ValueCursor<'a, VALUE_OBJECT, I> {
         ValueCursor::new(self.relation, other)
     }
 }
 
 /// How a [`Partitions`] sweep is being served.
-enum PartitionsCursor<'a> {
+enum PartitionsCursor<'a, D: TermDictionary> {
     /// Both key positions are known, so at most ONE partition can match and it was
     /// located by an ordered-map probe. This is the constant-predicate hot path: no
     /// sweep, no filter, straight to the same arrangement a predicate-keyed store would
     /// have handed back.
-    Single(Option<PartitionRef<'a>>),
+    Single(Option<PartitionRef<'a, D::Id>>),
     /// At least one key position is free: walk the store's lexical partition order,
     /// keeping the partitions whose key agrees with the known positions.
     Sweep {
         /// The store being swept.
-        store: &'a RelationStore,
+        store: &'a RelationStore<D>,
         /// The required predicate, or `None` if the position is free.
-        predicate: Option<TermId>,
+        predicate: Option<D::Id>,
         /// The required graph, or `None` if the position is free.
-        graph: Option<TermId>,
+        graph: Option<D::Id>,
         /// The next index into the store's lexical partition order.
         next: usize,
     },
@@ -916,9 +1025,9 @@ enum PartitionsCursor<'a> {
 ///
 /// Allocation-free in both modes, so an atom's partition resolution never materialises a
 /// `Vec` — see [`RelationStore::partitions`].
-pub struct Partitions<'a>(PartitionsCursor<'a>);
+pub struct Partitions<'a, D: TermDictionary = TermInterner>(PartitionsCursor<'a, D>);
 
-impl fmt::Debug for Partitions<'_> {
+impl<D: TermDictionary> fmt::Debug for Partitions<'_, D> {
     /// Prints the sweep's shape, never the borrowed store.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
@@ -943,8 +1052,8 @@ impl fmt::Debug for Partitions<'_> {
     }
 }
 
-impl<'a> Iterator for Partitions<'a> {
-    type Item = PartitionRef<'a>;
+impl<'a, D: TermDictionary> Iterator for Partitions<'a, D> {
+    type Item = PartitionRef<'a, D::Id>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.0 {
@@ -957,7 +1066,7 @@ impl<'a> Iterator for Partitions<'a> {
             } => {
                 while let Some(&slot) = store.order.get(*next) {
                     *next += 1;
-                    let (partition_predicate, partition_graph) = store.keys[slot];
+                    let (_, partition_predicate, partition_graph) = store.keys[slot];
                     if predicate.is_none_or(|wanted| wanted == partition_predicate)
                         && graph.is_none_or(|wanted| wanted == partition_graph)
                     {
@@ -980,18 +1089,18 @@ impl<'a> Iterator for Partitions<'a> {
 /// constant-predicate atom exactly as fast as it was when predicates were relation
 /// symbols.
 #[derive(Debug, Clone)]
-pub struct RelationStore {
+pub struct RelationStore<D: TermDictionary = TermInterner> {
     /// The store's term dictionary, shared by every position of every partition. This is
     /// the persistent term arena: never reset within the store's lifetime, because a
-    /// [`TermId`] handed out in round 1 must still resolve in round 40.
-    interner: TermInterner,
+    /// [`TermDictionary::Id`] handed out in round 1 must still resolve in round 40.
+    interner: D,
     /// The partitions, indexed by dense [`PartitionId`] slot.
-    relations: Vec<Relation>,
-    /// `keys[slot]` is `relations[slot]`'s `(predicate, graph)` key.
-    keys: Vec<(TermId, TermId)>,
+    relations: Vec<Relation<D::Id>>,
+    /// `keys[slot]` retains the original partition id and `(predicate, graph)` key.
+    keys: Vec<(PartitionId, D::Id, D::Id)>,
     /// Key → slot. Probed, NEVER iterated: its order is term mint order, which carries no
     /// lexical meaning. Every sweep reads `order` instead.
-    by_key: BTreeMap<(TermId, TermId), usize>,
+    by_key: BTreeMap<(D::Id, D::Id), usize>,
     /// The partition slots in LEXICAL `(predicate surface, graph surface)` order — the
     /// single sweep order, maintained on partition creation so no sweep has to sort.
     order: Vec<usize>,
@@ -1000,14 +1109,210 @@ pub struct RelationStore {
     /// insertion order, so at any point the live rows are exactly `0..row_count`. This
     /// is the single row-id source, and the id never enters a provenance identity.
     row_count: usize,
-    /// Every row's `(partition slot, subject, object)`, indexed by [`RowId`] — the row
+    /// Every row's original `(row id, partition id, subject, object)` — the row
     /// ORDER the arrangements do not keep, so [`Self::rows_from`] reads the rows a round
     /// added without scanning a partition.
-    row_log: Vec<(u32, TermId, TermId)>,
+    row_log: Vec<(RowId, PartitionId, D::Id, D::Id)>,
     /// A permanently-empty partition handed to [`select`](Self::select) on a partition
     /// miss, so an unknown key yields an empty [`RowCursor`] with NO `Option` branch on
     /// the per-row scan. Never inserted into.
-    empty: Relation,
+    empty: Relation<D::Id>,
+    /// Reduced-width owner model, absent from shipping partition storage.
+    #[cfg(test)]
+    partition_limit: Option<u64>,
+}
+
+/// Storage reservations held before publishing one new row.
+struct RowAdmission<I: TermIdentity> {
+    row_id: RowId,
+    partition_id: PartitionId,
+    new_relation: Relation<I>,
+}
+
+/// Original subject/object identities and the newly published row, if not a duplicate.
+pub type InsertedRow<I> = Option<(I, I, RowId)>;
+
+impl<D: TermDictionary> RelationStore<D> {
+    /// Construct an empty store using the original dictionary and identity space.
+    /// No term is read, copied or remapped by construction.
+    pub fn with_dictionary(interner: D) -> Self {
+        Self {
+            interner,
+            relations: Vec::new(),
+            keys: Vec::new(),
+            by_key: BTreeMap::new(),
+            order: Vec::new(),
+            row_count: 0,
+            row_log: Vec::new(),
+            empty: Relation::default(),
+            #[cfg(test)]
+            partition_limit: None,
+        }
+    }
+
+    /// Insert original IDs from this dictionary without interning lexical copies.
+    ///
+    /// Only a newly created partition resolves its predicate and graph to maintain
+    /// lexical sweep order. Row probes and joins use the supplied IDs unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Preserves the original dictionary failure or storage refusal. Neither a
+    /// source failure nor admission failure publishes a partial row or partition.
+    pub fn insert_ids(
+        &mut self,
+        ids: [D::Id; 4],
+    ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
+        self.insert_terms(ids.map(DictionaryTerm::Id))
+    }
+
+    /// Insert a mixed original-ID/fresh-surface quad through one admitted publication.
+    ///
+    /// # Errors
+    /// Original dictionary errors and native storage refusals leave the row absent.
+    /// New lexical identities are rolled back if their dependent validation refuses.
+    pub fn insert_terms(
+        &mut self,
+        terms: [DictionaryTerm<'_, D::Id>; 4],
+    ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
+        self.interner
+            .check_read()
+            .map_err(DictionaryError::Source)?;
+        let mut known = [None; 4];
+        for (slot, term) in known.iter_mut().zip(terms) {
+            *slot = match term {
+                DictionaryTerm::Id(id) => Some(id),
+                DictionaryTerm::Surface(surface) => self
+                    .interner
+                    .lookup_term(surface)
+                    .map_err(DictionaryError::Source)?,
+            };
+        }
+        self.interner
+            .check_read()
+            .map_err(DictionaryError::Source)?;
+        let [subject, predicate, object, graph] = known;
+        let existing = predicate
+            .zip(graph)
+            .and_then(|key| self.by_key.get(&key).copied());
+        if let (Some(slot), Some(subject), Some(object)) = (existing, subject, object)
+            && self.relations[slot].contains(subject, object)
+        {
+            return Ok(None);
+        }
+        let admission = self.admit_row(existing)?;
+        let [subject, predicate, object, graph] =
+            core::array::from_fn(|i| known[i].map_or(terms[i], DictionaryTerm::Id));
+        // Preserve the original native mint order: predicate, graph, subject, object.
+        let keys = &self.keys;
+        let order = &self.order;
+        let (ids, position) = self.interner.with_interned(
+            [predicate, graph, subject, object],
+            |dictionary, [predicate, graph, subject, object]| {
+                dictionary.check_read().map_err(DictionaryError::Source)?;
+                let position = if existing.is_some() {
+                    0
+                } else {
+                    partition_position(dictionary, keys, order, predicate, graph)
+                        .map_err(DictionaryError::Source)?
+                };
+                dictionary.check_read().map_err(DictionaryError::Source)?;
+                Ok(([subject, predicate, object, graph], position))
+            },
+        )?;
+        Ok(Some(self.publish_row(ids, existing, position, admission)))
+    }
+
+    fn admit_row(&mut self, existing: Option<usize>) -> Result<RowAdmission<D::Id>, StorageError> {
+        let row_id = RowId::from_address(self.row_count)?;
+        let partition_id = match existing {
+            Some(slot) => self.keys[slot].0,
+            None => {
+                let limit = u64::MAX;
+                #[cfg(test)]
+                let limit = self.partition_limit.unwrap_or(limit);
+                PartitionId::from_address_with_limit(self.relations.len(), limit)?
+            }
+        };
+        self.row_log
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        let mut new_relation = Relation::default();
+        if let Some(slot) = existing {
+            self.relations[slot].tail.reserve_row()?;
+        } else {
+            self.relations
+                .try_reserve(1)
+                .map_err(|_| StorageError::AllocationFailed)?;
+            self.keys
+                .try_reserve(1)
+                .map_err(|_| StorageError::AllocationFailed)?;
+            self.order
+                .try_reserve(1)
+                .map_err(|_| StorageError::AllocationFailed)?;
+            new_relation.tail.reserve_row()?;
+        }
+        Ok(RowAdmission {
+            row_id,
+            partition_id,
+            new_relation,
+        })
+    }
+
+    fn publish_row(
+        &mut self,
+        ids: [D::Id; 4],
+        existing: Option<usize>,
+        position: usize,
+        admission: RowAdmission<D::Id>,
+    ) -> (D::Id, D::Id, RowId) {
+        let [subject_id, predicate_id, object_id, graph_id] = ids;
+        let RowAdmission {
+            row_id,
+            partition_id,
+            new_relation,
+        } = admission;
+        let slot = if let Some(slot) = existing {
+            slot
+        } else {
+            let slot = self.relations.len();
+            self.relations.push(new_relation);
+            self.keys.push((partition_id, predicate_id, graph_id));
+            self.by_key.insert((predicate_id, graph_id), slot);
+            self.order.insert(position, slot);
+            slot
+        };
+        self.relations[slot].insert(subject_id, object_id, row_id);
+        self.row_count += 1;
+        self.row_log
+            .push((row_id, partition_id, subject_id, object_id));
+        (subject_id, object_id, row_id)
+    }
+}
+
+/// Lexical position of an absent partition in the original dictionary order.
+fn partition_position<D: TermDictionary>(
+    dictionary: &D,
+    keys: &[(PartitionId, D::Id, D::Id)],
+    order: &[usize],
+    predicate: D::Id,
+    graph: D::Id,
+) -> Result<usize, D::Error> {
+    let predicate = dictionary.resolve_term(predicate)?;
+    let graph = dictionary.resolve_term(graph)?;
+    let (mut lo, mut hi) = (0, order.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let (_, p, g) = keys[order[mid]];
+        let p = dictionary.resolve_term(p)?;
+        let g = dictionary.resolve_term(g)?;
+        if (p.as_ref(), g.as_ref()) < (predicate.as_ref(), graph.as_ref()) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(lo)
 }
 
 purrdf_hash::default_from_new!(RelationStore);
@@ -1016,16 +1321,7 @@ impl RelationStore {
     /// A fresh, empty store; [`Default`] delegates here.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            interner: TermInterner::default(),
-            relations: Vec::new(),
-            keys: Vec::new(),
-            by_key: BTreeMap::new(),
-            order: Vec::new(),
-            row_count: 0,
-            row_log: Vec::new(),
-            empty: Relation::default(),
-        }
+        Self::with_dictionary(TermInterner::default())
     }
 
     /// The lexical surface of the DEFAULT GRAPH: the EMPTY surface.
@@ -1054,69 +1350,27 @@ impl RelationStore {
         predicate: &str,
         object: &str,
         graph: &str,
-    ) -> Option<(TermId, TermId, RowId)> {
-        let slot = self.partition_slot(predicate, graph);
-        let row_id = RowId::from_index(self.row_count);
-        self.relations[slot]
-            .insert(&mut self.interner, subject, object, row_id)
-            .map(|(s_id, o_id)| {
-                self.row_count += 1;
-                self.row_log.push((
-                    u32::try_from(slot).expect("partition slots fit u32"),
-                    s_id,
-                    o_id,
-                ));
-                (s_id, o_id, row_id)
+    ) -> Result<Option<(TermId, TermId, RowId)>, StorageError> {
+        self.insert_terms([subject, predicate, object, graph].map(DictionaryTerm::Surface))
+            .map_err(|error| match error {
+                DictionaryError::Storage(error) => error,
+                DictionaryError::Source(never) => match never {},
             })
     }
+}
 
+impl<D: TermDictionary> RelationStore<D> {
     /// The rows from row `since` on, in row order, as `(subject, predicate, object,
     /// graph)` interned ids — the facts the store gained since it held `since` rows,
     /// read in time proportional to their number.
-    pub fn rows_from(&self, since: usize) -> impl Iterator<Item = (RowId, [TermId; 4])> + '_ {
+    pub fn rows_from(&self, since: usize) -> impl Iterator<Item = (RowId, [D::Id; 4])> + '_ {
         let since = since.min(self.row_log.len());
         self.row_log[since..]
             .iter()
-            .enumerate()
-            .map(move |(offset, &(slot, subject, object))| {
-                let (predicate, graph) = self.keys[slot as usize];
-                (
-                    RowId::from_index(since + offset),
-                    [subject, predicate, object, graph],
-                )
+            .map(|&(row, partition, subject, object)| {
+                let (_, predicate, graph) = self.keys[partition.resident_index()];
+                (row, [subject, predicate, object, graph])
             })
-    }
-
-    /// The slot of the `(predicate, graph)` partition, creating it if it is new.
-    ///
-    /// A new partition is spliced into the lexical `order` at the position a binary search
-    /// names, so the sweep order stays lexical without ever being re-sorted.
-    fn partition_slot(&mut self, predicate: &str, graph: &str) -> usize {
-        let predicate_id = self.interner.intern(predicate);
-        let graph_id = self.interner.intern(graph);
-        if let Some(&slot) = self.by_key.get(&(predicate_id, graph_id)) {
-            return slot;
-        }
-        let slot = self.relations.len();
-        let position = {
-            let interner = &self.interner;
-            let keys = &self.keys;
-            self.order
-                .binary_search_by(|&other| {
-                    let (other_predicate, other_graph) = keys[other];
-                    (
-                        interner.resolve(other_predicate),
-                        interner.resolve(other_graph),
-                    )
-                        .cmp(&(predicate, graph))
-                })
-                .unwrap_or_else(|position| position)
-        };
-        self.relations.push(Relation::default());
-        self.keys.push((predicate_id, graph_id));
-        self.by_key.insert((predicate_id, graph_id), slot);
-        self.order.insert(position, slot);
-        slot
     }
 
     /// The number of rows currently in the store across all partitions — equivalently,
@@ -1138,7 +1392,7 @@ impl RelationStore {
 
     /// The store's term dictionary — for resolving an id back to its lexical surface at
     /// the point a caller renders.
-    pub fn interner(&self) -> &TermInterner {
+    pub fn interner(&self) -> &D {
         &self.interner
     }
 
@@ -1148,9 +1402,11 @@ impl RelationStore {
     /// Predicate and graph surfaces are terms too, so they are counted here exactly like a
     /// subject or an object: the ceiling measures the whole dictionary, not a subset of it.
     pub fn term_bytes(&self) -> usize {
-        self.interner.byte_len()
+        self.interner.resident_bytes()
     }
+}
 
+impl RelationStore {
     /// The interned id of the term with this lexical surface, if the term has ever entered
     /// this store in ANY position. Never inserts.
     ///
@@ -1169,15 +1425,17 @@ impl RelationStore {
         self.by_key
             .get(&(predicate, graph))
             .copied()
-            .map(PartitionId::from_index)
+            .map(|slot| self.keys[slot].0)
     }
+}
 
+impl<D: TermDictionary> RelationStore<D> {
     /// The partition keyed by these interned positions, if it exists.
     ///
     /// One ordered-map probe on a pair of dense ids — the addressing step of every atom
     /// whose predicate and graph are constants or already-bound variables, and the reason
     /// carrying the predicate as data costs such an atom nothing.
-    pub fn partition(&self, predicate: TermId, graph: TermId) -> Option<PartitionRef<'_>> {
+    pub fn partition(&self, predicate: D::Id, graph: D::Id) -> Option<PartitionRef<'_, D::Id>> {
         self.by_key
             .get(&(predicate, graph))
             .map(|&slot| self.partition_at(slot))
@@ -1190,7 +1448,7 @@ impl RelationStore {
     /// one-element iterator — no sweep at all. With either free it walks the maintained
     /// lexical order, which is why an unbound predicate is deterministic and is still a
     /// sequence of indexed probes rather than one undifferentiated scan.
-    pub fn partitions(&self, predicate: Option<TermId>, graph: Option<TermId>) -> Partitions<'_> {
+    pub fn partitions(&self, predicate: Option<D::Id>, graph: Option<D::Id>) -> Partitions<'_, D> {
         match (predicate, graph) {
             (Some(predicate), Some(graph)) => {
                 Partitions(PartitionsCursor::Single(self.partition(predicate, graph)))
@@ -1205,16 +1463,18 @@ impl RelationStore {
     }
 
     /// The partition at a dense slot.
-    fn partition_at(&self, slot: usize) -> PartitionRef<'_> {
-        let (predicate, graph) = self.keys[slot];
+    fn partition_at(&self, slot: usize) -> PartitionRef<'_, D::Id> {
+        let (id, predicate, graph) = self.keys[slot];
         PartitionRef {
-            id: PartitionId::from_index(slot),
+            id,
             predicate,
             graph,
             relation: &self.relations[slot],
         }
     }
+}
 
+impl RelationStore {
     /// Whether the quad `(subject, predicate, object, graph)` is present, as lexical
     /// surfaces.
     ///
@@ -1263,7 +1523,7 @@ impl RelationStore {
     pub fn predicates(&self) -> impl Iterator<Item = &str> {
         self.keys
             .iter()
-            .map(|&(predicate, _)| self.interner.resolve(predicate))
+            .map(|&(_, predicate, _)| self.interner.resolve(predicate))
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
@@ -1275,7 +1535,7 @@ impl RelationStore {
     pub fn graphs(&self) -> impl Iterator<Item = &str> {
         self.keys
             .iter()
-            .map(|&(_, graph)| self.interner.resolve(graph))
+            .map(|&(_, _, graph)| self.interner.resolve(graph))
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
@@ -1289,7 +1549,7 @@ impl RelationStore {
     pub(crate) fn facts_in_row_order(&self) -> Vec<(RowId, Fact)> {
         let mut rows = Vec::with_capacity(self.row_count);
         for &slot in &self.order {
-            let (predicate, graph) = self.keys[slot];
+            let (_, predicate, graph) = self.keys[slot];
             let predicate = self.interner.resolve(predicate);
             let graph = self.interner.resolve(graph);
             let mut cursor = self.relations[slot].select(Bound::Any);
@@ -1319,7 +1579,7 @@ impl RelationStore {
     pub fn facts_sorted(&self) -> Vec<Fact> {
         let mut facts = Vec::with_capacity(self.row_count);
         for &slot in &self.order {
-            let (predicate, graph) = self.keys[slot];
+            let (_, predicate, graph) = self.keys[slot];
             let predicate = self.interner.resolve(predicate);
             let graph = self.interner.resolve(graph);
             let mut cursor = self.relations[slot].select(Bound::Any);
@@ -1339,9 +1599,406 @@ impl RelationStore {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::{HostDictionary, SourceLost};
+
+    #[test]
+    fn host_store_preserves_ids_and_original_source_refusal() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+        const P: u64 = 0xf000_0000_0000_0007;
+        const Q: u64 = 0x1000_0000_0000_0003;
+        const GRAPH: u64 = 0x8000_0000_0000_0000;
+        const TRIPLE: u64 = 0xa000_0000_1234_5678;
+        let dictionary = HostDictionary {
+            surfaces: [
+                (P, "<https://example.org/a>".into()),
+                (Q, "<https://example.org/z>".into()),
+                (GRAPH, String::new()),
+            ]
+            .into_iter()
+            .collect(),
+            resolves: AtomicUsize::new(0),
+            lookups: AtomicUsize::new(0),
+            lost: AtomicBool::new(false),
+            lose_after_lookup: AtomicBool::new(false),
+            pins: AtomicUsize::new(0),
+            extra_terms: 0,
+        };
+        let mut store = RelationStore::with_dictionary(dictionary);
+        assert_eq!(store.interner().resolves.load(AtomicOrdering::Relaxed), 0);
+        store.insert_ids([TRIPLE, Q, 0, GRAPH]).unwrap().unwrap();
+        store.insert_ids([0, P, TRIPLE, GRAPH]).unwrap().unwrap();
+        assert_eq!(
+            store
+                .partitions(None, None)
+                .map(PartitionRef::predicate)
+                .collect::<Vec<_>>(),
+            vec![P, Q],
+            "lexical sweep differs from raw-ID order"
+        );
+        let before = store.interner().resolves.load(AtomicOrdering::Relaxed);
+        let left = store.partition(P, GRAPH).unwrap();
+        let right = store.partition(Q, GRAPH).unwrap();
+        let mut outer = left.select(Bound::Any);
+        let mut joined = Vec::new();
+        while let Some((s, middle, _)) = outer.next() {
+            let mut inner = right.select(Bound::Subject(middle));
+            while let Some((_, o, _)) = inner.next() {
+                joined.push((s, middle, o));
+            }
+        }
+        assert_eq!(joined, vec![(0, TRIPLE, 0)]);
+        assert_eq!(
+            store.interner().resolves.load(AtomicOrdering::Relaxed),
+            before,
+            "actual indexed cursor join performs no lexical access"
+        );
+        assert_eq!(store.interner().lookups.load(AtomicOrdering::Relaxed), 0);
+        store.partition_limit = Some(2);
+        assert_eq!(store.insert_ids([TRIPLE, Q, 0, GRAPH]).unwrap(), None);
+        store
+            .insert_terms([
+                DictionaryTerm::Id(TRIPLE),
+                DictionaryTerm::Surface("<https://example.org/z>"),
+                DictionaryTerm::Id(1),
+                DictionaryTerm::Id(GRAPH),
+            ])
+            .unwrap()
+            .unwrap();
+        let rows = store.rows_from(0).collect::<Vec<_>>();
+        assert_eq!(
+            rows.iter().map(|(_, ids)| *ids).collect::<Vec<_>>(),
+            vec![
+                [TRIPLE, Q, 0, GRAPH],
+                [0, P, TRIPLE, GRAPH],
+                [TRIPLE, Q, 1, GRAPH]
+            ]
+        );
+        assert!(matches!(
+            store.insert_ids([0, 17, 1, GRAPH]),
+            Err(DictionaryError::Storage(StorageError::Capacity(_)))
+        ));
+        store.partition_limit = None;
+        assert_eq!(
+            store.insert_ids([0, 17, 1, GRAPH]),
+            Err(DictionaryError::Source(SourceLost(17)))
+        );
+        assert_eq!(store.rows_from(0).collect::<Vec<_>>(), rows);
+        assert_eq!(store.partition_count(), 2);
+        store.interner().lost.store(true, AtomicOrdering::Relaxed);
+        assert_eq!(
+            store.insert_ids([TRIPLE, Q, 0, GRAPH]),
+            Err(DictionaryError::Source(SourceLost(99))),
+            "even duplicate ingress checks original source lifetime"
+        );
+        assert_eq!(store.rows_from(0).collect::<Vec<_>>(), rows);
+    }
+    #[test]
+    fn arrangements_preserve_tagged_host_ids_across_batches_and_tail() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        struct HostId {
+            tag: u8,
+            payload: u64,
+        }
+        let subject = |i| HostId {
+            tag: 7,
+            payload: u64::MAX - i,
+        };
+        let object = |i| HostId {
+            tag: 19,
+            payload: (1_u64 << 48) + i,
+        };
+        let mut relation = Relation::<HostId>::default();
+        let mut expected = Vec::new();
+        for i in 0..145_u64 {
+            let row = RowId::from_index(i).unwrap();
+            relation.tail.reserve_row().unwrap();
+            relation.insert(subject(i), object(i % 11), row);
+            expected.push((subject(i), object(i % 11), row));
+        }
+        assert!(!relation.batches().is_empty());
+        assert!(!relation.tail().is_empty());
+        for &(s, o, _) in &expected {
+            assert!(relation.contains(s, o));
+            assert!(!relation.contains(HostId { tag: 8, ..s }, o));
+            assert!(!relation.contains(s, HostId { tag: 20, ..o }));
+            assert!(!relation.contains(
+                HostId {
+                    payload: s.payload ^ (1_u64 << 60),
+                    ..s
+                },
+                o,
+            ));
+            assert!(!relation.contains(
+                s,
+                HostId {
+                    payload: o.payload ^ (1_u64 << 60),
+                    ..o
+                },
+            ));
+        }
+        for bound in [
+            Bound::Any,
+            Bound::Subject(subject(73)),
+            Bound::Object(object(3)),
+            Bound::Both(subject(135), object(3)),
+        ] {
+            let mut cursor = relation.select(bound);
+            let mut actual = Vec::new();
+            while let Some(row) = cursor.next() {
+                actual.push(row);
+            }
+            let mut wanted: Vec<_> = expected
+                .iter()
+                .copied()
+                .filter(|&(s, o, _)| match bound {
+                    Bound::Any => true,
+                    Bound::Subject(value) => s == value,
+                    Bound::Object(value) => o == value,
+                    Bound::Both(left, right) => s == left && o == right,
+                })
+                .collect();
+            actual.sort_unstable();
+            wanted.sort_unstable();
+            assert_eq!(actual, wanted);
+        }
+        let mut wanted: Vec<_> = expected.iter().map(|&(s, _, row)| (s, row)).collect();
+        wanted.sort_unstable();
+        let mut subjects = ValueCursor::<VALUE_SUBJECT, HostId>::new(&relation, None);
+        subjects.seek(subject(90));
+        wanted.retain(|&(s, _)| s >= subject(90));
+        assert_eq!(subjects.collect::<Vec<_>>(), wanted);
+        let mut wanted: Vec<_> = expected.iter().map(|&(_, o, row)| (o, row)).collect();
+        wanted.sort_unstable();
+        let mut actual =
+            ValueCursor::<VALUE_OBJECT, HostId>::new(&relation, None).collect::<Vec<_>>();
+        assert!(actual.windows(2).all(|rows| rows[0].0 <= rows[1].0));
+        // Equal values retain arrangement order, not row-id order.
+        actual.sort_unstable();
+        assert_eq!(actual, wanted);
+        let rows = ValueCursor::<VALUE_OBJECT, HostId>::new(&relation, Some(subject(135)))
+            .collect::<Vec<_>>();
+        assert_eq!(rows, vec![(object(3), RowId::from_index(135).unwrap())]);
+    }
+    #[test]
+    fn partition_capacity_keeps_existing_partition_growth_and_refuses_new_keys() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        let mut store = RelationStore::new();
+        store.insert("s", "p", "o", "").unwrap().unwrap();
+        let partition = store.partition_id("p", "").unwrap();
+        store.partition_limit = Some(1);
+        store.insert("s2", "p", "o2", "").unwrap().unwrap();
+        assert_eq!(store.partition_id("p", ""), Some(partition));
+        let original_terms = store.interner.len();
+        assert_eq!(
+            store.insert("s", "new-p", "o", ""),
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogPartitions,
+                2,
+                1
+            )))
+        );
+        assert_eq!(store.interner.len(), original_terms);
+        assert_eq!(store.row_count(), 2);
+        assert_eq!(store.partition_count(), 1);
+        store.partition_limit = None;
+        store.insert("s", "new-p", "o", "").unwrap().unwrap();
+        assert_eq!(store.partition_id("new-p", "").unwrap().index(), 1);
+    }
+
+    #[test]
+    fn dependent_term_capacity_rolls_back_lexical_identity_and_original_rows() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        let mut store = RelationStore::new();
+        store.insert("s", "p", "o", "").unwrap().unwrap();
+        let original_rows = store.row_log.clone();
+        let original_terms = store.interner.len();
+        let original_bytes = store.interner.byte_len();
+        let known = store.term_id("p").unwrap();
+        store.interner.term_limit = Some(original_terms as u64);
+        assert_eq!(store.interner.intern("p"), Ok(known));
+        // Predicate and graph succeed; the subject refuses after both were minted.
+        store.interner.term_limit = Some(original_terms as u64 + 2);
+        assert_eq!(
+            store.insert("new-s", "new-p", "new-o", "new-g"),
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogTerms,
+                original_terms as u128 + 3,
+                original_terms as u128 + 2
+            )))
+        );
+        assert_eq!(store.row_log, original_rows);
+        assert_eq!(store.interner.len(), original_terms);
+        assert_eq!(store.interner.byte_len(), original_bytes);
+        assert_eq!(store.partition_count(), 1);
+        for term in ["new-s", "new-p", "new-o", "new-g"] {
+            assert!(store.term_id(term).is_none());
+        }
+        store.interner.term_limit = None;
+        assert_eq!(
+            store
+                .insert("new-s", "new-p", "new-o", "new-g")
+                .unwrap()
+                .unwrap()
+                .2
+                .index(),
+            1
+        );
+        assert_eq!(
+            store.term_id("new-p").unwrap().index(),
+            original_terms as u64
+        );
+    }
+
+    #[test]
+    fn mixed_row_admission_preserves_ids_and_rolls_back_fresh_terms() {
+        let mut store = RelationStore::new();
+        store.insert("s", "p", "o", "").unwrap().unwrap();
+        let predicate = store.term_id("p").unwrap();
+        let graph = store.term_id("").unwrap();
+        let before = (
+            store.interner.len(),
+            store.interner.byte_len(),
+            store.row_log.clone(),
+        );
+        store.interner.term_limit = Some(before.0 as u64 + 1);
+        let terms = [
+            DictionaryTerm::Surface("new-s"),
+            DictionaryTerm::Id(predicate),
+            DictionaryTerm::Surface("new-o"),
+            DictionaryTerm::Id(graph),
+        ];
+        for _ in 0..2 {
+            assert!(matches!(
+                store.insert_terms(terms),
+                Err(DictionaryError::Storage(StorageError::Capacity(_)))
+            ));
+            assert_eq!(
+                (
+                    store.interner.len(),
+                    store.interner.byte_len(),
+                    store.row_log.clone()
+                ),
+                before
+            );
+            assert_eq!(store.term_id("new-s"), None);
+            assert_eq!(store.term_id("new-o"), None);
+        }
+        store.interner.term_limit = None;
+        store.insert_terms(terms).unwrap().unwrap();
+        let (_, ids) = store.rows_from(1).next().unwrap();
+        assert_eq!(ids[1], predicate);
+        assert_eq!(ids[3], graph);
+        assert_eq!(ids[0], store.term_id("new-s").unwrap());
+        assert_eq!(ids[2], store.term_id("new-o").unwrap());
+        let before = (store.interner.len(), store.interner.byte_len());
+        let refusal: Result<(), DictionaryError<Infallible>> = store.interner.with_interned(
+            [
+                DictionaryTerm::Id(predicate),
+                DictionaryTerm::Id(graph),
+                DictionaryTerm::Surface("unpublished-s"),
+                DictionaryTerm::Surface("unpublished-o"),
+            ],
+            |dictionary, ids| {
+                assert_eq!(dictionary.resolve(ids[2]), "unpublished-s");
+                Err(DictionaryError::Storage(StorageError::SizeOverflow))
+            },
+        );
+        assert_eq!(
+            refusal,
+            Err(DictionaryError::Storage(StorageError::SizeOverflow))
+        );
+        assert_eq!((store.interner.len(), store.interner.byte_len()), before);
+        assert_eq!(store.term_id("unpublished-s"), None);
+        assert_eq!(store.term_id("unpublished-o"), None);
+        store.interner.term_limit = Some(before.0 as u64);
+        assert_eq!(store.insert_terms(terms), Ok(None));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn native_row_capacity_refuses_before_terms_and_preserves_duplicate_hits() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        let mut store = RelationStore::new();
+        store.insert("s", "p", "o", "").unwrap().unwrap();
+        let original_rows = store.row_log.clone();
+        let original_terms = store.interner.len();
+        let original_bytes = store.interner.byte_len();
+        let original_partitions = store.partition_count();
+        // Exercise the real insertion counter without allocating an impossible arena.
+        store.row_count = usize::MAX;
+        assert_eq!(store.insert("s", "p", "o", ""), Ok(None));
+        assert_eq!(
+            store.insert("fresh-s", "fresh-p", "fresh-o", "fresh-g"),
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogRows,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX)
+            )))
+        );
+        assert_eq!(store.row_count, usize::MAX);
+        assert_eq!(store.row_log, original_rows);
+        assert_eq!(store.interner.len(), original_terms);
+        assert_eq!(store.interner.byte_len(), original_bytes);
+        assert_eq!(store.partition_count(), original_partitions);
+        assert!(store.term_id("fresh-s").is_none());
+        assert!(store.term_id("fresh-p").is_none());
+        assert!(store.term_id("fresh-o").is_none());
+        assert!(store.term_id("fresh-g").is_none());
+    }
+
     use super::*;
     use crate::cursor::LendingIterator;
     use crate::test_support::permute;
+
+    #[test]
+    fn consolidated_object_positions_preserve_wide_row_ids() {
+        use crate::cursor::{RowCursor, VALUE_OBJECT, ValueCursor};
+        let mut relation = Relation::default();
+        let count = 517_u64;
+        let object = TermId::from_index(0).unwrap();
+        for index in 0..count {
+            relation.tail.reserve_row().unwrap();
+            relation.insert(
+                TermId::from_index(index + 1).unwrap(),
+                object,
+                RowId::from_index(u64::from(u32::MAX) + index).unwrap(),
+            );
+        }
+        assert!(
+            relation
+                .batches
+                .iter()
+                .any(|batch| batch.len() > usize::from(u8::MAX))
+        );
+        assert!(
+            relation
+                .batches
+                .iter()
+                .all(|batch| batch.object_index.get().is_none())
+        );
+        let mut cursor = RowCursor::new(&relation, Bound::Object(object));
+        let mut rows = Vec::new();
+        while let Some(row) = cursor.next() {
+            rows.push(row.2);
+        }
+        rows.sort_unstable();
+        let expected: Vec<_> = (0..count)
+            .map(|index| RowId::from_index(u64::from(u32::MAX) + index).unwrap())
+            .collect();
+        assert_eq!(rows, expected);
+        let ordered: Vec<_> = ValueCursor::<VALUE_OBJECT, _>::new(&relation, None)
+            .map(|(value, row)| {
+                assert_eq!(value, object);
+                row
+            })
+            .collect();
+        assert_eq!(ordered, expected);
+        for batch in &relation.batches {
+            let positions: &[usize] = batch.object_order();
+            assert_eq!(positions.len(), batch.len());
+            assert_eq!(size_of_val(positions), batch.len() * size_of::<usize>());
+        }
+    }
 
     /// The lexical surface of an example IRI, as a caller would render it.
     fn iri(local: &str) -> String {
@@ -1413,6 +2070,7 @@ mod tests {
         for &(p, sub, obj) in tuples {
             assert!(
                 s.insert(&iri(sub), p, &iri(obj), RelationStore::DEFAULT_GRAPH)
+                    .unwrap()
                     .is_some(),
                 "fixture tuples are distinct"
             );
@@ -1474,11 +2132,13 @@ mod tests {
         let mut s = RelationStore::new();
         assert!(
             s.insert(&iri("a"), KNOWS, &iri("b"), RelationStore::DEFAULT_GRAPH)
+                .unwrap()
                 .is_some()
         );
         // Re-inserting the same quad is a no-op that reports None (no new row id).
         assert!(
             s.insert(&iri("a"), KNOWS, &iri("b"), RelationStore::DEFAULT_GRAPH)
+                .unwrap()
                 .is_none()
         );
         assert_eq!(s.len_for(KNOWS, RelationStore::DEFAULT_GRAPH), 1);
@@ -1496,10 +2156,20 @@ mod tests {
         let g1 = iri("g1");
         let g2 = iri("g2");
         let mut s = RelationStore::new();
-        assert!(s.insert(&iri("a"), KNOWS, &iri("b"), &g1).is_some());
-        assert!(s.insert(&iri("a"), KNOWS, &iri("b"), &g2).is_some());
         assert!(
-            s.insert(&iri("a"), KNOWS, &iri("b"), &g1).is_none(),
+            s.insert(&iri("a"), KNOWS, &iri("b"), &g1)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), &g2)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), &g1)
+                .unwrap()
+                .is_none(),
             "a repeat within one graph still dedups"
         );
         assert_eq!(s.row_count(), 2);
@@ -1533,9 +2203,14 @@ mod tests {
         let mut s = RelationStore::new();
         assert!(
             s.insert(&iri("a"), KNOWS, &iri("b"), RelationStore::DEFAULT_GRAPH)
+                .unwrap()
                 .is_some()
         );
-        assert!(s.insert(&iri("a"), KNOWS, &iri("b"), &named).is_some());
+        assert!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), &named)
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(
             s.graphs().collect::<Vec<_>>(),
             vec![RelationStore::DEFAULT_GRAPH, named.as_str()],
@@ -1564,22 +2239,28 @@ mod tests {
         // Interleave predicates so a per-partition index would NOT match the global id.
         let r0 = s
             .insert(&iri("a"), KNOWS, &iri("b"), default)
+            .unwrap()
             .map(|(_, _, r)| r);
         let r1 = s
             .insert(&iri("a"), LIKES, &iri("c"), default)
+            .unwrap()
             .map(|(_, _, r)| r);
         let r2 = s
             .insert(&iri("a"), KNOWS, &iri("c"), default)
+            .unwrap()
             .map(|(_, _, r)| r);
-        assert_eq!(r0, Some(RowId::from_index(0)));
-        assert_eq!(r1, Some(RowId::from_index(1)));
+        assert_eq!(r0, Some(RowId::from_index(0).unwrap()));
+        assert_eq!(r1, Some(RowId::from_index(1).unwrap()));
         assert_eq!(
             r2,
-            Some(RowId::from_index(2)),
+            Some(RowId::from_index(2).unwrap()),
             "row ids span partitions in insertion order"
         );
         // A dedup consumes no row id — the space stays dense and `row_count` is exact.
-        assert_eq!(s.insert(&iri("a"), KNOWS, &iri("b"), default), None);
+        assert_eq!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), default).unwrap(),
+            None
+        );
         assert_eq!(s.row_count(), 3, "three distinct rows ⇒ row ids 0..3");
         // `select` hands each row its store-global id (never a per-partition index):
         // knows carries {0, 2}, likes carries {1} — the interleaved likes took id 1.
@@ -1589,14 +2270,14 @@ mod tests {
             .collect();
         assert_eq!(
             knows_ids,
-            [RowId::from_index(0), RowId::from_index(2)].into(),
+            [RowId::from_index(0).unwrap(), RowId::from_index(2).unwrap()].into(),
             "selected rows carry their store-global row id, not a per-partition index",
         );
         let likes_ids: BTreeSet<RowId> = select_rows(&s, LIKES, Bound::Any)
             .iter()
             .map(|&(_, _, r)| r)
             .collect();
-        assert_eq!(likes_ids, [RowId::from_index(1)].into());
+        assert_eq!(likes_ids, [RowId::from_index(1).unwrap()].into());
     }
 
     /// The arrangement seals its tail into sorted batches past the threshold and still
@@ -1616,6 +2297,7 @@ mod tests {
             let pred = if i % 2 == 0 { p } else { q };
             assert!(
                 s.insert(&iri("s"), pred, &iri(&format!("o{i:04}")), default)
+                    .unwrap()
                     .is_some()
             );
         }
@@ -1626,7 +2308,10 @@ mod tests {
             .iter()
             .map(|&(_, _, r)| r)
             .collect();
-        let expect_p: BTreeSet<RowId> = (0..n).step_by(2).map(RowId::from_index).collect();
+        let expect_p: BTreeSet<RowId> = (0..n)
+            .step_by(2)
+            .map(|index| RowId::from_address(index).unwrap())
+            .collect();
         assert_eq!(p_ids, expect_p, "p carries exactly the even-index row ids");
         // A subject-bound gallop over the sealed batches finds every one of s's edges.
         let subj = id_of(&s, &iri("s"));
@@ -1637,7 +2322,9 @@ mod tests {
         );
         // Dedup still holds across sealed batches: re-inserting a sealed row is a no-op.
         assert!(
-            s.insert(&iri("s"), p, &iri("o0000"), default).is_none(),
+            s.insert(&iri("s"), p, &iri("o0000"), default)
+                .unwrap()
+                .is_none(),
             "a row already sealed into a batch is deduped by the galloping probe"
         );
     }
@@ -1679,9 +2366,17 @@ mod tests {
         let domain = "<https://example.org/domain>";
         let mut s = RelationStore::new();
         // `knows domain Person` — the predicate surface KNOWS appears as a SUBJECT here…
-        assert!(s.insert(KNOWS, domain, &iri("Person"), default).is_some());
+        assert!(
+            s.insert(KNOWS, domain, &iri("Person"), default)
+                .unwrap()
+                .is_some()
+        );
         // …and as the predicate of an ordinary quad here.
-        assert!(s.insert(&iri("a"), KNOWS, &iri("b"), default).is_some());
+        assert!(
+            s.insert(&iri("a"), KNOWS, &iri("b"), default)
+                .unwrap()
+                .is_some()
+        );
         let knows = id_of(&s, KNOWS);
         assert_eq!(
             s.partition(knows, id_of(&s, default))
@@ -1709,7 +2404,7 @@ mod tests {
         );
         assert_eq!(
             s.partition_id(KNOWS, RelationStore::DEFAULT_GRAPH),
-            Some(PartitionId::from_index(0))
+            Some(PartitionId::from_index(0).unwrap())
         );
         assert_eq!(
             s.partition_id("<https://example.org/absent>", RelationStore::DEFAULT_GRAPH),
@@ -1735,6 +2430,7 @@ mod tests {
         ] {
             assert!(
                 s.insert(&iri(subject), predicate, &iri(object), graph)
+                    .unwrap()
                     .is_some()
             );
         }
@@ -1809,15 +2505,18 @@ mod tests {
     #[test]
     fn rows_from_reads_the_rows_added_since_in_row_order() {
         let mut s = RelationStore::new();
-        s.insert("<a>", "<p>", "<b>", RelationStore::DEFAULT_GRAPH);
-        s.insert("<b>", "<q>", "<c>", "<g>");
+        s.insert("<a>", "<p>", "<b>", RelationStore::DEFAULT_GRAPH)
+            .unwrap();
+        s.insert("<b>", "<q>", "<c>", "<g>").unwrap();
         assert!(
             s.insert("<a>", "<p>", "<b>", RelationStore::DEFAULT_GRAPH)
+                .unwrap()
                 .is_none(),
             "a duplicate adds no row"
         );
-        s.insert("<c>", "<p>", "<d>", RelationStore::DEFAULT_GRAPH);
-        let surfaces = |since: usize| -> Vec<(usize, [&str; 4])> {
+        s.insert("<c>", "<p>", "<d>", RelationStore::DEFAULT_GRAPH)
+            .unwrap();
+        let surfaces = |since: usize| -> Vec<(u64, [&str; 4])> {
             s.rows_from(since)
                 .map(|(row, ids)| (row.index(), ids.map(|id| s.interner().resolve(id))))
                 .collect()
@@ -1841,7 +2540,7 @@ mod tests {
         assert_eq!(s.term_bytes(), 0);
         assert!(s.interner().is_empty());
 
-        s.insert(&iri("a"), KNOWS, &iri("b"), default);
+        s.insert(&iri("a"), KNOWS, &iri("b"), default).unwrap();
         let after_first = s.term_bytes();
         assert_eq!(
             after_first,
@@ -1850,20 +2549,26 @@ mod tests {
         );
 
         // A repeat of both terms under a second predicate interns only the predicate.
-        s.insert(&iri("a"), LIKES, &iri("b"), default);
+        s.insert(&iri("a"), LIKES, &iri("b"), default).unwrap();
         assert_eq!(s.term_bytes(), after_first + LIKES.len());
         let after_second = s.term_bytes();
 
         // A new term adds exactly its own bytes.
-        s.insert(&iri("a"), KNOWS, &iri("c"), default);
+        s.insert(&iri("a"), KNOWS, &iri("c"), default).unwrap();
         assert_eq!(s.term_bytes(), after_second + iri("c").len());
         assert_eq!(s.term_bytes(), s.interner().byte_len());
 
         // The same quads in the opposite order reach the same total.
         let mut reversed = RelationStore::new();
-        reversed.insert(&iri("a"), KNOWS, &iri("c"), default);
-        reversed.insert(&iri("a"), LIKES, &iri("b"), default);
-        reversed.insert(&iri("a"), KNOWS, &iri("b"), default);
+        reversed
+            .insert(&iri("a"), KNOWS, &iri("c"), default)
+            .unwrap();
+        reversed
+            .insert(&iri("a"), LIKES, &iri("b"), default)
+            .unwrap();
+        reversed
+            .insert(&iri("a"), KNOWS, &iri("b"), default)
+            .unwrap();
         assert_eq!(reversed.term_bytes(), s.term_bytes());
     }
 
@@ -1873,7 +2578,7 @@ mod tests {
     #[should_panic(expected = "must never cross store boundaries")]
     fn store_resolving_a_foreign_term_id_panics() {
         let s = sample_store();
-        let _ = s.interner().resolve(TermId::from_index(999));
+        let _ = s.interner().resolve(TermId::from_index(999).unwrap());
     }
 
     /// Emission-order guard: the partition table is a slot-indexed `Vec` and the key map
@@ -1891,6 +2596,7 @@ mod tests {
         ] {
             assert!(
                 s.insert(&iri("x"), pred, &iri("y"), RelationStore::DEFAULT_GRAPH)
+                    .unwrap()
                     .is_some()
             );
         }
@@ -1988,7 +2694,7 @@ mod tests {
         let build = |order: &[(String, String, String, String)]| {
             let mut s = RelationStore::new();
             for (sub, p, obj, g) in order {
-                s.insert(sub, p, obj, g);
+                s.insert(sub, p, obj, g).unwrap();
             }
             s
         };
@@ -2088,7 +2794,8 @@ mod tests {
         let build = |order: &[(String, String)]| {
             let mut s = RelationStore::new();
             for (sub, obj) in order {
-                s.insert(sub, pred, obj, RelationStore::DEFAULT_GRAPH);
+                s.insert(sub, pred, obj, RelationStore::DEFAULT_GRAPH)
+                    .unwrap();
             }
             s
         };
@@ -2149,30 +2856,30 @@ mod tests {
     /// compiled, exercised fact rather than a promise; production stays at `W = ()`.
     #[test]
     fn batch_merge_is_a_z_set_over_signed_weights() {
-        let s = TermId::from_index(0);
-        let o = TermId::from_index(1);
+        let s = TermId::from_index(0).unwrap();
+        let o = TermId::from_index(1).unwrap();
 
         // (+1) + (-1) = 0 ⇒ the row annihilates and is dropped (retraction).
-        let plus = weighted_row(s, o, RowId::from_index(5), 1);
-        let minus = weighted_row(s, o, RowId::from_index(2), -1);
+        let plus = weighted_row(s, o, RowId::from_index(5).unwrap(), 1);
+        let minus = weighted_row(s, o, RowId::from_index(2).unwrap(), -1);
         let retracted = merge_batches(&plus, &minus).expect("signed retraction combines");
         assert_eq!(retracted.len(), 0, "(+1)+(-1)=0 annihilates the shared key");
 
         // (+1) + (+2) = 3 ⇒ one surviving row, weights summed, lower row id kept.
-        let two = weighted_row(s, o, RowId::from_index(2), 2);
+        let two = weighted_row(s, o, RowId::from_index(2).unwrap(), 2);
         let summed = merge_batches(&plus, &two).expect("signed addition combines");
         assert_eq!(summed.len(), 1, "a non-annihilating combine keeps one row");
         assert_eq!(summed.weight[0], 3, "weights sum: 1 + 2 = 3");
         assert_eq!(
             summed.row_id[0],
-            RowId::from_index(2),
+            RowId::from_index(2).unwrap(),
             "the lower row id deterministically survives a key collision"
         );
 
         // Disjoint keys interleave with NO combine — the set-semantics `W = ()` shape.
-        let o2 = TermId::from_index(2);
-        let a = weighted_row(s, o, RowId::from_index(0), 1);
-        let b = weighted_row(s, o2, RowId::from_index(1), 1);
+        let o2 = TermId::from_index(2).unwrap();
+        let a = weighted_row(s, o, RowId::from_index(0).unwrap(), 1);
+        let b = weighted_row(s, o2, RowId::from_index(1).unwrap(), 1);
         let disjoint = merge_batches(&a, &b).expect("disjoint signed batches interleave");
         assert_eq!(disjoint.len(), 2, "disjoint keys interleave, no combine");
     }
@@ -2182,10 +2889,10 @@ mod tests {
     /// id, so consolidation cannot depend on batch geometry.
     #[test]
     fn signed_weight_combine_is_commutative_across_merge_order() {
-        let s = TermId::from_index(0);
-        let o = TermId::from_index(1);
-        let left = weighted_row(s, o, RowId::from_index(7), 4);
-        let right = weighted_row(s, o, RowId::from_index(3), -1);
+        let s = TermId::from_index(0).unwrap();
+        let o = TermId::from_index(1).unwrap();
+        let left = weighted_row(s, o, RowId::from_index(7).unwrap(), 4);
+        let right = weighted_row(s, o, RowId::from_index(3).unwrap(), -1);
         let forward = merge_batches(&left, &right).expect("combines");
         let backward = merge_batches(&right, &left).expect("combines");
         assert_eq!(forward.weight, backward.weight, "combine commutes");
@@ -2221,9 +2928,11 @@ mod tests {
     #[test]
     fn gallop_lower_bound_matches_the_linear_lower_bound() {
         // A run with gaps, so keys both present and absent are exercised.
-        let run: Vec<TermId> = (0..64).map(|i| TermId::from_index(i * 3)).collect();
+        let run: Vec<TermId> = (0..64)
+            .map(|i| TermId::from_index(i * 3).unwrap())
+            .collect();
         for key_slot in 0..200usize {
-            let key = TermId::from_index(key_slot);
+            let key = TermId::from_address(key_slot).unwrap();
             for from in [0usize, 1, 7, 63, 64] {
                 let expected = from + run[from.min(run.len())..].partition_point(|&x| x < key);
                 assert_eq!(
@@ -2234,8 +2943,14 @@ mod tests {
             }
         }
         // An empty run and an out-of-range start both answer with the length.
-        assert_eq!(gallop_lower_bound(&[], 0, TermId::from_index(0)), 0);
-        assert_eq!(gallop_lower_bound(&run, 999, TermId::from_index(0)), 64);
+        assert_eq!(
+            gallop_lower_bound(&[], 0, TermId::from_index(0).unwrap()),
+            0
+        );
+        assert_eq!(
+            gallop_lower_bound(&run, 999, TermId::from_index(0).unwrap()),
+            64
+        );
     }
 
     /// The tail's duplicate probe as it was written over `(subject, object, row)`
@@ -2258,9 +2973,9 @@ mod tests {
         let mut tail = Tail::default();
         let mut rows = Vec::with_capacity(len);
         for i in 0..len {
-            let s = TermId::from_index(rng.below_usize(24));
-            let o = TermId::from_index(rng.below_usize(24));
-            let r = RowId::from_index(i);
+            let s = TermId::from_address(rng.below_usize(24)).unwrap();
+            let o = TermId::from_address(rng.below_usize(24)).unwrap();
+            let r = RowId::from_address(i).unwrap();
             tail.push(s, o, r);
             rows.push((s, o, r));
         }
@@ -2275,7 +2990,7 @@ mod tests {
     #[test]
     fn tail_contains_matches_the_tuple_scan() {
         let mut rng = purrdf_testkit::rng::SplitMix64::new(0x5EED_0F7A_11C0);
-        let outside = TermId::from_index(1_000);
+        let outside = TermId::from_index(1_000).unwrap();
         for len in 0..=TAIL_SEAL_THRESHOLD {
             for _ in 0..4 {
                 let (tail, rows) = random_tail(len, &mut rng);
@@ -2308,8 +3023,10 @@ mod tests {
     /// it sits, and must not take a one-column match for a hit.
     #[test]
     fn tail_contains_finds_a_lone_hit_at_every_position() {
-        let subject = TermId::from_index(7);
-        let object = TermId::from_index(9);
+        let subject = TermId::from_index((1_u64 << 48) + 7).unwrap();
+        let object = TermId::from_index((1_u64 << 40) + 9).unwrap();
+        let subject_low = TermId::from_index(7).unwrap();
+        let object_low = TermId::from_index(9).unwrap();
         for len in 1..=TAIL_SEAL_THRESHOLD {
             for hit in 0..len {
                 let mut tail = Tail::default();
@@ -2318,12 +3035,12 @@ mod tests {
                     let row = if i == hit {
                         (subject, object)
                     } else if i % 2 == 0 {
-                        (subject, TermId::from_index(100 + i))
+                        (subject, object_low)
                     } else {
-                        (TermId::from_index(100 + i), object)
+                        (subject_low, object)
                     };
-                    tail.push(row.0, row.1, RowId::from_index(i));
-                    rows.push((row.0, row.1, RowId::from_index(i)));
+                    tail.push(row.0, row.1, RowId::from_address(i).unwrap());
+                    rows.push((row.0, row.1, RowId::from_address(i).unwrap()));
                 }
                 assert!(tail.contains(subject, object), "len {len}, hit {hit}");
                 assert!(reference_tail_contains(&rows, subject, object));
@@ -2332,16 +3049,18 @@ mod tests {
                     "len {len}, hit {hit}: the swapped key is absent"
                 );
                 assert!(!reference_tail_contains(&rows, object, subject));
+                assert!(!tail.contains(subject_low, object_low));
+                assert!(!reference_tail_contains(&rows, subject_low, object_low));
             }
             // The same near misses with no hit at all.
             let mut tail = Tail::default();
             for i in 0..len {
                 let (s, o) = if i % 2 == 0 {
-                    (subject, TermId::from_index(100 + i))
+                    (subject, object_low)
                 } else {
-                    (TermId::from_index(100 + i), object)
+                    (subject_low, object)
                 };
-                tail.push(s, o, RowId::from_index(i));
+                tail.push(s, o, RowId::from_address(i).unwrap());
             }
             assert!(!tail.contains(subject, object), "len {len}: no hit");
         }

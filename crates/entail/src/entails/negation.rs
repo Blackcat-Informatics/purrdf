@@ -528,13 +528,13 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
             let term = |b: &mut RdfDatasetBuilder, value: &str| match value.strip_prefix('_') {
-                Some(label) => b.intern_blank(label, BlankScope::DEFAULT),
-                None => b.intern_iri(value),
+                Some(label) => b.intern_blank(label, BlankScope::DEFAULT).unwrap(),
+                None => b.intern_iri(value).unwrap(),
             };
             let s = term(&mut b, s);
             let p = term(&mut b, p);
             let o = term(&mut b, o);
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }

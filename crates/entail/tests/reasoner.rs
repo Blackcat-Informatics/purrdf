@@ -90,28 +90,32 @@ enum N {
 fn ds(triples: &[(N, N, N)]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let mut node = |n: &N| match n {
-        N::E(local) => b.intern_iri(&ex(local)),
-        N::V(iri) => b.intern_iri(iri),
-        N::B(label) => b.intern_blank(label, BlankScope::DEFAULT),
-        N::L(lexical, datatype) => b.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: (*lexical).to_owned(),
-            datatype: Some((*datatype).to_owned()),
-            language: None,
-            direction: None,
-        }),
-        N::Tagged(lexical, language, direction) => b.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: (*lexical).to_owned(),
-            datatype: None,
-            language: Some((*language).to_owned()),
-            direction: *direction,
-        }),
+        N::E(local) => b.intern_iri(&ex(local)).unwrap(),
+        N::V(iri) => b.intern_iri(iri).unwrap(),
+        N::B(label) => b.intern_blank(label, BlankScope::DEFAULT).unwrap(),
+        N::L(lexical, datatype) => b
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: (*lexical).to_owned(),
+                datatype: Some((*datatype).to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap(),
+        N::Tagged(lexical, language, direction) => b
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: (*lexical).to_owned(),
+                datatype: None,
+                language: Some((*language).to_owned()),
+                direction: *direction,
+            })
+            .unwrap(),
     };
     let resolved: Vec<_> = triples
         .iter()
         .map(|(s, p, o)| (node(s), node(p), node(o)))
         .collect();
     for (s, p, o) in resolved {
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("the fixture freezes")
 }

@@ -72,23 +72,24 @@ fn statement_layers(tag: Option<&str>) -> Arc<RdfDataset> {
         Some(tag) => format!("http://example.org/{tag}-{name}"),
         None => format!("http://example.org/{name}"),
     };
-    let s = b.intern_iri(&local("s"));
-    let p = b.intern_iri(P);
-    let o = b.intern_iri(&local("o"));
-    let triple = b.intern_triple(s, p, o);
-    let r = b.intern_iri(&local("r"));
-    let confidence = b.intern_iri(CONFIDENCE);
-    let high = b.intern_iri(HIGH);
-    let g1 = b.intern_iri("http://example.org/g1");
-    let g2 = b.intern_iri("http://example.org/g2");
+    let s = b.intern_iri(&local("s")).unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_iri(&local("o")).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_iri(&local("r")).unwrap();
+    let confidence = b.intern_iri(CONFIDENCE).unwrap();
+    let high = b.intern_iri(HIGH).unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    let g2 = b.intern_iri("http://example.org/g2").unwrap();
     for graph in [None, Some(g1), Some(g2)] {
-        b.push_quad(s, p, o, graph);
-        b.push_reifier_in_graph(r, triple, graph);
-        b.push_annotation_in_graph(r, confidence, high, graph);
+        b.push_quad(s, p, o, graph).unwrap();
+        b.push_reifier_in_graph(r, triple, graph).unwrap();
+        b.push_annotation_in_graph(r, confidence, high, graph)
+            .unwrap();
     }
     // A declaration-only graph: named, held, and empty in both side tables.
-    let empty = b.intern_iri("http://example.org/empty");
-    b.declare_named_graph(empty);
+    let empty = b.intern_iri("http://example.org/empty").unwrap();
+    b.declare_named_graph(empty).unwrap();
     b.freeze().expect("statement-layer fixture freezes")
 }
 
@@ -337,18 +338,19 @@ fn delta_graph_seam_matches_the_filtered_stream() {
 #[test]
 fn delta_graph_seam_matches_the_filtered_stream_for_a_blank_graph_name() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri(P);
-    let o = b.intern_iri("http://example.org/o");
-    let triple = b.intern_triple(s, p, o);
-    let r = b.intern_iri("http://example.org/r");
-    let confidence = b.intern_iri(CONFIDENCE);
-    let high = b.intern_iri(HIGH);
-    let blank = b.intern_blank("bg", BlankScope::DEFAULT);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_iri("http://example.org/r").unwrap();
+    let confidence = b.intern_iri(CONFIDENCE).unwrap();
+    let high = b.intern_iri(HIGH).unwrap();
+    let blank = b.intern_blank("bg", BlankScope::DEFAULT).unwrap();
     for graph in [None, Some(blank)] {
-        b.push_quad(s, p, o, graph);
-        b.push_reifier_in_graph(r, triple, graph);
-        b.push_annotation_in_graph(r, confidence, high, graph);
+        b.push_quad(s, p, o, graph).unwrap();
+        b.push_reifier_in_graph(r, triple, graph).unwrap();
+        b.push_annotation_in_graph(r, confidence, high, graph)
+            .unwrap();
     }
     let base = b.freeze().expect("blank-graph fixture freezes");
 
@@ -396,18 +398,21 @@ fn delta_graph_seam_matches_the_filtered_stream_for_a_blank_graph_name() {
 #[test]
 fn a_respelled_term_resolves_onto_the_base_row_and_never_duplicates_it() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri(P);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri(P).unwrap();
     // The base's own spelling of the literal, interned through the C0.1 policy.
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("high", "en"));
-    let triple = b.intern_triple(s, p, tagged);
-    let r = b.intern_iri("http://example.org/r");
-    let confidence = b.intern_iri(CONFIDENCE);
-    let g1 = b.intern_iri("http://example.org/g1");
+    let tagged = b
+        .intern_literal(RdfLiteral::language_tagged("high", "en"))
+        .unwrap();
+    let triple = b.intern_triple(s, p, tagged).unwrap();
+    let r = b.intern_iri("http://example.org/r").unwrap();
+    let confidence = b.intern_iri(CONFIDENCE).unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
     for graph in [None, Some(g1)] {
-        b.push_quad(s, p, tagged, graph);
-        b.push_reifier_in_graph(r, triple, graph);
-        b.push_annotation_in_graph(r, confidence, tagged, graph);
+        b.push_quad(s, p, tagged, graph).unwrap();
+        b.push_reifier_in_graph(r, triple, graph).unwrap();
+        b.push_annotation_in_graph(r, confidence, tagged, graph)
+            .unwrap();
     }
     let base = b.freeze().expect("language-tagged fixture freezes");
     let base_reifiers = base.reifier_quads().count();

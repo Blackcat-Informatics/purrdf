@@ -252,12 +252,12 @@ pub fn materialize_rif_with<D: DatasetView>(
             if original.contains(&t) {
                 continue;
             }
-            let s = intern_into(&mut b, terms.value(t[0]));
-            let p = intern_into(&mut b, terms.value(t[1]));
-            let o = intern_into(&mut b, terms.value(t[2]));
-            b.push_quad(s, p, o, None);
+            let s = intern_into(&mut b, terms.value(t[0]))?;
+            let p = intern_into(&mut b, terms.value(t[1]))?;
+            let o = intern_into(&mut b, terms.value(t[2]))?;
+            b.push_quad(s, p, o, None)?;
         }
-        let closure = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+        let closure = b.freeze().map_err(EntailError::from)?;
         Ok((closure, rif_report(named_graph, evaluation.budget())))
     })
     .map_err(EntailError::source_read)?
@@ -504,14 +504,14 @@ mod tests {
     #[test]
     fn a_named_graph_quad_raises_the_boundary_rather_than_vanishing() {
         let mut b = RdfDatasetBuilder::new();
-        let emeka = b.intern_iri(&format!("{EX}Emeka"));
-        let parent = b.intern_iri(&format!("{EX}parent"));
-        let oke = b.intern_iri(&format!("{EX}Okechukwu"));
-        let brother = b.intern_iri(&format!("{EX}brother"));
-        let chijoke = b.intern_iri(&format!("{EX}Chijoke"));
-        let g = b.intern_iri(&format!("{EX}g"));
-        b.push_quad(emeka, parent, oke, None);
-        b.push_quad(oke, brother, chijoke, Some(g));
+        let emeka = b.intern_iri(&format!("{EX}Emeka")).unwrap();
+        let parent = b.intern_iri(&format!("{EX}parent")).unwrap();
+        let oke = b.intern_iri(&format!("{EX}Okechukwu")).unwrap();
+        let brother = b.intern_iri(&format!("{EX}brother")).unwrap();
+        let chijoke = b.intern_iri(&format!("{EX}Chijoke")).unwrap();
+        let g = b.intern_iri(&format!("{EX}g")).unwrap();
+        b.push_quad(emeka, parent, oke, None).unwrap();
+        b.push_quad(oke, brother, chijoke, Some(g)).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let rules = RuleSet {

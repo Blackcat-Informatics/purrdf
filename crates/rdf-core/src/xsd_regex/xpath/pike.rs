@@ -293,6 +293,10 @@ pub(super) fn analyze(
     budget: &mut Budget<'_>,
 ) -> Result<Links, Error> {
     let count = nodes.len();
+    super::Refusal::u32_representation(Resource::ProgramNodes, count as u128)?;
+    // Every path in the admitted tree has fewer edges than nodes. The u32
+    // count therefore bounds both stall/counter increments and node ordinals,
+    // independently of the caller's application presets.
     // A link is five cells: its parent, its two nesting depths, its set and
     // innermost counted repetitions and its four boolean facts; the order is
     // one more.
@@ -397,7 +401,7 @@ pub(super) fn analyze(
                 budget.charge_wide(Resource::CompileSlots, 1)?;
                 let required = normal.len() + 1;
                 budget.reserve(&mut normal, required)?;
-                normal.push(u32::try_from(node).expect("an admitted program's nodes fit u32"));
+                normal.push(node as u32);
             }
         }
     }

@@ -927,7 +927,7 @@ impl PyQueryTriples {
         // The native serialization runs detached (GIL released).
         let triples = &self.triples;
         py.detach(move || serialize_triples(triples, format.to_native(), base.as_deref()))
-            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+            .map_err(|e| super::presentation::value_error(format!("serialize error: {e}"), &e))
     }
 }
 
@@ -1027,7 +1027,7 @@ impl PyQueryQuads {
         // The native serialization runs detached (GIL released).
         let quads = &self.quads;
         py.detach(move || serialize_quads(quads, format.to_native(), base.as_deref()))
-            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+            .map_err(|e| super::presentation::value_error(format!("serialize error: {e}"), &e))
     }
 }
 

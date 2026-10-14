@@ -160,11 +160,11 @@ fn subject(local: &str) -> String {
 /// default graph, and the very rows the text index is built from.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, text, _) in CORPUS {
-        let document = builder.intern_iri(&subject(local));
-        let literal = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(document, note, literal, None);
+        let document = builder.intern_iri(&subject(local)).unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(document, note, literal, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset is valid")
 }
@@ -356,11 +356,11 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
 /// watch the answer start claiming more than it has.
 fn sample_index() -> TextIndex {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, text, _) in &CORPUS[..CORPUS.len() / 2] {
-        let document = builder.intern_iri(&subject(local));
-        let literal = builder.intern_literal(RdfLiteral::simple(*text));
-        builder.push_quad(document, note, literal, None);
+        let document = builder.intern_iri(&subject(local)).unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(*text)).unwrap();
+        builder.push_quad(document, note, literal, None).unwrap();
     }
     let data = builder.freeze().expect("the sample dataset is valid");
     let config = TextIndexConfig::new(

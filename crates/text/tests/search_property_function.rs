@@ -59,13 +59,17 @@ use index_fixture::config as config_over;
 fn dataset_of(rows: &[(&str, &str, &str, Option<&str>)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for &(local, predicate, text, language) in rows {
-        let s = builder.intern_iri(&format!("http://example.org/{local}"));
-        let p = builder.intern_iri(predicate);
-        let o = builder.intern_literal(match language {
-            Some(tag) => RdfLiteral::language_tagged(text, tag),
-            None => RdfLiteral::simple(text),
-        });
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("http://example.org/{local}"))
+            .unwrap();
+        let p = builder.intern_iri(predicate).unwrap();
+        let o = builder
+            .intern_literal(match language {
+                Some(tag) => RdfLiteral::language_tagged(text, tag),
+                None => RdfLiteral::simple(text),
+            })
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("the fixture must validate")
 }
@@ -288,20 +292,26 @@ fn annotation_text_is_searchable_through_sparql() {
     const NEEDLE: &str = "quick brown";
 
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri("http://example.org/s");
-    let p = builder.intern_iri("http://example.org/p");
-    let o = builder.intern_iri("http://example.org/o");
-    let reifier = builder.intern_iri("http://example.org/r1");
-    let note = builder.intern_iri(NOTE);
-    let body = builder.intern_iri(BODY);
-    let asserted_text = builder.intern_literal(RdfLiteral::simple("ledger entry filed under seal"));
-    let annotated_text = builder.intern_literal(RdfLiteral::simple("the quick brown fox"));
+    let s = builder.intern_iri("http://example.org/s").unwrap();
+    let p = builder.intern_iri("http://example.org/p").unwrap();
+    let o = builder.intern_iri("http://example.org/o").unwrap();
+    let reifier = builder.intern_iri("http://example.org/r1").unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let body = builder.intern_iri(BODY).unwrap();
+    let asserted_text = builder
+        .intern_literal(RdfLiteral::simple("ledger entry filed under seal"))
+        .unwrap();
+    let annotated_text = builder
+        .intern_literal(RdfLiteral::simple("the quick brown fox"))
+        .unwrap();
 
-    builder.push_quad(s, p, o, None);
-    builder.push_quad(s, body, asserted_text, None);
-    let statement = builder.intern_triple(s, p, o);
-    builder.push_reifier(reifier, statement);
-    builder.push_annotation(reifier, note, annotated_text);
+    builder.push_quad(s, p, o, None).unwrap();
+    builder.push_quad(s, body, asserted_text, None).unwrap();
+    let statement = builder.intern_triple(s, p, o).unwrap();
+    builder.push_reifier(reifier, statement).unwrap();
+    builder
+        .push_annotation(reifier, note, annotated_text)
+        .unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let query = format!(

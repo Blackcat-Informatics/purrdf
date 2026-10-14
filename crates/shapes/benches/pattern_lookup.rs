@@ -42,26 +42,26 @@ fn iri(local: &str) -> String {
 /// closure walk exercises the visited-set dedup).
 fn fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&iri("p"));
-    let next = b.intern_iri(&iri("next"));
-    let hub = b.intern_iri(&iri("hub"));
+    let p = b.intern_iri(&iri("p")).unwrap();
+    let next = b.intern_iri(&iri("next")).unwrap();
+    let hub = b.intern_iri(&iri("hub")).unwrap();
 
     for idx in 0..FANOUT {
-        let o = b.intern_iri(&iri(&format!("o{idx}")));
-        b.push_quad(hub, p, o, None);
+        let o = b.intern_iri(&iri(&format!("o{idx}"))).unwrap();
+        b.push_quad(hub, p, o, None).unwrap();
     }
 
-    let mut prev = b.intern_iri(&iri("c0"));
+    let mut prev = b.intern_iri(&iri("c0")).unwrap();
     for idx in 1..CHAIN {
-        let node = b.intern_iri(&iri(&format!("c{idx}")));
-        b.push_quad(prev, next, node, None);
+        let node = b.intern_iri(&iri(&format!("c{idx}"))).unwrap();
+        b.push_quad(prev, next, node, None).unwrap();
         prev = node;
     }
     // Diamond re-entry: c1 also points back near the head, so the closure walk
     // hits an already-visited id and must dedup rather than loop.
-    let c1 = b.intern_iri(&iri("c1"));
-    let c0 = b.intern_iri(&iri("c0"));
-    b.push_quad(c1, next, c0, None);
+    let c1 = b.intern_iri(&iri("c1")).unwrap();
+    let c0 = b.intern_iri(&iri("c0")).unwrap();
+    b.push_quad(c1, next, c0, None).unwrap();
 
     b.freeze().expect("freeze fixture")
 }

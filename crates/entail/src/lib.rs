@@ -345,6 +345,8 @@ pub use owl_dl::roles::RoleHierarchyError;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum EntailError {
+    /// Logical capacity or physical storage refused construction.
+    Storage(purrdf_lex::allocation::StorageError),
     /// Building the derived dataset failed.
     Build(String),
     /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
@@ -563,6 +565,16 @@ impl EntailError {
     }
 }
 
+purrdf_lex::variant_from!(EntailError { Storage(purrdf_lex::allocation::StorageError) });
+
+impl From<purrdf_core::RdfDiagnostic> for EntailError {
+    fn from(error: purrdf_core::RdfDiagnostic) -> Self {
+        error
+            .storage_error()
+            .map_or_else(|| Self::Build(error.to_string()), Self::Storage)
+    }
+}
+
 impl From<RoleHierarchyError> for EntailError {
     fn from(error: RoleHierarchyError) -> Self {
         match error {
@@ -575,6 +587,7 @@ impl From<RoleHierarchyError> for EntailError {
 impl std::fmt::Display for EntailError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => write!(f, "entailment storage error: {error}"),
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
             Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
@@ -709,6 +722,7 @@ impl std::error::Error for EntailError {
     /// carries [`purrdf_core::CanonError`], which DOES have a cause to name.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(inner) => Some(inner),
             Self::Evaluate(inner) => Some(inner),
             Self::Chase(inner) => Some(inner),
             Self::Canonicalization(inner) => Some(inner),
@@ -794,13 +808,13 @@ impl std::error::Error for EntailError {
 /// use purrdf_core::RdfDatasetBuilder;
 ///
 /// let mut builder = RdfDatasetBuilder::new();
-/// let cat = builder.intern_iri("http://example.org/Cat");
-/// let animal = builder.intern_iri("http://example.org/Animal");
-/// let tom = builder.intern_iri("http://example.org/tom");
-/// let sub = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let ty = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// builder.push_quad(cat, sub, animal, None);
-/// builder.push_quad(tom, ty, cat, None);
+/// let cat = builder.intern_iri("http://example.org/Cat")?;
+/// let animal = builder.intern_iri("http://example.org/Animal")?;
+/// let tom = builder.intern_iri("http://example.org/tom")?;
+/// let sub = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let ty = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// builder.push_quad(cat, sub, animal, None)?;
+/// builder.push_quad(tom, ty, cat, None)?;
 /// let dataset = builder.freeze().expect("freeze");
 ///
 /// // rdfs9 re-types the instance — `tom` is an `Animal` as well as a `Cat`.
@@ -827,6 +841,7 @@ impl std::error::Error for EntailError {
 /// // function, once that input is in the parameter.
 /// let (_, dl) = materialize(&dataset, Materialization::OwlDirect(&[])).expect("owl-direct");
 /// assert_eq!(dl.regime(), Regime::OwlDirect);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn materialize<D: DatasetView>(
     ds: &D,
@@ -1001,7 +1016,7 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfTextDirection, TermRef, TermValue};
 
     fn iri(b: &mut RdfDatasetBuilder, s: &str) -> purrdf_core::TermId {
-        b.intern_iri(s)
+        b.intern_iri(s).unwrap()
     }
 
     /// Build a dataset from `(s, p, o)` IRI triples in the default graph.
@@ -1011,7 +1026,7 @@ mod tests {
             let s = iri(&mut b, s);
             let p = iri(&mut b, p);
             let o = iri(&mut b, o);
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -1798,27 +1813,27 @@ mod tests {
     /// A dataset whose object position holds an RDF 1.2 triple term.
     fn triple_term_fixture() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(X);
-        let p = b.intern_iri("http://example.org/says");
-        let inner_s = b.intern_iri(A);
-        let inner_p = b.intern_iri(RDFS_SUBCLASSOF);
-        let inner_o = b.intern_iri(B);
-        let quoted = b.intern_triple(inner_s, inner_p, inner_o);
-        b.push_quad(s, p, quoted, None);
-        let sub = b.intern_iri(RDFS_SUBCLASSOF);
-        b.push_quad(inner_s, sub, inner_o, None);
+        let s = b.intern_iri(X).unwrap();
+        let p = b.intern_iri("http://example.org/says").unwrap();
+        let inner_s = b.intern_iri(A).unwrap();
+        let inner_p = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+        let inner_o = b.intern_iri(B).unwrap();
+        let quoted = b.intern_triple(inner_s, inner_p, inner_o).unwrap();
+        b.push_quad(s, p, quoted, None).unwrap();
+        let sub = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+        b.push_quad(inner_s, sub, inner_o, None).unwrap();
         b.freeze().expect("freeze")
     }
 
     /// A dataset with a quad outside the default graph.
     fn named_graph_fixture() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(X);
-        let ty = b.intern_iri(RDF_TYPE);
-        let a = b.intern_iri(A);
-        let g = b.intern_iri("http://example.org/g");
-        b.push_quad(s, ty, a, None);
-        b.push_quad(s, ty, a, Some(g));
+        let s = b.intern_iri(X).unwrap();
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let a = b.intern_iri(A).unwrap();
+        let g = b.intern_iri("http://example.org/g").unwrap();
+        b.push_quad(s, ty, a, None).unwrap();
+        b.push_quad(s, ty, a, Some(g)).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -1826,16 +1841,18 @@ mod tests {
     /// conclude into subject position and cannot.
     fn literal_object_fixture() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(X);
-        let p = b.intern_iri("http://example.org/label");
-        let rng = b.intern_iri(RDFS_RANGE);
-        let a = b.intern_iri(A);
-        let literal = b.intern_literal(purrdf_core::RdfLiteral::typed(
-            "cat",
-            "http://www.w3.org/2001/XMLSchema#string",
-        ));
-        b.push_quad(p, rng, a, None);
-        b.push_quad(s, p, literal, None);
+        let s = b.intern_iri(X).unwrap();
+        let p = b.intern_iri("http://example.org/label").unwrap();
+        let rng = b.intern_iri(RDFS_RANGE).unwrap();
+        let a = b.intern_iri(A).unwrap();
+        let literal = b
+            .intern_literal(purrdf_core::RdfLiteral::typed(
+                "cat",
+                "http://www.w3.org/2001/XMLSchema#string",
+            ))
+            .unwrap();
+        b.push_quad(p, rng, a, None).unwrap();
+        b.push_quad(s, p, literal, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -2172,7 +2189,7 @@ mod tests {
             let p = iri(&mut b, p);
             let o = iri(&mut b, o);
             let g = g.map(|g| iri(&mut b, g));
-            b.push_quad(s, p, o, g);
+            b.push_quad(s, p, o, g).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -2350,11 +2367,13 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let s = iri(&mut b, X);
         let p = iri(&mut b, "http://example.org/age");
-        let bad = b.intern_literal(purrdf_core::RdfLiteral::typed(
-            "cat",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        b.push_quad(s, p, bad, None);
+        let bad = b
+            .intern_literal(purrdf_core::RdfLiteral::typed(
+                "cat",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        b.push_quad(s, p, bad, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         for plan in [Materialization::OwlRl, Materialization::D] {
@@ -2382,11 +2401,13 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let s = iri(&mut b, X);
         let p = iri(&mut b, "http://example.org/age");
-        let good = b.intern_literal(purrdf_core::RdfLiteral::typed(
-            "7",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        b.push_quad(s, p, good, None);
+        let good = b
+            .intern_literal(purrdf_core::RdfLiteral::typed(
+                "7",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        b.push_quad(s, p, good, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert!(materialize(&ds, Materialization::D).is_ok());
         assert!(materialize(&ds, Materialization::OwlRl).is_ok());
@@ -2416,11 +2437,15 @@ mod tests {
             let ty = iri(&mut b, RDF_TYPE);
             let fp = iri(&mut b, functional);
             let x = iri(&mut b, X);
-            let one = b.intern_literal(purrdf_core::RdfLiteral::typed(left, integer));
-            let two = b.intern_literal(purrdf_core::RdfLiteral::typed(right, integer));
-            b.push_quad(p, ty, fp, None);
-            b.push_quad(x, p, one, None);
-            b.push_quad(x, p, two, None);
+            let one = b
+                .intern_literal(purrdf_core::RdfLiteral::typed(left, integer))
+                .unwrap();
+            let two = b
+                .intern_literal(purrdf_core::RdfLiteral::typed(right, integer))
+                .unwrap();
+            b.push_quad(p, ty, fp, None).unwrap();
+            b.push_quad(x, p, one, None).unwrap();
+            b.push_quad(x, p, two, None).unwrap();
             b.freeze().expect("freeze")
         };
 
@@ -2510,9 +2535,9 @@ mod tests {
         let yy = iri(&mut b, y);
         let zz = iri(&mut b, z);
         let pp = iri(&mut b, p);
-        let quoted = b.intern_triple(x, pp, yy);
-        b.push_quad(yy, same, zz, None);
-        b.push_quad(x, says, quoted, None);
+        let quoted = b.intern_triple(x, pp, yy).unwrap();
+        b.push_quad(yy, same, zz, None).unwrap();
+        b.push_quad(x, says, quoted, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let (closed, report) = materialize(&ds, Materialization::OwlRl).expect("owl-rl");
@@ -2574,13 +2599,13 @@ mod tests {
         let sub = iri(&mut b, RDFS_SUBCLASSOF);
         let ty = iri(&mut b, RDF_TYPE);
         let bb = iri(&mut b, B);
-        let first = b.intern_blank("shared", BlankScope::DEFAULT);
-        let second = b.intern_blank("shared", BlankScope(7));
-        let class = b.intern_blank("class", BlankScope::DEFAULT);
+        let first = b.intern_blank("shared", BlankScope::DEFAULT).unwrap();
+        let second = b.intern_blank("shared", BlankScope(7)).unwrap();
+        let class = b.intern_blank("class", BlankScope::DEFAULT).unwrap();
         // `_:class ⊑ B`, and two same-labelled blanks from different scopes typed by it.
-        b.push_quad(class, sub, bb, None);
-        b.push_quad(first, ty, class, None);
-        b.push_quad(second, ty, class, None);
+        b.push_quad(class, sub, bb, None).unwrap();
+        b.push_quad(first, ty, class, None).unwrap();
+        b.push_quad(second, ty, class, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let (closed, report) = materialize(&ds, Materialization::Rdfs).expect("rdfs");
@@ -2661,12 +2686,12 @@ mod tests {
         let domain = iri(&mut b, RDFS_DOMAIN);
         for index in 0..CLASSES {
             let class = iri(&mut b, &format!("http://example.org/C{index}"));
-            b.push_quad(p, domain, class, None);
+            b.push_quad(p, domain, class, None).unwrap();
         }
         for index in 0..TRIPLES {
             let subject = iri(&mut b, &format!("http://example.org/x{index}"));
             let object = iri(&mut b, &format!("http://example.org/y{index}"));
-            b.push_quad(subject, p, object, None);
+            b.push_quad(subject, p, object, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -2780,8 +2805,8 @@ mod tests {
         let mentions = iri(&mut b, MENTIONS);
         let spo = iri(&mut b, RDFS_SUBPROPERTYOF);
         let o = object(&mut b);
-        b.push_quad(says, spo, mentions, None);
-        b.push_quad(x, says, o, None);
+        b.push_quad(says, spo, mentions, None).unwrap();
+        b.push_quad(x, says, o, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -2815,10 +2840,10 @@ mod tests {
     #[test]
     fn a_subproperty_rewrite_carries_a_triple_term_object_through() {
         let ds = rewrite_fixture(|b| {
-            let s = b.intern_iri(A);
-            let p = b.intern_iri(RDFS_SUBCLASSOF);
-            let o = b.intern_iri(B);
-            b.intern_triple(s, p, o)
+            let s = b.intern_iri(A).unwrap();
+            let p = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+            let o = b.intern_iri(B).unwrap();
+            b.intern_triple(s, p, o).unwrap()
         });
         let expected = quoted_value(A, RDFS_SUBCLASSOF, TermValue::iri(B));
         for plan in [Materialization::Rdfs, Materialization::OwlRl] {
@@ -2852,12 +2877,12 @@ mod tests {
     #[test]
     fn a_subproperty_rewrite_carries_a_nested_triple_term_through() {
         let ds = rewrite_fixture(|b| {
-            let a = b.intern_iri(A);
-            let sco = b.intern_iri(RDFS_SUBCLASSOF);
-            let bb = b.intern_iri(B);
-            let inner = b.intern_triple(a, sco, bb);
-            let p = b.intern_iri("http://example.org/p");
-            b.intern_triple(a, p, inner)
+            let a = b.intern_iri(A).unwrap();
+            let sco = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+            let bb = b.intern_iri(B).unwrap();
+            let inner = b.intern_triple(a, sco, bb).unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            b.intern_triple(a, p, inner).unwrap()
         });
         let expected = quoted_value(
             A,
@@ -2889,6 +2914,7 @@ mod tests {
                     language: Some("en".to_owned()),
                     direction: Some(direction),
                 })
+                .unwrap()
             });
             let expected = TermValue::Literal {
                 lexical_form: "hello".to_owned(),
@@ -2924,9 +2950,9 @@ mod tests {
         let a = iri(&mut b, A);
         let sco = iri(&mut b, RDFS_SUBCLASSOF);
         let bb = iri(&mut b, B);
-        let quoted = b.intern_triple(a, sco, bb);
-        b.push_quad(p, rng, a, None);
-        b.push_quad(x, p, quoted, None);
+        let quoted = b.intern_triple(a, sco, bb).unwrap();
+        b.push_quad(p, rng, a, None).unwrap();
+        b.push_quad(x, p, quoted, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         for plan in [Materialization::Rdfs, Materialization::OwlRl] {

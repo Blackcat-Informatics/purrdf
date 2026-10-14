@@ -677,20 +677,7 @@ pub(super) fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
     TermValue::from_rdf_term(term)
 }
 
-/// Convert a native owned [`RdfQuad`] into [`QuadValues`], tagging every blank node
-/// with `scope` (the per-load isolation scope) through
-/// [`TermValue::from_rdf_term_in_scope`].
-pub(super) fn rdf_quad_to_values_scoped(quad: &RdfQuad, scope: BlankScope) -> QuadValues {
-    QuadValues {
-        s: TermValue::from_rdf_term_in_scope(&quad.subject, scope),
-        p: TermValue::Iri(quad.predicate.clone()),
-        o: TermValue::from_rdf_term_in_scope(&quad.object, scope),
-        g: quad
-            .graph_name
-            .as_ref()
-            .map(|g| TermValue::from_rdf_term_in_scope(g, scope)),
-    }
-}
+pub(super) use super::load::rdf_quad_to_values_scoped;
 
 /// Convert a native owned [`RdfQuad`] into the `MutableDataset` [`QuadValues`] model
 /// under the default blank scope.

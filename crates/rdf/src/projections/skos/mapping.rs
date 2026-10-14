@@ -721,13 +721,11 @@ impl<'a> Projector<'a> {
         let mut builder = RdfDatasetBuilder::new();
         for quad in &self.output {
             let subject = intern_term(&mut builder, &quad.subject)?;
-            let predicate = builder.intern_iri(&quad.predicate);
+            let predicate = builder.intern_iri(&quad.predicate)?;
             let object = intern_term(&mut builder, &quad.object)?;
-            builder.push_quad(subject, predicate, object, None);
+            builder.push_quad(subject, predicate, object, None)?;
         }
-        builder.freeze().map_err(|error| {
-            ProjectionError::integrity(format!("SKOS output is not a valid RDF dataset: {error}"))
-        })
+        builder.freeze().map_err(ProjectionError::from)
     }
 
     fn record_quad_loss(
@@ -832,8 +830,10 @@ fn intern_term(
     term: &ProjectionTerm,
 ) -> Result<TermId, ProjectionError> {
     Ok(match term {
-        ProjectionTerm::Iri { value } => builder.intern_iri(value),
-        ProjectionTerm::Blank { label, scope } => builder.intern_blank(label, BlankScope(*scope)),
+        ProjectionTerm::Iri { value } => builder.intern_iri(value)?,
+        ProjectionTerm::Blank { label, scope } => {
+            builder.intern_blank(label, BlankScope(*scope))?
+        }
         ProjectionTerm::Literal {
             lexical,
             datatype,
@@ -844,7 +844,7 @@ fn intern_term(
             datatype: Some(datatype.clone()),
             language: language.clone(),
             direction: direction.map(Into::into),
-        }),
+        })?,
         ProjectionTerm::Triple { .. } => {
             return Err(ProjectionError::integrity(
                 "SKOS output unexpectedly contains an RDF triple term",
@@ -1061,10 +1061,12 @@ mod tests {
         object: &str,
         graph: Option<TermId>,
     ) {
-        let subject = builder.intern_iri(subject);
-        let predicate = builder.intern_iri(predicate);
-        let object = builder.intern_iri(object);
-        builder.push_quad(subject, predicate, object, graph);
+        let subject = builder.intern_iri(subject).unwrap();
+        let predicate = builder.intern_iri(predicate).unwrap();
+        let object = builder.intern_iri(object).unwrap();
+        builder
+            .push_quad(subject, predicate, object, graph)
+            .unwrap();
     }
 
     fn push_literal_quad(
@@ -1074,10 +1076,12 @@ mod tests {
         literal: RdfLiteral,
         graph: Option<TermId>,
     ) -> (TermId, TermId, TermId) {
-        let subject = builder.intern_iri(subject);
-        let predicate = builder.intern_iri(predicate);
-        let object = builder.intern_literal(literal);
-        builder.push_quad(subject, predicate, object, graph);
+        let subject = builder.intern_iri(subject).unwrap();
+        let predicate = builder.intern_iri(predicate).unwrap();
+        let object = builder.intern_literal(literal).unwrap();
+        builder
+            .push_quad(subject, predicate, object, graph)
+            .unwrap();
         (subject, predicate, object)
     }
 
@@ -1104,8 +1108,8 @@ mod tests {
         let c4 = format!("{DATA}c4");
         let mut builder = RdfDatasetBuilder::new();
         if reverse_interning {
-            let _ = builder.intern_iri(&format!("{DATA}z-unused"));
-            let _ = builder.intern_iri(&format!("{DATA}a-unused"));
+            let _ = builder.intern_iri(&format!("{DATA}z-unused")).unwrap();
+            let _ = builder.intern_iri(&format!("{DATA}a-unused")).unwrap();
         }
 
         push_iri_quad(
@@ -1171,10 +1175,14 @@ mod tests {
         ] {
             push_literal_quad(&mut builder, &c1, predicate, literal(value), None);
         }
-        let concept = builder.intern_iri(&c1);
-        let note = builder.intern_iri(docs.note());
-        let structured_note = builder.intern_blank("structured-note", BlankScope(3));
-        builder.push_quad(concept, note, structured_note, None);
+        let concept = builder.intern_iri(&c1).unwrap();
+        let note = builder.intern_iri(docs.note()).unwrap();
+        let structured_note = builder
+            .intern_blank("structured-note", BlankScope(3))
+            .unwrap();
+        builder
+            .push_quad(concept, note, structured_note, None)
+            .unwrap();
         push_iri_quad(&mut builder, &c1, relations.broader(), &c2, None);
         push_iri_quad(&mut builder, &c2, relations.narrower(), &c3, None);
         push_iri_quad(&mut builder, &c1, relations.related(), &c4, None);
@@ -1197,18 +1205,24 @@ mod tests {
             None,
         );
 
-        let graph = builder.intern_iri(&format!("{DATA}source-graph"));
-        builder.declare_named_graph(graph);
-        let blank = builder.intern_blank("unstable", BlankScope(7));
-        let junk = builder.intern_iri(&format!("{SOURCE}junk"));
-        let quoted_subject = builder.intern_iri(&c1);
-        let quoted_object = builder.intern_iri(&c2);
-        let quoted = builder.intern_triple(quoted_subject, junk, quoted_object);
-        builder.push_quad(blank, junk, quoted, Some(graph));
-        let reifier = builder.intern_blank("reifier", BlankScope(9));
-        builder.push_reifier_in_graph(reifier, quoted, Some(graph));
-        let annotation_predicate = builder.intern_iri(&format!("{SOURCE}confidence"));
-        builder.push_annotation_in_graph(reifier, annotation_predicate, quoted, Some(graph));
+        let graph = builder.intern_iri(&format!("{DATA}source-graph")).unwrap();
+        builder.declare_named_graph(graph).unwrap();
+        let blank = builder.intern_blank("unstable", BlankScope(7)).unwrap();
+        let junk = builder.intern_iri(&format!("{SOURCE}junk")).unwrap();
+        let quoted_subject = builder.intern_iri(&c1).unwrap();
+        let quoted_object = builder.intern_iri(&c2).unwrap();
+        let quoted = builder
+            .intern_triple(quoted_subject, junk, quoted_object)
+            .unwrap();
+        builder.push_quad(blank, junk, quoted, Some(graph)).unwrap();
+        let reifier = builder.intern_blank("reifier", BlankScope(9)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, quoted, Some(graph))
+            .unwrap();
+        let annotation_predicate = builder.intern_iri(&format!("{SOURCE}confidence")).unwrap();
+        builder
+            .push_annotation_in_graph(reifier, annotation_predicate, quoted, Some(graph))
+            .unwrap();
         builder.freeze().expect("SKOS fixture")
     }
 
@@ -1313,7 +1327,7 @@ mod tests {
         let source = source_roles();
         let mut builder = RdfDatasetBuilder::new();
         let graph_iri = format!("{DATA}selected");
-        let graph = builder.intern_iri(&graph_iri);
+        let graph = builder.intern_iri(&graph_iri).unwrap();
         push_literal_quad(
             &mut builder,
             &format!("{DATA}default-concept"),
@@ -1504,8 +1518,8 @@ mod tests {
     #[test]
     fn explicitly_empty_named_graph_has_a_located_loss() {
         let mut builder = RdfDatasetBuilder::new();
-        let graph = builder.intern_iri(&format!("{DATA}empty"));
-        builder.declare_named_graph(graph);
+        let graph = builder.intern_iri(&format!("{DATA}empty")).unwrap();
+        builder.declare_named_graph(graph).unwrap();
         let dataset = builder.freeze().expect("empty graph dataset");
         let projected = project_skos(
             dataset.as_ref(),

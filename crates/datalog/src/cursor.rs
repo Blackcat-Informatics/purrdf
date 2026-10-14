@@ -38,6 +38,7 @@ use core::cmp::{Ordering, Reverse};
 use core::fmt;
 use std::collections::BinaryHeap;
 
+use crate::dictionary::TermIdentity;
 use crate::id::{RowId, TermId};
 use crate::store::{Batch, Bound, Relation, Tail};
 
@@ -47,7 +48,7 @@ use crate::store::{Batch, Bound, Relation, Tail};
 mod sealed {
     pub trait Sealed {}
 
-    impl Sealed for super::RowCursor<'_> {}
+    impl<I: super::TermIdentity> Sealed for super::RowCursor<'_, I> {}
 }
 
 /// A lending iterator over a relation's id rows: it yields borrowed views tied to the
@@ -82,7 +83,7 @@ enum Inner<'a> {
     /// entry is a column position.
     Perm {
         /// The `(object, subject)`-ordered positions matching the bound object.
-        perm: &'a [u32],
+        perm: &'a [usize],
         /// The next index into `perm`.
         pos: usize,
     },
@@ -102,11 +103,11 @@ enum Inner<'a> {
 /// Borrows the relation for the cursor's lifetime; every yielded row is resolved
 /// through the batch columns or the tail, so nothing is cloned or allocated per row.
 /// The bound shape drives the per-source run.
-pub struct RowCursor<'a> {
+pub struct RowCursor<'a, I: TermIdentity = TermId> {
     /// The arrangement being scanned.
-    rel: &'a Relation,
+    rel: &'a Relation<I>,
     /// The selection this cursor enumerates.
-    bound: Bound,
+    bound: Bound<I>,
     /// The current arrangement leg: `0..batches.len()` selects that batch, an index
     /// equal to `batches.len()` selects the tail, and anything greater is exhausted.
     src: usize,
@@ -114,7 +115,7 @@ pub struct RowCursor<'a> {
     inner: Inner<'a>,
 }
 
-impl fmt::Debug for RowCursor<'_> {
+impl<I: TermIdentity> fmt::Debug for RowCursor<'_, I> {
     /// Prints the cursor's position, never the borrowed columns: a cursor is a
     /// position, and dumping a relation's whole arrangement into a diagnostic would be
     /// both enormous and useless.
@@ -134,10 +135,10 @@ impl fmt::Debug for RowCursor<'_> {
     }
 }
 
-impl<'a> RowCursor<'a> {
+impl<'a, I: TermIdentity> RowCursor<'a, I> {
     /// A cursor over the rows of `rel` selected by `bound`, positioned at the first
     /// source (batch 0, or the tail, or exhausted).
-    pub(crate) fn new(rel: &'a Relation, bound: Bound) -> Self {
+    pub(crate) fn new(rel: &'a Relation<I>, bound: Bound<I>) -> Self {
         let mut cursor = Self {
             rel,
             bound,
@@ -156,7 +157,7 @@ impl<'a> RowCursor<'a> {
         let batches = self.rel.batches();
         self.inner = match src.cmp(&batches.len()) {
             Ordering::Less => {
-                let b: &Batch = &batches[src];
+                let b: &Batch<(), I> = &batches[src];
                 match self.bound {
                     Bound::Any => Inner::Range {
                         pos: 0,
@@ -180,7 +181,7 @@ impl<'a> RowCursor<'a> {
 
     /// Whether the tail row `(s, o)` satisfies `bound`.
     #[inline]
-    fn tail_matches(bound: Bound, s: TermId, o: TermId) -> bool {
+    fn tail_matches(bound: Bound<I>, s: I, o: I) -> bool {
         match bound {
             Bound::Any => true,
             Bound::Subject(bs) => s == bs,
@@ -197,9 +198,9 @@ impl<'a> RowCursor<'a> {
     }
 }
 
-impl LendingIterator for RowCursor<'_> {
+impl<I: TermIdentity> LendingIterator for RowCursor<'_, I> {
     type Item<'a>
-        = (TermId, TermId, RowId)
+        = (I, I, RowId)
     where
         Self: 'a;
 
@@ -217,7 +218,7 @@ impl LendingIterator for RowCursor<'_> {
                 }
                 Inner::Perm { perm, pos } => {
                     if *pos < perm.len() {
-                        let p = perm[*pos] as usize;
+                        let p = perm[*pos];
                         *pos += 1;
                         return Some(rel.batches()[self.src].row_at(p));
                     }
@@ -254,12 +255,12 @@ pub const VALUE_SUBJECT: u8 = 0;
 pub const VALUE_OBJECT: u8 = 1;
 
 /// One sorted arrangement run viewed in the requested trie orientation.
-enum OrderedSource<'a, const COLUMN: u8> {
+enum OrderedSource<'a, const COLUMN: u8, I: TermIdentity> {
     /// A contiguous primary-column range: a whole subject-major batch, or one
     /// subject-bound object run.
     Range {
         /// The batch these positions index.
-        batch: &'a Batch,
+        batch: &'a Batch<(), I>,
         /// The next column position.
         pos: usize,
         /// One past the last column position.
@@ -269,9 +270,9 @@ enum OrderedSource<'a, const COLUMN: u8> {
     /// subject run.
     Perm {
         /// The batch these positions index.
-        batch: &'a Batch,
+        batch: &'a Batch<(), I>,
         /// The `(object, subject)`-ordered positions of this run.
-        positions: &'a [u32],
+        positions: &'a [usize],
         /// The next index into `positions`.
         pos: usize,
     },
@@ -279,7 +280,7 @@ enum OrderedSource<'a, const COLUMN: u8> {
     /// positions are sorted ONCE per cursor; the rows themselves are never copied.
     Tail {
         /// The relation's tail rows.
-        tail: &'a Tail,
+        tail: &'a Tail<I>,
         /// The matching tail indices, in projected `(value, row)` order.
         positions: Box<[u32]>,
         /// The next index into `positions`.
@@ -287,11 +288,11 @@ enum OrderedSource<'a, const COLUMN: u8> {
     },
 }
 
-impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
+impl<const COLUMN: u8, I: TermIdentity> OrderedSource<'_, COLUMN, I> {
     /// The column this orientation orders by. Resolved at monomorphisation, never
     /// re-branched per tuple.
     #[inline]
-    fn project(subject: TermId, object: TermId) -> TermId {
+    fn project(subject: I, object: I) -> I {
         match COLUMN {
             VALUE_SUBJECT => subject,
             VALUE_OBJECT => object,
@@ -301,7 +302,7 @@ impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
 
     /// Whether the row's OTHER column equals the fixed value.
     #[inline]
-    fn other_matches(other: TermId, subject: TermId, object: TermId) -> bool {
+    fn other_matches(other: I, subject: I, object: I) -> bool {
         match COLUMN {
             VALUE_SUBJECT => object == other,
             VALUE_OBJECT => subject == other,
@@ -311,20 +312,20 @@ impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
 
     /// The projected `(value, row)` pair at a batch column position.
     #[inline]
-    fn batch_row(batch: &Batch, position: usize) -> (TermId, RowId) {
+    fn batch_row(batch: &Batch<(), I>, position: usize) -> (I, RowId) {
         let (subject, object, row) = batch.row_at(position);
         (Self::project(subject, object), row)
     }
 
     /// The projected `(value, row)` pair at a tail index.
     #[inline]
-    fn tail_row(tail: &Tail, position: usize) -> (TermId, RowId) {
+    fn tail_row(tail: &Tail<I>, position: usize) -> (I, RowId) {
         let (subject, object, row) = tail.row(position);
         (Self::project(subject, object), row)
     }
 
     /// The run's current pair, without advancing.
-    fn peek(&self) -> Option<(TermId, RowId)> {
+    fn peek(&self) -> Option<(I, RowId)> {
         match self {
             Self::Range { batch, pos, end } => (*pos < *end).then(|| Self::batch_row(batch, *pos)),
             Self::Perm {
@@ -333,7 +334,7 @@ impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
                 pos,
             } => positions
                 .get(*pos)
-                .map(|&position| Self::batch_row(batch, position as usize)),
+                .map(|&position| Self::batch_row(batch, position)),
             Self::Tail {
                 tail,
                 positions,
@@ -345,7 +346,7 @@ impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
     }
 
     /// The run's current pair, advancing past it.
-    fn pop(&mut self) -> Option<(TermId, RowId)> {
+    fn pop(&mut self) -> Option<(I, RowId)> {
         let row = self.peek()?;
         match self {
             Self::Range { pos, .. } | Self::Perm { pos, .. } | Self::Tail { pos, .. } => {
@@ -356,7 +357,7 @@ impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
     }
 
     /// Seek this sorted run to its first projected value `>= target`.
-    fn seek(&mut self, target: TermId) {
+    fn seek(&mut self, target: I) {
         match self {
             Self::Range { batch, pos, end } => {
                 let (mut lo, mut hi) = (*pos, *end);
@@ -375,9 +376,8 @@ impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
                 positions,
                 pos,
             } => {
-                let offset = positions[*pos..].partition_point(|&position| {
-                    Self::batch_row(batch, position as usize).0 < target
-                });
+                let offset = positions[*pos..]
+                    .partition_point(|&position| Self::batch_row(batch, position).0 < target);
                 *pos += offset;
             }
             Self::Tail {
@@ -399,22 +399,23 @@ impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
 /// Immutable batches already carry the two orders this needs: `(subject, object)` in
 /// their primary columns and `(object, subject)` in the lazy permutation. This cursor
 /// k-way merges those sorted runs plus the bounded tail, yielding projected
-/// `(TermId, RowId)` pairs without materialising or re-sorting relation rows, and
+/// `(I, RowId)` pairs without materialising or re-sorting relation rows, and
 /// supports the [`seek`](Self::seek) a leapfrog intersection drives.
 ///
-/// The order is by interned [`TermId`], i.e. mint order — an INTERNAL join order shared
-/// by every relation of one store, because they share one dictionary. It is never an
-/// emission order.
-pub struct ValueCursor<'a, const COLUMN: u8> {
+/// The order is the identity carrier's `Ord`, shared by every relation of one
+/// dictionary. Native [`TermId`] uses mint order; host identities retain their own
+/// internal order. Neither certifies lexical or value order. Equal values retain
+/// arrangement order, not global row-id order. This is never an emission order.
+pub struct ValueCursor<'a, const COLUMN: u8, I: TermIdentity = TermId> {
     /// The non-exhausted sorted runs, in arrangement order.
-    sources: Vec<OrderedSource<'a, COLUMN>>,
+    sources: Vec<OrderedSource<'a, COLUMN, I>>,
     /// One current row from every non-exhausted source. `Reverse` turns the standard
     /// max-heap into a min-frontier; the source index in the key makes the pop order
     /// total, so equal `(value, row)` pairs cannot tie.
-    frontier: BinaryHeap<Reverse<(TermId, RowId, usize)>>,
+    frontier: BinaryHeap<Reverse<(I, RowId, usize)>>,
 }
 
-impl<const COLUMN: u8> fmt::Debug for ValueCursor<'_, COLUMN> {
+impl<const COLUMN: u8, I: TermIdentity> fmt::Debug for ValueCursor<'_, COLUMN, I> {
     /// Prints the merge shape, never the borrowed columns.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ValueCursor")
@@ -425,10 +426,10 @@ impl<const COLUMN: u8> fmt::Debug for ValueCursor<'_, COLUMN> {
     }
 }
 
-impl<'a, const COLUMN: u8> ValueCursor<'a, COLUMN> {
+impl<'a, const COLUMN: u8, I: TermIdentity> ValueCursor<'a, COLUMN, I> {
     /// A cursor over `rel`'s trie level in this orientation, optionally fixing the
     /// OTHER column to `other`.
-    pub(crate) fn new(rel: &'a Relation, other: Option<TermId>) -> Self {
+    pub(crate) fn new(rel: &'a Relation<I>, other: Option<I>) -> Self {
         let mut sources = Vec::with_capacity(rel.batches().len() + 1);
         for batch in rel.batches() {
             let source = match (COLUMN, other) {
@@ -496,14 +497,14 @@ impl<'a, const COLUMN: u8> ValueCursor<'a, COLUMN> {
 
     /// The column this orientation orders by.
     #[inline]
-    fn project(subject: TermId, object: TermId) -> TermId {
-        OrderedSource::<COLUMN>::project(subject, object)
+    fn project(subject: I, object: I) -> I {
+        OrderedSource::<COLUMN, I>::project(subject, object)
     }
 
     /// Whether the row's OTHER column equals the fixed value.
     #[inline]
-    fn other_matches(other: TermId, subject: TermId, object: TermId) -> bool {
-        OrderedSource::<COLUMN>::other_matches(other, subject, object)
+    fn other_matches(other: I, subject: I, object: I) -> bool {
+        OrderedSource::<COLUMN, I>::other_matches(other, subject, object)
     }
 
     /// Refill the min-frontier from every source's current pair.
@@ -518,7 +519,7 @@ impl<'a, const COLUMN: u8> ValueCursor<'a, COLUMN> {
 
     /// Seek every sorted run, positioning the merged cursor at its first value
     /// `>= target`.
-    pub fn seek(&mut self, target: TermId) {
+    pub fn seek(&mut self, target: I) {
         for source in &mut self.sources {
             source.seek(target);
         }
@@ -526,10 +527,10 @@ impl<'a, const COLUMN: u8> ValueCursor<'a, COLUMN> {
     }
 }
 
-impl<const COLUMN: u8> Iterator for ValueCursor<'_, COLUMN> {
-    type Item = (TermId, RowId);
+impl<const COLUMN: u8, I: TermIdentity> Iterator for ValueCursor<'_, COLUMN, I> {
+    type Item = (I, RowId);
 
-    /// Yield the globally-smallest remaining `(value, row)` pair and advance its run.
+    /// Yield a row at the globally-smallest remaining value and advance its run.
     fn next(&mut self) -> Option<Self::Item> {
         let Reverse((expected_value, expected_row, source)) = self.frontier.pop()?;
         let row = self.sources[source]
@@ -605,6 +606,7 @@ mod tests {
         for (sub, obj) in tuples {
             assert!(
                 s.insert(sub, P, obj, RelationStore::DEFAULT_GRAPH)
+                    .unwrap()
                     .is_some(),
                 "fixture rows are distinct"
             );
@@ -690,6 +692,7 @@ mod tests {
         for (sub, obj) in [("a", "b"), ("a", "c"), ("b", "c")] {
             assert!(
                 s.insert(&iri(sub), k, &iri(obj), RelationStore::DEFAULT_GRAPH)
+                    .unwrap()
                     .is_some()
             );
         }

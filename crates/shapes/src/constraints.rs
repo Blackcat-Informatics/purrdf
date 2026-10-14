@@ -927,7 +927,7 @@ fn conforms_memoized<'a>(
     context: ValidationContext<'a, '_>,
     plan: ShapePlan<'a>,
     focus: &FocusNode,
-) -> Result<bool, String> {
+) -> Result<bool, crate::error::ShapesError> {
     // Both halves of the key must be present for this question to be memoizable:
     // a non-interned value node has no identity to key on (two non-interned terms
     // can be equal), and a blank-node-identified shape has no second site to share
@@ -975,7 +975,7 @@ pub fn validate_shape(
     store: &ShaclData,
     focus: &Term,
     shape: &Shape,
-) -> Result<Vec<ValidationResult>, String> {
+) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     validate_shape_with(store, focus, shape, None)
 }
 
@@ -996,7 +996,7 @@ pub fn validate_shape_with(
     focus: &Term,
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
-) -> Result<Vec<ValidationResult>, String> {
+) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     // A caller holding only a parsed shape has no preparation to reuse, so the
     // lowering is derived here for this one call. A caller validating MANY focus
     // nodes should hold a `PreparedShapes`, which memoizes it.
@@ -1010,7 +1010,7 @@ pub(crate) fn validate_shape_with_plan_at(
     focus: &FocusNode,
     box_role_vocab: Option<&BoxRoleVocab>,
     plan: ShapePlan<'_>,
-) -> Result<Vec<ValidationResult>, String> {
+) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     validate_shape_with_depth(store, focus, box_role_vocab, plan, 0)
 }
 
@@ -1080,7 +1080,7 @@ fn validate_shape_with_depth(
     box_role_vocab: Option<&BoxRoleVocab>,
     plan: ShapePlan<'_>,
     depth: u32,
-) -> Result<Vec<ValidationResult>, String> {
+) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     let memo = ConformanceMemo::default();
     let context = ValidationContext {
         store,
@@ -1099,7 +1099,7 @@ fn validate_shape_with_depth(
 fn collect_shape(
     context: ValidationContext<'_, '_>,
     focus: &FocusNode,
-) -> Result<Vec<ValidationResult>, String> {
+) -> Result<Vec<ValidationResult>, crate::error::ShapesError> {
     let mut sink = Collect::default();
     walk_shape(context, focus, &mut sink)?;
     Ok(sink.results)
@@ -1112,7 +1112,7 @@ pub(crate) fn validate_shape_with_evidence_at<'a>(
     box_role_vocab: Option<&'a BoxRoleVocab>,
     plan: ShapePlan<'a>,
     capture: &'a crate::report::ReportCapture<'a>,
-) -> Result<Vec<ResultRecord>, String> {
+) -> Result<Vec<ResultRecord>, crate::error::ShapesError> {
     let local_capture = crate::report::ReportCapture::with_sources(
         capture.shapes,
         capture.profile,
@@ -1152,7 +1152,7 @@ pub(crate) fn validate_shape_with_evidence_at<'a>(
         // The first candidate's semantic cause was suppressed by conformance.
         // Replace only that successful traversal's cause with its hard refusal.
         local_capture.take_failure();
-        outcome = Err(local_capture.refuse(refusal));
+        outcome = Err(local_capture.refuse(refusal).into());
     }
     if outcome.is_err() {
         capture.record_focus_failure(store.core_view(), focus, local_capture.take_failure());
@@ -1167,7 +1167,7 @@ fn collect_details<S: ResultSink>(
     context: ValidationContext<'_, '_>,
     focus: &FocusNode,
     retain: impl Fn(&ValidationResult) -> bool,
-) -> Result<DetailResults, String> {
+) -> Result<DetailResults, crate::error::ShapesError> {
     if S::RECORDS_EVIDENCE {
         let mut sink = CollectEvidence::default();
         walk_shape(context, focus, &mut sink)?;
@@ -1202,7 +1202,7 @@ fn walk_shape<S: ResultSink>(
     context: ValidationContext<'_, '_>,
     focus: &FocusNode,
     sink: &mut S,
-) -> Result<Flow, String> {
+) -> Result<Flow, crate::error::ShapesError> {
     let plan = context.plan;
     let shape = plan.shape();
     if context.depth > crate::expression::MAX_RECURSION_DEPTH {
@@ -1211,7 +1211,7 @@ fn walk_shape<S: ResultSink>(
             context.depth,
             crate::expression::MAX_RECURSION_DEPTH,
             shape.id
-        ));
+        ).into());
     }
     if shape.deactivated {
         return Ok(Flow::Continue);
@@ -1421,7 +1421,11 @@ fn permitted_by_types(
 ///
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
-pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, String> {
+pub fn conforms(
+    store: &ShaclData,
+    focus: &Term,
+    shape: &Shape,
+) -> Result<bool, crate::error::ShapesError> {
     let lowering = OneShotLowering::of(store, shape);
     conforms_with_id_depth(
         store,
@@ -1445,7 +1449,7 @@ pub(crate) fn conforms_with_plan(
     store: &ShaclData,
     focus: &Term,
     plan: ShapePlan<'_>,
-) -> Result<bool, String> {
+) -> Result<bool, crate::error::ShapesError> {
     conforms_with_id_depth(
         store,
         &FocusNode::resolve(store.core_view(), focus),
@@ -1466,7 +1470,7 @@ pub(crate) fn conforms_with_id_depth(
     focus: &FocusNode,
     plan: ShapePlan<'_>,
     depth: u32,
-) -> Result<bool, String> {
+) -> Result<bool, crate::error::ShapesError> {
     let memo = ConformanceMemo::default();
     let context = ValidationContext {
         store,
@@ -1513,7 +1517,7 @@ fn eval_property_shape<'a, S: ResultSink>(
     property_plan: PropertyPlan<'a>,
     parent_box_roles: &[NamedNode],
     sink: &mut S,
-) -> Result<Flow, String> {
+) -> Result<Flow, crate::error::ShapesError> {
     let store = context.store;
     // A deactivated property shape validates nothing (SHACL §2.1.3.3).
     if ps.deactivated {
@@ -1655,7 +1659,7 @@ fn property_value_nodes(
     ps: &PropertyShape,
     property_plan: PropertyPlan<'_>,
     depth: u32,
-) -> Result<SmallVec<[ValueNode; 4]>, String> {
+) -> Result<SmallVec<[ValueNode; 4]>, crate::error::ShapesError> {
     let lowered_path = property_plan.path();
     let binding = property_plan.parent().binding();
     let mut value_nodes: SmallVec<[ValueNode; 4]> = match focus {
@@ -1684,7 +1688,7 @@ fn property_value_nodes(
                         lowered: &crate::plan::LoweredExpr,
                         value_nodes: &mut SmallVec<[ValueNode; 4]>,
                         which: &str|
-     -> Result<(), String> {
+     -> Result<(), crate::error::ShapesError> {
         let produced = crate::expression::eval_planned_node_expr(
             store,
             &focus_term,
@@ -1693,7 +1697,12 @@ fn property_value_nodes(
             property_plan.parent(),
             &mut guard,
         )
-        .map_err(|e| format!("{which} of property shape {} at {focus_term}: {e}", ps.id))?;
+        .map_err(|error| {
+            error.context(&format!(
+                "{which} of property shape {} at {focus_term}: ",
+                ps.id
+            ))
+        })?;
         for term in produced {
             let node = match FocusNode::resolve(ds, &term) {
                 FocusNode::Interned(id) => ValueNode::Interned(id),
@@ -1737,7 +1746,7 @@ pub(crate) fn property_value_terms(
     focus: &Term,
     ps: &PropertyShape,
     property_plan: PropertyPlan<'_>,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     let ds = store.core_view();
     let focus = FocusNode::resolve(ds, focus);
     Ok(property_value_nodes(store, &focus, ps, property_plan, 0)?
@@ -1805,7 +1814,7 @@ impl ReifierEvalContext<'_, '_, '_> {
 fn eval_reifier_shapes<S: ResultSink>(
     ctx: ReifierEvalContext<'_, '_, '_>,
     sink: &mut S,
-) -> Result<Flow, String> {
+) -> Result<Flow, crate::error::ShapesError> {
     let ReifierEvalContext {
         context,
         focus,
@@ -2216,7 +2225,7 @@ fn eval_constraint<'a, S: ResultSink>(
     path: Option<&Path>,
     source: ConstraintSource<'_>,
     sink: &mut S,
-) -> Result<Flow, String> {
+) -> Result<Flow, crate::error::ShapesError> {
     let store = context.store;
     let depth = context.depth;
     let ds = store.core_view();
@@ -2618,7 +2627,7 @@ fn eval_constraint<'a, S: ResultSink>(
         // without one conforming is it produced. The result names no `sh:value` —
         // no single value node caused it.
         PlannedConstraint::SomeValue(some_value) => {
-            let mut failure: Option<String> = None;
+            let mut failure: Option<crate::error::ShapesError> = None;
             let mut any_conforms = false;
             for value in value_nodes {
                 match conforms_memoized(context, some_value, &value.as_focus(ds)) {
@@ -2627,6 +2636,7 @@ fn eval_constraint<'a, S: ResultSink>(
                         break;
                     }
                     Ok(false) => {}
+                    Err(error @ crate::error::ShapesError::Storage(_)) => return Err(error),
                     Err(error) => {
                         failure.get_or_insert(error);
                     }
@@ -3377,7 +3387,9 @@ fn eval_constraint<'a, S: ResultSink>(
                         bnode_mint_prefix: mint_prefix.as_deref(),
                     }),
             )
-            .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?;
+            .map_err(|error| {
+                error.context(&format!("sh:sparql constraint on shape {source_shape}: "))
+            })?;
             // A SHACL-SPARQL validator answers in RESULTS rather than in a
             // per-value-node verdict, so the query runs whatever the sink is;
             // what the sink decides is only whether they are kept.
@@ -3446,7 +3458,11 @@ fn eval_constraint<'a, S: ResultSink>(
                     &mut guard,
                     crate::expression::Scope::bound(&binding),
                 )
-                .map_err(|e| format!("sh:expression constraint on shape {source_shape}: {e}"))?;
+                .map_err(|error| {
+                    error.context(&format!(
+                        "sh:expression constraint on shape {source_shape}: "
+                    ))
+                })?;
                 if !crate::expression::is_true(&out) {
                     emit!(severity = &sev; {
                         let mut r = result!(
@@ -3525,10 +3541,10 @@ fn eval_constraint<'a, S: ResultSink>(
                                 context.plan,
                                 &mut guard,
                             )
-                            .map_err(|e| {
-                                format!(
-                                    "sh:nodeByExpression constraint on shape {source_shape}: {e}"
-                                )
+                            .map_err(|error| {
+                                error.context(&format!(
+                                    "sh:nodeByExpression constraint on shape {source_shape}: "
+                                ))
                             })?,
                         ))
                     }
@@ -3557,12 +3573,9 @@ fn eval_constraint<'a, S: ResultSink>(
                         })?;
                         let conforms =
                             conforms_with_id_depth(store, &judged, shape_plan, next_depth)
-                                .map_err(|e| {
-                                    format!(
-                                        "sh:nodeByExpression constraint on shape \
-                                         {source_shape}: {e}"
-                                    )
-                                })?;
+                                .map_err(|error| error.context(&format!(
+                                    "sh:nodeByExpression constraint on shape {source_shape}: "
+                                )))?;
                         if !conforms {
                             emit!(severity = &sev; {
                                 let mut r = result!(
@@ -3706,7 +3719,9 @@ fn eval_constraint<'a, S: ResultSink>(
                         }),
                 ),
             }
-            .map_err(|e| format!("component validator on shape {source_shape}: {e}"))?;
+            .map_err(|error| {
+                error.context(&format!("component validator on shape {source_shape}: "))
+            })?;
             // As for `sh:sparql`: a custom component answers in results, so the
             // validator runs whatever the sink is.
             for produced_result in produced {
@@ -5211,11 +5226,13 @@ mod tests {
             let error = super::validate_shape(&data, &ex("stray"), shape_named(local))
                 .expect_err("a produced node that is not a shape must be a hard error");
             assert!(
-                error.contains("is not a shape of this shapes graph"),
+                error
+                    .to_string()
+                    .contains("is not a shape of this shapes graph"),
                 "ex:{local}: got {error}"
             );
             assert!(
-                error.contains("NotAShape"),
+                error.to_string().contains("NotAShape"),
                 "ex:{local}: the diagnostic must name the produced node, got {error}"
             );
         }

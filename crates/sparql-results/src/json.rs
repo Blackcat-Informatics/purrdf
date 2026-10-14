@@ -892,13 +892,15 @@ mod tests {
     #[test]
     fn graph_result_wraps_nquads() {
         let mut builder = RdfDatasetBuilder::new();
-        builder.push_owned_quad(&RdfQuad {
-            subject: RdfTerm::iri("http://example.org/s"),
-            predicate: "http://example.org/p".to_string(),
-            object: RdfTerm::iri("http://example.org/o"),
-            graph_name: None,
-            location: None,
-        });
+        builder
+            .push_owned_quad(&RdfQuad {
+                subject: RdfTerm::iri("http://example.org/s"),
+                predicate: "http://example.org/p".to_string(),
+                object: RdfTerm::iri("http://example.org/o"),
+                graph_name: None,
+                location: None,
+            })
+            .unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
         let result = SparqlResult::Graph(dataset.into());
 
@@ -924,13 +926,15 @@ mod tests {
     #[test]
     fn graph_result_carries_the_named_graph() {
         let mut builder = RdfDatasetBuilder::new();
-        builder.push_owned_quad(&RdfQuad {
-            subject: RdfTerm::iri("http://example.org/s"),
-            predicate: "http://example.org/p".to_string(),
-            object: RdfTerm::iri("http://example.org/o"),
-            graph_name: Some(RdfTerm::iri("http://example.org/g1")),
-            location: None,
-        });
+        builder
+            .push_owned_quad(&RdfQuad {
+                subject: RdfTerm::iri("http://example.org/s"),
+                predicate: "http://example.org/p".to_string(),
+                object: RdfTerm::iri("http://example.org/o"),
+                graph_name: Some(RdfTerm::iri("http://example.org/g1")),
+                location: None,
+            })
+            .unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
         let result = SparqlResult::Graph(dataset.into());
 

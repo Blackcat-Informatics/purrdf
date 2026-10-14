@@ -1874,22 +1874,25 @@ mod tests {
 
     fn example_dataset() -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let alice = b.intern_iri(&format!("{EX}alice"));
-        let bob = b.intern_iri(&format!("{EX}bob"));
-        let knows = b.intern_iri(KNOWS);
-        let claim = b.intern_iri(CLAIM);
-        let carol = b.intern_iri(CAROL);
-        let attributed_to = b.intern_iri(ATTRIBUTED_TO);
-        let confidence = b.intern_iri(CONFIDENCE);
-        let confidence_value = b.intern_literal(RdfLiteral::typed(
-            "0.8",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        let statement = b.intern_triple(alice, knows, bob);
-        b.push_quad(alice, knows, bob, None);
-        b.push_reifier(claim, statement);
-        b.push_annotation(claim, attributed_to, carol);
-        b.push_annotation(claim, confidence, confidence_value);
+        let alice = b.intern_iri(&format!("{EX}alice")).unwrap();
+        let bob = b.intern_iri(&format!("{EX}bob")).unwrap();
+        let knows = b.intern_iri(KNOWS).unwrap();
+        let claim = b.intern_iri(CLAIM).unwrap();
+        let carol = b.intern_iri(CAROL).unwrap();
+        let attributed_to = b.intern_iri(ATTRIBUTED_TO).unwrap();
+        let confidence = b.intern_iri(CONFIDENCE).unwrap();
+        let confidence_value = b
+            .intern_literal(RdfLiteral::typed(
+                "0.8",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        let statement = b.intern_triple(alice, knows, bob).unwrap();
+        b.push_quad(alice, knows, bob, None).unwrap();
+        b.push_reifier(claim, statement).unwrap();
+        b.push_annotation(claim, attributed_to, carol).unwrap();
+        b.push_annotation(claim, confidence, confidence_value)
+            .unwrap();
         b.freeze().expect("valid dataset")
     }
 

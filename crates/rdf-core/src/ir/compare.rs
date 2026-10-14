@@ -133,13 +133,13 @@ mod tests {
     use super::super::term::TermId;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     fn ground_triple() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
         b.freeze().expect("valid")
     }
 
@@ -159,7 +159,7 @@ mod tests {
             iri(&mut bb, "p"),
             iri(&mut bb, "DIFFERENT"),
         );
-        bb.push_quad(s, p, o, None);
+        bb.push_quad(s, p, o, None).unwrap();
         let b = bb.freeze().expect("valid");
         assert!(!datasets_isomorphic(&a, &b));
     }
@@ -171,11 +171,11 @@ mod tests {
         let build = |reifiers: &[&str]| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let triple = b.intern_triple(s, p, o);
-            b.push_quad(s, p, o, None);
+            let triple = b.intern_triple(s, p, o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
             for r in reifiers {
                 let rid = iri(&mut b, r);
-                b.push_reifier(rid, triple);
+                b.push_reifier(rid, triple).unwrap();
             }
             b.freeze().expect("valid")
         };
@@ -195,14 +195,14 @@ mod tests {
         let build = |with_annotation: bool| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let triple = b.intern_triple(s, p, o);
+            let triple = b.intern_triple(s, p, o).unwrap();
             let r = iri(&mut b, "r");
-            b.push_quad(s, p, o, None);
-            b.push_reifier(r, triple);
+            b.push_quad(s, p, o, None).unwrap();
+            b.push_reifier(r, triple).unwrap();
             if with_annotation {
                 let ap = iri(&mut b, "ap");
                 let ao = iri(&mut b, "ao");
-                b.push_annotation(r, ap, ao);
+                b.push_annotation(r, ap, ao).unwrap();
             }
             b.freeze().expect("valid")
         };
@@ -216,13 +216,15 @@ mod tests {
         let build = |dir: Option<RdfTextDirection>| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
-            let lit = b.intern_literal(RdfLiteral {
-                lexical_form: "x".to_owned(),
-                datatype: None,
-                language: Some("en".to_owned()),
-                direction: dir,
-            });
-            b.push_quad(s, p, lit, None);
+            let lit = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: "x".to_owned(),
+                    datatype: None,
+                    language: Some("en".to_owned()),
+                    direction: dir,
+                })
+                .unwrap();
+            b.push_quad(s, p, lit, None).unwrap();
             b.freeze().expect("valid")
         };
         assert!(!datasets_isomorphic(
@@ -242,8 +244,8 @@ mod tests {
         let build = |label: &str, scope: u32| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
-            let blank = b.intern_blank(label, BlankScope(scope));
-            b.push_quad(s, p, blank, None);
+            let blank = b.intern_blank(label, BlankScope(scope)).unwrap();
+            b.push_quad(s, p, blank, None).unwrap();
             b.freeze().expect("valid")
         };
         let a = build("b1", 0);
@@ -262,10 +264,10 @@ mod tests {
         let build = |neighbour: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, link) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "link"));
-            let blank = b.intern_blank("b", BlankScope::DEFAULT);
+            let blank = b.intern_blank("b", BlankScope::DEFAULT).unwrap();
             let nb = iri(&mut b, neighbour);
-            b.push_quad(s, p, blank, None);
-            b.push_quad(blank, link, nb, None);
+            b.push_quad(s, p, blank, None).unwrap();
+            b.push_quad(blank, link, nb, None).unwrap();
             b.freeze().expect("valid")
         };
         assert!(!datasets_isomorphic(&build("o1"), &build("o2")));
@@ -282,10 +284,10 @@ mod tests {
             let p = iri(&mut b, "p");
             let a_node = iri(&mut b, "A");
             let b_node = iri(&mut b, "B");
-            let x = b.intern_blank(l1, BlankScope(s1));
-            let y = b.intern_blank(l2, BlankScope(s2));
-            b.push_quad(x, p, a_node, None);
-            b.push_quad(y, p, b_node, None);
+            let x = b.intern_blank(l1, BlankScope(s1)).unwrap();
+            let y = b.intern_blank(l2, BlankScope(s2)).unwrap();
+            b.push_quad(x, p, a_node, None).unwrap();
+            b.push_quad(y, p, b_node, None).unwrap();
             b.freeze().expect("valid")
         };
         let a = build("x", 0, "y", 0);
@@ -302,10 +304,10 @@ mod tests {
         let build = |l1: &str, l2: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let p = iri(&mut b, "p");
-            let x = b.intern_blank(l1, BlankScope(0));
-            let y = b.intern_blank(l2, BlankScope(0));
-            b.push_quad(x, p, y, None);
-            b.push_quad(y, p, x, None);
+            let x = b.intern_blank(l1, BlankScope(0)).unwrap();
+            let y = b.intern_blank(l2, BlankScope(0)).unwrap();
+            b.push_quad(x, p, y, None).unwrap();
+            b.push_quad(y, p, x, None).unwrap();
             b.freeze().expect("valid")
         };
         assert!(datasets_isomorphic(&build("x", "y"), &build("m", "n")));

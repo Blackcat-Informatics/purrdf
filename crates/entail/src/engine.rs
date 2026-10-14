@@ -135,7 +135,7 @@ pub(crate) fn literal_surface(lexical: &str, datatype: &str) -> String {
 pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailError> {
     let mut b = RdfDatasetBuilder::new();
     copy_into(&mut b, ds)?;
-    b.freeze().map_err(|e| EntailError::Build(e.to_string()))
+    b.freeze().map_err(EntailError::from)
 }
 
 /// Copy every quad, side-table row and graph declaration of `ds` into `b`, PRESERVING
@@ -167,43 +167,43 @@ pub(crate) fn copy_into<D: DatasetView>(
 ) -> Result<(), EntailError> {
     ds.checked_read(|ds| {
         for quad in ds.quads() {
-            let s = intern_into(b, &ds.term_value(quad.s)?);
-            let p = intern_into(b, &ds.term_value(quad.p)?);
-            let o = intern_into(b, &ds.term_value(quad.o)?);
+            let s = intern_into(b, &ds.term_value(quad.s)?)?;
+            let p = intern_into(b, &ds.term_value(quad.p)?)?;
+            let o = intern_into(b, &ds.term_value(quad.o)?)?;
             let g = quad
                 .g
-                .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+                .map(|g| intern_into(b, &ds.term_value(g)?))
                 .transpose()?;
-            b.push_quad(s, p, o, g);
+            b.push_quad(s, p, o, g)?;
         }
         // Each reifier row projects as `(s = reifier, p = rdf:reifies, o = triple-term, g)`, so
         // the reifier is the quad's subject and the reified triple term its object.
         for quad in ds.reifier_quads() {
-            let reifier = intern_into(b, &ds.term_value(quad.s)?);
-            let triple = intern_into(b, &ds.term_value(quad.o)?);
+            let reifier = intern_into(b, &ds.term_value(quad.s)?)?;
+            let triple = intern_into(b, &ds.term_value(quad.o)?)?;
             let graph = quad
                 .g
-                .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+                .map(|g| intern_into(b, &ds.term_value(g)?))
                 .transpose()?;
-            b.push_reifier_in_graph(reifier, triple, graph);
+            b.push_reifier_in_graph(reifier, triple, graph)?;
         }
         // Each annotation row projects as `(s = reifier, p = predicate, o = object, g)`.
         for quad in ds.annotation_quads() {
-            let reifier = intern_into(b, &ds.term_value(quad.s)?);
-            let predicate = intern_into(b, &ds.term_value(quad.p)?);
-            let object = intern_into(b, &ds.term_value(quad.o)?);
+            let reifier = intern_into(b, &ds.term_value(quad.s)?)?;
+            let predicate = intern_into(b, &ds.term_value(quad.p)?)?;
+            let object = intern_into(b, &ds.term_value(quad.o)?)?;
             let graph = quad
                 .g
-                .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+                .map(|g| intern_into(b, &ds.term_value(g)?))
                 .transpose()?;
-            b.push_annotation_in_graph(reifier, predicate, object, graph);
+            b.push_annotation_in_graph(reifier, predicate, object, graph)?;
         }
         // A named graph a dataset DECLARES but puts no quad in is part of its content, and a
         // closure that dropped the declaration would answer a different question about which
         // graphs exist.
         for graph in ds.named_graphs() {
-            let graph = intern_into(b, &ds.term_value(graph)?);
-            b.declare_named_graph(graph);
+            let graph = intern_into(b, &ds.term_value(graph)?)?;
+            b.declare_named_graph(graph)?;
         }
         Ok(())
     })
@@ -355,7 +355,7 @@ pub(crate) fn close<D: DatasetView>(
         for conclusion in &default_run.conclusions {
             default_conclusions.insert(conclusion.key());
             stats.commit(conclusion.rule);
-            emit(&mut b, conclusion, None);
+            emit(&mut b, conclusion, None)?;
         }
         for graph in named.values() {
             // A dataset is closed graph by graph, so the loop over the named graphs is a
@@ -373,16 +373,16 @@ pub(crate) fn close<D: DatasetView>(
             if let Some(witness) = run.clash {
                 return Err(refuse(ds, regime, &stats, witness));
             }
-            let g = intern_into(&mut b, graph);
+            let g = intern_into(&mut b, graph)?;
             for conclusion in &run.conclusions {
                 if default_conclusions.contains(&conclusion.key()) {
                     continue;
                 }
                 stats.commit(conclusion.rule);
-                emit(&mut b, conclusion, Some(g));
+                emit(&mut b, conclusion, Some(g))?;
             }
         }
-        let dataset = b.freeze().map_err(|e| EntailError::Build(e.to_string()))?;
+        let dataset = b.freeze().map_err(EntailError::from)?;
         Ok((dataset, stats))
     })
     .map_err(EntailError::source_read)?
@@ -504,11 +504,16 @@ struct GraphRun {
 }
 
 /// Push `conclusion` into `b`, in `graph`.
-fn emit(b: &mut RdfDatasetBuilder, conclusion: &Conclusion, graph: Option<TermId>) {
-    let s = intern_into(b, &conclusion.subject);
-    let p = intern_into(b, &conclusion.predicate);
-    let o = intern_into(b, &conclusion.object);
-    b.push_quad(s, p, o, graph);
+fn emit(
+    b: &mut RdfDatasetBuilder,
+    conclusion: &Conclusion,
+    graph: Option<TermId>,
+) -> Result<(), EntailError> {
+    let s = intern_into(b, &conclusion.subject)?;
+    let p = intern_into(b, &conclusion.predicate)?;
+    let o = intern_into(b, &conclusion.object)?;
+    b.push_quad(s, p, o, graph)?;
+    Ok(())
 }
 
 /// Close ONE graph of `ds` under `regime`'s declared calculus.
@@ -1479,10 +1484,10 @@ mod tests {
     fn dataset_of(triples: &[(&str, &str, &str)]) -> std::sync::Arc<purrdf_core::RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for &(s, p, o) in triples {
-            let s = b.intern_iri(s);
-            let p = b.intern_iri(p);
-            let o = b.intern_iri(o);
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri(s).unwrap();
+            let p = b.intern_iri(p).unwrap();
+            let o = b.intern_iri(o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("the fixture freezes")
     }
@@ -1851,11 +1856,11 @@ mod tests {
     #[test]
     fn a_blank_node_graph_name_survives_the_closure() {
         let mut b = RdfDatasetBuilder::new();
-        let graph = b.intern_blank("g", BlankScope::DEFAULT);
-        let subject = b.intern_blank("s", BlankScope::DEFAULT);
-        let sub = b.intern_iri(RDFS_SUBCLASSOF);
-        let object = b.intern_iri(EX_B);
-        b.push_quad(subject, sub, object, Some(graph));
+        let graph = b.intern_blank("g", BlankScope::DEFAULT).unwrap();
+        let subject = b.intern_blank("s", BlankScope::DEFAULT).unwrap();
+        let sub = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+        let object = b.intern_iri(EX_B).unwrap();
+        b.push_quad(subject, sub, object, Some(graph)).unwrap();
         let ds = b.freeze().expect("the fixture freezes");
 
         let closed = close(&ds, Regime::OwlRl, &EvalOptions::default(), None)
@@ -1910,16 +1915,16 @@ mod tests {
     #[test]
     fn one_call_compiles_the_calculus_once_however_many_graphs_it_holds() {
         let mut b = RdfDatasetBuilder::new();
-        let sub = b.intern_iri(RDFS_SUBCLASSOF);
-        let a = b.intern_iri(EX_A);
-        let c = b.intern_iri(EX_B);
-        b.push_quad(a, sub, c, None);
+        let sub = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+        let a = b.intern_iri(EX_A).unwrap();
+        let c = b.intern_iri(EX_B).unwrap();
+        b.push_quad(a, sub, c, None).unwrap();
         let mut graphs: Vec<Option<TermValue>> = vec![None];
         for name in [EX_G, EX_H, EX_S] {
-            let g = b.intern_iri(name);
-            let x = b.intern_iri(EX_X);
-            let ty = b.intern_iri(RDF_TYPE);
-            b.push_quad(x, ty, a, Some(g));
+            let g = b.intern_iri(name).unwrap();
+            let x = b.intern_iri(EX_X).unwrap();
+            let ty = b.intern_iri(RDF_TYPE).unwrap();
+            b.push_quad(x, ty, a, Some(g)).unwrap();
             graphs.push(Some(TermValue::iri(name)));
         }
         let ds = b.freeze().expect("the fixture freezes");
@@ -1983,17 +1988,17 @@ mod tests {
     #[test]
     fn a_warm_plan_and_a_cold_one_close_a_graph_identically() {
         let mut b = RdfDatasetBuilder::new();
-        let sub = b.intern_iri(RDFS_SUBCLASSOF);
-        let ty = b.intern_iri(RDF_TYPE);
-        let a = b.intern_iri(EX_A);
-        let c = b.intern_iri(EX_B);
-        let x = b.intern_iri(EX_X);
-        let y = b.intern_iri(EX_Y);
-        let g = b.intern_iri(EX_G);
-        let h = b.intern_iri(EX_H);
-        b.push_quad(a, sub, c, None);
-        b.push_quad(x, ty, a, Some(g));
-        b.push_quad(y, ty, c, Some(h));
+        let sub = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let a = b.intern_iri(EX_A).unwrap();
+        let c = b.intern_iri(EX_B).unwrap();
+        let x = b.intern_iri(EX_X).unwrap();
+        let y = b.intern_iri(EX_Y).unwrap();
+        let g = b.intern_iri(EX_G).unwrap();
+        let h = b.intern_iri(EX_H).unwrap();
+        b.push_quad(a, sub, c, None).unwrap();
+        b.push_quad(x, ty, a, Some(g)).unwrap();
+        b.push_quad(y, ty, c, Some(h)).unwrap();
         let ds = b.freeze().expect("the fixture freezes");
 
         let (program, attribution) = program_with_attribution(Regime::OwlRl);
@@ -2091,9 +2096,9 @@ mod term_walk_tests {
             nested += usize::from(budget < 7);
             assert_eq!(surface_of(&value), reference_surface(&value), "seed {seed}");
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let ds = builder.freeze().expect("a generated term freezes");
             let object = ds.quads().next().expect("one quad").o;
             assert_eq!(

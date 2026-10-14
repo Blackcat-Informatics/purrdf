@@ -53,53 +53,59 @@ fn id_of<V: DatasetView>(v: &V, value: &TermValue) -> V::Id {
 fn build_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
-    let alice = b.intern_iri("http://example.org/alice");
-    let bob = b.intern_iri("http://example.org/bob");
-    let carol = b.intern_iri("http://example.org/carol");
-    let knows = b.intern_iri("http://example.org/knows");
-    let age = b.intern_iri("http://example.org/age");
-    let name = b.intern_iri("http://example.org/name");
-    let confidence = b.intern_iri("http://example.org/confidence");
-    let high = b.intern_iri("http://example.org/high");
-    let reifier = b.intern_iri("http://example.org/r");
-    let graph1 = b.intern_iri("http://example.org/graph1");
+    let alice = b.intern_iri("http://example.org/alice").unwrap();
+    let bob = b.intern_iri("http://example.org/bob").unwrap();
+    let carol = b.intern_iri("http://example.org/carol").unwrap();
+    let knows = b.intern_iri("http://example.org/knows").unwrap();
+    let age = b.intern_iri("http://example.org/age").unwrap();
+    let name = b.intern_iri("http://example.org/name").unwrap();
+    let confidence = b.intern_iri("http://example.org/confidence").unwrap();
+    let high = b.intern_iri("http://example.org/high").unwrap();
+    let reifier = b.intern_iri("http://example.org/r").unwrap();
+    let graph1 = b.intern_iri("http://example.org/graph1").unwrap();
 
-    let blank = b.intern_blank("b1", BlankScope::DEFAULT);
+    let blank = b.intern_blank("b1", BlankScope::DEFAULT).unwrap();
 
-    let forty_two = b.intern_literal(RdfLiteral {
-        lexical_form: "42".to_string(),
-        datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_string()),
-        language: None,
-        direction: None,
-    });
-    let alice_name_en = b.intern_literal(RdfLiteral {
-        lexical_form: "Alice".to_string(),
-        datatype: None,
-        language: Some("en".to_string()),
-        direction: None,
-    });
-    let hello_ltr = b.intern_literal(RdfLiteral {
-        lexical_form: "Hello".to_string(),
-        datatype: None,
-        language: Some("en".to_string()),
-        direction: Some(RdfTextDirection::Ltr),
-    });
+    let forty_two = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "42".to_string(),
+            datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_string()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    let alice_name_en = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "Alice".to_string(),
+            datatype: None,
+            language: Some("en".to_string()),
+            direction: None,
+        })
+        .unwrap();
+    let hello_ltr = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "Hello".to_string(),
+            datatype: None,
+            language: Some("en".to_string()),
+            direction: Some(RdfTextDirection::Ltr),
+        })
+        .unwrap();
 
-    let alice_knows_bob = b.intern_triple(alice, knows, bob);
+    let alice_knows_bob = b.intern_triple(alice, knows, bob).unwrap();
 
     // -- Default graph --------------------------------------------------------
-    b.push_quad(alice, knows, bob, None);
-    b.push_quad(alice, age, forty_two, None);
-    b.push_quad(alice, name, alice_name_en, None);
-    b.push_quad(bob, name, hello_ltr, None);
-    b.push_quad(blank, knows, alice, None);
+    b.push_quad(alice, knows, bob, None).unwrap();
+    b.push_quad(alice, age, forty_two, None).unwrap();
+    b.push_quad(alice, name, alice_name_en, None).unwrap();
+    b.push_quad(bob, name, hello_ltr, None).unwrap();
+    b.push_quad(blank, knows, alice, None).unwrap();
 
     // -- Named graph ------------------------------------------------------------
-    b.push_quad(bob, knows, carol, Some(graph1));
+    b.push_quad(bob, knows, carol, Some(graph1)).unwrap();
 
     // -- Reifier + annotation -----------------------------------------------------
-    b.push_reifier(reifier, alice_knows_bob);
-    b.push_annotation(reifier, confidence, high);
+    b.push_reifier(reifier, alice_knows_bob).unwrap();
+    b.push_annotation(reifier, confidence, high).unwrap();
 
     b.freeze().expect("fixture dataset must validate")
 }

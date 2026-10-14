@@ -881,7 +881,9 @@ fn macro_forms() {
 #[test]
 fn id_rows_behave_as_slices() {
     use crate::TermId;
-    let ids: Vec<TermId> = (0..6).map(TermId::from_index).collect();
+    let ids: Vec<TermId> = (0..6)
+        .map(|index| TermId::from_index(index).expect("stored term index is representable"))
+        .collect();
     let row = IdVec::from_slice(&ids[..3]);
     assert!(!row.spilled());
     assert_eq!(hash_of(&row), hash_of(&ids[..3]));

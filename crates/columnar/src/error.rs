@@ -9,6 +9,8 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ColumnarError {
+    /// Logical capacity or physical storage refused RDF reconstruction.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The source read session failed; this is not malformed RDF or an absent row.
     SourceRead {
         /// The operational source failure's diagnostic detail.
@@ -76,6 +78,7 @@ impl ColumnarError {
 impl fmt::Display for ColumnarError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Storage(error) => write!(f, "columnar storage: {error}"),
             Self::SourceRead { detail } => write!(f, "columnar source read failed: {detail}"),
             Self::Truncated {
                 context,
@@ -103,4 +106,6 @@ impl fmt::Display for ColumnarError {
     }
 }
 
-impl std::error::Error for ColumnarError {}
+purrdf_lex::error_source!(ColumnarError { Storage });
+
+purrdf_lex::variant_from!(ColumnarError { Storage(purrdf_lex::allocation::StorageError) });

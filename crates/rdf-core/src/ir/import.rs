@@ -4,6 +4,7 @@
 //! Typed, memoized transfer from one read view into a native dataset builder.
 
 use core::convert::Infallible;
+use purrdf_lex::allocation::{CapacityError, StorageError};
 
 use super::term_walk::{Nested, try_fold_nested};
 use crate::hash::FastMap;
@@ -137,13 +138,16 @@ pub enum DatasetImportError<E> {
     /// The source could not be read completely.
     Read(E),
     /// The requested materialization cannot be addressed by the resident builder.
-    Capacity,
+    Capacity(CapacityError),
+    /// A physical allocation refused before successful materialization.
+    Storage(StorageError),
 }
 impl<E: core::fmt::Display> core::fmt::Display for DatasetImportError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Read(error) => write!(f, "dataset import read failed: {error}"),
-            Self::Capacity => f.write_str("dataset import exceeds resident address capacity"),
+            Self::Capacity(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
         }
     }
 }
@@ -151,8 +155,34 @@ impl<E: std::error::Error + 'static> std::error::Error for DatasetImportError<E>
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Read(error) => Some(error),
-            Self::Capacity => None,
+            Self::Capacity(error) => Some(error),
+            Self::Storage(error) => Some(error),
         }
+    }
+}
+
+impl<E> From<StorageError> for DatasetImportError<E> {
+    fn from(error: StorageError) -> Self {
+        match error {
+            StorageError::Capacity(error) => Self::Capacity(error),
+            error => Self::Storage(error),
+        }
+    }
+}
+
+impl From<DatasetImportError<Infallible>> for StorageError {
+    fn from(error: DatasetImportError<Infallible>) -> Self {
+        match error {
+            DatasetImportError::Read(error) => match error {},
+            DatasetImportError::Capacity(error) => Self::Capacity(error),
+            DatasetImportError::Storage(error) => error,
+        }
+    }
+}
+
+impl From<DatasetImportError<Infallible>> for crate::RdfDiagnostic {
+    fn from(error: DatasetImportError<Infallible>) -> Self {
+        StorageError::from(error).into()
     }
 }
 
@@ -195,18 +225,22 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
     /// answer simply reserves nothing for that table. A replay that overruns any
     /// figure still grows normally; the reserve removes the doubling walk, it does
     /// not bound the import.
-    pub fn new(builder: &'builder mut RdfDatasetBuilder, view: &'view D) -> Self
+    pub fn new(
+        builder: &'builder mut RdfDatasetBuilder,
+        view: &'view D,
+    ) -> Result<Self, DatasetImportError<Infallible>>
     where
         D: DatasetView<ReadError = Infallible>,
     {
-        Self::try_new(builder, view).expect("trusted resident import fits the resident builder")
+        Self::try_new(builder, view)
     }
 
-    /// Bind a materialization after checking all logical sizes before reservation.
+    /// Bind a materialization using representable source counts as reservation hints.
     ///
     /// # Errors
-    /// Returns a source read failure or [`DatasetImportError::Capacity`] before
-    /// allocating when a logical size cannot be represented by the resident builder.
+    /// Returns the original source read or physical reservation failure. Logical
+    /// capacity is checked on actual new destination entries during replay, after
+    /// duplicate lookup; an unusable source upper bound is not an import refusal.
     pub fn try_new(
         builder: &'builder mut RdfDatasetBuilder,
         view: &'view D,
@@ -214,19 +248,23 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
         if let Some(error) = view.read_error() {
             return Err(DatasetImportError::Read(error));
         }
-        let terms = usize::try_from(view.term_count()).map_err(|_| DatasetImportError::Capacity)?;
-        if u32::try_from(terms).is_err() {
-            return Err(DatasetImportError::Capacity);
-        }
-        let bytes = usize::try_from(view.term_bytes_hint().unwrap_or(0))
-            .map_err(|_| DatasetImportError::Capacity)?;
-        let rows = usize::try_from(view.len_hint().unwrap_or(0))
-            .map_err(|_| DatasetImportError::Capacity)?;
-        builder.reserve_for_replay(terms, bytes, rows);
+        let hint = |count| {
+            u32::try_from(count)
+                .ok()
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or(0)
+        };
+        let terms = hint(view.term_count());
+        let bytes = hint(view.term_bytes_hint().unwrap_or(0));
+        let rows = hint(view.len_hint().unwrap_or(0));
+        builder.reserve_for_replay(terms, bytes, rows)?;
+        let mut memo = FastMap::default();
+        memo.try_reserve(terms)
+            .map_err(|_| StorageError::AllocationFailed)?;
         Ok(Self {
             builder,
             view,
-            terms: FastMap::with_capacity_and_hasher(terms, crate::hash::FastHasher::default()),
+            terms: memo,
             stats: DatasetImportStats::default(),
         })
     }
@@ -238,14 +276,11 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
     /// consulting the memo; a triple term's subject, predicate and object are each
     /// transferred fully, in that order, before the triple. Every term is recorded in
     /// the memo as soon as its own id exists.
-    pub fn term(&mut self, id: D::Id) -> TermId
+    pub fn term(&mut self, id: D::Id) -> Result<TermId, DatasetImportError<Infallible>>
     where
         D: DatasetView<ReadError = Infallible>,
     {
-        match self.try_term(id) {
-            Ok(id) => id,
-            Err(error) => panic!("trusted resident import failed: {error}"),
-        }
+        self.try_term(id)
     }
 
     /// Transfer one term while retaining the backing source's typed failure.
@@ -290,22 +325,26 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
                         )
                     }
                     TermRef::Triple { s, p, o } => return Ok(Nested::Triple(s, p, o)),
-                };
-                this.record(id, mapped);
+                }?;
+                this.record(id, mapped)?;
                 Ok(Nested::Leaf(mapped))
             },
             |this, id, s, p, o| {
-                let mapped = this.builder.intern_triple(s, p, o);
-                this.record(id, mapped);
+                let mapped = this.builder.intern_triple(s, p, o)?;
+                this.record(id, mapped)?;
                 Ok(mapped)
             },
         )
     }
 
     /// Record that source term `id` was transferred as `mapped`.
-    fn record(&mut self, id: D::Id, mapped: TermId) {
+    fn record(&mut self, id: D::Id, mapped: TermId) -> Result<(), StorageError> {
+        self.terms
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
         self.terms.insert(id, mapped);
         self.stats.terms += 1;
+        Ok(())
     }
 
     /// Replay the complete RDF surface exposed by the source view, keeping base
@@ -315,12 +354,11 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
     /// `DatasetView` does not expose source locations or non-RDF lookaside
     /// records; owners must carry those sidecars separately. This operation does
     /// not invent or claim to transfer them.
-    pub fn append(&mut self)
+    pub fn append(&mut self) -> Result<(), DatasetImportError<Infallible>>
     where
         D: DatasetView<ReadError = Infallible>,
     {
         self.try_append()
-            .expect("trusted resident import is readable");
     }
 
     /// Replay every stream, refusing incomplete reads before returning success.
@@ -336,7 +374,7 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
                 let p = self.try_term(quad.p)?;
                 let o = self.try_term(quad.o)?;
                 let g = quad.g.map(|g| self.try_term(g)).transpose()?;
-                self.builder.push_quad(s, p, o, g);
+                self.builder.push_quad(s, p, o, g)?;
                 self.stats.quads += 1;
             }
             // The RDF 1.2 overlay has no count on the view seam, but its own iterator
@@ -344,28 +382,29 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
             // before it yields a row. A source that cannot say reports a zero lower bound
             // and the tables grow as they always did.
             let reifiers = view.reifier_quads();
-            self.builder.reserve_reifiers(reifiers.size_hint().0);
+            self.builder.reserve_reifiers(reifiers.size_hint().0)?;
             for quad in reifiers {
                 let reifier = self.try_term(quad.s)?;
                 let triple = self.try_term(quad.o)?;
                 let graph = quad.g.map(|g| self.try_term(g)).transpose()?;
-                self.builder.push_reifier_in_graph(reifier, triple, graph);
+                self.builder.push_reifier_in_graph(reifier, triple, graph)?;
                 self.stats.reifiers += 1;
             }
             let annotations = view.annotation_quads();
-            self.builder.reserve_annotations(annotations.size_hint().0);
+            self.builder
+                .reserve_annotations(annotations.size_hint().0)?;
             for quad in annotations {
                 let reifier = self.try_term(quad.s)?;
                 let predicate = self.try_term(quad.p)?;
                 let object = self.try_term(quad.o)?;
                 let graph = quad.g.map(|g| self.try_term(g)).transpose()?;
                 self.builder
-                    .push_annotation_in_graph(reifier, predicate, object, graph);
+                    .push_annotation_in_graph(reifier, predicate, object, graph)?;
                 self.stats.annotations += 1;
             }
             for graph in view.named_graphs() {
                 let graph = self.try_term(graph)?;
-                self.builder.declare_named_graph(graph);
+                self.builder.declare_named_graph(graph)?;
                 self.stats.named_graphs += 1;
             }
             Ok(())
@@ -440,11 +479,11 @@ mod term_walk_tests {
                 let s = reference_term(importer, s);
                 let p = reference_term(importer, p);
                 let o = reference_term(importer, o);
-                importer.builder.intern_triple(s, p, o)
+                importer.builder.intern_triple(s, p, o).unwrap()
             }
             _ => {
-                let mut single = DatasetImporter::new(importer.builder, importer.view);
-                single.term(id)
+                let mut single = DatasetImporter::new(importer.builder, importer.view).unwrap();
+                single.term(id).unwrap()
             }
         };
         importer.terms.insert(id, mapped);
@@ -455,9 +494,9 @@ mod term_walk_tests {
     /// A frozen dataset holding `value` as the object of one quad, and that object's id.
     fn holding(value: &TermValue) -> (std::sync::Arc<RdfDataset>, TermId) {
         let mut builder = RdfDatasetBuilder::new();
-        let object = builder.intern_value(value);
-        let holder = builder.intern_iri("http://example.org/holder");
-        builder.push_quad(holder, holder, object, None);
+        let object = builder.intern_value(value).unwrap();
+        let holder = builder.intern_iri("http://example.org/holder").unwrap();
+        builder.push_quad(holder, holder, object, None).unwrap();
         let dataset = builder.freeze().expect("a generated term freezes");
         let object = dataset.quads().next().expect("one quad").o;
         (dataset, object)
@@ -498,11 +537,11 @@ mod term_walk_tests {
             }
             let (mut into, mut expected_into) =
                 (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
-            let mut importer = DatasetImporter::new(&mut into, &*source);
-            let mut expected = DatasetImporter::new(&mut expected_into, &*source);
+            let mut importer = DatasetImporter::new(&mut into, &*source).unwrap();
+            let mut expected = DatasetImporter::new(&mut expected_into, &*source).unwrap();
             for _ in 0..2 {
                 assert_eq!(
-                    importer.term(id),
+                    importer.term(id).unwrap(),
                     reference_term(&mut expected, id),
                     "seed {seed}"
                 );

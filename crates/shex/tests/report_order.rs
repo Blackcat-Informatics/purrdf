@@ -37,33 +37,37 @@ fn directional(lexical: &str, tag: &str, direction: RdfTextDirection) -> RdfLite
 /// `<s> <p>` each of a mixed-kind object set, plus `<s2> <p>` a repeat of one of them.
 fn data() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(SUBJECT);
-    let p = b.intern_iri(PREDICATE);
+    let s = b.intern_iri(SUBJECT).unwrap();
+    let p = b.intern_iri(PREDICATE).unwrap();
     let mut objects = vec![
-        b.intern_iri("http://example.org/o2"),
-        b.intern_iri("http://example.org/o1"),
-        b.intern_blank("b", BlankScope(2)),
-        b.intern_blank("b", BlankScope(1)),
-        b.intern_blank("b", BlankScope::DEFAULT),
-        b.intern_blank("a", BlankScope(1)),
-        b.intern_literal(RdfLiteral::simple("x")),
-        b.intern_literal(RdfLiteral::language_tagged("x", "en")),
-        b.intern_literal(directional("x", "en", RdfTextDirection::Rtl)),
-        b.intern_literal(directional("x", "en", RdfTextDirection::Ltr)),
+        b.intern_iri("http://example.org/o2").unwrap(),
+        b.intern_iri("http://example.org/o1").unwrap(),
+        b.intern_blank("b", BlankScope(2)).unwrap(),
+        b.intern_blank("b", BlankScope(1)).unwrap(),
+        b.intern_blank("b", BlankScope::DEFAULT).unwrap(),
+        b.intern_blank("a", BlankScope(1)).unwrap(),
+        b.intern_literal(RdfLiteral::simple("x")).unwrap(),
+        b.intern_literal(RdfLiteral::language_tagged("x", "en"))
+            .unwrap(),
+        b.intern_literal(directional("x", "en", RdfTextDirection::Rtl))
+            .unwrap(),
+        b.intern_literal(directional("x", "en", RdfTextDirection::Ltr))
+            .unwrap(),
         b.intern_literal(RdfLiteral::typed(
             "7",
             "http://www.w3.org/2001/XMLSchema#integer",
-        )),
+        ))
+        .unwrap(),
     ];
     let (ts, tp, to) = (
-        b.intern_iri("http://example.org/ts"),
-        b.intern_iri("http://example.org/tp"),
-        b.intern_iri("http://example.org/to"),
+        b.intern_iri("http://example.org/ts").unwrap(),
+        b.intern_iri("http://example.org/tp").unwrap(),
+        b.intern_iri("http://example.org/to").unwrap(),
     );
-    objects.push(b.intern_triple(ts, tp, to));
+    objects.push(b.intern_triple(ts, tp, to).unwrap());
     // Inserted in a scrambled order, twice for one of them: dedup must hold.
     for &o in objects.iter().rev().chain(objects.iter().take(1)) {
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("freeze")
 }

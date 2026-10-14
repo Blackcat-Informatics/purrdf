@@ -20,14 +20,18 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 fn high_cost_dataset(rows: usize) -> std::sync::Arc<purrdf_core::RdfDataset> {
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/v");
+    let p = b.intern_iri("http://example.org/v").unwrap();
     for index in 0..rows {
-        let s = b.intern_iri(&format!("http://example.org/s{index}"));
-        let value = b.intern_literal(RdfLiteral::typed(
-            format!("1{index:0width$}", width = 3_125 - 1),
-            purrdf_xsd::datatype::XSD_INTEGER,
-        ));
-        b.push_quad(s, p, value, None);
+        let s = b
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        let value = b
+            .intern_literal(RdfLiteral::typed(
+                format!("1{index:0width$}", width = 3_125 - 1),
+                purrdf_xsd::datatype::XSD_INTEGER,
+            ))
+            .unwrap();
+        b.push_quad(s, p, value, None).unwrap();
     }
     b.freeze().expect("numeric fixture")
 }

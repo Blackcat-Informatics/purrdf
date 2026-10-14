@@ -19,7 +19,7 @@ fn invalid_literal_shapes_cannot_cross_native_validation() {
         ),
     ] {
         let mut builder = RdfDatasetBuilder::new();
-        builder.intern_literal(literal);
+        builder.intern_literal(literal).unwrap();
         assert_eq!(
             builder
                 .freeze()
@@ -52,7 +52,9 @@ fn malformed_language_tags_cannot_cross_the_intern_path() {
         ("en-u s", "langtag-terminal-subtag-not-alphanum"),
     ] {
         let mut builder = RdfDatasetBuilder::new();
-        builder.intern_literal(RdfLiteral::language_tagged("x", tag));
+        builder
+            .intern_literal(RdfLiteral::language_tagged("x", tag))
+            .unwrap();
         let diagnostic = builder
             .freeze()
             .expect_err("a malformed language tag must not publish");
@@ -77,7 +79,9 @@ fn well_formed_language_tags_still_cross_the_intern_path() {
         "en-fr-jura",
         "fr-be-fbcl",
     ] {
-        builder.intern_literal(RdfLiteral::language_tagged("x", tag));
+        builder
+            .intern_literal(RdfLiteral::language_tagged("x", tag))
+            .unwrap();
     }
     builder
         .freeze()
@@ -92,12 +96,14 @@ fn native_implied_datatype_policy_remains_compatible() {
         Some(RdfTextDirection::Ltr),
         Some(RdfTextDirection::Rtl),
     ] {
-        let id = builder.intern_literal(RdfLiteral {
-            lexical_form: "x".to_owned(),
-            datatype: Some("https://example.org/ignored-explicit-type".to_owned()),
-            language: Some("EN".to_owned()),
-            direction,
-        });
+        let id = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "x".to_owned(),
+                datatype: Some("https://example.org/ignored-explicit-type".to_owned()),
+                language: Some("EN".to_owned()),
+                direction,
+            })
+            .unwrap();
         let purrdf_core::TermRef::Literal {
             datatype,
             language,

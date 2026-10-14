@@ -91,36 +91,39 @@ const ABOX_INDIVIDUALS: usize = 10;
 /// individuals is restricted by (the range-clause scan the pre-index bounds).
 fn ontology(pairs: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(RDF_TYPE);
-    let domain = b.intern_iri(RDFS_DOMAIN);
-    let range = b.intern_iri(RDFS_RANGE);
-    let on_property = b.intern_iri(OWL_ON_PROPERTY);
-    let some_values = b.intern_iri(OWL_SOME_VALUES_FROM);
-    let xsd_integer = b.intern_iri(XSD_INTEGER);
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let domain = b.intern_iri(RDFS_DOMAIN).unwrap();
+    let range = b.intern_iri(RDFS_RANGE).unwrap();
+    let on_property = b.intern_iri(OWL_ON_PROPERTY).unwrap();
+    let some_values = b.intern_iri(OWL_SOME_VALUES_FROM).unwrap();
+    let xsd_integer = b.intern_iri(XSD_INTEGER).unwrap();
 
     for i in 0..pairs {
-        let p = b.intern_iri(&format!("{EX}p{i}"));
-        let d = b.intern_iri(&format!("{EX}D{i}"));
-        let r = b.intern_iri(&format!("{EX}R{i}"));
-        b.push_quad(p, domain, d, None);
-        b.push_quad(p, range, r, None);
+        let p = b.intern_iri(&format!("{EX}p{i}")).unwrap();
+        let d = b.intern_iri(&format!("{EX}D{i}")).unwrap();
+        let r = b.intern_iri(&format!("{EX}R{i}")).unwrap();
+        b.push_quad(p, domain, d, None).unwrap();
+        b.push_quad(p, range, r, None).unwrap();
     }
 
     // ONE data property, its own `rdfs:range xsd:integer` — an unguarded, absorbed range
     // clause exactly like every `p_i` above, except this is the one a Min restriction actually
     // asks `data_clashes` to narrow against.
-    let dp = b.intern_iri(&format!("{EX}dp"));
-    b.push_quad(dp, range, xsd_integer, None);
+    let dp = b.intern_iri(&format!("{EX}dp")).unwrap();
+    b.push_quad(dp, range, xsd_integer, None).unwrap();
 
     // The FIXED ABox: `ABOX_INDIVIDUALS` individuals, each restricted `∃dp.xsd:integer` — a
     // `Min(1, dp, Data(xsd:integer))` label, one per individual, so the number of nodes
     // `data_clashes` must resolve the range clause for does not move as `pairs` grows.
     for i in 0..ABOX_INDIVIDUALS {
-        let a = b.intern_iri(&format!("{EX}a{i}"));
-        let restriction = b.intern_blank(&format!("some{i}"), BlankScope::DEFAULT);
-        b.push_quad(restriction, on_property, dp, None);
-        b.push_quad(restriction, some_values, xsd_integer, None);
-        b.push_quad(a, ty, restriction, None);
+        let a = b.intern_iri(&format!("{EX}a{i}")).unwrap();
+        let restriction = b
+            .intern_blank(&format!("some{i}"), BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(restriction, on_property, dp, None).unwrap();
+        b.push_quad(restriction, some_values, xsd_integer, None)
+            .unwrap();
+        b.push_quad(a, ty, restriction, None).unwrap();
     }
 
     b.freeze().expect("freeze")

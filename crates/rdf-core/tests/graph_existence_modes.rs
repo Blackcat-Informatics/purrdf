@@ -82,8 +82,8 @@ fn omitted_policy_remembers_empty_slots_across_mutation_and_reconstruction() {
 #[test]
 fn an_empty_graph_declaration_sets_the_frozen_capability() {
     let mut builder = RdfDatasetBuilder::new();
-    let graph = builder.intern_iri("http://example.org/empty");
-    builder.declare_named_graph(graph);
+    let graph = builder.intern_iri("http://example.org/empty").unwrap();
+    builder.declare_named_graph(graph).unwrap();
     let dataset = builder.freeze().expect("valid declaration");
     assert_eq!(dataset.named_graphs().count(), 1);
     assert!(dataset.capabilities().named_graphs);
@@ -92,11 +92,13 @@ fn an_empty_graph_declaration_sets_the_frozen_capability() {
 #[test]
 fn withdrawing_the_only_named_graph_clears_the_snapshot_capability() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/s");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/o");
-    let graph = builder.intern_iri("http://example.org/g");
-    builder.push_quad(subject, predicate, object, Some(graph));
+    let subject = builder.intern_iri("http://example.org/s").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/o").unwrap();
+    let graph = builder.intern_iri("http://example.org/g").unwrap();
+    builder
+        .push_quad(subject, predicate, object, Some(graph))
+        .unwrap();
     let base = builder.freeze().expect("valid row");
     let mut mutable = MutableDataset::new(Arc::clone(&base));
     let rows = mutable.quads_for_pattern(None, None, None, GraphMatchValue::Any);
@@ -216,10 +218,10 @@ fn removing_the_last_added_row_preserves_only_remembered_slots() {
 #[test]
 fn a_graph_name_already_interned_as_an_object_gets_its_own_slot() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/default");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let graph = builder.intern_iri("http://example.org/g");
-    builder.push_quad(subject, predicate, graph, None);
+    let subject = builder.intern_iri("http://example.org/default").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let graph = builder.intern_iri("http://example.org/g").unwrap();
+    builder.push_quad(subject, predicate, graph, None).unwrap();
     let base = builder.freeze().unwrap();
     assert!(base.named_graphs().next().is_none());
     for mode in MODES {
@@ -238,21 +240,27 @@ fn a_graph_name_already_interned_as_an_object_gets_its_own_slot() {
 
 fn role_base(graph: &TermValue, role: u8) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/s");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/o");
-    let graph = intern_value(&mut builder, graph);
-    let reifier = builder.intern_iri("http://example.org/reifier");
+    let subject = builder.intern_iri("http://example.org/s").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/o").unwrap();
+    let graph = intern_value(&mut builder, graph).expect("authored fixture");
+    let reifier = builder.intern_iri("http://example.org/reifier").unwrap();
     match role {
-        0 => builder.push_quad(subject, predicate, object, Some(graph)),
+        0 => builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap(),
         1 => {
-            let triple = builder.intern_triple(subject, predicate, object);
-            builder.push_reifier_in_graph(reifier, triple, Some(graph));
+            let triple = builder.intern_triple(subject, predicate, object).unwrap();
+            builder
+                .push_reifier_in_graph(reifier, triple, Some(graph))
+                .unwrap();
         }
         2 => {
-            let triple = builder.intern_triple(subject, predicate, object);
-            builder.push_reifier(reifier, triple);
-            builder.push_annotation_in_graph(reifier, predicate, object, Some(graph));
+            let triple = builder.intern_triple(subject, predicate, object).unwrap();
+            builder.push_reifier(reifier, triple).unwrap();
+            builder
+                .push_annotation_in_graph(reifier, predicate, object, Some(graph))
+                .unwrap();
         }
         _ => unreachable!("the fixture has exactly three RDF roles"),
     }

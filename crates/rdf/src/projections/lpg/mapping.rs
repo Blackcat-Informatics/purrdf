@@ -470,7 +470,7 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
 
     for graph_name in &graph.named_graphs {
         let id = graph_name.intern(&mut builder)?;
-        builder.declare_named_graph(id);
+        builder.declare_named_graph(id)?;
     }
     for node in &graph.nodes {
         for label in &node.labels {
@@ -487,18 +487,16 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
         let reifier = row.reifier.intern(&mut builder)?;
         let statement = row.statement.intern(&mut builder)?;
         let graph_name = intern_context(&mut builder, &row.graph)?;
-        builder.push_reifier_in_graph(reifier, statement, graph_name);
+        builder.push_reifier_in_graph(reifier, statement, graph_name)?;
     }
     for row in &graph.annotations {
         let reifier = row.reifier.intern(&mut builder)?;
-        let predicate = builder.intern_iri(&row.predicate);
+        let predicate = builder.intern_iri(&row.predicate)?;
         let object = row.object.intern(&mut builder)?;
         let graph_name = intern_context(&mut builder, &row.graph)?;
-        builder.push_annotation_in_graph(reifier, predicate, object, graph_name);
+        builder.push_annotation_in_graph(reifier, predicate, object, graph_name)?;
     }
-    let dataset = builder.freeze().map_err(|error| {
-        ProjectionError::integrity(format!("lifted LPG produced invalid RDF: {error}"))
-    })?;
+    let dataset = builder.freeze().map_err(ProjectionError::from)?;
 
     let mut ledger = LossLedger::new();
     let contract = lpg_to_rdf_loss_ledger();
@@ -709,10 +707,10 @@ fn record_term_sideband_losses<'a>(
 
 fn push_quad(builder: &mut RdfDatasetBuilder, quad: &LpgRdfQuad) -> Result<(), ProjectionError> {
     let subject = quad.subject.intern(builder)?;
-    let predicate = builder.intern_iri(&quad.predicate);
+    let predicate = builder.intern_iri(&quad.predicate)?;
     let object = quad.object.intern(builder)?;
     let graph = intern_context(builder, &quad.graph)?;
-    builder.push_quad(subject, predicate, object, graph);
+    builder.push_quad(subject, predicate, object, graph)?;
     Ok(())
 }
 
@@ -767,40 +765,50 @@ mod tests {
     fn fixture(reverse_interning: bool) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         if reverse_interning {
-            let _ = builder.intern_iri("http://example.org/z-unused");
-            let _ = builder.intern_iri("http://example.org/a-unused");
+            let _ = builder.intern_iri("http://example.org/z-unused").unwrap();
+            let _ = builder.intern_iri("http://example.org/a-unused").unwrap();
         }
-        let subject = builder.intern_iri("http://example.org/s");
-        let predicate = builder.intern_iri("http://example.org/p");
-        let object = builder.intern_iri("http://example.org/o");
-        let quoted = builder.intern_triple(subject, predicate, object);
-        let graph = builder.intern_iri("http://example.org/g");
-        let class = builder.intern_iri("http://example.org/Class");
-        let rdf_type = builder.intern_iri(TYPE);
-        builder.push_quad(subject, rdf_type, class, Some(graph));
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder.intern_iri("http://example.org/o").unwrap();
+        let quoted = builder.intern_triple(subject, predicate, object).unwrap();
+        let graph = builder.intern_iri("http://example.org/g").unwrap();
+        let class = builder.intern_iri("http://example.org/Class").unwrap();
+        let rdf_type = builder.intern_iri(TYPE).unwrap();
+        builder
+            .push_quad(subject, rdf_type, class, Some(graph))
+            .unwrap();
 
-        let blank = builder.intern_blank("b", BlankScope(7));
-        let label = builder.intern_iri("http://example.org/label");
-        let literal = builder.intern_literal(RdfLiteral {
-            lexical_form: "marhaba".to_owned(),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        builder.push_quad(blank, label, literal, Some(graph));
-        let relates = builder.intern_iri("http://example.org/relates");
-        builder.push_quad(subject, relates, quoted, None);
+        let blank = builder.intern_blank("b", BlankScope(7)).unwrap();
+        let label = builder.intern_iri("http://example.org/label").unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "marhaba".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        builder
+            .push_quad(blank, label, literal, Some(graph))
+            .unwrap();
+        let relates = builder.intern_iri("http://example.org/relates").unwrap();
+        builder.push_quad(subject, relates, quoted, None).unwrap();
 
-        let reifier = builder.intern_iri("http://example.org/reifier");
-        builder.push_reifier_in_graph(reifier, quoted, Some(graph));
-        let annotation_predicate = builder.intern_iri("http://example.org/confidence");
-        let annotation_object = builder.intern_iri("http://example.org/high");
-        builder.push_annotation_in_graph(
-            reifier,
-            annotation_predicate,
-            annotation_object,
-            Some(graph),
-        );
+        let reifier = builder.intern_iri("http://example.org/reifier").unwrap();
+        builder
+            .push_reifier_in_graph(reifier, quoted, Some(graph))
+            .unwrap();
+        let annotation_predicate = builder.intern_iri("http://example.org/confidence").unwrap();
+        let annotation_object = builder.intern_iri("http://example.org/high").unwrap();
+        builder
+            .push_annotation_in_graph(
+                reifier,
+                annotation_predicate,
+                annotation_object,
+                Some(graph),
+            )
+            .unwrap();
         builder.freeze().expect("fixture")
     }
 
@@ -899,34 +907,54 @@ mod tests {
         const BUSINESS: &str = "http://example.org/business";
 
         let mut builder = RdfDatasetBuilder::new();
-        let alice = builder.intern_iri("http://example.org/alice");
-        let bob = builder.intern_iri("http://example.org/bob");
-        let secret = builder.intern_iri("http://example.org/secret");
-        let customer = builder.intern_iri(CUSTOMER);
-        let internal = builder.intern_iri(INTERNAL);
-        let rdf_type = builder.intern_iri(TYPE);
-        let name = builder.intern_iri(NAME);
-        let knows = builder.intern_iri(KNOWS);
-        let audit = builder.intern_iri(AUDIT);
-        let confidence = builder.intern_iri(CONFIDENCE);
-        let business = builder.intern_iri(BUSINESS);
-        let system = builder.intern_iri("http://example.org/system");
-        let alice_name = builder.intern_literal(RdfLiteral::simple("Alice"));
-        let classified = builder.intern_literal(RdfLiteral::simple("classified"));
-        builder.push_quad(alice, rdf_type, customer, Some(business));
-        builder.push_quad(bob, rdf_type, customer, Some(business));
-        builder.push_quad(secret, rdf_type, internal, Some(business));
-        builder.push_quad(alice, name, alice_name, Some(business));
-        builder.push_quad(alice, knows, bob, Some(business));
-        builder.push_quad(alice, audit, secret, Some(business));
-        builder.push_quad(secret, name, classified, Some(system));
-        builder.push_quad(alice, audit, secret, None);
+        let alice = builder.intern_iri("http://example.org/alice").unwrap();
+        let bob = builder.intern_iri("http://example.org/bob").unwrap();
+        let secret = builder.intern_iri("http://example.org/secret").unwrap();
+        let customer = builder.intern_iri(CUSTOMER).unwrap();
+        let internal = builder.intern_iri(INTERNAL).unwrap();
+        let rdf_type = builder.intern_iri(TYPE).unwrap();
+        let name = builder.intern_iri(NAME).unwrap();
+        let knows = builder.intern_iri(KNOWS).unwrap();
+        let audit = builder.intern_iri(AUDIT).unwrap();
+        let confidence = builder.intern_iri(CONFIDENCE).unwrap();
+        let business = builder.intern_iri(BUSINESS).unwrap();
+        let system = builder.intern_iri("http://example.org/system").unwrap();
+        let alice_name = builder.intern_literal(RdfLiteral::simple("Alice")).unwrap();
+        let classified = builder
+            .intern_literal(RdfLiteral::simple("classified"))
+            .unwrap();
+        builder
+            .push_quad(alice, rdf_type, customer, Some(business))
+            .unwrap();
+        builder
+            .push_quad(bob, rdf_type, customer, Some(business))
+            .unwrap();
+        builder
+            .push_quad(secret, rdf_type, internal, Some(business))
+            .unwrap();
+        builder
+            .push_quad(alice, name, alice_name, Some(business))
+            .unwrap();
+        builder
+            .push_quad(alice, knows, bob, Some(business))
+            .unwrap();
+        builder
+            .push_quad(alice, audit, secret, Some(business))
+            .unwrap();
+        builder
+            .push_quad(secret, name, classified, Some(system))
+            .unwrap();
+        builder.push_quad(alice, audit, secret, None).unwrap();
 
-        let quoted = builder.intern_triple(alice, knows, bob);
-        let reifier = builder.intern_iri("http://example.org/reifier");
-        let high = builder.intern_iri("http://example.org/high");
-        builder.push_reifier_in_graph(reifier, quoted, Some(business));
-        builder.push_annotation_in_graph(reifier, confidence, high, Some(business));
+        let quoted = builder.intern_triple(alice, knows, bob).unwrap();
+        let reifier = builder.intern_iri("http://example.org/reifier").unwrap();
+        let high = builder.intern_iri("http://example.org/high").unwrap();
+        builder
+            .push_reifier_in_graph(reifier, quoted, Some(business))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(reifier, confidence, high, Some(business))
+            .unwrap();
         let dataset = builder.freeze().expect("scoped fixture");
 
         let scope = LpgScope::select(
@@ -1030,12 +1058,12 @@ mod tests {
         }
 
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/source");
-        let predicate = builder.intern_iri("http://example.org/edge");
-        let first = builder.intern_iri("http://example.org/first");
-        let second = builder.intern_iri("http://example.org/second");
-        builder.push_quad(subject, predicate, first, None);
-        builder.push_quad(subject, predicate, second, None);
+        let subject = builder.intern_iri("http://example.org/source").unwrap();
+        let predicate = builder.intern_iri("http://example.org/edge").unwrap();
+        let first = builder.intern_iri("http://example.org/first").unwrap();
+        let second = builder.intern_iri("http://example.org/second").unwrap();
+        builder.push_quad(subject, predicate, first, None).unwrap();
+        builder.push_quad(subject, predicate, second, None).unwrap();
         let two_edges = builder.freeze().expect("two-edge fixture");
         let edge_limit = LpgExecutionLimits::new(2, 5, 3, 1).expect("edge limit");
         assert!(
@@ -1088,10 +1116,10 @@ mod tests {
     #[test]
     fn canonical_json_and_empty_named_graph_round_trip_strictly() {
         let mut builder = RdfDatasetBuilder::new();
-        let empty_iri = builder.intern_iri("http://example.org/empty");
-        let empty_blank = builder.intern_blank("empty", BlankScope(11));
-        builder.declare_named_graph(empty_iri);
-        builder.declare_named_graph(empty_blank);
+        let empty_iri = builder.intern_iri("http://example.org/empty").unwrap();
+        let empty_blank = builder.intern_blank("empty", BlankScope(11)).unwrap();
+        builder.declare_named_graph(empty_iri).unwrap();
+        builder.declare_named_graph(empty_blank).unwrap();
         let dataset = builder.freeze().expect("empty named graph");
         let config = config(100);
         let graph = project_lpg(dataset.as_ref(), &config).expect("project");
@@ -1132,20 +1160,20 @@ mod tests {
             named in any::<bool>(),
         ) {
             let mut builder = RdfDatasetBuilder::new();
-            let subject = builder.intern_blank("generated", BlankScope(u32::from(scope)));
-            let text_predicate = builder.intern_iri("http://example.org/text");
-            let text = builder.intern_literal(RdfLiteral::simple(lexical));
-            let number_predicate = builder.intern_iri("http://example.org/number");
+            let subject = builder.intern_blank("generated", BlankScope(u32::from(scope))).unwrap();
+            let text_predicate = builder.intern_iri("http://example.org/text").unwrap();
+            let text = builder.intern_literal(RdfLiteral::simple(lexical)).unwrap();
+            let number_predicate = builder.intern_iri("http://example.org/number").unwrap();
             let number = builder.intern_literal(RdfLiteral::typed(
                 integer.to_string(),
                 "http://www.w3.org/2001/XMLSchema#integer",
-            ));
-            let edge_predicate = builder.intern_iri("http://example.org/edge");
-            let target = builder.intern_iri("http://example.org/target");
-            let graph = named.then(|| builder.intern_iri("http://example.org/graph"));
-            builder.push_quad(subject, text_predicate, text, graph);
-            builder.push_quad(subject, number_predicate, number, graph);
-            builder.push_quad(subject, edge_predicate, target, graph);
+            )).unwrap();
+            let edge_predicate = builder.intern_iri("http://example.org/edge").unwrap();
+            let target = builder.intern_iri("http://example.org/target").unwrap();
+            let graph = named.then(|| builder.intern_iri("http://example.org/graph").unwrap());
+            builder.push_quad(subject, text_predicate, text, graph).unwrap();
+            builder.push_quad(subject, number_predicate, number, graph).unwrap();
+            builder.push_quad(subject, edge_predicate, target, graph).unwrap();
             let dataset = builder.freeze().expect("generated dataset");
 
             let config = config(1_000);

@@ -41,7 +41,7 @@
 //!   predicates) a completion frontier reads.
 //!
 //! Term and partition resolution is deliberately NOT hoisted here: a
-//! [`TermId`] and a [`PartitionId`](crate::id::PartitionId) are per-store handles minted
+//! [`TermId`](crate::id::TermId) and a [`PartitionId`](crate::id::PartitionId) are per-store handles minted
 //! at load/derivation time in insertion order, so they are meaningless against a store
 //! that does not yet exist at plan time. That is why a constant position lowers to its
 //! lexical SURFACE and not to an id. The plan is store-independent; resolving ids here
@@ -59,7 +59,9 @@ use std::sync::Arc;
 
 use crate::binding_pattern::BindingPattern;
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
+use crate::dictionary::TermIdentity;
 use crate::guard::Negation;
+#[cfg(test)]
 use crate::id::TermId;
 use crate::paths::relax_strata;
 use crate::store::Bound;
@@ -310,7 +312,7 @@ impl IndexChoice {
     /// That is the same probe-miss semantics
     /// [`RelationStore::term_id`](crate::store::RelationStore::term_id) defines,
     /// expressed once here rather than at every call site.
-    pub fn bound(self, subject: Option<TermId>, object: Option<TermId>) -> Option<Bound> {
+    pub fn bound<I: TermIdentity>(self, subject: Option<I>, object: Option<I>) -> Option<Bound<I>> {
         match self {
             Self::Any => Some(Bound::Any),
             Self::Subject => subject.map(Bound::Subject),
@@ -1948,9 +1950,12 @@ mod tests {
     /// term the store has never interned short-circuits to "no rows".
     #[test]
     fn index_choice_lowers_to_a_store_bound() {
-        let s = TermId::from_index(0);
-        let o = TermId::from_index(1);
-        assert_eq!(IndexChoice::Any.bound(None, None), Some(Bound::Any));
+        let s = TermId::from_index(0).unwrap();
+        let o = TermId::from_index(1).unwrap();
+        assert_eq!(
+            IndexChoice::Any.bound::<TermId>(None, None),
+            Some(Bound::Any)
+        );
         assert_eq!(
             IndexChoice::Subject.bound(Some(s), None),
             Some(Bound::Subject(s))
@@ -1966,7 +1971,7 @@ mod tests {
         // A missing term on a bound position means the selection is empty.
         assert_eq!(IndexChoice::Subject.bound(None, Some(o)), None);
         assert_eq!(IndexChoice::Both.bound(Some(s), None), None);
-        assert_eq!(IndexChoice::Both.bound(None, None), None);
+        assert_eq!(IndexChoice::Both.bound::<TermId>(None, None), None);
     }
 
     /// The swap program restores authored order from ANY execution order, in place, and

@@ -56,55 +56,96 @@ const PEOPLE: usize = 5_000;
 /// `pub(crate)` force seam.
 fn people_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let rdf_type = b.intern_iri(RDF_TYPE);
-    let person_class = b.intern_iri(&format!("{EX}Person"));
-    let p_name = b.intern_iri(&format!("{EX}name"));
-    let p_age = b.intern_iri(&format!("{EX}age"));
-    let p_label = b.intern_iri(&format!("{EX}label"));
-    let p_dept = b.intern_iri(&format!("{EX}dept"));
-    let p_city = b.intern_iri(&format!("{EX}city"));
-    let p_knows = b.intern_iri(&format!("{EX}knows"));
-    let p_email = b.intern_iri(&format!("{EX}email"));
-    let p_reports = b.intern_iri(&format!("{EX}reportsTo"));
+    let rdf_type = b.intern_iri(RDF_TYPE).expect("fixture capacity");
+    let person_class = b
+        .intern_iri(&format!("{EX}Person"))
+        .expect("fixture capacity");
+    let p_name = b
+        .intern_iri(&format!("{EX}name"))
+        .expect("fixture capacity");
+    let p_age = b.intern_iri(&format!("{EX}age")).expect("fixture capacity");
+    let p_label = b
+        .intern_iri(&format!("{EX}label"))
+        .expect("fixture capacity");
+    let p_dept = b
+        .intern_iri(&format!("{EX}dept"))
+        .expect("fixture capacity");
+    let p_city = b
+        .intern_iri(&format!("{EX}city"))
+        .expect("fixture capacity");
+    let p_knows = b
+        .intern_iri(&format!("{EX}knows"))
+        .expect("fixture capacity");
+    let p_email = b
+        .intern_iri(&format!("{EX}email"))
+        .expect("fixture capacity");
+    let p_reports = b
+        .intern_iri(&format!("{EX}reportsTo"))
+        .expect("fixture capacity");
 
     let people: Vec<_> = (0..PEOPLE)
-        .map(|i| b.intern_iri(&format!("{EX}person{i}")))
+        .map(|i| {
+            b.intern_iri(&format!("{EX}person{i}"))
+                .expect("fixture capacity")
+        })
         .collect();
     let depts: Vec<_> = (0..200)
-        .map(|d| b.intern_iri(&format!("{EX}dept{d}")))
+        .map(|d| {
+            b.intern_iri(&format!("{EX}dept{d}"))
+                .expect("fixture capacity")
+        })
         .collect();
     let cities: Vec<_> = (0..50)
-        .map(|c| b.intern_iri(&format!("{EX}city{c}")))
+        .map(|c| {
+            b.intern_iri(&format!("{EX}city{c}"))
+                .expect("fixture capacity")
+        })
         .collect();
 
     for i in 0..PEOPLE {
         let s = people[i];
-        b.push_quad(s, rdf_type, person_class, None);
+        b.push_quad(s, rdf_type, person_class, None)
+            .expect("fixture capacity");
 
-        let name = b.intern_literal(RdfLiteral::simple(format!("Name{i}")));
-        b.push_quad(s, p_name, name, None);
+        let name = b
+            .intern_literal(RdfLiteral::simple(format!("Name{i}")))
+            .expect("fixture capacity");
+        b.push_quad(s, p_name, name, None)
+            .expect("fixture capacity");
 
-        let age = b.intern_literal(RdfLiteral::typed((18 + i % 60).to_string(), XSD_INTEGER));
-        b.push_quad(s, p_age, age, None);
+        let age = b
+            .intern_literal(RdfLiteral::typed((18 + i % 60).to_string(), XSD_INTEGER))
+            .expect("fixture capacity");
+        b.push_quad(s, p_age, age, None).expect("fixture capacity");
 
         let lang = if i % 2 == 0 { "en" } else { "de" };
-        let label = b.intern_literal(RdfLiteral::language_tagged(format!("Person {i}"), lang));
-        b.push_quad(s, p_label, label, None);
+        let label = b
+            .intern_literal(RdfLiteral::language_tagged(format!("Person {i}"), lang))
+            .expect("fixture capacity");
+        b.push_quad(s, p_label, label, None)
+            .expect("fixture capacity");
 
-        b.push_quad(s, p_dept, depts[i % 200], None);
-        b.push_quad(s, p_city, cities[i % 50], None);
+        b.push_quad(s, p_dept, depts[i % 200], None)
+            .expect("fixture capacity");
+        b.push_quad(s, p_city, cities[i % 50], None)
+            .expect("fixture capacity");
 
         for step in [1usize, 17, 97] {
-            b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None);
+            b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None)
+                .expect("fixture capacity");
         }
 
         if i % 10 == 0 {
-            let email = b.intern_literal(RdfLiteral::simple(format!("p{i}@example.org")));
-            b.push_quad(s, p_email, email, None);
+            let email = b
+                .intern_literal(RdfLiteral::simple(format!("p{i}@example.org")))
+                .expect("fixture capacity");
+            b.push_quad(s, p_email, email, None)
+                .expect("fixture capacity");
         }
 
         if i > 0 {
-            b.push_quad(s, p_reports, people[(i - 1) / 2], None);
+            b.push_quad(s, p_reports, people[(i - 1) / 2], None)
+                .expect("fixture capacity");
         }
     }
 

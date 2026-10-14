@@ -191,11 +191,11 @@ impl PfCursor for IndexedCursor {
 /// and the relation is invoked once per row.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let o = builder.intern_iri(&format!("{EX}team"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let o = builder.intern_iri(&format!("{EX}team")).unwrap();
     for row in 0..ROWS {
-        let s = builder.intern_iri(&format!("{EX}row-{row}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}row-{row}")).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset freezes")
 }

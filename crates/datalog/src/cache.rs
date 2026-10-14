@@ -788,12 +788,14 @@ mod tests {
     fn store_of(triples: &[(&str, &str, &str)]) -> RelationStore {
         let mut store = RelationStore::new();
         for &(subject, predicate, object) in triples {
-            store.insert(
-                &format!("<{subject}>"),
-                &format!("<{predicate}>"),
-                &format!("<{object}>"),
-                RelationStore::DEFAULT_GRAPH,
-            );
+            store
+                .insert(
+                    &format!("<{subject}>"),
+                    &format!("<{predicate}>"),
+                    &format!("<{object}>"),
+                    RelationStore::DEFAULT_GRAPH,
+                )
+                .unwrap();
         }
         store
     }

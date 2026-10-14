@@ -66,10 +66,12 @@ const CORPUS: [(&str, &str); 4] = [
 fn dataset_of(rows: &[(&str, &str)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for &(local, text) in rows {
-        let s = builder.intern_iri(&format!("http://example.org/{local}"));
-        let p = builder.intern_iri(NOTE);
-        let o = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("http://example.org/{local}"))
+            .unwrap();
+        let p = builder.intern_iri(NOTE).unwrap();
+        let o = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("the fixture must validate")
 }
@@ -306,10 +308,12 @@ fn blank_node_labels_are_the_documented_limit() {
     /// One blank subject, labelled `label`, carrying the needle's text.
     fn labelled(label: &str) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_blank(label, BlankScope::DEFAULT);
-        let p = builder.intern_iri(NOTE);
-        let o = builder.intern_literal(RdfLiteral::simple("quick brown fox"));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        let p = builder.intern_iri(NOTE).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::simple("quick brown fox"))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
         builder.freeze().expect("the fixture must validate")
     }
 

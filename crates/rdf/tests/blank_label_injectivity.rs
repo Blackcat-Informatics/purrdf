@@ -132,13 +132,13 @@ fn a_scoped_pair_round_trips_through_its_envelope() {
     // somewhere — so it is written as its envelope and re-parses to that same
     // pair, while the literal labels `x` and `x.s2` stay untouched beside it.
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let scoped = b.intern_blank("x", BlankScope(2));
-    let plain = b.intern_blank("x", BlankScope::DEFAULT);
-    let suffixed = b.intern_blank("x.s2", BlankScope::DEFAULT);
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let scoped = b.intern_blank("x", BlankScope(2)).unwrap();
+    let plain = b.intern_blank("x", BlankScope::DEFAULT).unwrap();
+    let suffixed = b.intern_blank("x.s2", BlankScope::DEFAULT).unwrap();
     for (i, s) in [scoped, plain, suffixed].into_iter().enumerate() {
-        let o = b.intern_iri(&format!("https://example.org/o{i}"));
-        b.push_quad(s, p, o, None);
+        let o = b.intern_iri(&format!("https://example.org/o{i}")).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     let ds = b.freeze().expect("dataset freezes");
 
@@ -176,8 +176,8 @@ fn standardize_apart_keeps_per_document_blanks_distinct() {
     let one = parse("_:b0 <https://example.org/p> \"1\" .\n");
     let two = parse("_:b0 <https://example.org/p> \"2\" .\n");
     let mut merged = RdfDatasetBuilder::new();
-    merged.push_dataset(&one);
-    merged.push_dataset(&two);
+    merged.push_dataset(&one).unwrap();
+    merged.push_dataset(&two).unwrap();
     let merged = merged.freeze().expect("merge freezes");
     assert_eq!(
         blank_nodes(&merged).len(),

@@ -58,28 +58,52 @@ fn public_visitor_and_sink_surfaces_are_bidirectional_and_stable() {
 fn public_writer_reports_the_closed_loss_profile() {
     let config = config();
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/doc/concept.md");
-    let path_predicate = builder.intern_iri(config.path_predicate());
-    let body_predicate = builder.intern_iri(config.body_predicate());
-    let type_predicate = builder.intern_iri(config.predicate_iri("type").expect("type IRI"));
-    let path = builder.intern_literal(RdfLiteral::simple("concept.md"));
-    let body = builder.intern_literal(RdfLiteral::simple("Body.\n"));
-    let kind = builder.intern_literal(RdfLiteral::simple("Concept"));
-    builder.push_quad(subject, path_predicate, path, None);
-    builder.push_quad(subject, body_predicate, body, None);
-    builder.push_quad(subject, type_predicate, kind, None);
+    let subject = builder
+        .intern_iri("https://example.org/doc/concept.md")
+        .unwrap();
+    let path_predicate = builder.intern_iri(config.path_predicate()).unwrap();
+    let body_predicate = builder.intern_iri(config.body_predicate()).unwrap();
+    let type_predicate = builder
+        .intern_iri(config.predicate_iri("type").expect("type IRI"))
+        .unwrap();
+    let path = builder
+        .intern_literal(RdfLiteral::simple("concept.md"))
+        .unwrap();
+    let body = builder
+        .intern_literal(RdfLiteral::simple("Body.\n"))
+        .unwrap();
+    let kind = builder
+        .intern_literal(RdfLiteral::simple("Concept"))
+        .unwrap();
+    builder
+        .push_quad(subject, path_predicate, path, None)
+        .unwrap();
+    builder
+        .push_quad(subject, body_predicate, body, None)
+        .unwrap();
+    builder
+        .push_quad(subject, type_predicate, kind, None)
+        .unwrap();
 
-    let owl = builder.intern_iri("http://www.w3.org/2002/07/owl#equivalentClass");
-    let other = builder.intern_iri("https://example.org/Other");
-    let graph = builder.intern_iri("https://example.org/graph");
-    builder.push_quad(subject, owl, other, None);
-    builder.push_quad(subject, owl, other, Some(graph));
-    let triple = builder.intern_triple(subject, owl, other);
-    let reifier = builder.intern_blank("unrelated", BlankScope::DEFAULT);
-    builder.push_reifier(reifier, triple);
-    let note_predicate = builder.intern_iri("https://example.org/note");
-    let note = builder.intern_literal(RdfLiteral::simple("metadata"));
-    builder.push_annotation(reifier, note_predicate, note);
+    let owl = builder
+        .intern_iri("http://www.w3.org/2002/07/owl#equivalentClass")
+        .unwrap();
+    let other = builder.intern_iri("https://example.org/Other").unwrap();
+    let graph = builder.intern_iri("https://example.org/graph").unwrap();
+    builder.push_quad(subject, owl, other, None).unwrap();
+    builder.push_quad(subject, owl, other, Some(graph)).unwrap();
+    let triple = builder.intern_triple(subject, owl, other).unwrap();
+    let reifier = builder
+        .intern_blank("unrelated", BlankScope::DEFAULT)
+        .unwrap();
+    builder.push_reifier(reifier, triple).unwrap();
+    let note_predicate = builder.intern_iri("https://example.org/note").unwrap();
+    let note = builder
+        .intern_literal(RdfLiteral::simple("metadata"))
+        .unwrap();
+    builder
+        .push_annotation(reifier, note_predicate, note)
+        .unwrap();
 
     let dataset = builder.freeze().expect("valid RDF dataset");
     let outcome = write_okf_bundle(&dataset, &config).expect("lossy projection");

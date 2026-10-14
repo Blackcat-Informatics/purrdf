@@ -12,11 +12,15 @@ use std::sync::Arc;
 
 fn data(rows: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
+    let p = b.intern_iri("https://example.org/p").unwrap();
     for row in 0..rows {
-        let s = b.intern_iri(&format!("https://example.org/s{row}"));
-        let o = b.intern_literal(RdfLiteral::simple(row.to_string()));
-        b.push_quad(s, p, o, None);
+        let s = b
+            .intern_iri(&format!("https://example.org/s{row}"))
+            .unwrap();
+        let o = b
+            .intern_literal(RdfLiteral::simple(row.to_string()))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("data")
 }
@@ -75,7 +79,10 @@ fn bench(c: &mut Bench) {
                         panic!("graph")
                     };
                     let mut target = RdfDatasetBuilder::new();
-                    DatasetImporter::new(&mut target, graph.as_ref()).append();
+                    DatasetImporter::new(&mut target, graph.as_ref())
+                        .unwrap()
+                        .append()
+                        .unwrap();
                     std::hint::black_box(target.freeze().expect("publication"));
                 });
             },

@@ -285,7 +285,8 @@ fn report_nt(prepared: &PreparedShapes) -> String {
         .expect("the data graph binds")
         .validate()
         .expect("validation runs")
-        .to_ntriples();
+        .to_ntriples()
+        .expect("report serializes");
     assert!(
         report.contains("ClassConstraintComponent"),
         "the fixture must produce a `sh:class` violation, or every report comparison in this file \
@@ -640,6 +641,7 @@ fn lowered_report_nt(prepared: &PreparedShapes) -> String {
         .validate()
         .expect("validation runs")
         .to_ntriples()
+        .expect("report serializes")
 }
 
 /// **A product-admitted preparation constrains exactly as a freshly parsed one

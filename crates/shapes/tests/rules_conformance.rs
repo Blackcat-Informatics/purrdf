@@ -119,7 +119,7 @@ fn load(case: &Case) -> Result<(purrdf_shapes::shapes::Shapes, Arc<RdfDataset>),
     let (input, doc_prefixes) = parse_input(&case.input_path, &text)?;
     let shapes = from_dataset_with_prefixes(&input, &doc_prefixes)
         .map_err(|e| format!("shapes parse error: {e}"))?;
-    let projected = engine::project_dataset(input.as_ref())?;
+    let projected = engine::project_dataset(input.as_ref()).map_err(|error| error.to_string())?;
     Ok((shapes, projected))
 }
 

@@ -651,10 +651,14 @@ impl Corpus {
                 purrdf_shapes::rules::LimitKnobs::new("rounds", "terms", "facts", "joins"),
             ) {
                 Ok(inference) => self.grade_inferences(case, &inference),
-                Err(message) => Observation {
-                    kind: OutcomeKind::Crash,
+                Err(error) => Observation {
+                    kind: if matches!(error, purrdf_shapes::ShapesError::Storage(_)) {
+                        OutcomeKind::ResourceExhausted
+                    } else {
+                        OutcomeKind::Crash
+                    },
                     reason: None,
-                    message,
+                    message: error.to_string(),
                 },
             };
             records.push(record("native/rules", observed));
@@ -741,6 +745,11 @@ impl Corpus {
                     reason: None,
                     message,
                 },
+                Err(GradeError::Storage(error)) => Observation {
+                    kind: OutcomeKind::ResourceExhausted,
+                    reason: None,
+                    message: error.to_string(),
+                },
                 Err(GradeError::Malformed(message)) => Observation {
                     kind: OutcomeKind::Malformed,
                     reason: None,
@@ -783,10 +792,13 @@ impl Corpus {
                     manifest::inference_triples(reader, reader.one(case.entry, mf::RESULT)?)?;
                 triples_dataset(&triples)?
             };
-            report::compare_graphs(&expected, &inline).map_err(|_| {
-                malformed("the inline mf:result list and the expected graph disagree")
+            report::compare_graphs(&expected, &inline).map_err(|error| match error {
+                GradeError::Mismatch(_) => {
+                    malformed("the inline mf:result list and the expected graph disagree")
+                }
+                other => other,
             })?;
-            let actual = inference.inferred_dataset().map_err(malformed)?;
+            let actual = inference.inferred_dataset().map_err(shapes_grade_error)?;
             report::compare_graphs(&expected, &actual)
         })();
         match graded {
@@ -804,6 +816,11 @@ impl Corpus {
                 kind: OutcomeKind::ResourceExhausted,
                 reason: None,
                 message,
+            },
+            Err(GradeError::Storage(error)) => Observation {
+                kind: OutcomeKind::ResourceExhausted,
+                reason: None,
+                message: error.to_string(),
             },
             Err(GradeError::Malformed(message)) => Observation {
                 kind: OutcomeKind::Malformed,
@@ -1048,7 +1065,7 @@ fn compare_report(
     ];
     let expected_links = report::expected_source_correspondence(&expected, &expected_sources)?;
 
-    let graph = actual.to_graph();
+    let graph = actual.to_graph().map_err(shapes_grade_error)?;
     let actual_dataset = graph.dataset();
     let actual_root = report_root(actual_dataset)?;
     let context = graph.source_context();
@@ -1120,12 +1137,18 @@ fn compare_report(
 fn triples_dataset(triples: &[[TermValue; 3]]) -> Result<Arc<RdfDataset>, GradeError> {
     let mut builder = purrdf_core::RdfDatasetBuilder::new();
     for [s, p, o] in triples {
-        let s = purrdf_core::TermFactory::intern_value(&mut builder, s);
-        let p = purrdf_core::TermFactory::intern_value(&mut builder, p);
-        let o = purrdf_core::TermFactory::intern_value(&mut builder, o);
-        builder.push_quad(s, p, o, None);
+        let s = purrdf_core::TermFactory::intern_value(&mut builder, s)?;
+        let p = purrdf_core::TermFactory::intern_value(&mut builder, p)?;
+        let o = purrdf_core::TermFactory::intern_value(&mut builder, o)?;
+        builder.push_quad(s, p, o, None)?;
     }
-    builder
-        .freeze()
-        .map_err(|error| malformed(error.to_string()))
+    builder.freeze().map_err(GradeError::from)
+}
+
+/// Preserve physical refusal while rendering other shapes failures for grading.
+fn shapes_grade_error(error: purrdf_shapes::ShapesError) -> GradeError {
+    match error {
+        purrdf_shapes::ShapesError::Storage(error) => GradeError::Storage(error),
+        other => malformed(other.to_string()),
+    }
 }

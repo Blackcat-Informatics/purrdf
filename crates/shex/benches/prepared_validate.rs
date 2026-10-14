@@ -55,27 +55,36 @@ fn fixture() -> (
     let schema = parse_shexc(&schema_src, None).expect("fixture schema parses");
 
     let mut builder = RdfDatasetBuilder::new();
-    let p_code = builder.intern_iri(&format!("{NS}code"));
-    let p_label = builder.intern_iri(&format!("{NS}label"));
-    let p_owner = builder.intern_iri(&format!("{NS}owner"));
-    let p_status = builder.intern_iri(&format!("{NS}status"));
-    let p_priority = builder.intern_iri(&format!("{NS}priority"));
-    let owner = builder.intern_iri(&format!("{NS}team-alpha"));
+    let p_code = builder.intern_iri(&format!("{NS}code")).unwrap();
+    let p_label = builder.intern_iri(&format!("{NS}label")).unwrap();
+    let p_owner = builder.intern_iri(&format!("{NS}owner")).unwrap();
+    let p_status = builder.intern_iri(&format!("{NS}status")).unwrap();
+    let p_priority = builder.intern_iri(&format!("{NS}priority")).unwrap();
+    let owner = builder.intern_iri(&format!("{NS}team-alpha")).unwrap();
 
     let mut map = Vec::with_capacity(NODE_COUNT);
     for idx in 0..NODE_COUNT {
         let subject_iri = format!("{NS}widget-{idx}");
-        let subject = builder.intern_iri(&subject_iri);
-        let code = builder.intern_literal(purrdf_core::RdfLiteral::simple(format!("W-{idx}")));
-        builder.push_quad(subject, p_code, code, None);
-        let label =
-            builder.intern_literal(purrdf_core::RdfLiteral::simple(format!("Widget {idx}")));
-        builder.push_quad(subject, p_label, label, None);
-        builder.push_quad(subject, p_owner, owner, None);
-        let status = builder.intern_literal(purrdf_core::RdfLiteral::simple("active"));
-        builder.push_quad(subject, p_status, status, None);
-        let priority = builder.intern_literal(purrdf_core::RdfLiteral::simple("normal"));
-        builder.push_quad(subject, p_priority, priority, None);
+        let subject = builder.intern_iri(&subject_iri).unwrap();
+        let code = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple(format!("W-{idx}")))
+            .unwrap();
+        builder.push_quad(subject, p_code, code, None).unwrap();
+        let label = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple(format!("Widget {idx}")))
+            .unwrap();
+        builder.push_quad(subject, p_label, label, None).unwrap();
+        builder.push_quad(subject, p_owner, owner, None).unwrap();
+        let status = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple("active"))
+            .unwrap();
+        builder.push_quad(subject, p_status, status, None).unwrap();
+        let priority = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple("normal"))
+            .unwrap();
+        builder
+            .push_quad(subject, p_priority, priority, None)
+            .unwrap();
 
         map.push((
             TermValue::iri(subject_iri),

@@ -219,10 +219,10 @@ mod tests {
     #[test]
     fn basic_graph_round_trips() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("freeze");
         // Every bidirectional format round-trips a basic graph isomorphically — JSON-LD /
         // YAML-LD alongside the FULL declared peer set (including TriX / HexTuples).
@@ -244,10 +244,10 @@ mod tests {
     #[test]
     fn jsonld_and_yamlld_emit_empty_context_and_absolute_iris() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("https://example.org/alice");
-        let predicate = builder.intern_iri("https://schema.org/name");
-        let object = builder.intern_literal(RdfLiteral::simple("Alice"));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri("https://example.org/alice").unwrap();
+        let predicate = builder.intern_iri("https://schema.org/name").unwrap();
+        let object = builder.intern_literal(RdfLiteral::simple("Alice")).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         let dataset = builder.freeze().expect("freeze");
 
         let json = jsonld::serialize_dataset_to_jsonld(&dataset).expect("JSON-LD");
@@ -272,18 +272,20 @@ mod tests {
     #[test]
     fn reifier_and_annotation_round_trip() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let triple = b.intern_triple(s, p, o);
-        let r = b.intern_iri("https://e/r");
-        let conf = b.intern_iri("https://e/confidence");
-        let val = b.intern_literal(RdfLiteral::typed(
-            "0.9",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_reifier(r, triple);
-        b.push_annotation(r, conf, val);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let r = b.intern_iri("https://e/r").unwrap();
+        let conf = b.intern_iri("https://e/confidence").unwrap();
+        let val = b
+            .intern_literal(RdfLiteral::typed(
+                "0.9",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, conf, val).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/n-triples");
         assert_round_trips(&ds, "text/turtle");
@@ -299,12 +301,12 @@ mod tests {
         // encoding makes it round-trip losslessly through JSON-LD and YAML-LD too, so
         // `carries_star == true` is honest for these formats.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let inner = b.intern_triple(s, p, o);
-        let asserts = b.intern_iri("https://e/asserts");
-        b.push_quad(s, asserts, inner, None);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let inner = b.intern_triple(s, p, o).unwrap();
+        let asserts = b.intern_iri("https://e/asserts").unwrap();
+        b.push_quad(s, asserts, inner, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/ld+json");
         assert_round_trips(&ds, "application/ld+yaml");
@@ -321,26 +323,28 @@ mod tests {
         // only path that exercises the `encode_triple_component` /
         // `parse_triple_term` recursion (jsonld.rs) — previously zero coverage.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let inner = b.intern_triple(s, p, o); // depth-1 triple term: <<( s p o )>>
-        let p2 = b.intern_iri("https://e/p2");
-        let o2 = b.intern_iri("https://e/o2");
-        let outer = b.intern_triple(o2, p2, inner); // depth-2: object is itself a triple term
-        let subj = b.intern_iri("https://e/subj");
-        let asserts = b.intern_iri("https://e/asserts");
-        b.push_quad(subj, asserts, outer, None); // assert the nested term in object position
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let inner = b.intern_triple(s, p, o).unwrap(); // depth-1 triple term: <<( s p o )>>
+        let p2 = b.intern_iri("https://e/p2").unwrap();
+        let o2 = b.intern_iri("https://e/o2").unwrap();
+        let outer = b.intern_triple(o2, p2, inner).unwrap(); // depth-2: object is itself a triple term
+        let subj = b.intern_iri("https://e/subj").unwrap();
+        let asserts = b.intern_iri("https://e/asserts").unwrap();
+        b.push_quad(subj, asserts, outer, None).unwrap(); // assert the nested term in object position
 
         // Reifier + annotation live on the INNER triple, not the outer one.
-        let r = b.intern_iri("https://e/r");
-        let conf = b.intern_iri("https://e/confidence");
-        let val = b.intern_literal(RdfLiteral::typed(
-            "0.9",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_reifier(r, inner);
-        b.push_annotation(r, conf, val);
+        let r = b.intern_iri("https://e/r").unwrap();
+        let conf = b.intern_iri("https://e/confidence").unwrap();
+        let val = b
+            .intern_literal(RdfLiteral::typed(
+                "0.9",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_reifier(r, inner).unwrap();
+        b.push_annotation(r, conf, val).unwrap();
 
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/ld+json");
@@ -426,21 +430,23 @@ mod tests {
         // `Err` and the comparator's `.expect(...)` panicked. `reifier_of` must skip
         // Triple-kind sentinel rows so this collision no longer panics.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let inner = b.intern_triple(s, p, o);
-        let asserts = b.intern_iri("https://e/asserts");
-        let subj = b.intern_iri("https://e/subj");
-        b.push_quad(subj, asserts, inner, None); // object-position triple term for (s,p,o)
-        let r = b.intern_iri("https://e/r");
-        let conf = b.intern_iri("https://e/confidence");
-        let val = b.intern_literal(RdfLiteral::typed(
-            "0.9",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_reifier(r, inner); // real reifier on the SAME (s,p,o)
-        b.push_annotation(r, conf, val);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let inner = b.intern_triple(s, p, o).unwrap();
+        let asserts = b.intern_iri("https://e/asserts").unwrap();
+        let subj = b.intern_iri("https://e/subj").unwrap();
+        b.push_quad(subj, asserts, inner, None).unwrap(); // object-position triple term for (s,p,o)
+        let r = b.intern_iri("https://e/r").unwrap();
+        let conf = b.intern_iri("https://e/confidence").unwrap();
+        let val = b
+            .intern_literal(RdfLiteral::typed(
+                "0.9",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_reifier(r, inner).unwrap(); // real reifier on the SAME (s,p,o)
+        b.push_annotation(r, conf, val).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/ld+json");
         assert_round_trips(&ds, "application/ld+yaml");
@@ -451,18 +457,18 @@ mod tests {
         // An annotation whose VALUE is itself a triple term exercises the
         // annotation-value `@triple` path (`simple_term_value`'s `Triple` arm).
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let base = b.intern_triple(s, p, o);
-        let r = b.intern_iri("https://e/r");
-        b.push_reifier(r, base);
-        let derived = b.intern_iri("https://e/derivedFrom");
-        let x = b.intern_iri("https://e/x");
-        let y = b.intern_iri("https://e/y");
-        let z = b.intern_iri("https://e/z");
-        let ann_triple = b.intern_triple(x, y, z);
-        b.push_annotation(r, derived, ann_triple);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let base = b.intern_triple(s, p, o).unwrap();
+        let r = b.intern_iri("https://e/r").unwrap();
+        b.push_reifier(r, base).unwrap();
+        let derived = b.intern_iri("https://e/derivedFrom").unwrap();
+        let x = b.intern_iri("https://e/x").unwrap();
+        let y = b.intern_iri("https://e/y").unwrap();
+        let z = b.intern_iri("https://e/z").unwrap();
+        let ann_triple = b.intern_triple(x, y, z).unwrap();
+        b.push_annotation(r, derived, ann_triple).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/ld+json");
         assert_round_trips(&ds, "application/ld+yaml");
@@ -474,20 +480,22 @@ mod tests {
         // JSON-LD must thread the reifier/annotation graph slot, not force it to the
         // default graph — otherwise the round-trip is not isomorphic.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let g = b.intern_iri("https://e/g");
-        let triple = b.intern_triple(s, p, o);
-        let r = b.intern_iri("https://e/r");
-        let conf = b.intern_iri("https://e/confidence");
-        let val = b.intern_literal(RdfLiteral::typed(
-            "0.9",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_quad(s, p, o, Some(g));
-        b.push_reifier_in_graph(r, triple, Some(g));
-        b.push_annotation_in_graph(r, conf, val, Some(g));
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let g = b.intern_iri("https://e/g").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let r = b.intern_iri("https://e/r").unwrap();
+        let conf = b.intern_iri("https://e/confidence").unwrap();
+        let val = b
+            .intern_literal(RdfLiteral::typed(
+                "0.9",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
+        b.push_reifier_in_graph(r, triple, Some(g)).unwrap();
+        b.push_annotation_in_graph(r, conf, val, Some(g)).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/ld+json");
         assert_round_trips(&ds, "application/ld+yaml");
@@ -503,31 +511,37 @@ mod tests {
         // go in (2 asserted triples + 2 reifier bindings + 2 annotations); the round-trip
         // must come back isomorphic, not cross-contaminated to ~10 quads.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let g1 = b.intern_iri("https://e/g1");
-        let g2 = b.intern_iri("https://e/g2");
-        let triple = b.intern_triple(s, p, o);
-        let conf = b.intern_iri("https://e/confidence");
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let g1 = b.intern_iri("https://e/g1").unwrap();
+        let g2 = b.intern_iri("https://e/g2").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let conf = b.intern_iri("https://e/confidence").unwrap();
 
-        let r1 = b.intern_iri("https://e/r1");
-        let val1 = b.intern_literal(RdfLiteral::typed(
-            "0.1",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_quad(s, p, o, Some(g1));
-        b.push_reifier_in_graph(r1, triple, Some(g1));
-        b.push_annotation_in_graph(r1, conf, val1, Some(g1));
+        let r1 = b.intern_iri("https://e/r1").unwrap();
+        let val1 = b
+            .intern_literal(RdfLiteral::typed(
+                "0.1",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_quad(s, p, o, Some(g1)).unwrap();
+        b.push_reifier_in_graph(r1, triple, Some(g1)).unwrap();
+        b.push_annotation_in_graph(r1, conf, val1, Some(g1))
+            .unwrap();
 
-        let r2 = b.intern_iri("https://e/r2");
-        let val2 = b.intern_literal(RdfLiteral::typed(
-            "0.9",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_quad(s, p, o, Some(g2));
-        b.push_reifier_in_graph(r2, triple, Some(g2));
-        b.push_annotation_in_graph(r2, conf, val2, Some(g2));
+        let r2 = b.intern_iri("https://e/r2").unwrap();
+        let val2 = b
+            .intern_literal(RdfLiteral::typed(
+                "0.9",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_quad(s, p, o, Some(g2)).unwrap();
+        b.push_reifier_in_graph(r2, triple, Some(g2)).unwrap();
+        b.push_annotation_in_graph(r2, conf, val2, Some(g2))
+            .unwrap();
 
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/ld+json");
@@ -540,17 +554,17 @@ mod tests {
         // through classify + codec_for — proving no `native_codecs::jsonld::` side-door is
         // needed. A named-graph + reifier dataset exercises the star + dataset paths.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let g = b.intern_iri("https://e/g");
-        let triple = b.intern_triple(s, p, o);
-        let r = b.intern_iri("https://e/r");
-        let conf = b.intern_iri("https://e/confidence");
-        let val = b.intern_literal(RdfLiteral::simple("high"));
-        b.push_quad(s, p, o, Some(g));
-        b.push_reifier_in_graph(r, triple, Some(g));
-        b.push_annotation_in_graph(r, conf, val, Some(g));
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let g = b.intern_iri("https://e/g").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let r = b.intern_iri("https://e/r").unwrap();
+        let conf = b.intern_iri("https://e/confidence").unwrap();
+        let val = b.intern_literal(RdfLiteral::simple("high")).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
+        b.push_reifier_in_graph(r, triple, Some(g)).unwrap();
+        b.push_annotation_in_graph(r, conf, val, Some(g)).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let backend = GtsCodecBackend;
@@ -594,16 +608,16 @@ mod tests {
         // JSON-LD / YAML-LD are star-capable, so `serialize_dataset_to_format` reports
         // ZERO dropped statement rows even when the dataset carries reifiers/annotations.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let triple = b.intern_triple(s, p, o);
-        let r = b.intern_iri("https://e/r");
-        let conf = b.intern_iri("https://e/confidence");
-        let val = b.intern_literal(RdfLiteral::simple("high"));
-        b.push_quad(s, p, o, None);
-        b.push_reifier(r, triple);
-        b.push_annotation(r, conf, val);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let r = b.intern_iri("https://e/r").unwrap();
+        let conf = b.intern_iri("https://e/confidence").unwrap();
+        let val = b.intern_literal(RdfLiteral::simple("high")).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, conf, val).unwrap();
         let ds = b.freeze().expect("freeze");
         for format in [NativeRdfFormat::JsonLd, NativeRdfFormat::YamlLd] {
             let outcome = serialize_dataset_to_format(&ds, format, None).expect("serialize");
@@ -652,15 +666,17 @@ mod tests {
     #[test]
     fn rtl_literal_round_trips() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let lit = b.intern_literal(RdfLiteral {
-            lexical_form: "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}".to_owned(),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        b.push_quad(s, p, lit, None);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        b.push_quad(s, p, lit, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/n-triples");
     }
@@ -668,12 +684,12 @@ mod tests {
     #[test]
     fn quoted_triple_term_round_trips() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let inner = b.intern_triple(s, p, o);
-        let asserts = b.intern_iri("https://e/asserts");
-        b.push_quad(s, asserts, inner, None);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let inner = b.intern_triple(s, p, o).unwrap();
+        let asserts = b.intern_iri("https://e/asserts").unwrap();
+        b.push_quad(s, asserts, inner, None).unwrap();
         let ds = b.freeze().expect("freeze");
         // FINDING: purrdf-gts 0.9.5's `to_turtle`/`to_ntriples`/`to_trig`/
         // `to_rdf_xml` event-source serializers CANNOT emit a quoted-triple term that
@@ -692,12 +708,12 @@ mod tests {
         // token (`x` vs `purrdfesc1_x`) survives the round trip as two distinct
         // blank nodes.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
-        let p = b.intern_iri("https://e/p");
-        let b0 = b.intern_blank("x", BlankScope(0));
-        let b1 = b.intern_blank("x", BlankScope(1));
-        b.push_quad(s, p, b0, None);
-        b.push_quad(s, p, b1, None);
+        let s = b.intern_iri("https://e/s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let b0 = b.intern_blank("x", BlankScope(0)).unwrap();
+        let b1 = b.intern_blank("x", BlankScope(1)).unwrap();
+        b.push_quad(s, p, b0, None).unwrap();
+        b.push_quad(s, p, b1, None).unwrap();
         let ds = b.freeze().expect("freeze");
         // Two distinct blanks → two quads survive (a collapse would drop one).
         let reparsed = round_trip(&ds, "application/n-triples");
@@ -791,10 +807,12 @@ mod tests {
         ];
         for (lexical, datatype) in cases {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri("https://e/s");
-            let p = b.intern_iri("https://e/p");
-            let lit = b.intern_literal(RdfLiteral::typed(lexical, datatype));
-            b.push_quad(s, p, lit, None);
+            let s = b.intern_iri("https://e/s").unwrap();
+            let p = b.intern_iri("https://e/p").unwrap();
+            let lit = b
+                .intern_literal(RdfLiteral::typed(lexical, datatype))
+                .unwrap();
+            b.push_quad(s, p, lit, None).unwrap();
             let ds = b.freeze().expect("freeze");
             let reparsed = round_trip(&ds, "application/n-triples");
             assert!(
@@ -837,21 +855,23 @@ mod tests {
             "2020-01-01",
         ];
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://e/s");
+        let s = b.intern_iri("https://e/s").unwrap();
         for (i, scalar) in adversarial.iter().enumerate() {
             // The scalar as a plain literal — implied xsd:string (no datatype IRI).
-            let p_plain = b.intern_iri(&format!("https://e/plain{i}"));
-            let plain = b.intern_literal(RdfLiteral::simple(*scalar));
-            b.push_quad(s, p_plain, plain, None);
+            let p_plain = b.intern_iri(&format!("https://e/plain{i}")).unwrap();
+            let plain = b.intern_literal(RdfLiteral::simple(*scalar)).unwrap();
+            b.push_quad(s, p_plain, plain, None).unwrap();
 
             // The same scalar as an EXPLICIT (non-numeric, non-boolean) xsd:string
             // typed literal — the lexical form must survive verbatim either way.
-            let p_typed = b.intern_iri(&format!("https://e/typed{i}"));
-            let typed = b.intern_literal(RdfLiteral::typed(
-                *scalar,
-                "http://www.w3.org/2001/XMLSchema#string",
-            ));
-            b.push_quad(s, p_typed, typed, None);
+            let p_typed = b.intern_iri(&format!("https://e/typed{i}")).unwrap();
+            let typed = b
+                .intern_literal(RdfLiteral::typed(
+                    *scalar,
+                    "http://www.w3.org/2001/XMLSchema#string",
+                ))
+                .unwrap();
+            b.push_quad(s, p_typed, typed, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
         // JSON-LD as a control: JSON has no ambiguous bare-scalar resolver, so this
@@ -886,13 +906,13 @@ mod tests {
     #[test]
     fn backend_serializes_default_graph_without_named_rows() {
         let mut b = RdfDatasetBuilder::new();
-        let default_s = b.intern_iri("https://e/default-s");
-        let named_s = b.intern_iri("https://e/named-s");
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let g = b.intern_iri("https://e/g");
-        b.push_quad(default_s, p, o, None);
-        b.push_quad(named_s, p, o, Some(g));
+        let default_s = b.intern_iri("https://e/default-s").unwrap();
+        let named_s = b.intern_iri("https://e/named-s").unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let g = b.intern_iri("https://e/g").unwrap();
+        b.push_quad(default_s, p, o, None).unwrap();
+        b.push_quad(named_s, p, o, Some(g)).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let bytes = serialize_dataset(&ds, "application/n-triples", SerializeGraph::DefaultGraph)

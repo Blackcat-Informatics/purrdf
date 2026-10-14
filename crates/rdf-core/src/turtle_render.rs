@@ -251,7 +251,7 @@ impl<'a> Renderer<'a> {
     /// The `TermId` of an interned IRI, or `None` if the term table has no such IRI.
     fn find_iri(&self, iri: &str) -> Option<TermId> {
         for i in 0..self.dataset.term_count() {
-            let id = TermId::from_index(i as u32);
+            let id = TermId::from_index(i as u32).expect("stored term index is representable");
             if let TermRef::Iri(v) = self.dataset.resolve(id)
                 && v == iri
             {
@@ -1039,12 +1039,12 @@ mod tests {
     fn object_key_equality_and_order_agree_for_singletons_and_competitors() {
         use crate::{BlankScope, RdfDatasetBuilder};
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_blank("a", BlankScope::DEFAULT);
-        let b = builder.intern_blank("b", BlankScope::DEFAULT);
-        let predicate = builder.intern_iri("http://example.org/p");
-        let end = builder.intern_iri("http://example.org/end");
-        builder.push_quad(a, predicate, end, None);
-        builder.push_quad(b, predicate, end, None);
+        let a = builder.intern_blank("a", BlankScope::DEFAULT).unwrap();
+        let b = builder.intern_blank("b", BlankScope::DEFAULT).unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let end = builder.intern_iri("http://example.org/end").unwrap();
+        builder.push_quad(a, predicate, end, None).unwrap();
+        builder.push_quad(b, predicate, end, None).unwrap();
         let dataset = builder.freeze().unwrap();
         let raw: RawProps = [a, b]
             .into_iter()
@@ -1071,8 +1071,12 @@ mod tests {
         use crate::ir::builder::RdfDatasetBuilder;
         let render_one = |s: &str, p: &str, o: &str, prefixes: &[(&str, &str)]| {
             let mut b = RdfDatasetBuilder::new();
-            let (s, p, o) = (b.intern_iri(s), b.intern_iri(p), b.intern_iri(o));
-            b.push_quad(s, p, o, None);
+            let (s, p, o) = (
+                b.intern_iri(s).unwrap(),
+                b.intern_iri(p).unwrap(),
+                b.intern_iri(o).unwrap(),
+            );
+            b.push_quad(s, p, o, None).unwrap();
             let prefixes: Vec<(String, String)> = prefixes
                 .iter()
                 .map(|&(prefix, ns)| (prefix.to_owned(), ns.to_owned()))
@@ -1123,15 +1127,15 @@ mod tests {
     fn renders_rdf12_reifier_flat() {
         use crate::ir::builder::RdfDatasetBuilder;
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://ex/s");
-        let p = b.intern_iri("https://ex/p");
-        let o = b.intern_iri("https://ex/o");
-        let r = b.intern_iri("https://ex/r");
-        let conf = b.intern_iri("https://ex/conf");
-        b.push_quad(s, p, o, None);
-        let tt = b.intern_triple(s, p, o);
-        b.push_reifier(r, tt);
-        b.push_annotation(r, conf, o);
+        let s = b.intern_iri("https://ex/s").unwrap();
+        let p = b.intern_iri("https://ex/p").unwrap();
+        let o = b.intern_iri("https://ex/o").unwrap();
+        let r = b.intern_iri("https://ex/r").unwrap();
+        let conf = b.intern_iri("https://ex/conf").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        let tt = b.intern_triple(s, p, o).unwrap();
+        b.push_reifier(r, tt).unwrap();
+        b.push_annotation(r, conf, o).unwrap();
         let ds = b.freeze().unwrap();
         let out = render(&ds, &[("rdf".to_string(), RDF.to_string())]);
         // The reifier renders FLAT — the quoted triple inline, the annotation alongside
@@ -1199,19 +1203,19 @@ mod tests {
         let rdf_iri = |local: &str| format!("{RDF}{local}");
         let render_list = |extra_rest: bool| {
             let mut b = crate::RdfDatasetBuilder::new();
-            let s = b.intern_iri("https://ex/s");
-            let p = b.intern_iri("https://ex/p");
-            let cell = b.intern_blank("c", crate::BlankScope::DEFAULT);
-            let first = b.intern_iri(&rdf_iri("first"));
-            let rest = b.intern_iri(&rdf_iri("rest"));
-            let nil = b.intern_iri(&rdf_iri("nil"));
-            let member = b.intern_iri("https://ex/m");
-            b.push_quad(s, p, cell, None);
-            b.push_quad(cell, first, member, None);
-            b.push_quad(cell, rest, nil, None);
+            let s = b.intern_iri("https://ex/s").unwrap();
+            let p = b.intern_iri("https://ex/p").unwrap();
+            let cell = b.intern_blank("c", crate::BlankScope::DEFAULT).unwrap();
+            let first = b.intern_iri(&rdf_iri("first")).unwrap();
+            let rest = b.intern_iri(&rdf_iri("rest")).unwrap();
+            let nil = b.intern_iri(&rdf_iri("nil")).unwrap();
+            let member = b.intern_iri("https://ex/m").unwrap();
+            b.push_quad(s, p, cell, None).unwrap();
+            b.push_quad(cell, first, member, None).unwrap();
+            b.push_quad(cell, rest, nil, None).unwrap();
             if extra_rest {
-                let other = b.intern_iri("https://ex/other");
-                b.push_quad(cell, rest, other, None);
+                let other = b.intern_iri("https://ex/other").unwrap();
+                b.push_quad(cell, rest, other, None).unwrap();
             }
             render(&b.freeze().unwrap(), &[])
         };

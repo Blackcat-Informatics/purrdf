@@ -23,16 +23,22 @@ const QUERY: &str = "SELECT ?o WHERE { \
 
 fn coprime_cycle_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let start = builder.intern_iri(&format!("{EX}a"));
-    let predicate = builder.intern_iri(&format!("{EX}p"));
+    let start = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
 
     for (cycle, &length) in CYCLE_LENGTHS.iter().enumerate() {
         let nodes: Vec<_> = (0..length)
-            .map(|index| builder.intern_iri(&format!("{EX}c{cycle}_{index}")))
+            .map(|index| {
+                builder
+                    .intern_iri(&format!("{EX}c{cycle}_{index}"))
+                    .unwrap()
+            })
             .collect();
-        builder.push_quad(start, predicate, nodes[0], None);
+        builder.push_quad(start, predicate, nodes[0], None).unwrap();
         for index in 0..length {
-            builder.push_quad(nodes[index], predicate, nodes[(index + 1) % length], None);
+            builder
+                .push_quad(nodes[index], predicate, nodes[(index + 1) % length], None)
+                .unwrap();
         }
     }
 

@@ -53,7 +53,7 @@ use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 #[derive(Debug)]
 pub enum QueryIndexAllocationError {
     /// Ordinal array allocation failed.
-    Permutation(std::collections::TryReserveError),
+    Permutation(purrdf_lex::allocation::StorageError),
     /// The statement graph histogram table allocation failed.
     StatementHistogram(hashbrown::TryReserveError),
 }
@@ -409,6 +409,7 @@ pub struct RdfDataset {
 /// the remaining bound-set shapes. All five warm ≈ 20 B/quad on top of the table.
 #[derive(Debug, Default)]
 struct QuadIndexes {
+    capacity: super::builder::LocalCapacity,
     pos: OnceLock<Box<[u32]>>,
     osp: OnceLock<Box<[u32]>>,
     gspo: OnceLock<Box<[u32]>>,
@@ -1119,8 +1120,7 @@ impl RdfDataset {
     /// `<g1>`'s projection, and hence make
     /// [`PipelineBundle::graph_digest`](super::pipeline_bundle::PipelineBundle::graph_digest)
     /// a digest partly over another graph's content.
-    #[must_use]
-    pub fn project_named_graph(&self, graph: &str) -> Self {
+    pub fn project_named_graph(&self, graph: &str) -> Result<Self, crate::RdfDiagnostic> {
         let mut builder = super::builder::RdfDatasetBuilder::new();
 
         for mut quad in self.owned_quads() {
@@ -1128,7 +1128,7 @@ impl RdfDataset {
                 continue;
             }
             quad.graph_name = None;
-            builder.push_owned_quad(&quad);
+            builder.push_owned_quad(&quad)?;
         }
 
         for mut reifier in self.owned_reifiers() {
@@ -1136,7 +1136,7 @@ impl RdfDataset {
                 continue;
             }
             reifier.graph = None;
-            builder.push_owned_reifier(&reifier);
+            builder.push_owned_reifier(&reifier)?;
         }
 
         for mut annotation in self.owned_annotations() {
@@ -1144,15 +1144,13 @@ impl RdfDataset {
                 continue;
             }
             annotation.graph = None;
-            builder.push_owned_annotation(&annotation);
+            builder.push_owned_annotation(&annotation)?;
         }
 
-        Arc::try_unwrap(
-            builder
-                .freeze()
-                .expect("a named-graph projection of a valid dataset is valid"),
-        )
-        .unwrap_or_else(|arc| arc.owned_snapshot())
+        match Arc::try_unwrap(builder.freeze()?) {
+            Ok(dataset) => Ok(dataset),
+            Err(arc) => arc.owned_snapshot(),
+        }
     }
 
     /// Borrow (building on first access) the ordinal-indirection array for a
@@ -1168,14 +1166,16 @@ impl RdfDataset {
     fn try_permutation(
         &self,
         perm: QuadPermutation,
-    ) -> Result<&[u32], std::collections::TryReserveError> {
+    ) -> Result<&[u32], purrdf_lex::allocation::StorageError> {
         let cell = self.permutation_cell(perm);
         if cell.get().is_none() {
+            let mut resident = purrdf_lex::allocation::Resident;
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
             let ordinals = self.build_permutation(
                 perm,
-                &mut (),
-                |(), values, required| values.try_reserve_exact(required),
-                |(), values| Ok(values.into_boxed_slice()),
+                &mut memory,
+                purrdf_lex::allocation::Memory::reserve,
+                purrdf_lex::allocation::Memory::boxed_slice,
             )?;
             let _ = cell.set(ordinals);
         }
@@ -1195,7 +1195,7 @@ impl RdfDataset {
         }
     }
 
-    fn build_permutation<S, E>(
+    fn build_permutation<S, E: From<purrdf_lex::allocation::StorageError>>(
         &self,
         permutation: QuadPermutation,
         storage: &mut S,
@@ -1203,7 +1203,11 @@ impl RdfDataset {
         freeze: impl FnOnce(&mut S, Vec<u32>) -> Result<Box<[u32]>, E>,
     ) -> Result<Box<[u32]>, E> {
         let axes = permutation.axes();
-        let len = u32::try_from(self.quads.len()).expect("dataset quad count exceeds u32::MAX");
+        use purrdf_lex::allocation::{CapacitySpace, StorageError};
+        self.indexes
+            .capacity
+            .required(CapacitySpace::Permutation, self.quads.len(), 0)?;
+        let len = u32::try_from(self.quads.len()).map_err(|_| StorageError::SizeOverflow)?;
         let mut ordinals = Vec::new();
         reserve(storage, &mut ordinals, self.quads.len())?;
         ordinals.extend(0..len);
@@ -1494,9 +1498,11 @@ impl RdfDataset {
         mut matches: impl FnMut(TermId) -> bool,
     ) -> Option<TermId> {
         self.term_index
-            .find(hash, |&index| matches(TermId::from_index(index)))
+            .find(hash, |&index| {
+                matches(TermId::from_index(index).expect("stored term index is representable"))
+            })
             .copied()
-            .map(TermId::from_index)
+            .map(|index| TermId::from_index(index).expect("stored term index is representable"))
     }
 
     /// The id of an interned IRI, without allocating an owned [`TermValue`].
@@ -2058,19 +2064,16 @@ impl RdfDataset {
     /// `content_id`/`content_ids` RE-DERIVE over the merged IRI bytes and the
     /// derivation-predecessor index resolves over the merged annotation table.
     /// Disagreeing inputs carry none forward — no fabricated compromise.
-    #[must_use]
-    pub fn union(datasets: &[&Self]) -> Self {
+    pub fn union(datasets: &[&Self]) -> Result<Self, crate::RdfDiagnostic> {
         let mut builder = Self::agreed_builder(datasets);
         for ds in datasets {
-            builder.push_dataset(ds);
+            builder.push_dataset(ds)?;
         }
         // `push_dataset` re-interns owned terms into a fresh builder, so the union is
         // already standardized-apart; freeze re-sorts + dedups. Unwrap the `Arc` to
         // an owned `RdfDataset` (the union owns its arena exclusively).
-        let frozen = builder
-            .freeze()
-            .expect("union of valid datasets re-freezes successfully");
-        Arc::try_unwrap(frozen).unwrap_or_else(|arc| arc.clone_dataset())
+        let frozen = builder.freeze()?;
+        Ok(Arc::try_unwrap(frozen).unwrap_or_else(|arc| arc.clone_dataset()))
     }
 
     /// Deep-clone a frozen dataset's tables into a fresh owned `RdfDataset`. The
@@ -2468,8 +2471,62 @@ mod tests {
     use crate::TermBox;
     use crate::ir::RdfDatasetBuilder;
 
+    #[test]
+    fn lazy_permutation_capacity_refuses_before_allocation_and_retries() {
+        use crate::ir::builder::LocalCapacity;
+        use purrdf_lex::allocation::{
+            CapacityError, CapacitySpace, Memory, Resident, StorageError,
+        };
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = iri(&mut builder, "p");
+        let object = iri(&mut builder, "o");
+        for name in ["s0", "s1", "s2"] {
+            let subject = iri(&mut builder, name);
+            builder.push_quad(subject, predicate, object, None).unwrap();
+        }
+        let mut dataset = Arc::try_unwrap(builder.freeze().unwrap()).unwrap();
+        dataset.indexes.capacity = LocalCapacity::Reduced {
+            terms: u32::MAX,
+            text: u32::MAX,
+            rows: 2,
+        };
+        let expected = StorageError::Capacity(CapacityError::new(CapacitySpace::Permutation, 3, 2));
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        for _ in 0..3 {
+            assert_eq!(
+                dataset.warm_query_indexes_with_memory(&mut memory),
+                Err(expected)
+            );
+            let error = dataset.warm_query_indexes().unwrap_err();
+            assert!(
+                matches!(error, QueryIndexAllocationError::Permutation(cause) if cause == expected)
+            );
+            assert_eq!(memory.admitted_bytes(), 0);
+            for permutation in QuadPermutation::ALL.into_iter().skip(1) {
+                assert!(dataset.permutation_cell(permutation).get().is_none());
+            }
+        }
+        dataset.indexes.capacity = LocalCapacity::Reduced {
+            terms: u32::MAX,
+            text: u32::MAX,
+            rows: 3,
+        };
+        dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
+        assert!(memory.admitted_bytes() >= 3 * 5 * size_of::<u32>());
+        assert_eq!(
+            dataset
+                .quads_for_pattern_indexed(None, Some(predicate), Some(object), GraphMatch::Any)
+                .count(),
+            3
+        );
+        let before = memory.admitted_bytes();
+        dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), before);
+    }
+
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     #[test]
@@ -2540,18 +2597,24 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        let bn = b.intern_blank("b0", BlankScope::DEFAULT);
-        let plain = b.intern_literal(RdfLiteral::simple("hello"));
-        let typed = b.intern_literal(RdfLiteral::typed(
-            "42",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let lang = b.intern_literal(RdfLiteral::language_tagged("bonjour", "fr"));
-        let tr = b.intern_triple(s, p, o);
-        b.push_quad(s, p, o, None);
+        let bn = b.intern_blank("b0", BlankScope::DEFAULT).unwrap();
+        let plain = b.intern_literal(RdfLiteral::simple("hello")).unwrap();
+        let typed = b
+            .intern_literal(RdfLiteral::typed(
+                "42",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        let lang = b
+            .intern_literal(RdfLiteral::language_tagged("bonjour", "fr"))
+            .unwrap();
+        let tr = b.intern_triple(s, p, o).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let r = iri(&mut b, "r");
-        let reifies = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
-        b.push_quad(r, reifies, tr, None);
+        let reifies = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies")
+            .unwrap();
+        b.push_quad(r, reifies, tr, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         assert_eq!(
@@ -2644,7 +2707,10 @@ mod tests {
             .map(|len| format!("a:{}", "x".repeat(len - 2)))
             .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
             .collect();
-        let ids: Vec<TermId> = iris.iter().map(|iri| builder.intern_iri(iri)).collect();
+        let ids: Vec<TermId> = iris
+            .iter()
+            .map(|iri| builder.intern_iri(iri).unwrap())
+            .collect();
         let dataset = builder.freeze().expect("freeze");
         for (iri, id) in iris.iter().zip(ids) {
             assert_eq!(
@@ -2669,14 +2735,16 @@ mod tests {
         let s = iri(&mut local, "s");
         let p = iri(&mut local, "p");
         let o = iri(&mut local, "o");
-        let triple = local.intern_triple(s, p, o);
-        local.push_quad(s, p, triple, None);
+        let triple = local.intern_triple(s, p, o).unwrap();
+        local.push_quad(s, p, triple, None).unwrap();
         let local = local.freeze().unwrap();
 
         let mut foreign = RdfDatasetBuilder::new();
         for n in 0..local.term_count() + 2 {
-            let id = foreign.intern_iri(&format!("http://example.org/foreign/{n}"));
-            foreign.push_quad(id, id, id, None);
+            let id = foreign
+                .intern_iri(&format!("http://example.org/foreign/{n}"))
+                .unwrap();
+            foreign.push_quad(id, id, id, None).unwrap();
         }
         let foreign = foreign.freeze().unwrap();
         let foreign_id = foreign.quads().last().unwrap().s;
@@ -2691,17 +2759,21 @@ mod tests {
         // retained interner index must resolve the datatype IRI to its local id,
         // not collapse the two dataset-independent values.
         let mut b = RdfDatasetBuilder::new();
-        let as_int = b.intern_literal(RdfLiteral::typed(
-            "1",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let as_bool = b.intern_literal(RdfLiteral::typed(
-            "1",
-            "http://www.w3.org/2001/XMLSchema#boolean",
-        ));
+        let as_int = b
+            .intern_literal(RdfLiteral::typed(
+                "1",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        let as_bool = b
+            .intern_literal(RdfLiteral::typed(
+                "1",
+                "http://www.w3.org/2001/XMLSchema#boolean",
+            ))
+            .unwrap();
         let s = iri(&mut b, "s");
-        b.push_quad(s, s, as_int, None);
-        b.push_quad(s, s, as_bool, None);
+        b.push_quad(s, s, as_int, None).unwrap();
+        b.push_quad(s, s, as_bool, None).unwrap();
         let ds = b.freeze().unwrap();
         assert_ne!(as_int, as_bool);
         assert_eq!(
@@ -2732,13 +2804,13 @@ mod tests {
         let val = TermValue::Iri("http://example.org/x".to_string());
         let mut a = RdfDatasetBuilder::new();
         let _pad = iri(&mut a, "pad"); // shift x's id in dataset `a`
-        let xa = a.intern_iri("http://example.org/x");
-        a.push_quad(xa, xa, xa, None);
+        let xa = a.intern_iri("http://example.org/x").unwrap();
+        a.push_quad(xa, xa, xa, None).unwrap();
         let da = a.freeze().unwrap();
 
         let mut b = RdfDatasetBuilder::new();
-        let xb = b.intern_iri("http://example.org/x");
-        b.push_quad(xb, xb, xb, None);
+        let xb = b.intern_iri("http://example.org/x").unwrap();
+        b.push_quad(xb, xb, xb, None).unwrap();
         let db = b.freeze().unwrap();
 
         assert_ne!(xa, xb, "the same value has different ids across datasets");
@@ -2751,7 +2823,7 @@ mod tests {
         use std::sync::Arc;
         let mut b = RdfDatasetBuilder::new();
         let s = iri(&mut b, "s");
-        b.push_quad(s, s, s, None);
+        b.push_quad(s, s, s, None).unwrap();
         let ds = b.freeze().unwrap(); // Arc<RdfDataset>
         let want = TermValue::Iri("http://example.org/s".to_string());
         // The retained immutable interner index is directly shareable.
@@ -2772,8 +2844,8 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
         let (o1, o2) = (iri(&mut b, "o1"), iri(&mut b, "o2"));
-        // Extend<QuadIds>: bulk-push ids interned in THIS builder.
-        b.extend([
+        // Fallible bulk push of ids interned in THIS builder.
+        b.extend_quads([
             QuadIds {
                 s,
                 p,
@@ -2786,7 +2858,8 @@ mod tests {
                 o: o2,
                 g: None,
             },
-        ]);
+        ])
+        .unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(ds.quad_count(), 2);
         // IntoIterator for &RdfDataset yields one QuadRef per quad.
@@ -2805,13 +2878,13 @@ mod tests {
     fn extend_empty_and_dedup() {
         // Empty extend yields an empty dataset.
         let mut b = RdfDatasetBuilder::new();
-        b.extend(core::iter::empty::<QuadIds>());
+        b.extend_quads(core::iter::empty::<QuadIds>()).unwrap();
         assert_eq!(b.freeze().expect("freeze").quad_count(), 0);
-        // Duplicate quads collapse — Extend routes through push_quad's dedup.
+        // Duplicate quads collapse through the original push_quad deduplication.
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
         let q = QuadIds { s, p, o, g: None };
-        b.extend([q, q]);
+        b.extend_quads([q, q]).unwrap();
         assert_eq!(b.freeze().expect("freeze").quad_count(), 1);
     }
 
@@ -2821,7 +2894,7 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         match ds.resolve(s) {
             TermRef::Iri(v) => assert_eq!(v, "http://example.org/s"),
@@ -2834,8 +2907,10 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
-        let lit = b.intern_literal(RdfLiteral::language_tagged("Bonjour", "FR"));
-        b.push_quad(s, p, lit, None);
+        let lit = b
+            .intern_literal(RdfLiteral::language_tagged("Bonjour", "FR"))
+            .unwrap();
+        b.push_quad(s, p, lit, None).unwrap();
         let ds = b.freeze().expect("valid");
         match ds.resolve(lit) {
             TermRef::Literal {
@@ -2857,12 +2932,12 @@ mod tests {
         let o1 = iri(&mut b, "o1");
         let o2 = iri(&mut b, "o2");
 
-        let h0 = b.next_quad_handle();
-        b.push_quad(s, p, o0, None);
+        let h0 = b.next_quad_handle().unwrap();
+        b.push_quad(s, p, o0, None).unwrap();
         // No location for the middle quad.
-        b.push_quad(s, p, o1, None);
-        let h2 = b.next_quad_handle();
-        b.push_quad(s, p, o2, None);
+        b.push_quad(s, p, o1, None).unwrap();
+        let h2 = b.next_quad_handle().unwrap();
+        b.push_quad(s, p, o2, None).unwrap();
 
         b.attach_location(h0, RdfLocation::logical("first"));
         b.attach_location(h2, RdfLocation::logical("third"));
@@ -2896,10 +2971,10 @@ mod tests {
 
         // Push in DESCENDING object order; the frozen order is ascending, so push
         // order and frozen order genuinely differ.
-        let h_o2 = b.next_quad_handle();
-        b.push_quad(s, p, o2, None);
-        b.push_quad(s, p, o1, None);
-        b.push_quad(s, p, o0, None);
+        let h_o2 = b.next_quad_handle().unwrap();
+        b.push_quad(s, p, o2, None).unwrap();
+        b.push_quad(s, p, o1, None).unwrap();
+        b.push_quad(s, p, o0, None).unwrap();
         b.attach_location(h_o2, RdfLocation::logical("loc-o2"));
 
         let ds = b.freeze().expect("valid");
@@ -2924,14 +2999,14 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        let triple = b.intern_triple(s, p, o);
+        let triple = b.intern_triple(s, p, o).unwrap();
         let r1 = iri(&mut b, "r1");
         let r2 = iri(&mut b, "r2");
         let ap = iri(&mut b, "ap");
         let ao = iri(&mut b, "ao");
-        b.push_reifier(r1, triple);
-        b.push_reifier(r2, triple);
-        b.push_annotation(r1, ap, ao);
+        b.push_reifier(r1, triple).unwrap();
+        b.push_reifier(r2, triple).unwrap();
+        b.push_annotation(r1, ap, ao).unwrap();
         let ds = b.freeze().expect("valid");
 
         let reifiers: std::collections::BTreeSet<_> = ds.reifiers_of(triple).collect();
@@ -2950,17 +3025,19 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        let triple = b.intern_triple(s, p, o);
+        let triple = b.intern_triple(s, p, o).unwrap();
         let r = iri(&mut b, "r");
         let ap = iri(&mut b, "ap");
-        let rtl = b.intern_literal(RdfLiteral {
-            lexical_form: "مرحبا".to_string(),
-            datatype: None,
-            language: Some("ar".to_string()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        b.push_reifier(r, triple);
-        b.push_annotation(r, ap, rtl);
+        let rtl = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "مرحبا".to_string(),
+                datatype: None,
+                language: Some("ar".to_string()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, ap, rtl).unwrap();
         let ds = b.freeze().expect("valid");
 
         // reifier_refs: the reifier is an IRI, the statement resolves to a triple term.
@@ -3006,15 +3083,15 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        let triple = b.intern_triple(s, p, o);
+        let triple = b.intern_triple(s, p, o).unwrap();
         let r1 = iri(&mut b, "r1");
         let r2 = iri(&mut b, "r2");
         // The ingest path interns `rdf:reifies` as a term alongside the reifier
         // binding (it is the serialized indirection edge); `reifier_quads` uses that
         // interned id as the virtual predicate.
-        let reifies = b.intern_iri(RDF_REIFIES);
-        b.push_reifier(r1, triple);
-        b.push_reifier(r2, triple);
+        let reifies = b.intern_iri(RDF_REIFIES).unwrap();
+        b.push_reifier(r1, triple).unwrap();
+        b.push_reifier(r2, triple).unwrap();
         let ds = b.freeze().expect("valid");
 
         assert_eq!(
@@ -3050,15 +3127,15 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        let triple = b.intern_triple(s, p, o);
+        let triple = b.intern_triple(s, p, o).unwrap();
         let r = iri(&mut b, "r");
         let ap1 = iri(&mut b, "ap1");
         let ap2 = iri(&mut b, "ap2");
         let ao1 = iri(&mut b, "ao1");
         let ao2 = iri(&mut b, "ao2");
-        b.push_reifier(r, triple);
-        b.push_annotation(r, ap1, ao1);
-        b.push_annotation(r, ap2, ao2);
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, ap1, ao1).unwrap();
+        b.push_annotation(r, ap2, ao2).unwrap();
         let ds = b.freeze().expect("valid");
 
         let rows: Vec<QuadIds> = ds.annotation_quads().collect();
@@ -3105,25 +3182,25 @@ mod tests {
         let g1 = iri(&mut b, "g1");
         let g2 = iri(&mut b, "g2");
         let bystander = iri(&mut b, "not-a-reifier");
-        let reifies = b.intern_iri(RDF_REIFIES);
+        let reifies = b.intern_iri(RDF_REIFIES).unwrap();
 
-        let t1 = b.intern_triple(s1, p, s2);
-        let t2 = b.intern_triple(s2, p, s3);
-        let t3 = b.intern_triple(s3, p, s1);
+        let t1 = b.intern_triple(s1, p, s2).unwrap();
+        let t2 = b.intern_triple(s2, p, s3).unwrap();
+        let t3 = b.intern_triple(s3, p, s1).unwrap();
 
-        b.push_reifier_in_graph(r_c, t2, Some(g2));
-        b.push_reifier(r_a, t3);
-        b.push_reifier_in_graph(r_b, t1, Some(g1));
-        b.push_reifier_in_graph(r_a, t1, Some(g2));
-        b.push_reifier(r_c, t2);
-        b.push_reifier_in_graph(r_a, t1, Some(g1));
-        b.push_reifier(r_b, t1);
-        b.push_reifier(r_a, t2);
-        b.push_reifier_in_graph(r_c, t1, Some(g1));
+        b.push_reifier_in_graph(r_c, t2, Some(g2)).unwrap();
+        b.push_reifier(r_a, t3).unwrap();
+        b.push_reifier_in_graph(r_b, t1, Some(g1)).unwrap();
+        b.push_reifier_in_graph(r_a, t1, Some(g2)).unwrap();
+        b.push_reifier(r_c, t2).unwrap();
+        b.push_reifier_in_graph(r_a, t1, Some(g1)).unwrap();
+        b.push_reifier(r_b, t1).unwrap();
+        b.push_reifier(r_a, t2).unwrap();
+        b.push_reifier_in_graph(r_c, t1, Some(g1)).unwrap();
         // A base quad and an annotation, so the dataset is not side-table-only and the
         // (separately keyed) annotation table is populated alongside.
-        b.push_quad(s1, p, s2, None);
-        b.push_annotation(r_b, p, s3);
+        b.push_quad(s1, p, s2, None).unwrap();
+        b.push_annotation(r_b, p, s3).unwrap();
 
         let ids = vec![
             p, r_a, s1, r_b, s2, r_c, s3, g1, g2, bystander, reifies, t1, t2, t3,
@@ -3214,7 +3291,7 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(ds.reifier_quads_of(s).count(), 0);
     }
@@ -3227,7 +3304,7 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(ds.reifier_quads().count(), 0);
         assert_eq!(ds.annotation_quads().count(), 0);
@@ -3267,7 +3344,7 @@ mod tests {
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
         let g = iri(&mut b, "g");
-        b.push_quad(s, p, o, Some(g));
+        b.push_quad(s, p, o, Some(g)).unwrap();
         let ds = b.freeze().expect("valid");
         let q = ds.quads().next().expect("one quad");
         assert_eq!(
@@ -3294,18 +3371,18 @@ mod tests {
         let a = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "oa"));
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("a")
         };
         let c = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "oc"));
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("c")
         };
 
-        let ab = RdfDataset::union(&[&a, &c]);
-        let ba = RdfDataset::union(&[&c, &a]);
+        let ab = RdfDataset::union(&[&a, &c]).unwrap();
+        let ba = RdfDataset::union(&[&c, &a]).unwrap();
         assert_eq!(ab.quad_count(), 2, "both quads survive the union");
         assert_eq!(
             canonicalize(&ab).nquads,
@@ -3322,13 +3399,13 @@ mod tests {
             let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
             let shared = iri(&mut b, "shared");
             let o = iri(&mut b, obj);
-            b.push_quad(s, p, shared, None); // identical in both inputs
-            b.push_quad(s, p, o, None); // input-specific
+            b.push_quad(s, p, shared, None).unwrap(); // identical in both inputs
+            b.push_quad(s, p, o, None).unwrap(); // input-specific
             b.freeze().expect("ds")
         };
         let a = build("oa");
         let c = build("oc");
-        let u = RdfDataset::union(&[&a, &c]);
+        let u = RdfDataset::union(&[&a, &c]).unwrap();
         // shared + oa + oc = 3 distinct rows.
         assert_eq!(u.quad_count(), 3, "shared quad collapses, distinct survive");
     }
@@ -3339,21 +3416,21 @@ mod tests {
         let src = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let triple = b.intern_triple(s, p, o);
+            let triple = b.intern_triple(s, p, o).unwrap();
             let r = iri(&mut b, "r");
             let (ap, ao) = (iri(&mut b, "ap"), iri(&mut b, "ao"));
-            b.push_reifier(r, triple);
-            b.push_annotation(r, ap, ao);
+            b.push_reifier(r, triple).unwrap();
+            b.push_annotation(r, ap, ao).unwrap();
             b.freeze().expect("src")
         };
         let other = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o2"));
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("other")
         };
 
-        let u = RdfDataset::union(&[&src, &other]);
+        let u = RdfDataset::union(&[&src, &other]).unwrap();
         assert_eq!(u.reifiers().count(), 1, "reifier binding survives union");
         assert_eq!(u.annotations().count(), 1, "annotation survives union");
 
@@ -3377,18 +3454,24 @@ mod tests {
     fn union_standardizes_apart_same_label_blanks() {
         let build = |member: &str| {
             let mut b = RdfDatasetBuilder::new();
-            let head = b.intern_blank("b0", BlankScope::DEFAULT);
-            let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-            let disjoint = b.intern_iri("http://www.w3.org/2002/07/owl#AllDisjointClasses");
-            let members = b.intern_iri("http://www.w3.org/2002/07/owl#members");
+            let head = b.intern_blank("b0", BlankScope::DEFAULT).unwrap();
+            let rdf_type = b
+                .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+                .unwrap();
+            let disjoint = b
+                .intern_iri("http://www.w3.org/2002/07/owl#AllDisjointClasses")
+                .unwrap();
+            let members = b
+                .intern_iri("http://www.w3.org/2002/07/owl#members")
+                .unwrap();
             let m = iri(&mut b, member);
-            b.push_quad(head, rdf_type, disjoint, None);
-            b.push_quad(head, members, m, None);
+            b.push_quad(head, rdf_type, disjoint, None).unwrap();
+            b.push_quad(head, members, m, None).unwrap();
             b.freeze().expect("ds")
         };
         let a = build("ClassA");
         let c = build("ClassC");
-        let u = RdfDataset::union(&[&a, &c]);
+        let u = RdfDataset::union(&[&a, &c]).unwrap();
 
         // If the two `_:b0` heads collapsed, the `rdf:type owl:AllDisjointClasses`
         // quad would dedup to ONE and the union would hold 3 quads. With
@@ -3418,11 +3501,11 @@ mod tests {
         let ds = {
             let mut b = RdfDatasetBuilder::new();
             let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
-            let head = b.intern_blank("x", BlankScope::DEFAULT);
-            b.push_quad(s, p, head, None);
+            let head = b.intern_blank("x", BlankScope::DEFAULT).unwrap();
+            b.push_quad(s, p, head, None).unwrap();
             b.freeze().expect("ds")
         };
-        let u = RdfDataset::union(&[&ds]);
+        let u = RdfDataset::union(&[&ds]).unwrap();
         assert_eq!(
             canonicalize(&ds).nquads,
             canonicalize(&u).nquads,
@@ -3447,13 +3530,13 @@ mod tests {
                 scheme.clone(),
                 Some(DERIVED_FROM.into()),
             );
-            let a = b.intern_iri(IRI_A);
-            let bb = b.intern_iri(IRI_B);
-            let derived_from = b.intern_iri(DERIVED_FROM);
+            let a = b.intern_iri(IRI_A).unwrap();
+            let bb = b.intern_iri(IRI_B).unwrap();
+            let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
             let p = iri(&mut b, "p");
             let o = iri(&mut b, "o");
-            b.push_quad(a, p, o, None);
-            b.push_annotation(a, derived_from, bb);
+            b.push_quad(a, p, o, None).unwrap();
+            b.push_annotation(a, derived_from, bb).unwrap();
             b.freeze().expect("first")
         };
         let second = {
@@ -3461,11 +3544,11 @@ mod tests {
             // break agreement.
             let mut b = RdfDatasetBuilder::with_content_addressing(scheme.clone(), None);
             let (s, p, o) = (iri(&mut b, "s2"), iri(&mut b, "p2"), iri(&mut b, "o2"));
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("second")
         };
 
-        let u = RdfDataset::union(&[&first, &second]);
+        let u = RdfDataset::union(&[&first, &second]).unwrap();
         assert_eq!(
             u.content_id_scheme(),
             Some(&scheme),
@@ -3494,24 +3577,28 @@ mod tests {
 
         let first = {
             let mut b = RdfDatasetBuilder::with_content_addressing(scheme_a, None);
-            let s = b.intern_iri(
-                "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            );
+            let s = b
+                .intern_iri(
+                    "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )
+                .unwrap();
             let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("first")
         };
         let second = {
             let mut b = RdfDatasetBuilder::with_content_addressing(scheme_b, None);
-            let s = b.intern_iri(
-                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            );
+            let s = b
+                .intern_iri(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )
+                .unwrap();
             let (p, o) = (iri(&mut b, "p2"), iri(&mut b, "o2"));
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("second")
         };
 
-        let u = RdfDataset::union(&[&first, &second]);
+        let u = RdfDataset::union(&[&first, &second]).unwrap();
         assert_eq!(
             u.content_id_scheme(),
             None,
@@ -3543,25 +3630,25 @@ mod tests {
                 );
                 let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
                 let o = if interned {
-                    b.intern_iri(DERIVED_FROM)
+                    b.intern_iri(DERIVED_FROM).unwrap()
                 } else {
                     iri(&mut b, "o")
                 };
-                b.push_quad(s, p, o, None);
+                b.push_quad(s, p, o, None).unwrap();
                 b.freeze().expect("configured input")
             };
             let carrier = {
                 let mut b = RdfDatasetBuilder::with_content_addressing(scheme.clone(), None);
-                let c = b.intern_iri(IRI_C);
-                let a = b.intern_iri(IRI_A);
+                let c = b.intern_iri(IRI_C).unwrap();
+                let a = b.intern_iri(IRI_A).unwrap();
                 let (x, y, z) = (iri(&mut b, "x"), iri(&mut b, "y"), iri(&mut b, "z"));
-                let triple = b.intern_triple(x, y, z);
-                let derived_from = b.intern_iri(DERIVED_FROM);
-                b.push_reifier(c, triple);
-                b.push_annotation(c, derived_from, a);
+                let triple = b.intern_triple(x, y, z).unwrap();
+                let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
+                b.push_reifier(c, triple).unwrap();
+                b.push_annotation(c, derived_from, a).unwrap();
                 b.freeze().expect("carrier input")
             };
-            let u = RdfDataset::union(&[&configured, &carrier]);
+            let u = RdfDataset::union(&[&configured, &carrier]).unwrap();
             let c = u.term_id_by_iri(IRI_C).expect("C");
             let a = u.term_id_by_iri(IRI_A).expect("A");
             assert_eq!(u.predecessors(c), &[a], "interned={interned}");
@@ -3580,15 +3667,15 @@ mod tests {
         let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
         let mut b =
             RdfDatasetBuilder::with_content_addressing(scheme.clone(), Some(DERIVED_FROM.into()));
-        let a = b.intern_iri(IRI_A);
-        let bb = b.intern_iri(IRI_B);
-        let derived_from = b.intern_iri(DERIVED_FROM);
+        let a = b.intern_iri(IRI_A).unwrap();
+        let bb = b.intern_iri(IRI_B).unwrap();
+        let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
         let p = iri(&mut b, "p");
-        b.push_quad(a, p, bb, None);
-        b.push_annotation(a, derived_from, bb);
+        b.push_quad(a, p, bb, None).unwrap();
+        b.push_annotation(a, derived_from, bb).unwrap();
         let ds = b.freeze().expect("freeze");
 
-        let snap = ds.owned_snapshot();
+        let snap = ds.owned_snapshot().unwrap();
         assert_eq!(snap.content_id_scheme(), Some(&scheme));
         assert_eq!(snap.content_ids().count(), 2);
         let sa = snap.term_id_by_iri(IRI_A).expect("A survives the snapshot");
@@ -3603,8 +3690,8 @@ mod tests {
         let predicate = iri(&mut builder, "predicate");
         let first = iri(&mut builder, "first");
         let second = iri(&mut builder, "second");
-        builder.push_quad(subject, predicate, first, None);
-        builder.push_quad(subject, predicate, second, None);
+        builder.push_quad(subject, predicate, first, None).unwrap();
+        builder.push_quad(subject, predicate, second, None).unwrap();
         let dataset = builder.freeze().expect("valid dataset");
 
         let mut cursor = dataset.quads_for_pattern_cursor(
@@ -3636,10 +3723,10 @@ mod tests {
             let mut b = RdfDatasetBuilder::new();
             // Intern a fixed pool of IRIs once so positional constraints always hold.
             let pool: Vec<TermId> = (0..5)
-                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")).unwrap())
                 .collect();
             let graphs: Vec<TermId> = (0..3)
-                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")).unwrap())
                 .collect();
 
             let mut distinct: crate::FastSet<(TermId, TermId, TermId, Option<TermId>)> =
@@ -3649,7 +3736,7 @@ mod tests {
                 let p = pool[p as usize];
                 let o = pool[o as usize];
                 let g = g.map(|gi| graphs[gi as usize]);
-                b.push_quad(s, p, o, g);
+                b.push_quad(s, p, o, g).unwrap();
                 distinct.insert((s, p, o, g));
             }
 
@@ -3687,14 +3774,14 @@ mod tests {
 
             let mut b = RdfDatasetBuilder::new();
             let pool: Vec<TermId> = (0..5)
-                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")).unwrap())
                 .collect();
             let graphs: Vec<TermId> = (0..3)
-                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")).unwrap())
                 .collect();
             for (s, p, o, g) in rows {
                 b.push_quad(pool[s as usize], pool[p as usize], pool[o as usize],
-                    g.map(|gi| graphs[gi as usize]));
+                    g.map(|gi| graphs[gi as usize])).unwrap();
             }
             let ds = b.freeze().expect("random valid dataset must freeze");
 
@@ -3746,14 +3833,14 @@ mod tests {
         ) {
             let mut b = RdfDatasetBuilder::new();
             let pool: Vec<TermId> = (0..5)
-                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")).unwrap())
                 .collect();
             let graphs: Vec<TermId> = (0..3)
-                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")).unwrap())
                 .collect();
             for (s, p, o, g) in rows {
                 b.push_quad(pool[s as usize], pool[p as usize], pool[o as usize],
-                    g.map(|gi| graphs[gi as usize]));
+                    g.map(|gi| graphs[gi as usize])).unwrap();
             }
             let ds = b.freeze().expect("random valid dataset must freeze");
 
@@ -3791,10 +3878,10 @@ mod tests {
         ) {
             let mut b = RdfDatasetBuilder::new();
             let pool: Vec<TermId> = (0..5)
-                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")).unwrap())
                 .collect();
             let graphs: Vec<TermId> = (0..3)
-                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")).unwrap())
                 .collect();
             let raw: Vec<(TermId, TermId, TermId, Option<TermId>)> = rows
                 .iter()
@@ -3804,7 +3891,7 @@ mod tests {
                 ))
                 .collect();
             for &(s, p, o, g) in &raw {
-                b.push_quad(s, p, o, g);
+                b.push_quad(s, p, o, g).unwrap();
             }
             let ds = b.freeze().expect("random valid dataset must freeze");
 
@@ -3846,19 +3933,21 @@ mod tests {
 
             // Base layer: one asserted statement per graph, plus a plain quad that
             // puts `r1` in each graph's subject set.
-            b.push_quad(a, related, bb, Some(g1));
-            b.push_quad(r1, kind, record, Some(g1));
-            b.push_quad(a, related, c, Some(g2));
-            b.push_quad(r1, kind, record, Some(g2));
+            b.push_quad(a, related, bb, Some(g1)).unwrap();
+            b.push_quad(r1, kind, record, Some(g1)).unwrap();
+            b.push_quad(a, related, c, Some(g2)).unwrap();
+            b.push_quad(r1, kind, record, Some(g2)).unwrap();
 
             // Statement layer: the same reifier id, declared about a different triple
             // in each graph, annotated differently in each graph.
-            let t1 = b.intern_triple(a, related, bb);
-            let t2 = b.intern_triple(a, related, c);
-            b.push_reifier_in_graph(r1, t1, Some(g1));
-            b.push_reifier_in_graph(r1, t2, Some(g2));
-            b.push_annotation_in_graph(r1, source, ledger, Some(g1));
-            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2));
+            let t1 = b.intern_triple(a, related, bb).unwrap();
+            let t2 = b.intern_triple(a, related, c).unwrap();
+            b.push_reifier_in_graph(r1, t1, Some(g1)).unwrap();
+            b.push_reifier_in_graph(r1, t2, Some(g2)).unwrap();
+            b.push_annotation_in_graph(r1, source, ledger, Some(g1))
+                .unwrap();
+            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2))
+                .unwrap();
 
             b.freeze().expect("valid dataset")
         }
@@ -3874,7 +3963,7 @@ mod tests {
         fn projection_does_not_absorb_another_graphs_statement_layer() {
             let ds = two_graphs_sharing_one_reifier();
 
-            let g1 = ds.project_named_graph("http://example.org/g1");
+            let g1 = ds.project_named_graph("http://example.org/g1").unwrap();
             let quads: Vec<_> = g1.owned_quads().collect();
             assert_eq!(quads.len(), 2, "only <g1>'s two base quads: {quads:?}");
             assert!(
@@ -3906,7 +3995,7 @@ mod tests {
             assert!(annotations[0].graph.is_none());
 
             // The mirror image, so the test cannot pass by preferring one graph.
-            let g2 = ds.project_named_graph("http://example.org/g2");
+            let g2 = ds.project_named_graph("http://example.org/g2").unwrap();
             let reifiers: Vec<_> = g2.owned_reifiers().collect();
             let annotations: Vec<_> = g2.owned_annotations().collect();
             assert_eq!(reifiers.len(), 1);
@@ -3928,13 +4017,13 @@ mod tests {
             let kind = iri(&mut b, "kind");
             let record = iri(&mut b, "record");
             let g1 = iri(&mut b, "g1");
-            b.push_quad(r1, kind, record, Some(g1));
-            let t1 = b.intern_triple(a, related, bb);
-            b.push_reifier_in_graph(r1, t1, None);
-            b.push_annotation_in_graph(r1, kind, record, None);
+            b.push_quad(r1, kind, record, Some(g1)).unwrap();
+            let t1 = b.intern_triple(a, related, bb).unwrap();
+            b.push_reifier_in_graph(r1, t1, None).unwrap();
+            b.push_annotation_in_graph(r1, kind, record, None).unwrap();
             let ds = b.freeze().expect("valid dataset");
 
-            let g1 = ds.project_named_graph("http://example.org/g1");
+            let g1 = ds.project_named_graph("http://example.org/g1").unwrap();
             assert_eq!(g1.owned_quads().count(), 1);
             assert_eq!(g1.owned_reifiers().count(), 0);
             assert_eq!(g1.owned_annotations().count(), 0);
@@ -3966,13 +4055,13 @@ mod tests {
 
             let ca1_iri = hex_iri("blake3:", 0xAA);
             let ca2_iri = hex_iri("blake3:", 0xBB);
-            let ca1 = b.intern_iri(&ca1_iri);
-            let ca2 = b.intern_iri(&ca2_iri);
-            let ordinary = b.intern_iri("http://example.org/plain");
-            let derived_from = b.intern_iri(DERIVED_FROM);
+            let ca1 = b.intern_iri(&ca1_iri).unwrap();
+            let ca2 = b.intern_iri(&ca2_iri).unwrap();
+            let ordinary = b.intern_iri("http://example.org/plain").unwrap();
+            let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
 
-            b.push_quad(ca1, derived_from, ca2, None);
-            b.push_quad(ordinary, derived_from, ca1, None);
+            b.push_quad(ca1, derived_from, ca2, None).unwrap();
+            b.push_quad(ordinary, derived_from, ca1, None).unwrap();
 
             let ds = b.freeze().expect("valid dataset");
 
@@ -4021,10 +4110,10 @@ mod tests {
                 RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.to_string()));
             // Intern unrelated terms and push a quad so the dataset is non-empty and
             // freezes, but never touch `DERIVED_FROM`.
-            let s = b.intern_iri("http://example.org/s");
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o");
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri("http://example.org/s").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o").unwrap();
+            b.push_quad(s, p, o, None).unwrap();
 
             let ds = b.freeze().expect("valid dataset");
             assert_eq!(
@@ -4040,10 +4129,10 @@ mod tests {
         fn no_content_addressing_configured_is_empty() {
             let mut b = RdfDatasetBuilder::new();
             let iri = hex_iri("blake3:", 0xCC);
-            let id = b.intern_iri(&iri);
-            let s = b.intern_iri("http://example.org/s");
-            let p = b.intern_iri("http://example.org/p");
-            b.push_quad(s, p, id, None);
+            let id = b.intern_iri(&iri).unwrap();
+            let s = b.intern_iri("http://example.org/s").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            b.push_quad(s, p, id, None).unwrap();
 
             let ds = b.freeze().expect("valid dataset");
             assert_eq!(ds.content_id(id), None);
@@ -4054,7 +4143,7 @@ mod tests {
         /// INDEX-STABILITY REGRESSION TEST (load-bearing invariant): the frozen
         /// `content_ids` side table is keyed by `TermId`, and `materialize` passes
         /// the interner's term table through to `from_parts` UNSORTED so that
-        /// `TermId::from_index(i)` stays valid post-freeze (see the comment on
+        /// `TermId::from_index(i).expect("stored term index is representable")` stays valid post-freeze (see the comment on
         /// `RdfDatasetBuilder::materialize`). This test captures each
         /// content-addressed term's `TermId` BEFORE freeze (from the builder) and
         /// asserts that the SAME id looks up the SAME digest AFTER freeze — i.e.
@@ -4073,17 +4162,17 @@ mod tests {
             let mut expected: Vec<(TermId, Blake3ContentId)> = Vec::new();
             let mut last_ordinary = None;
             for n in 0..8u8 {
-                let ordinary = b.intern_iri(&format!("http://example.org/z{n}"));
+                let ordinary = b.intern_iri(&format!("http://example.org/z{n}")).unwrap();
                 last_ordinary = Some(ordinary);
                 let ca_iri = hex_iri("blake3:", n);
-                let ca_id = b.intern_iri(&ca_iri);
+                let ca_id = b.intern_iri(&ca_iri).unwrap();
                 let digest = Blake3ContentId::from_raw([n; 32]);
                 expected.push((ca_id, digest));
             }
             let s = last_ordinary.expect("at least one ordinary term interned");
-            let p = b.intern_iri("http://example.org/p");
+            let p = b.intern_iri("http://example.org/p").unwrap();
             let o = expected[0].0;
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
 
             let ds = b.freeze().expect("valid dataset");
 
@@ -4106,16 +4195,18 @@ mod tests {
                 ContentIdScheme::new("blake3:").expect("valid scheme"),
                 Some(DERIVED_FROM.to_string()),
             );
-            let successor = b.intern_iri("http://example.org/successor");
-            let predecessor = b.intern_iri("http://example.org/predecessor");
-            let derived_from = b.intern_iri(DERIVED_FROM);
-            let unrelated = b.intern_iri("http://example.org/unrelated");
+            let successor = b.intern_iri("http://example.org/successor").unwrap();
+            let predecessor = b.intern_iri("http://example.org/predecessor").unwrap();
+            let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
+            let unrelated = b.intern_iri("http://example.org/unrelated").unwrap();
 
             // successor -[derivation_predicate]-> predecessor, as an annotation on
             // the successor's own reifier id (successor IS the reifier here).
-            b.push_annotation(successor, derived_from, predecessor);
+            b.push_annotation(successor, derived_from, predecessor)
+                .unwrap();
             // A different predicate on the same reifier must not be picked up.
-            b.push_annotation(successor, unrelated, predecessor);
+            b.push_annotation(successor, unrelated, predecessor)
+                .unwrap();
 
             let ds = b.freeze().expect("valid dataset");
 
@@ -4134,10 +4225,11 @@ mod tests {
         #[test]
         fn predecessors_empty_when_no_derivation_predicate_configured() {
             let mut b = RdfDatasetBuilder::new();
-            let successor = b.intern_iri("http://example.org/successor");
-            let predicate = b.intern_iri("http://example.org/somePredicate");
-            let predecessor = b.intern_iri("http://example.org/predecessor");
-            b.push_annotation(successor, predicate, predecessor);
+            let successor = b.intern_iri("http://example.org/successor").unwrap();
+            let predicate = b.intern_iri("http://example.org/somePredicate").unwrap();
+            let predecessor = b.intern_iri("http://example.org/predecessor").unwrap();
+            b.push_annotation(successor, predicate, predecessor)
+                .unwrap();
 
             let ds = b.freeze().expect("valid dataset");
             assert_eq!(ds.predecessors(successor), &[] as &[TermId]);
@@ -4153,14 +4245,14 @@ mod tests {
                 ContentIdScheme::new("blake3:").expect("valid scheme"),
                 Some(DERIVED_FROM.to_string()),
             );
-            let derived_from = b.intern_iri(DERIVED_FROM);
-            let a = b.intern_iri("http://example.org/a");
-            let c = b.intern_iri("http://example.org/c");
-            let bb = b.intern_iri("http://example.org/b");
+            let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
+            let a = b.intern_iri("http://example.org/a").unwrap();
+            let c = b.intern_iri("http://example.org/c").unwrap();
+            let bb = b.intern_iri("http://example.org/b").unwrap();
 
             // A derivedFrom B, B derivedFrom C: push_annotation(successor, pred, predecessor).
-            b.push_annotation(a, derived_from, bb);
-            b.push_annotation(bb, derived_from, c);
+            b.push_annotation(a, derived_from, bb).unwrap();
+            b.push_annotation(bb, derived_from, c).unwrap();
 
             let ds = b.freeze().expect("valid dataset");
 
@@ -4179,14 +4271,14 @@ mod tests {
                 ContentIdScheme::new("blake3:").expect("valid scheme"),
                 Some(DERIVED_FROM.to_string()),
             );
-            let derived_from = b.intern_iri(DERIVED_FROM);
-            let x = b.intern_iri("http://example.org/x");
-            let p2 = b.intern_iri("http://example.org/p2");
-            let p1 = b.intern_iri("http://example.org/p1");
+            let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
+            let x = b.intern_iri("http://example.org/x").unwrap();
+            let p2 = b.intern_iri("http://example.org/p2").unwrap();
+            let p1 = b.intern_iri("http://example.org/p1").unwrap();
 
             // Push in an order that would NOT already be TermId-sorted.
-            b.push_annotation(x, derived_from, p2);
-            b.push_annotation(x, derived_from, p1);
+            b.push_annotation(x, derived_from, p2).unwrap();
+            b.push_annotation(x, derived_from, p1).unwrap();
 
             let ds = b.freeze().expect("valid dataset");
 
@@ -4204,12 +4296,12 @@ mod tests {
                 ContentIdScheme::new("blake3:").expect("valid scheme"),
                 Some(DERIVED_FROM.to_string()),
             );
-            let derived_from = b.intern_iri(DERIVED_FROM);
-            let a = b.intern_iri("http://example.org/a");
-            let bb = b.intern_iri("http://example.org/b");
+            let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
+            let a = b.intern_iri("http://example.org/a").unwrap();
+            let bb = b.intern_iri("http://example.org/b").unwrap();
 
-            b.push_annotation(a, derived_from, bb);
-            b.push_annotation(bb, derived_from, a);
+            b.push_annotation(a, derived_from, bb).unwrap();
+            b.push_annotation(bb, derived_from, a).unwrap();
 
             let ds = b.freeze().expect("valid dataset");
 
@@ -4226,10 +4318,10 @@ mod tests {
                 ContentIdScheme::new("blake3:").expect("valid scheme"),
                 Some(DERIVED_FROM.to_string()),
             );
-            let derived_from = b.intern_iri(DERIVED_FROM);
-            let a = b.intern_iri("http://example.org/a");
-            let bb = b.intern_iri("http://example.org/b");
-            b.push_annotation(a, derived_from, bb);
+            let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
+            let a = b.intern_iri("http://example.org/a").unwrap();
+            let bb = b.intern_iri("http://example.org/b").unwrap();
+            b.push_annotation(a, derived_from, bb).unwrap();
 
             // `freeze` already returns an `Arc<RdfDataset>` — clone the `Arc`
             // handle (not the dataset) to share it between threads.
@@ -4330,12 +4422,12 @@ mod tests {
         for rows in (0..=40).chain([63, 64, 65, 127, 200]) {
             let mut b = RdfDatasetBuilder::new();
             let pool: Vec<TermId> = (0..4)
-                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")).unwrap())
                 .collect();
             let graphs: Vec<TermId> = (0..2)
-                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")).unwrap())
                 .collect();
-            let unused = b.intern_iri("http://example.org/unused");
+            let unused = b.intern_iri("http://example.org/unused").unwrap();
             for _ in 0..rows {
                 let g = match next(3) {
                     0 => None,
@@ -4346,7 +4438,8 @@ mod tests {
                     pool[next(4) as usize],
                     pool[next(4) as usize],
                     g,
-                );
+                )
+                .unwrap();
             }
             let ds = b.freeze().expect("random valid dataset must freeze");
             let choices: Vec<Option<TermId>> = std::iter::once(None)

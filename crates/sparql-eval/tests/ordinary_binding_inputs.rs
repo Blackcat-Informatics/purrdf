@@ -22,7 +22,7 @@ fn ungoverned_optional_driver_chunks_preserve_bags_and_order() {
     let mut builder = RdfDatasetBuilder::new();
     let [a, b, p, q, v1, v2, v3, z1, z2, z3] =
         ["a", "b", "p", "q", "v1", "v2", "v3", "z1", "z2", "z3"]
-            .map(|local| builder.intern_iri(&format!("{EX}{local}")));
+            .map(|local| builder.intern_iri(&format!("{EX}{local}")).unwrap());
     for (s, predicate, object) in [
         (a, p, v1),
         (a, p, v2),
@@ -31,7 +31,7 @@ fn ungoverned_optional_driver_chunks_preserve_bags_and_order() {
         (v2, q, z2),
         (v3, q, z3),
     ] {
-        builder.push_quad(s, predicate, object, None);
+        builder.push_quad(s, predicate, object, None).unwrap();
     }
     let dataset = builder.freeze().expect("driver chunk fixture");
     let drivers = "ex:a ex:a ex:missing UNDEF ".repeat(BLOCKS);
@@ -103,11 +103,13 @@ fn ungoverned_optional_driver_chunks_preserve_bags_and_order() {
 #[test]
 fn duplicate_nullable_and_absent_drivers_keep_their_exact_join_bags() {
     let mut builder = RdfDatasetBuilder::new();
-    let [a, b, p] = ["a", "b", "p"].map(|local| builder.intern_iri(&format!("{EX}{local}")));
+    let [a, b, p] =
+        ["a", "b", "p"].map(|local| builder.intern_iri(&format!("{EX}{local}")).unwrap());
     for (subject, value) in [(a, "1"), (a, "2"), (b, "3")] {
-        let object =
-            builder.intern_literal(RdfLiteral::typed(value, purrdf_xsd::datatype::XSD_INTEGER));
-        builder.push_quad(subject, p, object, None);
+        let object = builder
+            .intern_literal(RdfLiteral::typed(value, purrdf_xsd::datatype::XSD_INTEGER))
+            .unwrap();
+        builder.push_quad(subject, p, object, None).unwrap();
     }
     let dataset = builder.freeze().expect("nullable bag fixture");
     let a = format!("<{EX}a>");
@@ -165,14 +167,16 @@ fn duplicate_nullable_and_absent_drivers_keep_their_exact_join_bags() {
 fn computed_existing_missing_and_quoted_slots_use_dataset_identity_before_scanning() {
     let mut builder = RdfDatasetBuilder::new();
     let [a, p, q, o, record, has, noise] = ["a", "p", "q", "o", "record", "has", "noise"]
-        .map(|local| builder.intern_iri(&format!("{EX}{local}")));
-    let value = builder.intern_literal(RdfLiteral::typed("1", purrdf_xsd::datatype::XSD_INTEGER));
-    builder.push_quad(a, p, value, None);
-    let quote = builder.intern_triple(a, q, o);
-    builder.push_quad(record, has, quote, None);
+        .map(|local| builder.intern_iri(&format!("{EX}{local}")).unwrap());
+    let value = builder
+        .intern_literal(RdfLiteral::typed("1", purrdf_xsd::datatype::XSD_INTEGER))
+        .unwrap();
+    builder.push_quad(a, p, value, None).unwrap();
+    let quote = builder.intern_triple(a, q, o).unwrap();
+    builder.push_quad(record, has, quote, None).unwrap();
     for index in 0..5_000 {
-        let subject = builder.intern_iri(&format!("{EX}noise{index}"));
-        builder.push_quad(subject, noise, o, None);
+        let subject = builder.intern_iri(&format!("{EX}noise{index}")).unwrap();
+        builder.push_quad(subject, noise, o, None).unwrap();
     }
     let dataset = builder.freeze().expect("term identity fixture");
     let cases = [
@@ -229,7 +233,7 @@ fn retained_optional_preparation_preserves_masks_and_every_governor_cut() {
     let [a, b, p, q, v1, v2, v3, z1, z2, z3, record, has, o] = [
         "a", "b", "p", "q", "v1", "v2", "v3", "z1", "z2", "z3", "record", "has", "o",
     ]
-    .map(|local| builder.intern_iri(&format!("{EX}{local}")));
+    .map(|local| builder.intern_iri(&format!("{EX}{local}")).unwrap());
     for (s, predicate, object) in [
         (a, p, v1),
         (a, p, v2),
@@ -238,10 +242,10 @@ fn retained_optional_preparation_preserves_masks_and_every_governor_cut() {
         (v2, q, z2),
         (v3, q, z3),
     ] {
-        builder.push_quad(s, predicate, object, None);
+        builder.push_quad(s, predicate, object, None).unwrap();
     }
-    let quote = builder.intern_triple(a, q, o);
-    builder.push_quad(record, has, quote, None);
+    let quote = builder.intern_triple(a, q, o).unwrap();
+    builder.push_quad(record, has, quote, None).unwrap();
     let dataset = builder.freeze().expect("retained BGP fixture");
     let iri = |local| format!("<{EX}{local}>");
     let matches = |include_v| {

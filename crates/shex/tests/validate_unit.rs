@@ -24,15 +24,17 @@ enum T<'a> {
 fn dataset(triples: &[(T<'_>, &str, T<'_>)]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let term = |b: &mut RdfDatasetBuilder, t: &T<'_>| match t {
-        T::I(iri) => b.intern_iri(iri),
-        T::B(label) => b.intern_blank(label, purrdf_core::BlankScope::DEFAULT),
-        T::L(lit) => b.intern_literal(lit.clone()),
+        T::I(iri) => b.intern_iri(iri).unwrap(),
+        T::B(label) => b
+            .intern_blank(label, purrdf_core::BlankScope::DEFAULT)
+            .unwrap(),
+        T::L(lit) => b.intern_literal(lit.clone()).unwrap(),
     };
     for (s, p, o) in triples {
         let s = term(&mut b, s);
-        let p = b.intern_iri(p);
+        let p = b.intern_iri(p).unwrap();
         let o = term(&mut b, o);
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("freeze")
 }

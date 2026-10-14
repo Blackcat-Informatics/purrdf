@@ -14,8 +14,8 @@ use super::{
     ATOM_ARITY, ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence,
     JoinGroup, JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore,
     RoundBuffer, RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
-    TermId, delta_can_match, emit_solution, extend_slot_solutions, extend_solutions_leapfrog,
-    source_heights, source_preference,
+    TermDictionary, TermId, TermIdentity, delta_can_match, emit_solution, extend_slot_solutions,
+    extend_solutions_leapfrog, source_heights, source_preference,
 };
 
 /// One component of the positive-variable incidence graph, including negative coupling.
@@ -150,13 +150,13 @@ pub(super) fn certify(plan: &RulePlan, runtime: &RuleRuntime) -> Vec<Factor> {
 }
 
 /// Evaluate one factor Full with the existing indexed and certified cyclic kernels.
-fn full_matches(
+fn full_matches<D: TermDictionary>(
     factor: &Factor,
     entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: RoundSnapshot<'_, D>,
     governor: &mut StepGovernor,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
-) -> Result<Vec<SlotSolution>, EvalError> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+) -> Result<Vec<SlotSolution<D::Id>>, EvalError<D::Error>> {
     factor_matches(
         factor,
         entry,
@@ -168,16 +168,16 @@ fn full_matches(
 }
 
 /// Match one factor using the existing scan-aware binary and cyclic kernels.
-fn factor_matches(
+fn factor_matches<D: TermDictionary>(
     factor: &Factor,
     entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: RoundSnapshot<'_, D>,
     governor: &mut StepGovernor,
     scan: JoinScan,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
-) -> Result<Vec<SlotSolution>, EvalError> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+) -> Result<Vec<SlotSolution<D::Id>>, EvalError<D::Error>> {
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
-    let binary = |position, partial: &[SlotSolution], governor: &mut StepGovernor| {
+    let binary = |position, partial: &[SlotSolution<D::Id>], governor: &mut StepGovernor| {
         extend_slot_solutions(
             entry.plan.operator_at(position),
             snapshot.rel,
@@ -189,7 +189,7 @@ fn factor_matches(
     };
     if !entry.plan.has_cyclic_subplan() {
         for &position in &factor.positions {
-            partial = binary(position, &partial, governor);
+            partial = binary(position, &partial, governor).map_err(EvalError::Source)?;
             if partial.is_empty() || governor.spent() {
                 break;
             }
@@ -204,9 +204,10 @@ fn factor_matches(
                 continue;
             }
             partial = match group {
-                JoinGroup::Binary(atom) => binary(atom.positive_position(), &partial, governor),
+                JoinGroup::Binary(atom) => binary(atom.positive_position(), &partial, governor)
+                    .map_err(EvalError::Source)?,
                 JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
-                    LeapfrogRun {
+                    &LeapfrogRun {
                         plan: entry.plan,
                         cycle,
                         scan,
@@ -215,7 +216,8 @@ fn factor_matches(
                     },
                     &partial,
                     governor,
-                ),
+                )
+                .map_err(EvalError::Source)?,
             };
             if partial.is_empty() || governor.spent() {
                 break;
@@ -274,9 +276,9 @@ fn factor_matches(
 
 /// A borrowed factor witness, with its content-derived numeric prefix.
 #[derive(Debug, Clone, Copy)]
-struct Witness<'a> {
+struct Witness<'a, I: TermIdentity = TermId> {
     /// The stored factor match; mode and projection tables never clone it.
-    solution: &'a SlotSolution,
+    solution: &'a SlotSolution<I>,
     /// Raw maximum source height, before the head's saturating increment.
     maximum: u32,
     /// Saturated sum of source heights.
@@ -284,20 +286,20 @@ struct Witness<'a> {
 }
 
 /// Match only tuples containing a delta source, using disjoint last-new-atom anchors.
-fn new_matches(
+fn new_matches<D: TermDictionary>(
     factor: &Factor,
     entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: RoundSnapshot<'_, D>,
     governor: &mut StepGovernor,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
-) -> Result<Vec<SlotSolution>, EvalError> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+) -> Result<Vec<SlotSolution<D::Id>>, EvalError<D::Error>> {
     let join = JoinSnapshot {
         rel: snapshot.rel,
         delta: entry.delta,
     };
     let mut matches = Vec::new();
     for &position in &factor.positions {
-        if !delta_can_match(entry.plan.operator_at(position), join) {
+        if !delta_can_match(entry.plan.operator_at(position), join).map_err(EvalError::Source)? {
             continue;
         }
         matches.extend(factor_matches(
@@ -315,13 +317,16 @@ fn new_matches(
     Ok(matches)
 }
 
+/// Matching solutions for each independent positive factor.
+type FactorRelations<I> = Vec<Vec<SlotSolution<I>>>;
+
 /// Discover productive anchors before building the old/full context they actually need.
-fn partial_relations(
+fn partial_relations<D: TermDictionary>(
     entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: RoundSnapshot<'_, D>,
     governor: &mut StepGovernor,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
-) -> Result<Vec<Vec<SlotSolution>>, EvalError> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+) -> Result<FactorRelations<D::Id>, EvalError<D::Error>> {
     let mut relations = Vec::with_capacity(entry.runtime.factors.len());
     for factor in &entry.runtime.factors {
         relations.push(new_matches(factor, entry, snapshot, governor, evidence)?);
@@ -362,45 +367,50 @@ fn partial_relations(
 
 /// Both prefix winners at a raw-height threshold.
 #[derive(Debug, Clone, Copy)]
-struct Threshold<'a> {
+struct Threshold<'a, I: TermIdentity = TermId> {
     /// Inclusive raw source-height threshold.
     height: u32,
     /// Best sum followed by lexical witness at or below this threshold.
-    summed: Witness<'a>,
+    summed: Witness<'a, I>,
     /// Best purely lexical witness at or below this threshold.
-    lexical: Witness<'a>,
+    lexical: Witness<'a, I>,
 }
 
 /// Exact prefix frontiers for one projected binding and one scan mode.
 #[derive(Debug)]
-pub(super) struct Frontier<'a> {
+pub(super) struct Frontier<'a, I: TermIdentity = TermId> {
     /// Sorted distinct height thresholds; each stores both cumulative winners.
-    thresholds: Vec<Threshold<'a>>,
+    thresholds: Vec<Threshold<'a, I>>,
     /// Original projected witnesses retained only by an evidence-enabled query.
-    witnesses: Option<Vec<Witness<'a>>>,
+    witnesses: Option<Vec<Witness<'a, I>>>,
 }
 
-impl<'a> Frontier<'a> {
+impl<'a, I: TermIdentity> Frontier<'a, I> {
     /// Build cumulative frontiers without assuming local height preference composes.
-    fn new(mut witnesses: Vec<Witness<'a>>, rel: &RelationStore, retain_witnesses: bool) -> Self {
+    fn new<D: TermDictionary<Id = I>>(
+        mut witnesses: Vec<Witness<'a, I>>,
+        rel: &RelationStore<D>,
+        retain_witnesses: bool,
+    ) -> Result<Self, D::Error> {
+        rel.interner().check_read()?;
         witnesses.sort_by_key(|witness| witness.maximum);
-        let mut thresholds: Vec<Threshold<'a>> = Vec::new();
+        let mut thresholds: Vec<Threshold<'a, I>> = Vec::new();
         for witness in witnesses.iter().copied() {
             let mut next = thresholds.last().copied().unwrap_or(Threshold {
                 height: witness.maximum,
                 summed: witness,
                 lexical: witness,
             });
-            let lexical = |left: Witness<'_>, right: Witness<'_>| {
+            let lexical = |left: Witness<'_, I>, right: Witness<'_, I>| {
                 source_preference(&left.solution.sources, 0, &right.solution.sources, 0, rel)
-                    .is_lt()
+                    .map(core::cmp::Ordering::is_lt)
             };
             if witness.sum < next.summed.sum
-                || (witness.sum == next.summed.sum && lexical(witness, next.summed))
+                || (witness.sum == next.summed.sum && lexical(witness, next.summed)?)
             {
                 next.summed = witness;
             }
-            if lexical(witness, next.lexical) {
+            if lexical(witness, next.lexical)? {
                 next.lexical = witness;
             }
             next.height = witness.maximum;
@@ -413,13 +423,14 @@ impl<'a> Frontier<'a> {
                 thresholds.push(next);
             }
         }
-        Self {
+        rel.interner().check_read()?;
+        Ok(Self {
             thresholds,
             witnesses: retain_witnesses.then_some(witnesses),
-        }
+        })
     }
 
-    pub(super) fn witnesses(&self) -> impl Iterator<Item = &SlotSolution> {
+    pub(super) fn witnesses(&self) -> impl Iterator<Item = &SlotSolution<I>> {
         self.witnesses
             .as_deref()
             .unwrap_or_default()
@@ -433,7 +444,7 @@ impl<'a> Frontier<'a> {
     }
 
     /// Both exact winners under a feasible global raw-height threshold.
-    fn at(&self, maximum: u32) -> Threshold<'a> {
+    fn at(&self, maximum: u32) -> Threshold<'a, I> {
         let end = self
             .thresholds
             .partition_point(|threshold| threshold.height <= maximum);
@@ -441,28 +452,32 @@ impl<'a> Frontier<'a> {
     }
 }
 
+/// Projected head identities and their source witness frontiers.
+type FrontierTable<'a, I> = BTreeMap<Vec<I>, Frontier<'a, I>>;
+
 /// Mode frontiers borrowing one frozen factor relation containing its needed modes.
 #[derive(Debug)]
-struct Projection<'a> {
+struct Projection<'a, I: TermIdentity = TermId> {
     /// Any matching source tuple.
-    full: BTreeMap<Vec<TermId>, Frontier<'a>>,
+    full: FrontierTable<'a, I>,
     /// Tuples having no source in the current delta.
-    old: BTreeMap<Vec<TermId>, Frontier<'a>>,
+    old: FrontierTable<'a, I>,
     /// Tuples having at least one source in the current delta.
-    new: BTreeMap<Vec<TermId>, Frontier<'a>>,
+    new: FrontierTable<'a, I>,
 }
 
 /// Project one head's factor relation; callers consume only its required modes.
-fn project<'a>(
-    matches: &'a [SlotSolution],
+fn project<'a, D: TermDictionary>(
+    matches: &'a [SlotSolution<D::Id>],
     slots: &[usize],
-    snapshot: RoundSnapshot<'_>,
+    snapshot: RoundSnapshot<'_, D>,
     delta: Delta,
     retain_witnesses: bool,
-) -> Projection<'a> {
-    let mut full: BTreeMap<Vec<TermId>, Vec<Witness<'a>>> = BTreeMap::new();
-    let mut old: BTreeMap<Vec<TermId>, Vec<Witness<'a>>> = BTreeMap::new();
-    let mut new: BTreeMap<Vec<TermId>, Vec<Witness<'a>>> = BTreeMap::new();
+) -> Result<Projection<'a, D::Id>, D::Error> {
+    snapshot.rel.interner().check_read()?;
+    let mut full: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id>>> = BTreeMap::new();
+    let mut old: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id>>> = BTreeMap::new();
+    let mut new: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id>>> = BTreeMap::new();
     for solution in matches {
         let key: Vec<_> = slots
             .iter()
@@ -490,22 +505,24 @@ fn project<'a>(
         };
         mode.entry(key).or_default().push(witness);
     }
-    let seal = |table: BTreeMap<Vec<TermId>, Vec<Witness<'a>>>| {
+    let seal = |table: BTreeMap<Vec<D::Id>, Vec<Witness<'a, D::Id>>>| {
         table
             .into_iter()
             .map(|(key, witnesses)| {
-                (
+                Ok((
                     key,
-                    Frontier::new(witnesses, snapshot.rel, retain_witnesses),
-                )
+                    Frontier::new(witnesses, snapshot.rel, retain_witnesses)?,
+                ))
             })
-            .collect()
+            .collect::<Result<_, D::Error>>()
     };
-    Projection {
-        full: seal(full),
-        old: seal(old),
-        new: seal(new),
-    }
+    let projection = Projection {
+        full: seal(full)?,
+        old: seal(old)?,
+        new: seal(new)?,
+    };
+    snapshot.rel.interner().check_read()?;
+    Ok(projection)
 }
 
 /// Feasible raw threshold for the minimum saturated global head proof height.
@@ -524,25 +541,25 @@ fn saturated_sum(sums: impl IntoIterator<Item = u64>) -> bool {
 }
 
 /// Immutable state for streamed projected products.
-struct Product<'a, 'r> {
+struct Product<'a, 'r, D: TermDictionary> {
     /// One mode table per certified factor.
-    tables: Vec<&'a BTreeMap<Vec<TermId>, Frontier<'a>>>,
+    tables: Vec<&'a FrontierTable<'a, D::Id>>,
     /// The authored head currently emitted.
     head: &'r [ArgShape; ATOM_ARITY],
     /// Rule identity and variable-frame width.
     entry: RuleEntry<'r>,
     /// Store and source proof heights.
-    snapshot: RoundSnapshot<'a>,
+    snapshot: RoundSnapshot<'a, D>,
 }
 
-impl<'r> Product<'_, 'r> {
+impl<'r, D: TermDictionary> Product<'_, 'r, D> {
     /// Stream necessary projected combinations with a borrowed heap odometer.
     fn visit(
         &self,
-        buffer: &mut RoundBuffer<'r>,
+        buffer: &mut RoundBuffer<'r, D::Id>,
         governor: &mut StepGovernor,
-        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
-    ) -> Result<(), EvalError> {
+        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+    ) -> Result<(), EvalError<D::Error>> {
         let mut cursors: Vec<_> = self.tables.iter().map(|table| table.values()).collect();
         let mut chosen = Vec::with_capacity(self.tables.len());
         let mut position = 0;
@@ -569,11 +586,11 @@ impl<'r> Product<'_, 'r> {
     /// Choose the exact global witness for one projected combination, then emit it.
     fn emit(
         &self,
-        chosen: &[&Frontier<'_>],
-        buffer: &mut RoundBuffer<'r>,
+        chosen: &[&Frontier<'_, D::Id>],
+        buffer: &mut RoundBuffer<'r, D::Id>,
         governor: &mut StepGovernor,
-        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
-    ) -> Result<(), EvalError> {
+        evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+    ) -> Result<(), EvalError<D::Error>> {
         if !governor.charge() {
             return Ok(());
         }
@@ -630,126 +647,142 @@ impl<'r> Product<'_, 'r> {
 
 /// Evaluate independent factors and stream each conjunctive head's necessary product.
 #[cfg(test)]
-pub(super) fn evaluate<'r>(
+pub(super) fn evaluate<'r, D: TermDictionary>(
     entry: RuleEntry<'r>,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: RoundSnapshot<'_, D>,
     governor: &mut StepGovernor,
-) -> Result<RoundBuffer<'r>, EvalError> {
+) -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
     evaluate_with_evidence(entry, snapshot, governor, None)
 }
 
-pub(super) fn evaluate_with_evidence<'r>(
+pub(super) fn evaluate_with_evidence<'r, D: TermDictionary>(
     entry: RuleEntry<'r>,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: RoundSnapshot<'_, D>,
     governor: &mut StepGovernor,
-    mut evidence: Option<&mut dyn super::evidence::RuleEvidence>,
-) -> Result<RoundBuffer<'r>, EvalError> {
-    let mut buffer = RoundBuffer::new();
-    let join = JoinSnapshot {
-        rel: snapshot.rel,
-        delta: entry.delta,
-    };
-    if !entry
-        .plan
-        .operators()
-        .iter()
-        .any(|operator| delta_can_match(operator, join))
-    {
-        return Ok(buffer);
-    }
-    let (blocked, ground_evidence) = ground_blocked(entry, snapshot, governor, &mut evidence)?;
-    if blocked {
-        buffer.join_steps = governor.consumed;
-        return Ok(buffer);
-    }
-    let mut relations = if entry.delta == Delta::all(snapshot.rel.row_count()) {
-        let mut relations = Vec::with_capacity(entry.runtime.factors.len());
-        for factor in &entry.runtime.factors {
-            let matches = full_matches(factor, entry, snapshot, governor, &mut evidence)?;
-            if matches.is_empty() || governor.spent() {
-                buffer.join_steps = governor.consumed;
-                return Ok(buffer);
+    mut evidence: Option<&mut dyn super::evidence::RuleEvidence<D>>,
+) -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+    snapshot
+        .rel
+        .interner()
+        .check_read()
+        .map_err(EvalError::Source)?;
+    let result = (|| -> Result<RoundBuffer<'r, D::Id>, EvalError<D::Error>> {
+        let mut buffer = RoundBuffer::new();
+        let join = JoinSnapshot {
+            rel: snapshot.rel,
+            delta: entry.delta,
+        };
+        let mut can_match = false;
+        for operator in entry.plan.operators() {
+            if delta_can_match(operator, join).map_err(EvalError::Source)? {
+                can_match = true;
+                break;
             }
-            relations.push(matches);
         }
-        relations
-    } else {
-        partial_relations(entry, snapshot, governor, &mut evidence)?
-    };
-    if relations.is_empty() {
-        buffer.join_steps = governor.consumed;
-        return Ok(buffer);
-    }
-    // A round-wide negative premise belongs to every product. Attach it to one
-    // existing factor's witnesses so the original product law carries it once.
-    if let (Some(id), Some(owner)) = (ground_evidence, evidence.as_deref_mut()) {
-        for solution in &mut relations[0] {
-            solution.retain_negative(id, owner)?;
+        if !can_match {
+            return Ok(buffer);
         }
-    }
-    for head in &entry.runtime.head {
-        let projections: Vec<_> = entry
-            .runtime
-            .factors
-            .iter()
-            .zip(&relations)
-            .map(|(factor, matches)| {
-                let slots: BTreeSet<_> = head
+        let (blocked, ground_evidence) = ground_blocked(entry, snapshot, governor, &mut evidence)?;
+        if blocked {
+            buffer.join_steps = governor.consumed;
+            return Ok(buffer);
+        }
+        let mut relations = if entry.delta == Delta::all(snapshot.rel.row_count()) {
+            let mut relations = Vec::with_capacity(entry.runtime.factors.len());
+            for factor in &entry.runtime.factors {
+                let matches = full_matches(factor, entry, snapshot, governor, &mut evidence)?;
+                if matches.is_empty() || governor.spent() {
+                    buffer.join_steps = governor.consumed;
+                    return Ok(buffer);
+                }
+                relations.push(matches);
+            }
+            relations
+        } else {
+            partial_relations(entry, snapshot, governor, &mut evidence)?
+        };
+        if relations.is_empty() {
+            buffer.join_steps = governor.consumed;
+            return Ok(buffer);
+        }
+        // A round-wide negative premise belongs to every product. Attach it to one
+        // existing factor's witnesses so the original product law carries it once.
+        if let (Some(id), Some(owner)) = (ground_evidence, evidence.as_deref_mut()) {
+            for solution in &mut relations[0] {
+                solution.retain_negative(id, owner)?;
+            }
+        }
+        for head in &entry.runtime.head {
+            let projections: Vec<_> = entry
+                .runtime
+                .factors
+                .iter()
+                .zip(&relations)
+                .map(|(factor, matches)| {
+                    let slots: BTreeSet<_> = head
+                        .iter()
+                        .filter_map(|arg| match arg {
+                            ArgShape::Slot(slot) if factor.slots.contains(slot) => Some(*slot),
+                            ArgShape::Slot(_) | ArgShape::Const(_) => None,
+                        })
+                        .collect();
+                    project(
+                        matches,
+                        &slots.into_iter().collect::<Vec<_>>(),
+                        snapshot,
+                        entry.delta,
+                        evidence.is_some(),
+                    )
+                })
+                .collect::<Result<_, _>>()
+                .map_err(EvalError::Source)?;
+            for anchor in 0..projections.len() {
+                let tables: Vec<_> = projections
                     .iter()
-                    .filter_map(|arg| match arg {
-                        ArgShape::Slot(slot) if factor.slots.contains(slot) => Some(*slot),
-                        ArgShape::Slot(_) | ArgShape::Const(_) => None,
+                    .enumerate()
+                    .map(|(position, projection)| match position.cmp(&anchor) {
+                        std::cmp::Ordering::Less => &projection.old,
+                        std::cmp::Ordering::Equal => &projection.new,
+                        std::cmp::Ordering::Greater => &projection.full,
                     })
                     .collect();
-                project(
-                    matches,
-                    &slots.into_iter().collect::<Vec<_>>(),
+                if tables.iter().any(|table| table.is_empty()) {
+                    continue;
+                }
+                Product {
+                    tables,
+                    head,
+                    entry,
                     snapshot,
-                    entry.delta,
-                    evidence.is_some(),
-                )
-            })
-            .collect();
-        for anchor in 0..projections.len() {
-            let tables: Vec<_> = projections
-                .iter()
-                .enumerate()
-                .map(|(position, projection)| match position.cmp(&anchor) {
-                    std::cmp::Ordering::Less => &projection.old,
-                    std::cmp::Ordering::Equal => &projection.new,
-                    std::cmp::Ordering::Greater => &projection.full,
-                })
-                .collect();
-            if tables.iter().any(|table| table.is_empty()) {
-                continue;
+                }
+                .visit(&mut buffer, governor, &mut evidence)?;
+                if governor.spent() {
+                    break;
+                }
             }
-            Product {
-                tables,
-                head,
-                entry,
-                snapshot,
-            }
-            .visit(&mut buffer, governor, &mut evidence)?;
             if governor.spent() {
                 break;
             }
         }
-        if governor.spent() {
-            break;
-        }
-    }
-    buffer.join_steps = governor.consumed;
-    Ok(buffer)
+        buffer.join_steps = governor.consumed;
+        Ok(buffer)
+    })()?;
+    snapshot
+        .rel
+        .interner()
+        .check_read()
+        .map_err(EvalError::Source)?;
+    Ok(result)
 }
 
 /// Negative predicates with no positive outer slot are round-wide preconditions.
 /// Local variables remain local even when their authored name appears in another group.
-fn ground_blocked(
+fn ground_blocked<D: TermDictionary>(
     entry: RuleEntry<'_>,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: RoundSnapshot<'_, D>,
     governor: &mut StepGovernor,
-    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence>,
-) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError> {
+    evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D>>,
+) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError<D::Error>> {
     let mut empty = SlotSolution::empty(entry.plan.variables().len());
     for (index, atom) in entry.runtime.negated.iter().enumerate() {
         if governor.spent() {
@@ -831,7 +864,7 @@ mod tests {
     fn seeded(rows: &[(String, String, String, String)]) -> RelationStore {
         let mut store = RelationStore::new();
         for (subject, predicate, object, graph) in rows {
-            store.insert(subject, predicate, object, graph);
+            store.insert(subject, predicate, object, graph).unwrap();
         }
         store
     }
@@ -855,6 +888,245 @@ mod tests {
                 ]
             })
             .collect()
+    }
+
+    #[test]
+    fn host_projection_retains_ids_and_fallible_lexical_frontiers() {
+        use crate::seminaive::{JoinSnapshot, join_body};
+        use crate::test_support::{HostDictionary, SourceLost};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        const FIRST: u64 = 0xa000_0000_1234_5678;
+        let mut rel = RelationStore::with_dictionary(HostDictionary {
+            surfaces: [
+                (FIRST, "aaa".into()),
+                (0, "zzz".into()),
+                (u64::MAX, "value".into()),
+                (7, format!("<{A}>")),
+                (9, format!("<{Q}>")),
+                (11, format!("<{B}>")),
+                (1, String::new()),
+            ]
+            .into_iter()
+            .collect(),
+            resolves: AtomicUsize::new(0),
+            lookups: AtomicUsize::new(0),
+            lost: AtomicBool::new(false),
+            lose_after_lookup: AtomicBool::new(false),
+            pins: AtomicUsize::new(0),
+            extra_terms: 1u64 << 40,
+        });
+        for subject in [0, FIRST] {
+            rel.insert_ids([subject, 7, u64::MAX, 1]).unwrap();
+        }
+        let rule = DlClause::datalog(atom("?x", Q, "?v"), vec![atom("?x", A, "?v")]);
+        let plan = RulePlan::for_rule(&rule);
+        let matches = join_body(
+            &plan,
+            JoinSnapshot {
+                rel: &rel,
+                delta: Delta::all(2),
+            },
+            JoinStrategy::Planned,
+            &mut StepGovernor::new(u64::MAX),
+        )
+        .unwrap();
+        let snapshot = RoundSnapshot {
+            rel: &rel,
+            depth: &[0, 0],
+            assumed: &[],
+        };
+        let delta = Delta { lo: 1, hi: 2 };
+        let projection = project(&matches, &[], snapshot, delta, true).unwrap();
+        let full = projection.full.values().next().unwrap();
+        assert_eq!(full.at(0).lexical.solution.sources[0].subject, FIRST);
+        assert_eq!(full.at(0).summed.solution.sources[0].subject, FIRST);
+        assert_eq!(full.witnesses().count(), 2);
+        assert_eq!(
+            projection
+                .old
+                .values()
+                .next()
+                .unwrap()
+                .at(0)
+                .lexical
+                .solution
+                .sources[0]
+                .subject,
+            0
+        );
+        assert_eq!(
+            projection
+                .new
+                .values()
+                .next()
+                .unwrap()
+                .at(0)
+                .lexical
+                .solution
+                .sources[0]
+                .subject,
+            FIRST
+        );
+        let slot = plan
+            .variables()
+            .iter()
+            .position(|name| name == "?x")
+            .unwrap();
+        let bound = project(&matches, &[slot], snapshot, delta, false).unwrap();
+        assert_eq!(
+            bound.full.keys().cloned().collect::<Vec<_>>(),
+            vec![vec![0], vec![FIRST]]
+        );
+        assert_eq!(rel.interner().pins.load(Ordering::Relaxed), 0);
+        drop((projection, bound));
+        // Both production rule strategies consume the same original host IDs,
+        // including disjoint factor products and each semi-naive delta anchor.
+        let factor_rule = DlClause::datalog(
+            atom("?x", Q, "?y"),
+            vec![atom("?x", A, "?v"), atom("?y", A, "?w")],
+        );
+        let factor_plan = RulePlan::for_rule(&factor_rule);
+        let runtime = RuleRuntime::new(&factor_rule, &factor_plan);
+        assert_eq!(runtime.factors.len(), 2);
+        for delta in [
+            Delta::all(2),
+            Delta { lo: 0, hi: 1 },
+            Delta { lo: 1, hi: 2 },
+        ] {
+            let entry = RuleEntry {
+                index: 0,
+                rule: &factor_rule,
+                plan: &factor_plan,
+                runtime: &runtime,
+                delta,
+            };
+            let planned = evaluate_rule(
+                entry,
+                snapshot,
+                JoinStrategy::Planned,
+                StepGovernor::new(u64::MAX),
+                &NoGuards,
+            )
+            .unwrap();
+            let binary = evaluate_rule(
+                entry,
+                snapshot,
+                JoinStrategy::ForcedBinary,
+                StepGovernor::new(u64::MAX),
+                &NoGuards,
+            )
+            .unwrap();
+            assert_eq!(
+                planned.entries.len(),
+                if delta.lo == 0 && delta.hi == 2 { 4 } else { 3 }
+            );
+            assert_eq!(planned.entries.len(), binary.entries.len());
+            for (key, witness) in &planned.entries {
+                assert!(matches!(key.subject.interned(), Some(0 | FIRST)));
+                assert!(matches!(key.object.interned(), Some(0 | FIRST)));
+                assert_eq!(key.graph.interned(), Some(1));
+                assert_eq!(
+                    witness.source_facts(&rel).unwrap(),
+                    binary.entries.get(key).unwrap().source_facts(&rel).unwrap()
+                );
+            }
+        }
+        assert_eq!(rel.interner().pins.load(Ordering::Relaxed), 0);
+        let entry = RuleEntry {
+            index: 0,
+            rule: &factor_rule,
+            plan: &factor_plan,
+            runtime: &runtime,
+            delta: Delta::all(2),
+        };
+        let entries = [entry, RuleEntry { index: 1, ..entry }];
+        for execution in [RoundExecution::Sequential, RoundExecution::Parallel] {
+            let round = crate::seminaive::evaluate_round(
+                &entries,
+                snapshot,
+                execution,
+                JoinStrategy::Planned,
+                u64::MAX,
+                &NoGuards,
+            )
+            .unwrap();
+            assert_eq!(round.entries.len(), 4);
+            assert!(round.entries.values().all(|candidate| candidate.rule == 0));
+            for key in round.entries.keys() {
+                assert!(matches!(key.subject.interned(), Some(0 | FIRST)));
+                assert!(matches!(key.object.interned(), Some(0 | FIRST)));
+            }
+        }
+        // An omitted dictionary entry fails the actual lexical tie comparison and
+        // releases the earlier lexical pins; it must not choose by numeric ID.
+        let mut missing = matches.clone();
+        missing[1].sources[0].object = 17;
+        let snapshot = RoundSnapshot {
+            rel: &rel,
+            depth: &[0, 0],
+            assumed: &[],
+        };
+        assert!(matches!(
+            project(&missing, &[], snapshot, delta, true),
+            Err(SourceLost(17))
+        ));
+        assert_eq!(rel.interner().pins.load(Ordering::Relaxed), 0);
+        rel.interner().lost.store(true, Ordering::Relaxed);
+        assert!(matches!(
+            project(&[], &[], snapshot, delta, false),
+            Err(SourceLost(99))
+        ));
+        assert!(matches!(
+            crate::seminaive::evaluate_round(
+                &[],
+                snapshot,
+                RoundExecution::Parallel,
+                JoinStrategy::Planned,
+                0,
+                &NoGuards,
+            ),
+            Err(crate::seminaive::EvalError::Source(SourceLost(99)))
+        ));
+        for strategy in [JoinStrategy::Planned, JoinStrategy::ForcedBinary] {
+            let entry = RuleEntry {
+                index: 0,
+                rule: &factor_rule,
+                plan: &factor_plan,
+                runtime: &runtime,
+                delta: Delta { lo: 2, hi: 2 },
+            };
+            assert!(matches!(
+                evaluate_rule(entry, snapshot, strategy, StepGovernor::new(0), &NoGuards),
+                Err(crate::seminaive::EvalError::Source(SourceLost(99)))
+            ));
+        }
+        rel.interner().lost.store(false, Ordering::Relaxed);
+        let exe = compile(vec![
+            factor_rule,
+            DlClause::datalog(atom("?x", B, "?y"), vec![atom("?x", Q, "?y")]),
+        ])
+        .unwrap();
+        let result = crate::seminaive::evaluate(&exe, rel).unwrap();
+        assert_eq!(result.facts().row_count(), 10);
+        assert_eq!(result.derivations().len(), 8);
+        assert_eq!(result.budget().input_terms(), (1u64 << 40) + 7);
+        assert_eq!(result.budget().generated_terms(), 0);
+        for (_, ids) in result.facts().rows_from(2) {
+            assert!(matches!(ids[0], 0 | FIRST));
+            assert!(matches!(ids[1], 9 | 11));
+            assert!(matches!(ids[2], 0 | FIRST));
+            assert_eq!(ids[3], 1);
+        }
+        assert_eq!(result.facts().interner().pins.load(Ordering::Relaxed), 0);
+        result
+            .facts()
+            .interner()
+            .lost
+            .store(true, Ordering::Relaxed);
+        assert!(matches!(
+            crate::seminaive::evaluate(&compile(Vec::new()).unwrap(), result.into_facts()),
+            Err(crate::seminaive::EvalError::Source(SourceLost(99)))
+        ));
     }
 
     /// Exhaustive sparse input subsets, insertion permutations and every head projection.
@@ -1109,7 +1381,10 @@ mod tests {
                 assert_eq!(planned.entries.len(), binary.entries.len());
                 for (key, candidate) in &planned.entries {
                     let expected = binary.entries.get(key).expect("same projected fact");
-                    assert_eq!(candidate.source_facts(&rel), expected.source_facts(&rel));
+                    assert_eq!(
+                        candidate.source_facts(&rel).unwrap(),
+                        expected.source_facts(&rel).unwrap()
+                    );
                 }
             }
         }
@@ -1158,7 +1433,7 @@ mod tests {
                 } else {
                     Vec::new()
                 };
-                let projection = project(&matches, &slots, snapshot, entry.delta, false);
+                let projection = project(&matches, &slots, snapshot, entry.delta, false).unwrap();
                 assert!(projection.old.is_empty());
                 for frontier in projection.full.values().chain(projection.new.values()) {
                     stored_thresholds += frontier.thresholds.len();
@@ -1977,7 +2252,10 @@ mod tests {
                         );
                         if delta == Delta::all(input.len()) {
                             let winner = planned.entries.values().next().expect("one head fires");
-                            assert_eq!(winner.source_facts(&rel)[1].subject, surface("b1"));
+                            assert_eq!(
+                                winner.source_facts(&rel).unwrap()[1].subject,
+                                surface("b1")
+                            );
                         }
                     }
                 }
@@ -2003,6 +2281,7 @@ mod tests {
             let object = surface("value");
             let (_, _, row) = rel
                 .insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH)
+                .unwrap()
                 .expect("unique source");
             let mut solution = SlotSolution::empty(0);
             solution.sources.push(SourceRow {
@@ -2019,8 +2298,16 @@ mod tests {
         };
         let lexical = solution("a", 0);
         let summed = solution("z", 0);
-        assert!(source_preference(&lexical.sources, 0, &lexical.sources, 1, &rel).is_lt());
-        assert!(source_preference(&lexical.sources, 9, &summed.sources, 0, &rel).is_lt());
+        assert!(
+            source_preference(&lexical.sources, 0, &lexical.sources, 1, &rel)
+                .unwrap()
+                .is_lt()
+        );
+        assert!(
+            source_preference(&lexical.sources, 9, &summed.sources, 0, &rel)
+                .unwrap()
+                .is_lt()
+        );
         let frontier = Frontier::new(
             vec![
                 Witness {
@@ -2036,7 +2323,8 @@ mod tests {
             ],
             &rel,
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(frontier.at(u32::MAX - 1).lexical.solution, &summed);
         assert_eq!(frontier.at(u32::MAX).summed.solution, &summed);
         assert_eq!(frontier.at(u32::MAX).lexical.solution, &lexical);

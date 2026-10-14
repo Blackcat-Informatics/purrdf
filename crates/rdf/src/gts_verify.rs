@@ -250,10 +250,10 @@ mod tests {
     fn dataset_referencing(content_iri: &str) -> Arc<RdfDataset> {
         let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
         let mut builder = RdfDatasetBuilder::with_content_addressing(scheme, None);
-        let s = builder.intern_iri(content_iri);
-        let p = builder.intern_iri("https://example.org/p");
-        let o = builder.intern_literal(RdfLiteral::simple("o"));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(content_iri).unwrap();
+        let p = builder.intern_iri("https://example.org/p").unwrap();
+        let o = builder.intern_literal(RdfLiteral::simple("o")).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
         builder.freeze().expect("freeze content-addressing dataset")
     }
 

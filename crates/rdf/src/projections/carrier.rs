@@ -857,10 +857,10 @@ mod tests {
 
     fn dataset() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("https://example.org/subject");
-        let predicate = builder.intern_iri("https://example.org/predicate");
-        let object = builder.intern_iri("https://example.org/object");
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri("https://example.org/subject").unwrap();
+        let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+        let object = builder.intern_iri("https://example.org/object").unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         builder.freeze().expect("dataset")
     }
 

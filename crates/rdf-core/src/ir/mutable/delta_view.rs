@@ -111,7 +111,8 @@ impl DeltaDatasetView {
         let delta_ids = (0..delta.as_ref().term_count())
             .map(|index| {
                 let id =
-                    TermId::from_index(u32::try_from(index).expect("native term index fits u32"));
+                    TermId::from_index(u32::try_from(index).expect("native term index fits u32"))
+                        .expect("stored term index is representable");
                 if let Some(base_id) =
                     crate::ir::import::lookup_native_term(&delta, &base, id, Some, &mut lookup)
                 {
@@ -198,9 +199,10 @@ impl DeltaDatasetView {
     pub fn term_ids(&self) -> impl Iterator<Item = DeltaViewId> + '_ {
         (0..self.base.as_ref().term_count())
             .map(|index| {
-                DeltaViewId::Base(TermId::from_index(
-                    u32::try_from(index).expect("native index fits u32"),
-                ))
+                DeltaViewId::Base(
+                    TermId::from_index(u32::try_from(index).expect("native index fits u32"))
+                        .expect("stored term index is representable"),
+                )
             })
             .chain(self.added_term_ids())
     }
@@ -1061,16 +1063,16 @@ mod tests {
     /// unrelated plain row, in the default graph.
     fn reified_base() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s");
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_iri("https://example.org/o");
-        let r = b.intern_iri("https://example.org/r");
-        let other = b.intern_iri("https://example.org/other");
-        let triple = b.intern_triple(s, p, o);
-        b.push_quad(s, p, o, None);
-        b.push_quad(other, p, o, None);
-        b.push_reifier_in_graph(r, triple, None);
-        b.push_annotation_in_graph(r, p, other, None);
+        let s = b.intern_iri("https://example.org/s").unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b.intern_iri("https://example.org/o").unwrap();
+        let r = b.intern_iri("https://example.org/r").unwrap();
+        let other = b.intern_iri("https://example.org/other").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(other, p, o, None).unwrap();
+        b.push_reifier_in_graph(r, triple, None).unwrap();
+        b.push_annotation_in_graph(r, p, other, None).unwrap();
         b.freeze().unwrap()
     }
 
@@ -1154,13 +1156,13 @@ mod tests {
         //    is dropped rather than re-filed. It is still on the surface, via the
         //    annotation that masked it.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s");
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_iri("https://example.org/o");
-        let triple = b.intern_triple(s, p, o);
-        b.push_quad(s, p, o, None);
-        b.push_reifier_in_graph(s, triple, None);
-        b.push_annotation_in_graph(s, p, o, None);
+        let s = b.intern_iri("https://example.org/s").unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b.intern_iri("https://example.org/o").unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_reifier_in_graph(s, triple, None).unwrap();
+        b.push_annotation_in_graph(s, p, o, None).unwrap();
         let masked = b.freeze().unwrap();
         let mut mutation = MutableDataset::new(Arc::clone(&masked));
         assert!(
@@ -1183,10 +1185,10 @@ mod tests {
     #[test]
     fn snapshot_shares_base_and_isolates_suppression_reinsertion_and_new_terms() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/a");
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_iri("https://example.org/b");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("https://example.org/a").unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b.intern_iri("https://example.org/b").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let base = b.freeze().unwrap();
         let mut mutation = MutableDataset::new(Arc::clone(&base));
         assert!(mutation.remove(&row("a", "b")));
@@ -1221,11 +1223,12 @@ mod tests {
     #[test]
     fn indexed_patterns_match_complete_scan_for_shared_and_delta_ids() {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("https://example.org/p");
-        let graph = b.intern_iri("https://example.org/g");
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let graph = b.intern_iri("https://example.org/g").unwrap();
         for i in 0..20 {
-            let s = b.intern_iri(&format!("https://example.org/s{i}"));
-            b.push_quad(s, p, s, if i % 2 == 0 { Some(graph) } else { None });
+            let s = b.intern_iri(&format!("https://example.org/s{i}")).unwrap();
+            b.push_quad(s, p, s, if i % 2 == 0 { Some(graph) } else { None })
+                .unwrap();
         }
         let base = b.freeze().unwrap();
         let mut mutation = MutableDataset::new(base);
@@ -1285,21 +1288,23 @@ mod tests {
     #[test]
     fn rdf12_tables_deduplicate_overlaps_and_keep_graphs_and_direction() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s");
-        let p = b.intern_iri("https://example.org/p");
-        let literal = b.intern_literal(RdfLiteral {
-            direction: Some(RdfTextDirection::Rtl),
-            ..RdfLiteral::language_tagged("مرحبا", "ar")
-        });
-        let quoted = b.intern_triple(s, p, literal);
-        let nested = b.intern_triple(s, p, quoted);
-        let r = b.intern_iri("https://example.org/reifier");
-        let g = b.intern_iri("https://example.org/context");
-        let empty = b.intern_iri("https://example.org/empty");
-        b.declare_named_graph(empty);
-        b.push_quad(s, p, nested, Some(g));
-        b.push_reifier_in_graph(r, quoted, Some(g));
-        b.push_annotation_in_graph(r, p, literal, Some(g));
+        let s = b.intern_iri("https://example.org/s").unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let literal = b
+            .intern_literal(RdfLiteral {
+                direction: Some(RdfTextDirection::Rtl),
+                ..RdfLiteral::language_tagged("مرحبا", "ar")
+            })
+            .unwrap();
+        let quoted = b.intern_triple(s, p, literal).unwrap();
+        let nested = b.intern_triple(s, p, quoted).unwrap();
+        let r = b.intern_iri("https://example.org/reifier").unwrap();
+        let g = b.intern_iri("https://example.org/context").unwrap();
+        let empty = b.intern_iri("https://example.org/empty").unwrap();
+        b.declare_named_graph(empty).unwrap();
+        b.push_quad(s, p, nested, Some(g)).unwrap();
+        b.push_reifier_in_graph(r, quoted, Some(g)).unwrap();
+        b.push_annotation_in_graph(r, p, literal, Some(g)).unwrap();
         let base = b.freeze().unwrap();
         let mut mutation = MutableDataset::new(Arc::clone(&base));
         for q in base.reifier_quads().chain(base.annotation_quads()) {

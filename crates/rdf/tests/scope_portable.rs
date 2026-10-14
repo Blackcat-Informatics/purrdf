@@ -37,10 +37,12 @@ fn case_dataset(directory: &Path, inputs: &Value) -> Arc<RdfDataset> {
         let graph = input["graph"].as_str();
         for mut quad in dataset.owned_quads() {
             quad.graph_name = graph.map(|iri| RdfTerm::Iri(iri.to_owned()));
-            builder.push_owned_quad_scoped(
-                &quad,
-                BlankScope(u32::try_from(index).expect("fixture source index fits")),
-            );
+            builder
+                .push_owned_quad_scoped(
+                    &quad,
+                    BlankScope(u32::try_from(index).expect("fixture source index fits")),
+                )
+                .unwrap();
         }
     }
     builder.freeze().expect("fixture dataset freezes")

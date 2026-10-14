@@ -301,8 +301,12 @@ impl VisualOptions {
 }
 
 /// Map an engine diagnostic to a JS error.
-pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsError {
-    JsError::new(&diag.to_string())
+pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsValue {
+    if diag.storage_error().is_some() {
+        crate::operation::diagnostic_to_js(diag.clone())
+    } else {
+        JsError::new(&diag.to_string()).into()
+    }
 }
 
 /// Render an IRI failure as a thrown JS error, leading with the workspace's shared
@@ -310,6 +314,14 @@ pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsError {
 /// stable string every other surface reports.
 pub(crate) fn iri_to_err(err: &purrdf::IriError) -> JsError {
     JsError::new(&format!("{}: {err}", err.diagnostic_code()))
+}
+
+/// Keep physical IRI ingress refusal distinct from invalid lexical input.
+fn iri_read_to_err(error: &purrdf::iri::IriReadError) -> JsValue {
+    match error {
+        purrdf::iri::IriReadError::Lexical(error) => iri_to_err(error).into(),
+        purrdf::iri::IriReadError::Storage(error) => diag_to_err(&(*error).into()),
+    }
 }
 
 /// The source of every [`Dataset`]'s identity. Starts at 1 so no dataset is ever `0`.
@@ -388,7 +400,7 @@ impl Drop for UpdateClaim {
 impl Dataset {
     /// An empty frozen base — the COW root for a dataset with no parsed content —
     /// under the graph-existence policy `mode`.
-    fn empty_base(mode: GraphExistenceMode) -> Result<MutableDataset, JsError> {
+    fn empty_base(mode: GraphExistenceMode) -> Result<MutableDataset, JsValue> {
         let base = RdfDatasetBuilder::new()
             .freeze()
             .map_err(|e| diag_to_err(&e))?;
@@ -411,7 +423,7 @@ impl Dataset {
     }
 
     /// A new dataset over `inner`, with a fresh identity at generation zero.
-    pub(crate) fn from_mutable(inner: MutableDataset) -> Result<Self, JsError> {
+    pub(crate) fn from_mutable(inner: MutableDataset) -> Result<Self, JsValue> {
         Ok(Self {
             inner,
             id: mint_dataset_id(&NEXT_DATASET_ID).map_err(|error| diag_to_err(&error))?,
@@ -423,12 +435,12 @@ impl Dataset {
     /// A new dataset over a frozen base, with a fresh identity at generation zero,
     /// under the default graph-existence policy. The handle retains the original
     /// native admission; resident parser and sink owners enter through Arc::into.
-    pub(crate) fn from_frozen(frozen: DatasetHandle) -> Result<Self, JsError> {
+    pub(crate) fn from_frozen(frozen: DatasetHandle) -> Result<Self, JsValue> {
         Self::from_frozen_in(frozen, GraphExistenceMode::default())
     }
 
     /// A new dataset over a frozen base under the graph-existence policy `mode`.
-    fn from_frozen_in(frozen: DatasetHandle, mode: GraphExistenceMode) -> Result<Self, JsError> {
+    fn from_frozen_in(frozen: DatasetHandle, mode: GraphExistenceMode) -> Result<Self, JsValue> {
         Self::from_mutable(MutableDataset::new_with_graph_existence(frozen, mode))
     }
 
@@ -498,7 +510,7 @@ impl Dataset {
     /// `false` opts out to the implicit lifetime, in which a graph exists only while
     /// it holds a quad (or as a parsed document declared it, until it is emptied).
     #[wasm_bindgen(constructor)]
-    pub fn new(remember_empty_graphs: Option<bool>) -> Result<Self, JsError> {
+    pub fn new(remember_empty_graphs: Option<bool>) -> Result<Self, JsValue> {
         Self::from_mutable(Self::empty_base(Self::mode_of(remember_empty_graphs))?)
     }
 
@@ -523,7 +535,7 @@ impl Dataset {
         format: &str,
         base: Option<String>,
         remember_empty_graphs: Option<bool>,
-    ) -> Result<Self, JsError> {
+    ) -> Result<Self, JsValue> {
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
         let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
             .map_err(|e| diag_to_err(&e))?;
@@ -564,7 +576,7 @@ impl Dataset {
     /// those three they are not, and the difference is exactly the counted loss.
     #[wasm_bindgen(js_name = serialize)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn serialize(&self, format: &str, base: Option<String>) -> Result<String, JsError> {
+    pub fn serialize(&self, format: &str, base: Option<String>) -> Result<String, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let native = classify(format).map_err(|e| diag_to_err(&e))?;
         let outcome = serialize_dataset_with(
@@ -578,8 +590,9 @@ impl Dataset {
             },
         )
         .map_err(|e| diag_to_err(&e))?;
-        String::from_utf8(outcome.bytes)
-            .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))
+        String::from_utf8(outcome.bytes).map_err(|e| {
+            JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")).into()
+        })
     }
 
     /// Serialize INCREMENTALLY, handing each window to `sink.write`.
@@ -608,7 +621,7 @@ impl Dataset {
         format: &str,
         base: Option<String>,
         sink: &ChunkSink,
-    ) -> Result<(), JsError> {
+    ) -> Result<(), JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let native = classify(format).map_err(|e| diag_to_err(&e))?;
         let mut writer = SinkWriter { sink, thrown: None };
@@ -630,7 +643,8 @@ impl Dataset {
             return Err(JsError::new(&format!(
                 "the sink's write threw: {}",
                 thrown.as_string().unwrap_or_else(|| format!("{thrown:?}"))
-            )));
+            ))
+            .into());
         }
         outcome.map(|_| ()).map_err(|e| diag_to_err(&e))
     }
@@ -668,7 +682,7 @@ impl Dataset {
         &self,
         format: &str,
         base: Option<String>,
-    ) -> Result<SerializeLoss, JsError> {
+    ) -> Result<SerializeLoss, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let fmt = resolve_format(format).map_err(|e| JsError::new(&e))?;
         let outcome = serialize_dataset_to_format(&frozen, fmt, base.as_deref())
@@ -702,7 +716,7 @@ impl Dataset {
         format: &str,
         options_json: &str,
         base: Option<String>,
-    ) -> Result<String, JsError> {
+    ) -> Result<String, JsValue> {
         self.serialize_with_options(format, &decode_options(options_json)?, base.as_deref())
     }
 
@@ -718,7 +732,7 @@ impl Dataset {
         context: &CompiledJsonLdContext,
         yaml_schema_url: Option<String>,
         base: Option<String>,
-    ) -> Result<String, JsError> {
+    ) -> Result<String, JsValue> {
         let mut options = context_options(context);
         if let Some(url) = yaml_schema_url {
             options = options
@@ -740,11 +754,11 @@ impl Dataset {
     /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
     /// wasm trap/process abort.
     #[wasm_bindgen(js_name = canonicalize)]
-    pub fn canonicalize(&self) -> Result<String, JsError> {
+    pub fn canonicalize(&self) -> Result<String, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         match try_canonicalize_flat_view(&frozen, CanonHash::Sha256) {
             Ok(canonicalized) => Ok(canonicalized.nquads),
-            Err(ViewCanonError::Refused(err)) => Err(JsError::new(&err.to_string())),
+            Err(ViewCanonError::Refused(err)) => Err(JsError::new(&err.to_string()).into()),
             Err(ViewCanonError::NotReady { error, .. }) => match error {
                 // LAW: a freshly-frozen `Arc<RdfDataset>`'s `FallibleDatasetView::Error`
                 // is `Infallible` — the frozen dataset never faults, so this arm is
@@ -761,7 +775,7 @@ impl Dataset {
     /// comparing the two [`canonicalize`](Self::canonicalize) strings, but avoids
     /// materializing them for obviously-different inputs.
     #[wasm_bindgen(js_name = isomorphic)]
-    pub fn isomorphic(&self, other: &Self) -> Result<bool, JsError> {
+    pub fn isomorphic(&self, other: &Self) -> Result<bool, JsValue> {
         let a = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let b = other.inner.freeze().map_err(|e| diag_to_err(&e))?;
         Ok(datasets_isomorphic(&a, &b))
@@ -789,7 +803,7 @@ impl Dataset {
     ///
     /// A dataset whose pending changes cannot be frozen.
     #[wasm_bindgen(js_name = snapshot)]
-    pub fn snapshot(&self) -> Result<Self, JsError> {
+    pub fn snapshot(&self) -> Result<Self, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         Self::from_frozen_in(frozen.into(), self.graph_existence())
     }
@@ -811,18 +825,18 @@ impl Dataset {
     /// against and none is invented. The thrown message carries the workspace's
     /// shared `iri-relative-no-base` code.
     #[wasm_bindgen(js_name = add)]
-    pub fn add(&mut self, quad: &Quad) -> Result<bool, JsError> {
+    pub fn add(&mut self, quad: &Quad) -> Result<bool, JsValue> {
         let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
         self.mutate(|inner| match inner.insert(values) {
             Ok(changed) => (Ok(changed), changed),
-            Err(error) => (Err(iri_to_err(&error)), false),
+            Err(error) => (Err(iri_read_to_err(&error)), false),
         })
         .map_err(|error| diag_to_err(&error))?
     }
 
     /// `delete(quad)` → remove a quad. Returns `true` if the effective set changed.
     #[wasm_bindgen(js_name = delete)]
-    pub fn delete(&mut self, quad: &Quad) -> Result<bool, JsError> {
+    pub fn delete(&mut self, quad: &Quad) -> Result<bool, JsValue> {
         let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
         self.mutate(|inner| {
             let changed = inner.remove(&values);
@@ -851,7 +865,7 @@ impl Dataset {
     /// `visualModelJson(optionsJson?)` -> the renderer-neutral RDF 1.2 model as JSON.
     #[wasm_bindgen(js_name = visualModelJson)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn visual_model_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+    pub fn visual_model_json(&self, options_json: Option<String>) -> Result<String, JsValue> {
         let (spec, _) = VisualOptions::parse(options_json)?.into_engine_options()?;
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         let model =
@@ -862,18 +876,18 @@ impl Dataset {
     /// `visualExportJson(optionsJson?)` -> model, scene, geometry, and index as JSON.
     #[wasm_bindgen(js_name = visualExportJson)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn visual_export_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+    pub fn visual_export_json(&self, options_json: Option<String>) -> Result<String, JsValue> {
         let (spec, options) = VisualOptions::parse(options_json)?.into_engine_options()?;
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         let export = project_dataset_export(&frozen, &spec, &options.layout)
             .map_err(|error| JsError::new(&error.to_string()))?;
-        export_json(&export).map_err(|error| JsError::new(&error.to_string()))
+        export_json(&export).map_err(|error| JsError::new(&error.to_string()).into())
     }
 
     /// `visualSvgJson(optionsJson?)` -> deterministic SVG and its complete export.
     #[wasm_bindgen(js_name = visualSvgJson)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn visual_svg_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+    pub fn visual_svg_json(&self, options_json: Option<String>) -> Result<String, JsValue> {
         let (spec, options) = VisualOptions::parse(options_json)?.into_engine_options()?;
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         let document = render_dataset_svg(&frozen, &spec, &options)
@@ -892,7 +906,7 @@ impl Dataset {
         predicate: Option<Term>,
         object: Option<Term>,
         graph: Option<Term>,
-    ) -> Result<Self, JsError> {
+    ) -> Result<Self, JsValue> {
         let s = pattern_value(subject.as_ref())?;
         let p = pattern_value(predicate.as_ref())?;
         let o = pattern_value(object.as_ref())?;
@@ -921,7 +935,7 @@ impl Dataset {
             // These values were just read back out of an existing dataset, so they
             // already satisfy the absoluteness invariant. Propagate rather than
             // unwrap anyway: a panic across the wasm boundary is not a diagnostic.
-            out.insert(qv.clone()).map_err(|e| iri_to_err(&e))?;
+            out.insert(qv.clone()).map_err(|e| iri_read_to_err(&e))?;
         }
         Self::from_mutable(out)
     }
@@ -1012,27 +1026,32 @@ impl Dataset {
         format: &str,
         options: &JsonLdSerializeOptions,
         base: Option<&str>,
-    ) -> Result<String, JsError> {
+    ) -> Result<String, JsValue> {
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
         serialize_frozen_with_options(&frozen, format, options, base)
-            .map_err(|message| JsError::new(&message))
+            .map_err(|diagnostic| diag_to_err(&diagnostic))
     }
 }
 
 /// [`Dataset::serialize_with_options`] over an already-frozen dataset, with a plain
-/// `String` error — the shape the asynchronous lane records on a job rather than
-/// throwing across a suspended frame. The words are the synchronous method's.
+/// native diagnostic — retained by the asynchronous lane's job rather than
+/// throwing across a suspended frame. Native codec messages are unchanged. Invalid
+/// UTF-8 generated by a serializer is an invariant failure and now includes the
+/// host serialization code in its diagnostic rendering.
 pub(crate) fn serialize_frozen_with_options(
     frozen: &RdfDataset,
     format: &str,
     options: &JsonLdSerializeOptions,
     base: Option<&str>,
-) -> Result<String, String> {
-    let native = classify(format).map_err(|error| error.to_string())?;
-    let outcome = serialize_dataset_to_format_with_jsonld_options(frozen, native, base, options)
-        .map_err(|error| error.to_string())?;
-    String::from_utf8(outcome.bytes)
-        .map_err(|error| format!("serialization produced non-UTF-8 bytes: {error}"))
+) -> Result<String, RdfDiagnostic> {
+    let native = classify(format)?;
+    let outcome = serialize_dataset_to_format_with_jsonld_options(frozen, native, base, options)?;
+    String::from_utf8(outcome.bytes).map_err(|error| {
+        RdfDiagnostic::error(
+            crate::operation::SERIALIZE_CODE,
+            format!("serialization produced non-UTF-8 bytes: {error}"),
+        )
+    })
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]
@@ -1043,7 +1062,7 @@ mod identity_fixture {
     /// Unit-test-module fixture only: seed the real exported getters beyond binary64's
     /// exact integer range without adding a seed operation to the release package.
     #[wasm_bindgen]
-    pub fn __purrdf_test_large_dataset_identity() -> Result<Dataset, JsError> {
+    pub fn __purrdf_test_large_dataset_identity() -> Result<Dataset, JsValue> {
         let mut dataset = Dataset::new(None)?;
         dataset.id = 9_007_199_254_740_993;
         dataset.generation = 9_007_199_254_740_995;

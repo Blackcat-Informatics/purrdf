@@ -181,16 +181,20 @@ fn cycles_shared_and_quoted_blanks_preserve_statements() {
 fn tied_guarded_branches_keep_order_under_permutation() {
     let build = |reverse: bool| {
         let mut builder = RdfDatasetBuilder::new();
-        let root = builder.intern_iri("http://example.org/root");
-        let predicate = builder.intern_iri("http://example.org/p");
+        let root = builder.intern_iri("http://example.org/root").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
         for branch in if reverse { ["z", "a"] } else { ["a", "z"] } {
-            let mut next = builder.intern_iri(&format!("http://example.org/end{branch}"));
+            let mut next = builder
+                .intern_iri(&format!("http://example.org/end{branch}"))
+                .unwrap();
             for level in 0..100 {
-                let cell = builder.intern_blank(&format!("{branch}{level}"), BlankScope::DEFAULT);
-                builder.push_quad(cell, predicate, next, None);
+                let cell = builder
+                    .intern_blank(&format!("{branch}{level}"), BlankScope::DEFAULT)
+                    .unwrap();
+                builder.push_quad(cell, predicate, next, None).unwrap();
                 next = cell;
             }
-            builder.push_quad(root, predicate, next, None);
+            builder.push_quad(root, predicate, next, None).unwrap();
         }
         builder.freeze().unwrap()
     };
@@ -208,20 +212,22 @@ fn tied_guarded_branches_keep_order_under_permutation() {
 
 fn a_long_collection_keeps_every_member() {
     let mut builder = RdfDatasetBuilder::new();
-    let root = builder.intern_iri("http://example.org/root");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let first = builder.intern_iri(rdf::FIRST);
-    let rest = builder.intern_iri(rdf::REST);
-    let nil = builder.intern_iri(rdf::NIL);
-    let member = builder.intern_iri("http://example.org/member");
+    let root = builder.intern_iri("http://example.org/root").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let first = builder.intern_iri(rdf::FIRST).unwrap();
+    let rest = builder.intern_iri(rdf::REST).unwrap();
+    let nil = builder.intern_iri(rdf::NIL).unwrap();
+    let member = builder.intern_iri("http://example.org/member").unwrap();
     let mut next = nil;
     for level in 0..100_000 {
-        let cell = builder.intern_blank(&format!("cell{level}"), BlankScope::DEFAULT);
-        builder.push_quad(cell, first, member, None);
-        builder.push_quad(cell, rest, next, None);
+        let cell = builder
+            .intern_blank(&format!("cell{level}"), BlankScope::DEFAULT)
+            .unwrap();
+        builder.push_quad(cell, first, member, None).unwrap();
+        builder.push_quad(cell, rest, next, None).unwrap();
         next = cell;
     }
-    builder.push_quad(root, predicate, next, None);
+    builder.push_quad(root, predicate, next, None).unwrap();
     let dataset = builder.freeze().unwrap();
     let packed = render_canonical_turtle(&dataset, &prefixes());
     assert_eq!(packed.matches("ex:member").count(), 100_000);
@@ -232,19 +238,21 @@ fn a_long_collection_keeps_every_member() {
 
 fn continuation_objects_saturate_at_the_same_indent_guard() {
     let mut builder = RdfDatasetBuilder::new();
-    let root = builder.intern_iri("http://example.org/root");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let a = builder.intern_iri("http://example.org/a");
-    let z = builder.intern_iri("http://example.org/z");
-    let mut next = builder.intern_blank("bottom", BlankScope::DEFAULT);
-    builder.push_quad(next, predicate, a, None);
-    builder.push_quad(next, predicate, z, None);
+    let root = builder.intern_iri("http://example.org/root").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let a = builder.intern_iri("http://example.org/a").unwrap();
+    let z = builder.intern_iri("http://example.org/z").unwrap();
+    let mut next = builder.intern_blank("bottom", BlankScope::DEFAULT).unwrap();
+    builder.push_quad(next, predicate, a, None).unwrap();
+    builder.push_quad(next, predicate, z, None).unwrap();
     for level in 1..39 {
-        let cell = builder.intern_blank(&format!("cell{level}"), BlankScope::DEFAULT);
-        builder.push_quad(cell, predicate, next, None);
+        let cell = builder
+            .intern_blank(&format!("cell{level}"), BlankScope::DEFAULT)
+            .unwrap();
+        builder.push_quad(cell, predicate, next, None).unwrap();
         next = cell;
     }
-    builder.push_quad(root, predicate, next, None);
+    builder.push_quad(root, predicate, next, None).unwrap();
     let packed = render_canonical_turtle(&builder.freeze().unwrap(), &prefixes());
     assert!(packed.contains(&format!(
         "{}ex:p ex:a ,\n{}ex:z ;\n",

@@ -41,18 +41,20 @@ const TAG: &str = "http://example.org/pf/tag";
 /// shared node answers `ex:s1` alone, while a cross product answers both subjects.
 fn dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&format!("{EX}p"));
-    let q = b.intern_iri(&format!("{EX}q"));
-    let w = b.intern_iri(&format!("{EX}w"));
-    let s1 = b.intern_iri(&format!("{EX}s1"));
-    let s2 = b.intern_iri(&format!("{EX}s2"));
-    let r1 = b.intern_iri(&format!("{EX}r1"));
-    let r2 = b.intern_iri(&format!("{EX}r2"));
-    let o = b.intern_literal(RdfLiteral::simple("o".to_owned()));
-    b.push_quad(s1, p, r1, None);
-    b.push_quad(s2, p, r2, None);
-    b.push_quad(r1, q, o, None);
-    b.push_quad(r2, w, r1, None);
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let q = b.intern_iri(&format!("{EX}q")).unwrap();
+    let w = b.intern_iri(&format!("{EX}w")).unwrap();
+    let s1 = b.intern_iri(&format!("{EX}s1")).unwrap();
+    let s2 = b.intern_iri(&format!("{EX}s2")).unwrap();
+    let r1 = b.intern_iri(&format!("{EX}r1")).unwrap();
+    let r2 = b.intern_iri(&format!("{EX}r2")).unwrap();
+    let o = b
+        .intern_literal(RdfLiteral::simple("o".to_owned()))
+        .unwrap();
+    b.push_quad(s1, p, r1, None).unwrap();
+    b.push_quad(s2, p, r2, None).unwrap();
+    b.push_quad(r1, q, o, None).unwrap();
+    b.push_quad(r2, w, r1, None).unwrap();
     b.freeze().expect("freeze")
 }
 

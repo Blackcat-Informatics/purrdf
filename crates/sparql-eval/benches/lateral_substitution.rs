@@ -38,15 +38,15 @@ use purrdf_sparql_eval::{EvalCtx, evaluate_query};
 /// multi-row scan rather than probing an already-singleton pattern.
 fn dataset(n: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let val = b.intern_iri("http://ex/val");
-    let rel = b.intern_iri("http://ex/rel");
+    let val = b.intern_iri("http://ex/val").unwrap();
+    let rel = b.intern_iri("http://ex/rel").unwrap();
     for i in 0..n {
-        let row = b.intern_iri(&format!("http://ex/row{i}"));
-        let v = b.intern_iri(&format!("urn:v{i}"));
-        b.push_quad(row, val, v, None);
+        let row = b.intern_iri(&format!("http://ex/row{i}")).unwrap();
+        let v = b.intern_iri(&format!("urn:v{i}")).unwrap();
+        b.push_quad(row, val, v, None).unwrap();
         for k in 0..3 {
-            let w = b.intern_iri(&format!("urn:w{i}-{k}"));
-            b.push_quad(v, rel, w, None);
+            let w = b.intern_iri(&format!("urn:w{i}-{k}")).unwrap();
+            b.push_quad(v, rel, w, None).unwrap();
         }
     }
     b.freeze().expect("freeze")

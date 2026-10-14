@@ -483,87 +483,84 @@ fn emit_void(
         config,
     };
     let dataset = config.dataset_iri();
-    emitter.push_type(dataset, VoidRole::DatasetClass);
+    emitter.push_type(dataset, VoidRole::DatasetClass)?;
     emitter.push_term(dataset, VoidRole::Version, version)?;
     emitter.push_term(dataset, VoidRole::Abstract, abstract_value)?;
     for statement in config.static_statements() {
-        emitter.push_static(dataset, statement.predicate(), statement.object());
+        emitter.push_static(dataset, statement.predicate(), statement.object())?;
     }
-    emitter.push_count(dataset, VoidRole::Triples, data.aggregate.triples);
+    emitter.push_count(dataset, VoidRole::Triples, data.aggregate.triples)?;
     emitter.push_count(
         dataset,
         VoidRole::Entities,
         count_u64(data.aggregate.subjects.len(), "VoID entity")?,
-    );
+    )?;
     emitter.push_count(
         dataset,
         VoidRole::Classes,
         count_u64(data.class_partitions.len(), "VoID class")?,
-    );
+    )?;
     emitter.push_count(
         dataset,
         VoidRole::Properties,
         count_u64(data.property_partitions.len(), "VoID property")?,
-    );
+    )?;
     emitter.push_count(
         dataset,
         VoidRole::DistinctSubjects,
         count_u64(data.aggregate.subjects.len(), "VoID distinct-subject")?,
-    );
+    )?;
     emitter.push_count(
         dataset,
         VoidRole::DistinctObjects,
         count_u64(data.aggregate.objects.len(), "VoID distinct-object")?,
-    );
+    )?;
     for (predicate, objects) in external_links {
         for object in objects {
-            emitter.push_iri_predicate(dataset, predicate, object);
+            emitter.push_iri_predicate(dataset, predicate, object)?;
         }
     }
 
     for (class, aggregate) in &data.class_partitions {
         let local = stable_identifier("void_class_partition", class.as_bytes())?;
         let partition = generated_iri(config, &local, "VoID class partition")?;
-        emitter.push_type(&partition, VoidRole::ClassPartitionClass);
-        emitter.push_iri(dataset, VoidRole::ClassPartition, &partition);
-        emitter.push_iri(dataset, VoidRole::Subset, &partition);
-        emitter.push_iri(&partition, VoidRole::Class, class);
+        emitter.push_type(&partition, VoidRole::ClassPartitionClass)?;
+        emitter.push_iri(dataset, VoidRole::ClassPartition, &partition)?;
+        emitter.push_iri(dataset, VoidRole::Subset, &partition)?;
+        emitter.push_iri(&partition, VoidRole::Class, class)?;
         emitter.push_partition_counts(&partition, aggregate)?;
     }
     for (property, aggregate) in &data.property_partitions {
         let local = stable_identifier("void_property_partition", property.as_bytes())?;
         let partition = generated_iri(config, &local, "VoID property partition")?;
-        emitter.push_type(&partition, VoidRole::PropertyPartitionClass);
-        emitter.push_iri(dataset, VoidRole::PropertyPartition, &partition);
-        emitter.push_iri(dataset, VoidRole::Subset, &partition);
-        emitter.push_iri(&partition, VoidRole::Property, property);
+        emitter.push_type(&partition, VoidRole::PropertyPartitionClass)?;
+        emitter.push_iri(dataset, VoidRole::PropertyPartition, &partition)?;
+        emitter.push_iri(dataset, VoidRole::Subset, &partition)?;
+        emitter.push_iri(&partition, VoidRole::Property, property)?;
         emitter.push_partition_counts(&partition, aggregate)?;
     }
     for linkset in linksets {
-        emitter.push_type(&linkset.iri, VoidRole::LinksetClass);
+        emitter.push_type(&linkset.iri, VoidRole::LinksetClass)?;
         emitter.push_iri(
             &linkset.iri,
             VoidRole::SubjectsTarget,
             &linkset.key.subjects_target,
-        );
+        )?;
         emitter.push_iri(
             &linkset.iri,
             VoidRole::ObjectsTarget,
             &linkset.key.objects_target,
-        );
+        )?;
         emitter.push_iri(
             &linkset.iri,
             VoidRole::LinkPredicate,
             &linkset.key.predicate,
-        );
-        emitter.push_count(&linkset.iri, VoidRole::Triples, linkset.triples);
-        emitter.push_iri(dataset, VoidRole::Subset, &linkset.iri);
+        )?;
+        emitter.push_count(&linkset.iri, VoidRole::Triples, linkset.triples)?;
+        emitter.push_iri(dataset, VoidRole::Subset, &linkset.iri)?;
     }
 
-    let dataset = emitter
-        .builder
-        .freeze()
-        .map_err(|error| ProjectionError::integrity(format!("freeze VoID dataset: {error}")))?;
+    let dataset = emitter.builder.freeze().map_err(ProjectionError::from)?;
     let output_records = dataset
         .quads()
         .count()
@@ -585,22 +582,43 @@ struct VoidEmitter<'a> {
 }
 
 impl VoidEmitter<'_> {
-    fn push_type(&mut self, subject: &str, class: VoidRole) {
+    fn push_type(&mut self, subject: &str, class: VoidRole) -> Result<(), ProjectionError> {
         let class = self.config.vocabulary().iri(class).to_owned();
         let predicate = self.config.vocabulary().iri(VoidRole::RdfType).to_owned();
-        self.push_iri_predicate(subject, &predicate, &class);
+        self.push_iri_predicate(subject, &predicate, &class)?;
+
+        Ok(())
     }
 
-    fn push_iri(&mut self, subject: &str, predicate: VoidRole, object: &str) {
+    fn push_iri(
+        &mut self,
+        subject: &str,
+        predicate: VoidRole,
+        object: &str,
+    ) -> Result<(), ProjectionError> {
         let predicate = self.config.vocabulary().iri(predicate).to_owned();
-        self.push_iri_predicate(subject, &predicate, object);
+        self.push_iri_predicate(subject, &predicate, object)?;
+
+        Ok(())
     }
 
-    fn push_iri_predicate(&mut self, subject: &str, predicate: &str, object: &str) {
-        push_iri_triple(&mut self.builder, subject, predicate, object);
+    fn push_iri_predicate(
+        &mut self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+    ) -> Result<(), ProjectionError> {
+        push_iri_triple(&mut self.builder, subject, predicate, object)?;
+
+        Ok(())
     }
 
-    fn push_count(&mut self, subject: &str, predicate: VoidRole, value: u64) {
+    fn push_count(
+        &mut self,
+        subject: &str,
+        predicate: VoidRole,
+        value: u64,
+    ) -> Result<(), ProjectionError> {
         let datatype = self
             .config
             .vocabulary()
@@ -610,7 +628,9 @@ impl VoidEmitter<'_> {
             subject,
             self.config.vocabulary().iri(predicate),
             RdfLiteral::typed(value.to_string(), datatype),
-        );
+        )?;
+
+        Ok(())
     }
 
     fn push_term(
@@ -636,17 +656,22 @@ impl VoidEmitter<'_> {
             language: language.clone(),
             direction: direction.map(Into::into),
         };
-        self.push_literal(subject, self.config.vocabulary().iri(predicate), literal);
+        self.push_literal(subject, self.config.vocabulary().iri(predicate), literal)?;
         Ok(())
     }
 
-    fn push_static(&mut self, subject: &str, predicate: &str, value: &VoidStaticValue) {
+    fn push_static(
+        &mut self,
+        subject: &str,
+        predicate: &str,
+        value: &VoidStaticValue,
+    ) -> Result<(), ProjectionError> {
         match value {
             VoidStaticValue::Iri { value } => {
-                self.push_iri_predicate(subject, predicate, value);
+                self.push_iri_predicate(subject, predicate, value)?;
             }
             VoidStaticValue::TypedLiteral { lexical, datatype } => {
-                self.push_literal(subject, predicate, RdfLiteral::typed(lexical, datatype));
+                self.push_literal(subject, predicate, RdfLiteral::typed(lexical, datatype))?;
             }
             VoidStaticValue::LanguageLiteral {
                 lexical,
@@ -661,8 +686,10 @@ impl VoidEmitter<'_> {
                     language: Some(language.clone()),
                     direction: direction.map(Into::into),
                 },
-            ),
+            )?,
         }
+
+        Ok(())
     }
 
     fn push_partition_counts(
@@ -670,20 +697,27 @@ impl VoidEmitter<'_> {
         partition: &str,
         aggregate: &Aggregate,
     ) -> Result<(), ProjectionError> {
-        self.push_count(partition, VoidRole::Triples, aggregate.triples);
+        self.push_count(partition, VoidRole::Triples, aggregate.triples)?;
         let subjects = count_u64(aggregate.subjects.len(), "VoID partition subject")?;
         let objects = count_u64(aggregate.objects.len(), "VoID partition object")?;
-        self.push_count(partition, VoidRole::Entities, subjects);
-        self.push_count(partition, VoidRole::DistinctSubjects, subjects);
-        self.push_count(partition, VoidRole::DistinctObjects, objects);
+        self.push_count(partition, VoidRole::Entities, subjects)?;
+        self.push_count(partition, VoidRole::DistinctSubjects, subjects)?;
+        self.push_count(partition, VoidRole::DistinctObjects, objects)?;
         Ok(())
     }
 
-    fn push_literal(&mut self, subject: &str, predicate: &str, literal: RdfLiteral) {
-        let subject = self.builder.intern_iri(subject);
-        let predicate = self.builder.intern_iri(predicate);
-        let object = self.builder.intern_literal(literal);
-        self.builder.push_quad(subject, predicate, object, None);
+    fn push_literal(
+        &mut self,
+        subject: &str,
+        predicate: &str,
+        literal: RdfLiteral,
+    ) -> Result<(), ProjectionError> {
+        let subject = self.builder.intern_iri(subject)?;
+        let predicate = self.builder.intern_iri(predicate)?;
+        let object = self.builder.intern_literal(literal)?;
+        self.builder.push_quad(subject, predicate, object, None)?;
+
+        Ok(())
     }
 }
 

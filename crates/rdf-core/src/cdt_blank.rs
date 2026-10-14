@@ -94,7 +94,7 @@ use purrdf_iri::terminals;
 use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use purrdf_lex::terminals::expand_uchars_with_memory;
 
-use purrdf_cdt::{CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, parse_cdt_by_iri};
+use purrdf_cdt::{CDT_LIST, CDT_MAP, CdtContents, CdtDatatype, CdtError, CdtTerm, CdtValue};
 
 use crate::blank_label::{
     LabelAlphabet, decode_blank_label, decode_blank_label_with_memory,
@@ -190,6 +190,8 @@ impl BlankBinding {
 /// A refusal from this module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CdtBlankError {
+    /// Logical capacity or physical storage refusal at the original term producer.
+    Storage(StorageError),
     /// The lexical form is not a well-formed value of its composite datatype, or
     /// it exceeds one of the `purrdf-cdt` resource limits. The document that
     /// carried it is refused.
@@ -217,6 +219,7 @@ pub enum CdtBlankError {
 impl std::fmt::Display for CdtBlankError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::Malformed { datatype, source } => {
                 write!(f, "ill-formed <{datatype}> lexical form: {source}")
             }
@@ -232,8 +235,40 @@ impl std::fmt::Display for CdtBlankError {
 impl std::error::Error for CdtBlankError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(error) => Some(error),
             Self::Malformed { source, .. } => Some(source),
             Self::ScannerDisagreement { .. } => None,
+        }
+    }
+}
+
+purrdf_lex::variant_from!(CdtBlankError { Storage(StorageError) });
+
+impl CdtBlankError {
+    /// Retained diagnostic payload, excluding parser and scanner scratch.
+    /// # Errors
+    /// Returns physical layout overflow rather than undercounting the owner.
+    pub fn owned_bytes(&self) -> Result<usize, StorageError> {
+        match self {
+            Self::Storage(_) => Ok(0),
+            Self::Malformed { source, .. } => Ok(source.owned_bytes()),
+            Self::ScannerDisagreement { scanned, parsed } => [scanned, parsed]
+                .into_iter()
+                .try_fold(0usize, |bytes, labels| {
+                    let bytes = bytes
+                        .checked_add(
+                            labels
+                                .capacity()
+                                .checked_mul(size_of::<String>())
+                                .ok_or(StorageError::SizeOverflow)?,
+                        )
+                        .ok_or(StorageError::SizeOverflow)?;
+                    labels.iter().try_fold(bytes, |bytes, label| {
+                        bytes
+                            .checked_add(label.capacity())
+                            .ok_or(StorageError::SizeOverflow)
+                    })
+                }),
         }
     }
 }
@@ -244,6 +279,7 @@ impl From<CdtBlankError> for crate::RdfDiagnostic {
     /// module docs for why there is no opaque-literal fallback.
     fn from(err: CdtBlankError) -> Self {
         let code = match err {
+            CdtBlankError::Storage(error) => return error.into(),
             CdtBlankError::Malformed { .. } => "cdt-literal-malformed",
             CdtBlankError::ScannerDisagreement { .. } => "cdt-literal-scan-disagreement",
         };
@@ -276,20 +312,56 @@ pub fn bind_cdt_blank_labels<'a>(
     datatype: &str,
     binding: BlankBinding,
 ) -> Result<Cow<'a, str>, CdtBlankError> {
+    bind_cdt_blank_labels_with_memory(lexical, datatype, binding, &mut Memory::new(&mut Resident))
+}
+
+/// Validate and bind a document literal through the original physical admission.
+/// Grammar, embedded composite traversal and byte-scanner agreement share that
+/// account. A returned lexical form or diagnostic retains its admitted payload.
+/// # Errors
+/// Preserves malformed CDT diagnostics separately from physical storage refusal.
+pub fn bind_cdt_blank_labels_with_memory<'a, S: Admission + ?Sized>(
+    lexical: &'a str,
+    datatype: &str,
+    binding: BlankBinding,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, CdtBlankError> {
     if !is_cdt_datatype(datatype) {
         return Ok(Cow::Borrowed(lexical));
     }
-    let value = parse_composite(lexical, datatype)?;
-    let spans = scan_tokens(lexical);
-    check_scan_agrees(&spans, &value)?;
-    Ok(splice(lexical, &spans, &mut |token| match token {
-        TokenKind::Blank(label) => match binding.rebind(label) {
-            // Nothing to write: the bound spelling IS the token already there.
-            Cow::Borrowed(_) => None,
-            Cow::Owned(bound) => Some(format!("_:{bound}")),
-        },
-        TokenKind::Iri { .. } => None,
-    }))
+    let baseline = memory.admitted_bytes();
+    let result: Result<_, CdtBlankError> = (|| {
+        let (value, bytes) = parse_composite(lexical, datatype, memory)?;
+        let spans = scan_tokens_with_memory(lexical, memory)?;
+        check_scan_agrees(&spans, &value, memory)?;
+        drop(value);
+        memory.release_bytes(bytes)?;
+        let output = bind_spans(lexical, &spans, &mut |_| Ok(binding), memory)?;
+        release_spans(spans, memory)?;
+        Ok(output)
+    })();
+    // Every local is now destroyed. Only the returned lexical/diagnostic payload
+    // survives; a refused cleanup must never replace the original first error.
+    let retained = match &result {
+        Ok(Cow::Owned(text)) => Ok(text.capacity()),
+        Ok(Cow::Borrowed(_)) => Ok(0),
+        Err(error) => error.owned_bytes(),
+    };
+    let cleanup = retained.and_then(|retained| {
+        let live = baseline
+            .checked_add(retained)
+            .ok_or(StorageError::SizeOverflow)?;
+        memory.release_bytes(
+            memory
+                .admitted_bytes()
+                .checked_sub(live)
+                .ok_or(StorageError::SizeOverflow)?,
+        )
+    });
+    if result.is_ok() {
+        cleanup?;
+    }
+    result
 }
 
 /// [`bind_cdt_blank_labels`] without the grammar check: bind the labels the byte
@@ -300,11 +372,11 @@ pub fn bind_cdt_blank_labels<'a>(
 ///
 /// It exists for the OWNED-model bridge
 /// ([`intern_owned_term_scoped`](crate::ir::builder::RdfDatasetBuilder::intern_owned_term_scoped)),
-/// which is infallible by contract and re-materializes datasets that a document
-/// ingress already validated. Binding must still happen there — a merge assigns
+/// which re-materializes datasets that a document ingress already validated and
+/// reports storage refusal separately. Binding must still happen there — a merge assigns
 /// each source a fresh [`BlankScope`], and an embedded label left unbound would
 /// name a node the merged dataset does not have — but there is no document to
-/// refuse and no diagnostic channel to refuse it through.
+/// refuse and no new lexical validation verdict to produce.
 ///
 /// Every path that reads a DOCUMENT uses
 /// [`intern_literal_bound`](crate::ir::builder::RdfDatasetBuilder::intern_literal_bound),
@@ -339,15 +411,37 @@ pub fn bind_cdt_blank_labels_unchecked_with_memory<'a, S: Admission + ?Sized>(
     binding: BlankBinding,
     memory: &mut Memory<'_, S>,
 ) -> Result<Cow<'a, str>, StorageError> {
+    bind_cdt_blank_labels_lazy_with_memory(lexical, datatype, &mut |_| Ok(binding), memory)
+}
+
+/// Obtain an independent document binding only when the original scanner visits
+/// an actual blank token, including blanks in embedded composite literals.
+pub(crate) fn bind_cdt_blank_labels_lazy_with_memory<'a, S: Admission + ?Sized>(
+    lexical: &'a str,
+    datatype: &str,
+    binding: &mut impl FnMut(&mut Memory<'_, S>) -> Result<BlankBinding, StorageError>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, StorageError> {
     if !is_cdt_datatype(datatype) {
         return Ok(Cow::Borrowed(lexical));
     }
     let spans = scan_tokens_with_memory(lexical, memory)?;
-    let output = splice_with_memory(
+    let output = bind_spans(lexical, &spans, binding, memory)?;
+    release_spans(spans, memory)?;
+    Ok(output)
+}
+
+fn bind_spans<'a, S: Admission + ?Sized>(
+    lexical: &'a str,
+    spans: &[TokenSpan],
+    binding: &mut impl FnMut(&mut Memory<'_, S>) -> Result<BlankBinding, StorageError>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, StorageError> {
+    splice_with_memory(
         lexical,
-        &spans,
+        spans,
         &mut |token, memory| match token {
-            TokenKind::Blank(label) => match binding.rebind_with_memory(label, memory)? {
+            TokenKind::Blank(label) => match binding(memory)?.rebind_with_memory(label, memory)? {
                 Cow::Borrowed(_) => Ok(None),
                 Cow::Owned(bound) => {
                     let replacement = memory.format(&format_args!("_:{bound}"))?;
@@ -358,9 +452,7 @@ pub fn bind_cdt_blank_labels_unchecked_with_memory<'a, S: Admission + ?Sized>(
             TokenKind::Iri { .. } => Ok(None),
         },
         memory,
-    )?;
-    release_spans(spans, memory)?;
-    Ok(output)
+    )
 }
 
 fn release_spans<S: Admission + ?Sized>(
@@ -530,21 +622,52 @@ pub fn cdt_embedded_blanks_with_memory<S: Admission + ?Sized>(
 
 /// Parse `lexical` as a value of the composite `datatype`, mapping every
 /// refusal — grammar and resource limit alike — onto [`CdtBlankError`].
-fn parse_composite(lexical: &str, datatype: &str) -> Result<CdtValue, CdtBlankError> {
+fn parse_composite<S: Admission + ?Sized>(
+    lexical: &str,
+    datatype: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<(CdtValue, usize), CdtBlankError> {
     let iri = if datatype == CDT_LIST {
         CDT_LIST
     } else {
         CDT_MAP
     };
-    match parse_cdt_by_iri(lexical, datatype) {
-        Ok(Some(value)) => Ok(value),
-        Ok(None) => unreachable!("is_cdt_datatype admitted a datatype parse_cdt_by_iri does not"),
-        Err(source) => Err(CdtBlankError::Malformed {
+    let datatype = if datatype == CDT_LIST {
+        CdtDatatype::List
+    } else {
+        CdtDatatype::Map
+    };
+    let mut storage = GrammarStorage { memory, live: 0 };
+    match purrdf_cdt::parse::try_parse_cdt(lexical, datatype, &mut storage) {
+        Ok(value) => Ok(value),
+        Err(purrdf_cdt::memory::ReadError::Storage(error)) => Err(error.into()),
+        Err(purrdf_cdt::memory::ReadError::Lexical(source)) => Err(CdtBlankError::Malformed {
             datatype: iri,
             source,
         }),
     }
 }
+
+/// The grammar's native boxes and buffers are charged before allocation to the
+/// surrounding operation, without replacing its already-live parent total.
+struct GrammarStorage<'m, 'a, S: Admission + ?Sized> {
+    memory: &'m mut Memory<'a, S>,
+    live: usize,
+}
+
+impl<S: Admission + ?Sized> Admission for GrammarStorage<'_, '_, S> {
+    fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+        if next >= self.live {
+            self.memory.add_bytes(next - self.live)?;
+        } else {
+            self.memory.release_bytes(self.live - next)?;
+        }
+        self.live = next;
+        Ok(())
+    }
+}
+
+impl<S: Admission + ?Sized> purrdf_cdt::memory::Storage for GrammarStorage<'_, '_, S> {}
 
 /// A rewritable term token located inside a composite lexical form.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -573,32 +696,6 @@ struct TokenSpan {
     end: usize,
     /// What the token is.
     kind: TokenKind,
-}
-
-/// Replace the located tokens for which `rewrite` returns a replacement,
-/// splicing into a fresh string and leaving every other byte alone.
-fn splice<'a>(
-    lexical: &'a str,
-    spans: &[TokenSpan],
-    rewrite: &mut dyn FnMut(&TokenKind) -> Option<String>,
-) -> Cow<'a, str> {
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    splice_with_memory(
-        lexical,
-        spans,
-        &mut |token, memory| {
-            let replacement = rewrite(token);
-            // Resident callbacks own their storage before entering this scanner.
-            // Bounded callbacks below allocate through the original memory instead.
-            if let Some(text) = &replacement {
-                memory.add_bytes(text.capacity())?;
-            }
-            Ok(replacement)
-        },
-        &mut memory,
-    )
-    .expect("resident composite splice allocation failed")
 }
 
 fn splice_with_memory<'a, S: Admission + ?Sized>(
@@ -633,23 +730,36 @@ fn splice_with_memory<'a, S: Admission + ?Sized>(
 
 /// Cross-check the byte scanner against the SEP-0009 grammar: both must report
 /// the same blank-node labels.
-fn check_scan_agrees(spans: &[TokenSpan], value: &CdtValue) -> Result<(), CdtBlankError> {
-    let parsed = grammar_blank_labels(value)?;
-    let scanned: Vec<String> = spans
-        .iter()
-        .filter_map(|span| match &span.kind {
-            TokenKind::Blank(label) => Some(label.clone()),
-            TokenKind::Iri { .. } => None,
-        })
-        .collect();
+fn check_scan_agrees<S: Admission + ?Sized>(
+    spans: &[TokenSpan],
+    value: &CdtValue,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), CdtBlankError> {
+    let parsed = grammar_blank_labels(value, memory)?;
+    let mut scanned = Vec::new();
+    for span in spans {
+        if let TokenKind::Blank(label) = &span.kind {
+            let label = memory.string(label)?;
+            memory.push(&mut scanned, label)?;
+        }
+    }
     // Occurrence ORDER differs legitimately: the grammar walk visits a map's
     // entries in the parsed value's key order while the scanner walks raw bytes.
     // Identity only depends on the SET of labels, so compare as multisets.
-    let mut a = scanned.clone();
-    let mut b = parsed.clone();
+    let mut a = memory.collect(scanned.iter().map(String::as_str))?;
+    let mut b = memory.collect(parsed.iter().map(String::as_str))?;
     a.sort_unstable();
     b.sort_unstable();
-    if a == b {
+    let agrees = a == b;
+    memory.release_vec(a)?;
+    memory.release_vec(b)?;
+    if agrees {
+        for mut labels in [scanned, parsed] {
+            while let Some(label) = labels.pop() {
+                memory.release_string(label)?;
+            }
+            memory.release_vec(labels)?;
+        }
         return Ok(());
     }
     Err(CdtBlankError::ScannerDisagreement { scanned, parsed })
@@ -667,17 +777,25 @@ fn check_scan_agrees(spans: &[TokenSpan], value: &CdtValue) -> Result<(), CdtBla
 /// one refuses the document exactly as a malformed outer form does — its blank
 /// nodes are in the same scope, so admitting it would leave that scope undefined
 /// just the same.
-fn grammar_blank_labels(root: &CdtValue) -> Result<Vec<String>, CdtBlankError> {
+fn grammar_blank_labels<S: Admission + ?Sized>(
+    root: &CdtValue,
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<String>, CdtBlankError> {
     let mut out = Vec::new();
     // Composite-typed literals found embedded as strings, still to be parsed.
     // Kept as a separate worklist rather than pushed onto the borrow stack so no
     // frame ever borrows from a value another frame owns.
     let mut embedded: Vec<(String, String)> = Vec::new();
-    walk_value(root, &mut out, &mut embedded);
+    walk_value(root, &mut out, &mut embedded, memory)?;
     while let Some((lexical, datatype)) = embedded.pop() {
-        let value = parse_composite(&lexical, &datatype)?;
-        walk_value(&value, &mut out, &mut embedded);
+        let (value, bytes) = parse_composite(&lexical, &datatype, memory)?;
+        walk_value(&value, &mut out, &mut embedded, memory)?;
+        drop(value);
+        memory.release_bytes(bytes)?;
+        memory.release_string(lexical)?;
+        memory.release_string(datatype)?;
     }
+    memory.release_vec(embedded)?;
     Ok(out)
 }
 
@@ -687,34 +805,58 @@ fn grammar_blank_labels(root: &CdtValue) -> Result<Vec<String>, CdtBlankError> {
 /// The value is a finite owning tree — every term is visited once and pushes only
 /// the terms it owns — so the walk terminates on any value, whatever its depth and
 /// however it was built.
-fn walk_value(value: &CdtValue, out: &mut Vec<String>, embedded: &mut Vec<(String, String)>) {
-    let mut stack: Vec<&CdtTerm> = Vec::new();
-    push_children(&mut stack, value);
+fn walk_value<S: Admission + ?Sized>(
+    value: &CdtValue,
+    out: &mut Vec<String>,
+    embedded: &mut Vec<(String, String)>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    let mut stack = purrdf_lex::walk::WorkList::<&CdtTerm, 16>::new();
+    push_children(&mut stack, value, memory)?;
     while let Some(term) = stack.pop() {
         match term {
-            CdtTerm::Blank(label) => out.push(label.clone()),
-            CdtTerm::Composite(inner) => push_children(&mut stack, inner),
+            CdtTerm::Blank(label) => {
+                let label = memory.string(label)?;
+                memory.push(out, label)?;
+            }
+            CdtTerm::Composite(inner) => push_children(&mut stack, inner, memory)?,
             CdtTerm::TripleTerm(triple) => {
-                stack.push(&triple.subject);
-                stack.push(&triple.predicate);
-                stack.push(&triple.object);
+                stack.try_push_admitted(&triple.subject, memory)?;
+                stack.try_push_admitted(&triple.predicate, memory)?;
+                stack.try_push_admitted(&triple.object, memory)?;
             }
             CdtTerm::Literal(lit) if is_cdt_datatype(&lit.datatype) => {
-                embedded.push((lit.lexical.clone(), lit.datatype.clone()));
+                let lexical = memory.string(&lit.lexical)?;
+                let datatype = memory.string(&lit.datatype)?;
+                memory.push(embedded, (lexical, datatype))?;
             }
             CdtTerm::Literal(_) | CdtTerm::Iri(_) | CdtTerm::Null => {}
         }
     }
+    stack.release_admitted(memory)
 }
 
 /// Push a composite's element terms onto the walk stack. A `cdt:Map` key is
 /// never a blank node (`CdtKey` makes that unrepresentable), so only values are
 /// visited.
-fn push_children<'a>(stack: &mut Vec<&'a CdtTerm>, value: &'a CdtValue) {
+fn push_children<'a, S: Admission + ?Sized>(
+    stack: &mut purrdf_lex::walk::WorkList<&'a CdtTerm, 16>,
+    value: &'a CdtValue,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
     match value.contents() {
-        CdtContents::List(items) => stack.extend(items.iter()),
-        CdtContents::Map(entries) => stack.extend(entries.iter().map(|entry| &entry.value)),
+        CdtContents::List(items) => {
+            for item in items {
+                stack.try_push_admitted(item, memory)?;
+            }
+        }
+        CdtContents::Map(entries) => {
+            for entry in entries {
+                stack.try_push_admitted(&entry.value, memory)?;
+            }
+        }
     }
+    Ok(())
 }
 
 // ── The byte scanner ────────────────────────────────────────────────────────
@@ -756,11 +898,6 @@ impl Region {
 /// rewritten by splicing directly into the ROOT bytes: nothing is ever
 /// unescaped-then-re-escaped, so a nested literal's escape spellings survive a
 /// rewrite of its labels byte for byte.
-fn scan_tokens(lexical: &str) -> Vec<TokenSpan> {
-    scan_tokens_with_memory(lexical, &mut Memory::new(&mut Resident))
-        .expect("resident composite scanner allocation failed")
-}
-
 fn scan_tokens_with_memory<S: Admission + ?Sized>(
     lexical: &str,
     memory: &mut Memory<'_, S>,

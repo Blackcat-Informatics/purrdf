@@ -307,10 +307,10 @@ impl Dataset {
 
     /// Wrap a freshly-frozen `Arc<RdfDataset>` (e.g. straight off a builder),
     /// unwrapping the unique allocation into an owned dataset.
-    pub fn from_frozen(ds: std::sync::Arc<RdfDataset>) -> Self {
-        Self {
-            ds: std::sync::Arc::try_unwrap(ds).unwrap_or_else(|arc| owned_clone_of(&arc)),
-        }
+    pub fn from_frozen(ds: std::sync::Arc<RdfDataset>) -> Result<Self, SliceError> {
+        Ok(Self {
+            ds: std::sync::Arc::try_unwrap(ds).map_or_else(|arc| owned_clone_of(&arc), Ok)?,
+        })
     }
 
     /// The underlying frozen dataset.
@@ -372,10 +372,10 @@ impl Dataset {
         context: &str,
     ) -> Result<Self, SliceError> {
         let ds = parse_dataset(bytes, media_type, base)
-            .map_err(|e| SliceError::Parse(format!("syntax error in {context}: {e}")))?;
+            .map_err(|error| SliceError::rdf(&error, &format!("syntax error in {context}")))?;
         // `parse_dataset` returns an `Arc<RdfDataset>`; unwrap the fresh, uniquely-owned
         // allocation into an owned dataset (no clone — it is the sole reference).
-        let ds = std::sync::Arc::try_unwrap(ds).unwrap_or_else(|arc| owned_clone_of(&arc));
+        let ds = std::sync::Arc::try_unwrap(ds).map_or_else(|arc| owned_clone_of(&arc), Ok)?;
         Ok(Self { ds })
     }
 
@@ -538,11 +538,11 @@ impl Dataset {
     pub fn canonical_nquads_flat(&self) -> Result<String, SliceError> {
         let mut builder = RdfDatasetBuilder::new();
         for quad in purrdf_rdf::flat_rdf_quads(&self.ds) {
-            builder.push_owned_quad(&quad);
+            builder.push_owned_quad(&quad)?;
         }
         let frozen = builder
             .freeze()
-            .map_err(|e| SliceError::Parse(format!("flatten for canonicalization: {e}")))?;
+            .map_err(|error| SliceError::rdf(&error, "flatten for canonicalization"))?;
         Ok(purrdf_rdf::canonicalize(&frozen).nquads)
     }
 
@@ -552,12 +552,12 @@ impl Dataset {
     pub fn from_owned_quads(quads: &[RdfQuad]) -> Result<Self, SliceError> {
         let mut builder = RdfDatasetBuilder::new();
         for quad in quads {
-            builder.push_owned_quad(quad);
+            builder.push_owned_quad(quad)?;
         }
         let frozen = builder
             .freeze()
-            .map_err(|e| SliceError::Parse(format!("dataset freeze failed: {e}")))?;
-        Ok(Self::from_frozen(frozen))
+            .map_err(|error| SliceError::rdf(&error, "dataset freeze failed"))?;
+        Self::from_frozen(frozen)
     }
 }
 
@@ -833,11 +833,13 @@ impl GraphView<'_> {
 /// Re-freeze a shared dataset into an owned one (only used on the rare path where the
 /// parser's `Arc` is somehow shared; in practice `parse_dataset` returns a fresh,
 /// uniquely-owned `Arc` so `try_unwrap` succeeds and this never runs).
-fn owned_clone_of(ds: &RdfDataset) -> RdfDataset {
+fn owned_clone_of(ds: &RdfDataset) -> Result<RdfDataset, SliceError> {
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(ds);
-    std::sync::Arc::try_unwrap(builder.freeze().expect("re-freeze owned dataset"))
-        .unwrap_or_else(|arc| owned_clone_of(&arc))
+    builder.push_dataset(ds)?;
+    let frozen = builder
+        .freeze()
+        .map_err(|error| SliceError::rdf(&error, "re-freeze owned dataset"))?;
+    std::sync::Arc::try_unwrap(frozen).map_or_else(|arc| owned_clone_of(&arc), Ok)
 }
 
 // ── Multi-file scoped accumulator ───────────────────────────────────────────────
@@ -871,8 +873,8 @@ impl DatasetAccumulator {
         context: &str,
     ) -> Result<(), SliceError> {
         let parsed = parse_dataset(bytes, media_type, base)
-            .map_err(|e| SliceError::Parse(format!("syntax error in {context}: {e}")))?;
-        self.builder.push_dataset(&parsed);
+            .map_err(|error| SliceError::rdf(&error, &format!("syntax error in {context}")))?;
+        self.builder.push_dataset(&parsed)?;
         Ok(())
     }
 
@@ -899,8 +901,9 @@ impl DatasetAccumulator {
     }
 
     /// Merge an already-parsed [`Dataset`] in under a fresh blank scope.
-    pub fn add_dataset(&mut self, dataset: &Dataset) {
-        self.builder.push_dataset(dataset.inner());
+    pub fn add_dataset(&mut self, dataset: &Dataset) -> Result<(), SliceError> {
+        self.builder.push_dataset(dataset.inner())?;
+        Ok(())
     }
 
     /// Freeze the accumulated quads into a queryable [`Dataset`].
@@ -908,8 +911,8 @@ impl DatasetAccumulator {
         let ds = self
             .builder
             .freeze()
-            .map_err(|e| SliceError::Parse(format!("dataset freeze failed: {e}")))?;
-        let ds = std::sync::Arc::try_unwrap(ds).unwrap_or_else(|arc| owned_clone_of(&arc));
+            .map_err(|error| SliceError::rdf(&error, "dataset freeze failed"))?;
+        let ds = std::sync::Arc::try_unwrap(ds).map_or_else(|arc| owned_clone_of(&arc), Ok)?;
         Ok(Dataset::from_dataset(ds))
     }
 }
@@ -1640,9 +1643,9 @@ mod term_walk_tests {
             );
             nested += usize::from(budget < 7);
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let ds = builder.freeze().expect("a generated term freezes");
             let object = ds.quads().next().expect("one quad").o;
             assert_eq!(

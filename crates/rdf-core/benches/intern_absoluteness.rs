@@ -71,7 +71,7 @@ fn bench_distinct_iris_all_misses(c: &mut Bench) {
             |iris| {
                 let mut builder = RdfDatasetBuilder::new();
                 for iri in &iris {
-                    black_box(builder.intern_iri(black_box(iri)));
+                    black_box(builder.intern_iri(black_box(iri)).unwrap());
                 }
                 black_box(builder)
             },
@@ -92,7 +92,7 @@ fn bench_repeated_iri_all_hits(c: &mut Bench) {
             |iri| {
                 let mut builder = RdfDatasetBuilder::new();
                 for _ in 0..N {
-                    black_box(builder.intern_iri(black_box(&iri)));
+                    black_box(builder.intern_iri(black_box(&iri)).unwrap());
                 }
                 black_box(builder)
             },
@@ -116,9 +116,11 @@ fn bench_realistic_mixed_vocabulary(c: &mut Bench) {
             |(subjects, predicates)| {
                 let mut builder = RdfDatasetBuilder::new();
                 for (i, subject) in subjects.iter().enumerate() {
-                    let s = builder.intern_iri(black_box(subject));
-                    let p = builder.intern_iri(black_box(&predicates[i % predicates.len()]));
-                    builder.push_quad(s, p, s, None);
+                    let s = builder.intern_iri(black_box(subject)).unwrap();
+                    let p = builder
+                        .intern_iri(black_box(&predicates[i % predicates.len()]))
+                        .unwrap();
+                    builder.push_quad(s, p, s, None).unwrap();
                 }
                 black_box(builder)
             },

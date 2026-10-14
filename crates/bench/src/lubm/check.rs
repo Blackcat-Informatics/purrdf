@@ -386,7 +386,9 @@ pub fn project(bytes: &[u8], ontology: &str) -> Result<Vec<u8>, String> {
             .as_ref()
             .map(|term| project_term(term, ontology))
             .transpose()?;
-        builder.push_owned_quad(&quad);
+        builder
+            .push_owned_quad(&quad)
+            .map_err(|error| error.to_string())?;
     }
     let projected = builder.freeze().map_err(|e| e.to_string())?;
     purrdf_rdf::serialize_dataset_to_format(projected.as_ref(), NativeRdfFormat::NQuads, None)

@@ -7,7 +7,7 @@ use super::table::table_fragment_iri;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::collections::{ListVocab, build_rdf_list};
+use purrdf_core::collections::{ListVocab, try_build_rdf_list};
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_iri::percent;
 use purrdf_lex::json::{Object, Value};
@@ -26,10 +26,7 @@ pub(crate) fn table_group_to_rdf(
         blank_counter: 0,
     };
     converter.convert(group)?;
-    converter
-        .builder
-        .freeze()
-        .map_err(|error| ProjectionError::integrity(format!("invalid CSVW RDF output: {error}")))
+    converter.builder.freeze().map_err(ProjectionError::from)
 }
 
 struct Converter<'a> {
@@ -43,14 +40,14 @@ impl Converter<'_> {
         let standard = self.config.mode() == CsvwMode::Standard;
         let group_node = if standard {
             Some(match &group.rdf_id {
-                Some(id) => self.builder.intern_iri(id),
-                None => self.blank("group"),
+                Some(id) => self.builder.intern_iri(id)?,
+                None => self.blank("group")?,
             })
         } else {
             None
         };
         if let Some(group_node) = group_node {
-            self.type_quad(group_node, "TableGroup");
+            self.type_quad(group_node, "TableGroup")?;
             self.emit_annotations(group_node, &group.annotations)?;
         }
         for (table_index, table) in group.tables.iter().enumerate() {
@@ -59,23 +56,23 @@ impl Converter<'_> {
             }
             let table_node = if standard {
                 Some(match &table.id {
-                    Some(id) => self.builder.intern_iri(id),
-                    None => self.blank(&format!("table-{table_index}")),
+                    Some(id) => self.builder.intern_iri(id)?,
+                    None => self.blank(&format!("table-{table_index}"))?,
                 })
             } else {
                 None
             };
             if let (Some(group_node), Some(table_node)) = (group_node, table_node) {
-                let table_predicate = self.csvw("table");
-                self.quad(group_node, table_predicate, table_node);
-                self.type_quad(table_node, "Table");
-                let url = self.builder.intern_iri(&table.url);
-                let url_predicate = self.csvw("url");
-                self.quad(table_node, url_predicate, url);
+                let table_predicate = self.csvw("table")?;
+                self.quad(group_node, table_predicate, table_node)?;
+                self.type_quad(table_node, "Table")?;
+                let url = self.builder.intern_iri(&table.url)?;
+                let url_predicate = self.csvw("url")?;
+                self.quad(table_node, url_predicate, url)?;
                 for comment in &table.comments {
-                    let literal = self.simple_literal(comment);
-                    let comment_predicate = self.rdfs("comment");
-                    self.quad(table_node, comment_predicate, literal);
+                    let literal = self.simple_literal(comment)?;
+                    let comment_predicate = self.rdfs("comment")?;
+                    self.quad(table_node, comment_predicate, literal)?;
                 }
                 self.emit_annotations(table_node, &table.annotations)?;
             }
@@ -94,28 +91,30 @@ impl Converter<'_> {
         table_index: usize,
     ) -> Result<(), ProjectionError> {
         let standard = self.config.mode() == CsvwMode::Standard;
-        let row_node = standard.then(|| self.blank(&format!("row-{table_index}-{}", row.number)));
+        let row_node = standard
+            .then(|| self.blank(&format!("row-{table_index}-{}", row.number)))
+            .transpose()?;
         if let (Some(table_node), Some(row_node)) = (table_node, row_node) {
-            let row_predicate = self.csvw("row");
-            self.quad(table_node, row_predicate, row_node);
-            self.type_quad(row_node, "Row");
+            let row_predicate = self.csvw("row")?;
+            self.quad(table_node, row_predicate, row_node)?;
+            self.type_quad(row_node, "Row")?;
             let rownum = self.typed_literal(
                 &row.number.to_string(),
                 self.config.vocabulary().xsd("integer"),
-            );
-            let rownum_predicate = self.csvw("rownum");
-            self.quad(row_node, rownum_predicate, rownum);
-            let url = self.builder.intern_iri(&row.url);
-            let url_predicate = self.csvw("url");
-            self.quad(row_node, url_predicate, url);
+            )?;
+            let rownum_predicate = self.csvw("rownum")?;
+            self.quad(row_node, rownum_predicate, rownum)?;
+            let url = self.builder.intern_iri(&row.url)?;
+            let url_predicate = self.csvw("url")?;
+            self.quad(row_node, url_predicate, url)?;
             for title in &row.titles {
-                let title = self.simple_literal(title);
-                let title_predicate = self.csvw("title");
-                self.quad(row_node, title_predicate, title);
+                let title = self.simple_literal(title)?;
+                let title_predicate = self.csvw("title")?;
+                self.quad(row_node, title_predicate, title)?;
             }
         }
         let variables = row_variables(table, row);
-        let default_subject = self.blank(&format!("subject-{table_index}-{}", row.number));
+        let default_subject = self.blank(&format!("subject-{table_index}-{}", row.number))?;
         let mut described = BTreeSet::new();
         for (column, cell) in table.schema.columns.iter().zip(&row.cells) {
             if column.suppress_output {
@@ -131,29 +130,29 @@ impl Converter<'_> {
             let subject = match &column.inherited.about_url {
                 Some(template) => {
                     let iri = expand_url(template, &cell_variables, &table.url, self.config)?;
-                    self.builder.intern_iri(&iri)
+                    self.builder.intern_iri(&iri)?
                 }
                 None => default_subject,
             };
             if let Some(row_node) = row_node
                 && described.insert(subject)
             {
-                let describes_predicate = self.csvw("describes");
-                self.quad(row_node, describes_predicate, subject);
+                let describes_predicate = self.csvw("describes")?;
+                self.quad(row_node, describes_predicate, subject)?;
             }
             let predicate_iri = match &column.inherited.property_url {
                 Some(template) => expand_url(template, &cell_variables, &table.url, self.config)?,
                 None => table_fragment_iri(&table.url, &column.name, "CSVW")?,
             };
-            let predicate = self.builder.intern_iri(&predicate_iri);
+            let predicate = self.builder.intern_iri(&predicate_iri)?;
             if cell.is_null && !(column.virtual_column && column.inherited.value_url.is_some()) {
                 continue;
             }
             if let Some(template) = &column.inherited.value_url {
                 if cell.values.is_empty() {
                     let value = expand_url(template, &cell_variables, &table.url, self.config)?;
-                    let object = self.builder.intern_iri(&value);
-                    self.quad(subject, predicate, object);
+                    let object = self.builder.intern_iri(&value)?;
+                    self.quad(subject, predicate, object)?;
                 } else {
                     let mut component_variables = cell_variables.clone();
                     for component in &cell.values {
@@ -166,47 +165,53 @@ impl Converter<'_> {
                         component_variable.clone_from(&component.source);
                         let value =
                             expand_url(template, &component_variables, &table.url, self.config)?;
-                        let object = self.builder.intern_iri(&value);
-                        self.quad(subject, predicate, object);
+                        let object = self.builder.intern_iri(&value)?;
+                        self.quad(subject, predicate, object)?;
                     }
                 }
             } else if column.inherited.separator.is_some() && column.inherited.ordered {
                 if !cell.values.is_empty() {
-                    let head = self.emit_list(cell, table_index, row.number, column.number);
-                    self.quad(subject, predicate, head);
+                    let head = self.emit_list(cell, table_index, row.number, column.number)?;
+                    self.quad(subject, predicate, head)?;
                 }
             } else {
                 for value in &cell.values {
-                    let object = self.value_literal(value);
-                    self.quad(subject, predicate, object);
+                    let object = self.value_literal(value)?;
+                    self.quad(subject, predicate, object)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn emit_list(&mut self, cell: &CsvwCell, table: usize, row: usize, column: usize) -> TermId {
-        let nil = self.rdf("nil");
+    fn emit_list(
+        &mut self,
+        cell: &CsvwCell,
+        table: usize,
+        row: usize,
+        column: usize,
+    ) -> Result<TermId, ProjectionError> {
+        let nil = self.rdf("nil")?;
         let vocab = ListVocab {
-            first: self.rdf("first"),
-            rest: self.rdf("rest"),
+            first: self.rdf("first")?,
+            rest: self.rdf("rest")?,
             nil,
         };
         let cells: Vec<TermId> = (0..cell.values.len())
             .map(|index| self.blank(&format!("list-{table}-{row}-{column}-{index}")))
-            .collect();
+            .collect::<Result<_, _>>()?;
         let members: Vec<TermId> = cell
             .values
             .iter()
             .map(|value| self.value_literal(value))
-            .collect();
+            .collect::<Result<_, _>>()?;
         let builder = &mut self.builder;
-        build_rdf_list(
+        Ok(try_build_rdf_list(
             members,
             &vocab,
-            |index| cells[index],
+            |index| Ok(cells[index]),
             |subject, predicate, object| builder.push_quad(subject, predicate, object, None),
-        )
+        )?)
     }
 
     fn emit_annotations(
@@ -215,10 +220,10 @@ impl Converter<'_> {
         annotations: &CsvwAnnotations,
     ) -> Result<(), ProjectionError> {
         for (property, value) in annotations {
-            let predicate = self.builder.intern_iri(property);
+            let predicate = self.builder.intern_iri(property)?;
             let objects = self.annotation_objects(value)?;
             for object in objects {
-                self.quad(subject, predicate, object);
+                self.quad(subject, predicate, object)?;
             }
         }
         Ok(())
@@ -240,14 +245,14 @@ impl Converter<'_> {
                 let node = match object.get("@id") {
                     Some(Value::String(id)) => {
                         let iri = expand_jsonld_iri(id, self.config)?;
-                        self.builder.intern_iri(&iri)
+                        self.builder.intern_iri(&iri)?
                     }
                     Some(_) => {
                         return Err(ProjectionError::integrity(
                             "CSVW annotation @id must be a string",
                         ));
                     }
-                    None => self.blank("annotation"),
+                    None => self.blank("annotation")?,
                 };
                 if let Some(types) = object.get("@type") {
                     let values: Vec<&Value> = match types {
@@ -262,9 +267,9 @@ impl Converter<'_> {
                         };
                         let object = self
                             .builder
-                            .intern_iri(&expand_jsonld_iri(value, self.config)?);
-                        let type_predicate = self.rdf("type");
-                        self.quad(node, type_predicate, object);
+                            .intern_iri(&expand_jsonld_iri(value, self.config)?)?;
+                        let type_predicate = self.rdf("type")?;
+                        self.quad(node, type_predicate, object)?;
                     }
                 }
                 // Properties in name order, whatever order a caller-built model
@@ -280,18 +285,18 @@ impl Converter<'_> {
                     } else {
                         expand_jsonld_iri(property, self.config)?
                     };
-                    let predicate = self.builder.intern_iri(&property);
+                    let predicate = self.builder.intern_iri(&property)?;
                     for object in self.annotation_objects(value)? {
-                        self.quad(node, predicate, object);
+                        self.quad(node, predicate, object)?;
                     }
                 }
                 Ok(vec![node])
             }
-            Value::String(value) => Ok(vec![self.simple_literal(value)]),
+            Value::String(value) => Ok(vec![self.simple_literal(value)?]),
             Value::Bool(value) => Ok(vec![self.typed_literal(
                 if *value { "true" } else { "false" },
                 self.config.vocabulary().xsd("boolean"),
-            )]),
+            )?]),
             Value::Number(number) => {
                 let datatype = if number.as_i64().is_some() || number.as_u64().is_some() {
                     self.config.vocabulary().xsd("integer")
@@ -301,7 +306,7 @@ impl Converter<'_> {
                 let lexical = crate::json_number::binary64_lexeme(number).map_err(|error| {
                     ProjectionError::integrity(format!("CSVW numeric annotation: {error}"))
                 })?;
-                Ok(vec![self.typed_literal(&lexical, datatype)])
+                Ok(vec![self.typed_literal(&lexical, datatype)?])
             }
             Value::Null => Ok(Vec::new()),
         }
@@ -349,10 +354,13 @@ impl Converter<'_> {
             datatype,
             language,
             direction: None,
-        }))
+        })?)
     }
 
-    fn value_literal(&mut self, value: &super::model::CsvwValue) -> TermId {
+    fn value_literal(
+        &mut self,
+        value: &super::model::CsvwValue,
+    ) -> Result<TermId, purrdf_lex::allocation::StorageError> {
         self.builder.intern_literal(RdfLiteral {
             lexical_form: value.lexical.clone(),
             datatype: value.language.is_none().then(|| value.datatype.clone()),
@@ -364,44 +372,65 @@ impl Converter<'_> {
         })
     }
 
-    fn simple_literal(&mut self, value: &str) -> TermId {
+    fn simple_literal(
+        &mut self,
+        value: &str,
+    ) -> Result<TermId, purrdf_lex::allocation::StorageError> {
         self.builder.intern_literal(RdfLiteral::simple(value))
     }
 
-    fn typed_literal(&mut self, lexical: &str, datatype: String) -> TermId {
+    fn typed_literal(
+        &mut self,
+        lexical: &str,
+        datatype: String,
+    ) -> Result<TermId, purrdf_lex::allocation::StorageError> {
         self.builder
             .intern_literal(RdfLiteral::typed(lexical, datatype))
     }
 
-    fn type_quad(&mut self, subject: TermId, csvw_type: &str) {
-        let predicate = self.rdf("type");
-        let object = self.csvw(csvw_type);
-        self.quad(subject, predicate, object);
+    fn type_quad(
+        &mut self,
+        subject: TermId,
+        csvw_type: &str,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        let predicate = self.rdf("type")?;
+        let object = self.csvw(csvw_type)?;
+        self.quad(subject, predicate, object)
     }
 
-    fn csvw(&mut self, local: &str) -> TermId {
+    fn csvw(&mut self, local: &str) -> Result<TermId, purrdf_lex::allocation::StorageError> {
         self.builder
             .intern_iri(&self.config.vocabulary().csvw(local))
     }
 
-    fn rdf(&mut self, local: &str) -> TermId {
+    fn rdf(&mut self, local: &str) -> Result<TermId, purrdf_lex::allocation::StorageError> {
         self.builder
             .intern_iri(&self.config.vocabulary().rdf(local))
     }
 
-    fn rdfs(&mut self, local: &str) -> TermId {
+    fn rdfs(&mut self, local: &str) -> Result<TermId, purrdf_lex::allocation::StorageError> {
         self.builder
             .intern_iri(&self.config.vocabulary().rdfs(local))
     }
 
-    fn blank(&mut self, role: &str) -> TermId {
+    fn blank(&mut self, role: &str) -> Result<TermId, purrdf_lex::allocation::StorageError> {
         let label = format!("csvw-{role}-{}", self.blank_counter);
-        self.blank_counter += 1;
-        self.builder.intern_blank(&label, BlankScope(0))
+        let next = self
+            .blank_counter
+            .checked_add(1)
+            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        let id = self.builder.intern_blank(&label, BlankScope(0))?;
+        self.blank_counter = next;
+        Ok(id)
     }
 
-    fn quad(&mut self, subject: TermId, predicate: TermId, object: TermId) {
-        self.builder.push_quad(subject, predicate, object, None);
+    fn quad(
+        &mut self,
+        subject: TermId,
+        predicate: TermId,
+        object: TermId,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        self.builder.push_quad(subject, predicate, object, None)
     }
 }
 

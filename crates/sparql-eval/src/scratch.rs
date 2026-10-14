@@ -1454,10 +1454,10 @@ mod tests {
 
     fn dataset_with_one_iri() -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s");
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_iri("https://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("https://example.org/s").unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b.intern_iri("https://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -1609,15 +1609,17 @@ mod tests {
         // A literal interned in the dataset resolves back to the same value space,
         // exercising the datatype-id → IRI expansion in `term_id_to_value`.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s");
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_literal(RdfLiteral {
-            lexical_form: "42".to_owned(),
-            datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
-            language: None,
-            direction: None,
-        });
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("https://example.org/s").unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "42".to_owned(),
+                datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let scratch = ScratchInterner::default();
@@ -1898,13 +1900,13 @@ mod term_walk_tests {
     /// A dataset holding `values`, each as the object of a `:s :p` quad, and their ids.
     fn dataset_of(values: &[TermValue]) -> (Arc<RdfDataset>, Vec<TermId>) {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri(&format!("{EX}s"));
-        let p = builder.intern_iri(&format!("{EX}p"));
+        let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+        let p = builder.intern_iri(&format!("{EX}p")).unwrap();
         let ids: Vec<TermId> = values
             .iter()
             .map(|value| {
-                let id = builder.intern_value(value);
-                builder.push_quad(s, p, id, None);
+                let id = builder.intern_value(value).unwrap();
+                builder.push_quad(s, p, id, None).unwrap();
                 id
             })
             .collect();

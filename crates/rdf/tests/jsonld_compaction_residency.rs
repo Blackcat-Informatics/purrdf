@@ -37,16 +37,22 @@ fn dataset(rows: usize) -> std::sync::Arc<purrdf_core::RdfDataset> {
     for i in 0..rows {
         // Several predicates under a shared namespace, so the derived context has
         // something to compact against and the carrier carries real node structure.
-        let s = b.intern_owned_term(&RdfTerm::iri(format!(
-            "https://example.org/vocabulary/subject/{i}"
-        )));
+        let s = b
+            .intern_owned_term(&RdfTerm::iri(format!(
+                "https://example.org/vocabulary/subject/{i}"
+            )))
+            .unwrap();
         for (slot, predicate) in ["title", "description", "identifier"].iter().enumerate() {
-            let p = b.intern_iri(&format!("https://example.org/vocabulary/{predicate}"));
-            let o = b.intern_literal(RdfLiteral::simple(format!(
-                "row {i} slot {slot}, padded out so the carrier is substantially larger \
+            let p = b
+                .intern_iri(&format!("https://example.org/vocabulary/{predicate}"))
+                .unwrap();
+            let o = b
+                .intern_literal(RdfLiteral::simple(format!(
+                    "row {i} slot {slot}, padded out so the carrier is substantially larger \
                  than the handful of bytes a threshold could be confused by"
-            )));
-            b.push_quad(s, p, o, None);
+                )))
+                .unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
     }
     b.freeze().expect("dataset freezes")

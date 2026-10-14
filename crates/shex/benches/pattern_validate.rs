@@ -59,13 +59,15 @@ fn shared_fixture(pattern: &str) -> Fixture {
     let schema = parse_shexc(&schema_src, None).expect("shared-pattern fixture schema parses");
 
     let mut builder = RdfDatasetBuilder::new();
-    let p_code = builder.intern_iri(&format!("{NS}code"));
+    let p_code = builder.intern_iri(&format!("{NS}code")).unwrap();
     let mut map = Vec::with_capacity(NODE_COUNT);
     for idx in 0..NODE_COUNT {
         let subject_iri = format!("{NS}widget-{idx}");
-        let subject = builder.intern_iri(&subject_iri);
-        let value = builder.intern_literal(RdfLiteral::simple(format!("W-{idx}")));
-        builder.push_quad(subject, p_code, value, None);
+        let subject = builder.intern_iri(&subject_iri).unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::simple(format!("W-{idx}")))
+            .unwrap();
+        builder.push_quad(subject, p_code, value, None).unwrap();
         map.push((
             TermValue::iri(subject_iri),
             ShapeSelector::Label(format!("{NS}Widget")),
@@ -92,13 +94,15 @@ fn distinct_fixture(count: usize) -> Fixture {
     let schema = parse_shexc(&schema_src, None).expect("distinct-pattern fixture schema parses");
 
     let mut builder = RdfDatasetBuilder::new();
-    let p_code = builder.intern_iri(&format!("{NS}code"));
+    let p_code = builder.intern_iri(&format!("{NS}code")).unwrap();
     let mut map = Vec::with_capacity(count);
     for idx in 0..count {
         let subject_iri = format!("{NS}widget-{idx}");
-        let subject = builder.intern_iri(&subject_iri);
-        let value = builder.intern_literal(RdfLiteral::simple(format!("W-{idx}-42")));
-        builder.push_quad(subject, p_code, value, None);
+        let subject = builder.intern_iri(&subject_iri).unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::simple(format!("W-{idx}-42")))
+            .unwrap();
+        builder.push_quad(subject, p_code, value, None).unwrap();
         map.push((
             TermValue::iri(subject_iri),
             ShapeSelector::Label(format!("{NS}Shape{idx}")),

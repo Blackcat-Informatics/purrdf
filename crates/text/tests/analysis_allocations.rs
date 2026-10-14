@@ -20,18 +20,28 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 #[test]
 fn bm25f_only_omits_surface_storage_without_changing_ranked_answers() {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/text");
+    let predicate = builder.intern_iri("https://example.org/text").unwrap();
     for at in 0..256 {
-        let subject = builder.intern_iri(&format!("https://example.org/document/{at}"));
-        let literal = builder.intern_literal(RdfLiteral::simple(format!(
-            "common 北京大学 document{at} substring{at} punctuation-bearing-{at} {}",
-            "searchable words with different surfaces ".repeat(4)
-        )));
-        builder.push_quad(subject, predicate, literal, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/document/{at}"))
+            .unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral::simple(format!(
+                "common 北京大学 document{at} substring{at} punctuation-bearing-{at} {}",
+                "searchable words with different surfaces ".repeat(4)
+            )))
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, literal, None)
+            .unwrap();
     }
-    let quiet = builder.intern_iri("https://example.org/quiet");
-    let punctuation = builder.intern_literal(RdfLiteral::simple("--- ... !!!"));
-    builder.push_quad(quiet, predicate, punctuation, None);
+    let quiet = builder.intern_iri("https://example.org/quiet").unwrap();
+    let punctuation = builder
+        .intern_literal(RdfLiteral::simple("--- ... !!!"))
+        .unwrap();
+    builder
+        .push_quad(quiet, predicate, punctuation, None)
+        .unwrap();
     let dataset = builder.freeze().expect("corpus");
     let config = TextIndexConfig::new(
         vec![TermValue::iri("https://example.org/text")],

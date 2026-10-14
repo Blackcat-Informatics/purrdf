@@ -32,16 +32,18 @@ const EX: &str = "http://example.org/";
 /// `<s{i}> <p> i` for `i` in `0..30`.
 fn dataset() -> std::sync::Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     for i in 0..30 {
-        let s = builder.intern_iri(&format!("{EX}s{i}"));
-        let o = builder.intern_literal(RdfLiteral {
-            lexical_form: i.to_string(),
-            datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
-            language: None,
-            direction: None,
-        });
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}s{i}")).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: i.to_string(),
+                datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("the bench dataset")
 }
@@ -49,11 +51,11 @@ fn dataset() -> std::sync::Arc<RdfDataset> {
 /// `<c{i}> <next> <c{i+1}>` for `i` in `0..10 000`: the chain the path shapes walk.
 fn path_dataset() -> std::sync::Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let next = builder.intern_iri(&format!("{EX}next"));
-    let mut from = builder.intern_iri(&format!("{EX}c0"));
+    let next = builder.intern_iri(&format!("{EX}next")).unwrap();
+    let mut from = builder.intern_iri(&format!("{EX}c0")).unwrap();
     for i in 1..=10_000 {
-        let to = builder.intern_iri(&format!("{EX}c{i}"));
-        builder.push_quad(from, next, to, None);
+        let to = builder.intern_iri(&format!("{EX}c{i}")).unwrap();
+        builder.push_quad(from, next, to, None).unwrap();
         from = to;
     }
     builder.freeze().expect("the path bench dataset")

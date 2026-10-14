@@ -34,60 +34,60 @@ struct Fixture {
 fn build_fixture() -> Fixture {
     let mut b = RdfDatasetBuilder::new();
 
-    let s1 = b.intern_iri("http://example.org/s1");
-    let p1 = b.intern_iri("http://example.org/p1");
-    let o1 = b.intern_iri("http://example.org/o1");
-    let triple1 = b.intern_triple(s1, p1, o1);
+    let s1 = b.intern_iri("http://example.org/s1").unwrap();
+    let p1 = b.intern_iri("http://example.org/p1").unwrap();
+    let o1 = b.intern_iri("http://example.org/o1").unwrap();
+    let triple1 = b.intern_triple(s1, p1, o1).unwrap();
 
     // A second, side-table-only triple term: never a base quad's S/P/O, only
     // reachable via `r3`'s reifier row — exercises the side-table closure's
     // recursive fold-in of a triple term's own components.
-    let s4 = b.intern_iri("http://example.org/s4");
-    let p4 = b.intern_iri("http://example.org/p4");
-    let o4 = b.intern_iri("http://example.org/o4");
-    let triple2 = b.intern_triple(s4, p4, o4);
+    let s4 = b.intern_iri("http://example.org/s4").unwrap();
+    let p4 = b.intern_iri("http://example.org/p4").unwrap();
+    let o4 = b.intern_iri("http://example.org/o4").unwrap();
+    let triple2 = b.intern_triple(s4, p4, o4).unwrap();
 
-    let s3 = b.intern_iri("http://example.org/s3");
-    let p3 = b.intern_iri("http://example.org/p3");
-    let s5 = b.intern_iri("http://example.org/s5");
-    let p5 = b.intern_iri("http://example.org/p5");
-    let o5 = b.intern_iri("http://example.org/o5");
-    let g1 = b.intern_iri("http://example.org/g1");
-    let g2 = b.intern_iri("http://example.org/g2");
+    let s3 = b.intern_iri("http://example.org/s3").unwrap();
+    let p3 = b.intern_iri("http://example.org/p3").unwrap();
+    let s5 = b.intern_iri("http://example.org/s5").unwrap();
+    let p5 = b.intern_iri("http://example.org/p5").unwrap();
+    let o5 = b.intern_iri("http://example.org/o5").unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    let g2 = b.intern_iri("http://example.org/g2").unwrap();
 
     // -- Base quads -----------------------------------------------------------
     // `triple1` also appears as a base quad's OBJECT (a quoted-triple use, not
     // side-table-only); `g2` owns a base quad (so its `named_graphs` membership
     // is NOT purely a side-table artifact, unlike `g1` below).
-    b.push_quad(s3, p3, triple1, None);
-    b.push_quad(s5, p5, o5, Some(g2));
+    b.push_quad(s3, p3, triple1, None).unwrap();
+    b.push_quad(s5, p5, o5, Some(g2)).unwrap();
 
     // -- Reifiers ---------------------------------------------------------------
-    let r1 = b.intern_iri("http://example.org/r1");
-    let r2 = b.intern_iri("http://example.org/r2");
-    let r3 = b.intern_iri("http://example.org/r3");
-    b.push_reifier(r1, triple1); // multiple reifiers binding ONE triple...
-    b.push_reifier(r2, triple1); // ...(r1, r2 both bind triple1).
+    let r1 = b.intern_iri("http://example.org/r1").unwrap();
+    let r2 = b.intern_iri("http://example.org/r2").unwrap();
+    let r3 = b.intern_iri("http://example.org/r3").unwrap();
+    b.push_reifier(r1, triple1).unwrap(); // multiple reifiers binding ONE triple...
+    b.push_reifier(r2, triple1).unwrap(); // ...(r1, r2 both bind triple1).
     // `r3` binds `triple2` INSIDE named graph `g1`, which owns NO base quad of
     // its own — `g1` is a named graph purely via this side-table reference.
-    b.push_reifier_in_graph(r3, triple2, Some(g1));
+    b.push_reifier_in_graph(r3, triple2, Some(g1)).unwrap();
 
     // -- Annotations --------------------------------------------------------
-    let ap1 = b.intern_iri("http://example.org/ap1");
-    let ao1 = b.intern_iri("http://example.org/ao1");
-    let ap2 = b.intern_iri("http://example.org/ap2");
-    let ao2 = b.intern_iri("http://example.org/ao2");
-    let ap3 = b.intern_iri("http://example.org/ap3");
-    let ao3 = b.intern_iri("http://example.org/ao3");
-    let ap4 = b.intern_iri("http://example.org/ap4");
-    let ao4 = b.intern_iri("http://example.org/ao4");
+    let ap1 = b.intern_iri("http://example.org/ap1").unwrap();
+    let ao1 = b.intern_iri("http://example.org/ao1").unwrap();
+    let ap2 = b.intern_iri("http://example.org/ap2").unwrap();
+    let ao2 = b.intern_iri("http://example.org/ao2").unwrap();
+    let ap3 = b.intern_iri("http://example.org/ap3").unwrap();
+    let ao3 = b.intern_iri("http://example.org/ao3").unwrap();
+    let ap4 = b.intern_iri("http://example.org/ap4").unwrap();
+    let ao4 = b.intern_iri("http://example.org/ao4").unwrap();
     // `r1` gets TWO annotations: one in the default graph, one in `g2`.
-    b.push_annotation(r1, ap1, ao1);
-    b.push_annotation_in_graph(r1, ap2, ao2, Some(g2));
+    b.push_annotation(r1, ap1, ao1).unwrap();
+    b.push_annotation_in_graph(r1, ap2, ao2, Some(g2)).unwrap();
     // `r2` gets one default-graph annotation.
-    b.push_annotation(r2, ap3, ao3);
+    b.push_annotation(r2, ap3, ao3).unwrap();
     // `r3` gets one annotation in `g1` (the side-table-only named graph).
-    b.push_annotation_in_graph(r3, ap4, ao4, Some(g1));
+    b.push_annotation_in_graph(r3, ap4, ao4, Some(g1)).unwrap();
 
     let dataset = b.freeze().expect("valid dataset");
 
@@ -297,13 +297,13 @@ fn capability_named_graphs_true_from_side_table_alone() {
     // anywhere names a graph) — proves `side::capabilities` does not silently
     // depend on `base_named_graphs` being true.
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let triple = b.intern_triple(s, p, o);
-    let r = b.intern_iri("http://example.org/r");
-    let g = b.intern_iri("http://example.org/g");
-    b.push_reifier_in_graph(r, triple, Some(g));
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let r = b.intern_iri("http://example.org/r").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    b.push_reifier_in_graph(r, triple, Some(g)).unwrap();
     let dataset = b.freeze().expect("valid dataset");
     assert!(dataset.quads().next().is_none(), "no base quads at all");
 

@@ -235,6 +235,7 @@ mod bounded_native_workspace {
 
     fn image() -> SegmentedImage {
         SegmentedBuilder::new(SegmentedBuildLimits::new(8, 512, 8, 512, 4).unwrap())
+            .unwrap()
             .seal()
             .unwrap()
     }

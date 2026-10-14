@@ -6531,7 +6531,7 @@ mod tests {
         let workspace = crate::WorkspaceCapability::resident();
         let lookup = TermLookup::default();
         let mut builder = RdfDatasetBuilder::new();
-        let id = builder.intern_iri("https://example.org/known");
+        let id = builder.intern_iri("https://example.org/known").unwrap();
         let known = TermValue::Iri("https://example.org/known".to_owned());
         let missing = TermValue::Iri("https://example.org/missing".to_owned());
         assert_eq!(
@@ -6575,8 +6575,8 @@ mod tests {
         let first = TermValue::Iri("https://example.org/first".to_owned());
         let second = TermValue::Iri("https://example.org/second".to_owned());
         let mut builder = RdfDatasetBuilder::new();
-        let first_id = builder.intern_iri("https://example.org/first");
-        let second_id = builder.intern_iri("https://example.org/second");
+        let first_id = builder.intern_iri("https://example.org/first").unwrap();
+        let second_id = builder.intern_iri("https://example.org/second").unwrap();
         let shared = lookup.shared(&workspace).unwrap();
         let mut bucket = crate::AdmittedVec::new(&workspace);
         // Put a distinct real value in the bucket selected by the second hash.
@@ -7263,10 +7263,10 @@ mod tests {
         use purrdf_sparql_algebra::SparqlParser;
 
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = SparqlParser::new()
@@ -7325,10 +7325,10 @@ mod tests {
         const TARGET: &str = "http://example.org/out";
 
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         // Every version label this engine recognizes, plus the undeclared case.
@@ -7398,18 +7398,20 @@ mod tests {
         // triple position (no expression correlation), so the uncorrelated fast path
         // is taken and the inner index must be reused across the three outer rows.
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let cls = b.intern_iri("http://ex/Class");
-        let stereo = b.intern_iri("http://ex/stereo");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
-        let s = b.intern_iri("http://ex/S");
-        b.push_quad(a, ty, cls, None);
-        b.push_quad(bb, ty, cls, None);
-        b.push_quad(c, ty, cls, None);
-        b.push_quad(a, stereo, s, None);
-        b.push_quad(bb, stereo, s, None);
+        let ty = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let cls = b.intern_iri("http://ex/Class").unwrap();
+        let stereo = b.intern_iri("http://ex/stereo").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        let s = b.intern_iri("http://ex/S").unwrap();
+        b.push_quad(a, ty, cls, None).unwrap();
+        b.push_quad(bb, ty, cls, None).unwrap();
+        b.push_quad(c, ty, cls, None).unwrap();
+        b.push_quad(a, stereo, s, None).unwrap();
+        b.push_quad(bb, stereo, s, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let vp = |n: &str| TermPattern::Variable(Variable::new(n));
@@ -7512,25 +7514,25 @@ mod tests {
         // :tea :extra :hot .
         // :a :bad :x .
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let likes = b.intern_iri("http://ex/likes");
-        let extra = b.intern_iri("http://ex/extra");
-        let bad = b.intern_iri("http://ex/bad");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
-        let cake = b.intern_iri("http://ex/cake");
-        let tea = b.intern_iri("http://ex/tea");
-        let juice = b.intern_iri("http://ex/juice");
-        let hot = b.intern_iri("http://ex/hot");
-        let x = b.intern_iri("http://ex/x");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(bb, knows, c, None);
-        b.push_quad(a, likes, cake, None);
-        b.push_quad(bb, likes, tea, None);
-        b.push_quad(c, likes, juice, None);
-        b.push_quad(tea, extra, hot, None);
-        b.push_quad(a, bad, x, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let likes = b.intern_iri("http://ex/likes").unwrap();
+        let extra = b.intern_iri("http://ex/extra").unwrap();
+        let bad = b.intern_iri("http://ex/bad").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        let cake = b.intern_iri("http://ex/cake").unwrap();
+        let tea = b.intern_iri("http://ex/tea").unwrap();
+        let juice = b.intern_iri("http://ex/juice").unwrap();
+        let hot = b.intern_iri("http://ex/hot").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(bb, knows, c, None).unwrap();
+        b.push_quad(a, likes, cake, None).unwrap();
+        b.push_quad(bb, likes, tea, None).unwrap();
+        b.push_quad(c, likes, juice, None).unwrap();
+        b.push_quad(tea, extra, hot, None).unwrap();
+        b.push_quad(a, bad, x, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let vp = |n: &str| TermPattern::Variable(Variable::new(n));
@@ -7599,29 +7601,29 @@ mod tests {
         use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
-        let name = b.intern_iri("http://ex/name");
-        let age = b.intern_iri("http://ex/age");
-        let p1 = b.intern_iri("http://ex/p1");
-        let p2 = b.intern_iri("http://ex/p2");
-        let p3 = b.intern_iri("http://ex/p3");
-        let name1 = b.intern_literal(RdfLiteral::simple("Name1002"));
-        let name2 = b.intern_literal(RdfLiteral::simple("Name1003"));
-        let name3 = b.intern_literal(RdfLiteral::simple("Name2002"));
+        let name = b.intern_iri("http://ex/name").unwrap();
+        let age = b.intern_iri("http://ex/age").unwrap();
+        let p1 = b.intern_iri("http://ex/p1").unwrap();
+        let p2 = b.intern_iri("http://ex/p2").unwrap();
+        let p3 = b.intern_iri("http://ex/p3").unwrap();
+        let name1 = b.intern_literal(RdfLiteral::simple("Name1002")).unwrap();
+        let name2 = b.intern_literal(RdfLiteral::simple("Name1003")).unwrap();
+        let name3 = b.intern_literal(RdfLiteral::simple("Name2002")).unwrap();
         let typed_int = |v: &str| RdfLiteral {
             lexical_form: v.to_owned(),
             datatype: Some(XINT.to_owned()),
             language: None,
             direction: None,
         };
-        let age1 = b.intern_literal(typed_int("45"));
-        let age2 = b.intern_literal(typed_int("30"));
-        let age3 = b.intern_literal(typed_int("50"));
-        b.push_quad(p1, name, name1, None);
-        b.push_quad(p1, age, age1, None);
-        b.push_quad(p2, name, name2, None);
-        b.push_quad(p2, age, age2, None);
-        b.push_quad(p3, name, name3, None);
-        b.push_quad(p3, age, age3, None);
+        let age1 = b.intern_literal(typed_int("45")).unwrap();
+        let age2 = b.intern_literal(typed_int("30")).unwrap();
+        let age3 = b.intern_literal(typed_int("50")).unwrap();
+        b.push_quad(p1, name, name1, None).unwrap();
+        b.push_quad(p1, age, age1, None).unwrap();
+        b.push_quad(p2, name, name2, None).unwrap();
+        b.push_quad(p2, age, age2, None).unwrap();
+        b.push_quad(p3, name, name3, None).unwrap();
+        b.push_quad(p3, age, age3, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let vp = |n: &str| TermPattern::Variable(Variable::new(n));
@@ -7696,18 +7698,20 @@ mod tests {
 
         // :a, :b carry a :stereo; :c does not.
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let cls = b.intern_iri("http://ex/Class");
-        let stereo = b.intern_iri("http://ex/stereo");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
-        let s = b.intern_iri("http://ex/S");
-        b.push_quad(a, ty, cls, None);
-        b.push_quad(bb, ty, cls, None);
-        b.push_quad(c, ty, cls, None);
-        b.push_quad(a, stereo, s, None);
-        b.push_quad(bb, stereo, s, None);
+        let ty = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let cls = b.intern_iri("http://ex/Class").unwrap();
+        let stereo = b.intern_iri("http://ex/stereo").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        let s = b.intern_iri("http://ex/S").unwrap();
+        b.push_quad(a, ty, cls, None).unwrap();
+        b.push_quad(bb, ty, cls, None).unwrap();
+        b.push_quad(c, ty, cls, None).unwrap();
+        b.push_quad(a, stereo, s, None).unwrap();
+        b.push_quad(bb, stereo, s, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let vp = |n: &str| TermPattern::Variable(Variable::new(n));
@@ -7769,27 +7773,31 @@ mod tests {
         // :a :knows :b (age 50) — passes the OPTIONAL filter (age > 40).
         // :a :knows :c (age 10) — right row exists but fails the filter ⇒ left-alone.
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let age = b.intern_iri("http://ex/age");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
-        let age50 = b.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: "50".to_owned(),
-            datatype: Some(XINT.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let age10 = b.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: "10".to_owned(),
-            datatype: Some(XINT.to_owned()),
-            language: None,
-            direction: None,
-        });
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(a, knows, c, None);
-        b.push_quad(bb, age, age50, None);
-        b.push_quad(c, age, age10, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let age = b.intern_iri("http://ex/age").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        let age50 = b
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: "50".to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let age10 = b
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: "10".to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(a, knows, c, None).unwrap();
+        b.push_quad(bb, age, age50, None).unwrap();
+        b.push_quad(c, age, age10, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let vp = |n: &str| TermPattern::Variable(Variable::new(n));
@@ -7881,18 +7889,18 @@ mod tests {
     /// blocks.
     fn chain_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("https://example.org/knows");
-        let likes = b.intern_iri("https://example.org/likes");
-        let a = b.intern_iri("https://example.org/a");
-        let bb = b.intern_iri("https://example.org/b");
-        let c = b.intern_iri("https://example.org/c");
-        let tea = b.intern_iri("https://example.org/tea");
-        let cake = b.intern_iri("https://example.org/cake");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(bb, knows, c, None);
-        b.push_quad(a, likes, tea, None);
-        b.push_quad(bb, likes, cake, None);
-        b.push_quad(c, likes, tea, None);
+        let knows = b.intern_iri("https://example.org/knows").unwrap();
+        let likes = b.intern_iri("https://example.org/likes").unwrap();
+        let a = b.intern_iri("https://example.org/a").unwrap();
+        let bb = b.intern_iri("https://example.org/b").unwrap();
+        let c = b.intern_iri("https://example.org/c").unwrap();
+        let tea = b.intern_iri("https://example.org/tea").unwrap();
+        let cake = b.intern_iri("https://example.org/cake").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(bb, knows, c, None).unwrap();
+        b.push_quad(a, likes, tea, None).unwrap();
+        b.push_quad(bb, likes, cake, None).unwrap();
+        b.push_quad(c, likes, tea, None).unwrap();
         b.freeze().expect("freeze")
     }
 

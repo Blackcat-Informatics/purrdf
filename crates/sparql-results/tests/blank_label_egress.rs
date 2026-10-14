@@ -53,10 +53,10 @@ fn select_with_blank(label: &str) -> SparqlResult {
 /// raw label at the DEFAULT scope.
 fn graph_with_blank(label: &str) -> SparqlResult {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank(label, BlankScope::DEFAULT);
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(s, p, o, None);
+    let s = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     SparqlResult::Graph(Arc::clone(&b.freeze().expect("dataset freezes")).into())
 }
 

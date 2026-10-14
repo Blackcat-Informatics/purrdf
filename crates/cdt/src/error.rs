@@ -112,6 +112,25 @@ pub enum CdtError {
 }
 
 impl CdtError {
+    /// Native diagnostic payload retained after the parser's scratch is destroyed.
+    /// The original admission keeps these bytes until the diagnostic is dropped.
+    #[must_use]
+    pub const fn owned_bytes(&self) -> usize {
+        match self {
+            Self::NotAbsoluteIri { iri, .. } => iri.capacity(),
+            Self::DuplicateMapKey { key, .. } => key.capacity(),
+            Self::InputTooLarge { .. }
+            | Self::TooManyElements { .. }
+            | Self::Unexpected { .. }
+            | Self::UnexpectedEnd { .. }
+            | Self::BadEscape { .. }
+            | Self::BadLanguageTag { .. }
+            | Self::BadNumericLiteral { .. }
+            | Self::BadBlankNodeLabel { .. }
+            | Self::TrailingText { .. } => 0,
+        }
+    }
+
     /// The byte offset into the lexical form at which the failure was detected.
     #[must_use]
     pub const fn offset(&self) -> usize {

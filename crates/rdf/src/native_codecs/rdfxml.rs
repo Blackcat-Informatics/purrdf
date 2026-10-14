@@ -323,7 +323,7 @@ impl RdfXmlParser {
         let mut fold_rows: Vec<FoldRow> = Vec::with_capacity(self.rows.len());
         for row in &self.rows {
             let subject = intern_term(&mut builder, &row.subject)?;
-            let predicate = builder.intern_iri(&row.predicate);
+            let predicate = builder.intern_iri(&row.predicate)?;
             let object = intern_node(&mut builder, &row.object)?;
             fold_rows.push(FoldRow {
                 subject,
@@ -861,7 +861,7 @@ fn fresh_labelled_bnode(counter: &mut usize, prefix: &str) -> Result<XmlNode, Rd
 fn intern_term(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<TermId, RdfDiagnostic> {
     match intern_node(builder, term)? {
         FoldNode::Term(id) => Ok(id),
-        FoldNode::Triple { s, p, o } => Ok(builder.intern_triple(s, p, o)),
+        FoldNode::Triple { s, p, o } => Ok(builder.intern_triple(s, p, o)?),
     }
 }
 
@@ -871,13 +871,13 @@ fn intern_term(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<TermId
 /// row, or re-intern it as a quoted-triple object otherwise.
 fn intern_node(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<FoldNode, RdfDiagnostic> {
     match term {
-        XmlTerm::Iri(iri) => Ok(FoldNode::Term(builder.intern_iri(iri))),
+        XmlTerm::Iri(iri) => Ok(FoldNode::Term(builder.intern_iri(iri)?)),
         // Text ingress: decode the `(label, scope)` encoding this codec's serializer
         // applied at egress, so a document it wrote re-parses to the very
         // `(label, scope)` pair it was written from. `rdf:nodeID` carries an XML
         // `NCName`, which is the alphabet the image test re-encodes against.
         XmlTerm::Blank(label) => Ok(FoldNode::Term(
-            builder.intern_text_blank(label, LabelAlphabet::NcName),
+            builder.intern_text_blank(label, LabelAlphabet::NcName)?,
         )),
         // A composite literal's embedded blank labels bind through the SAME rule
         // the `rdf:nodeID` tokens above use, so both spellings of one node agree.

@@ -261,10 +261,7 @@ pub fn encode_blank_label_with_memory<'a, S: Admission + ?Sized>(
     alphabet: LabelAlphabet,
     memory: &mut Memory<'_, S>,
 ) -> Result<Cow<'a, str>, StorageError> {
-    if scope == BlankScope::DEFAULT
-        && is_valid_label(label, alphabet)
-        && !label.starts_with(ESCAPE_MARKER)
-    {
+    if !needs_envelope(label, scope, alphabet) {
         return Ok(Cow::Borrowed(label));
     }
     let encoded = memory.format(&EnvelopeSpelling { label, scope })?;
@@ -273,6 +270,12 @@ pub fn encode_blank_label_with_memory<'a, S: Admission + ?Sized>(
         "encode_blank_label must always produce a token legal under the target alphabet"
     );
     Ok(Cow::Owned(encoded))
+}
+
+fn needs_envelope(label: &str, scope: BlankScope, alphabet: LabelAlphabet) -> bool {
+    scope != BlankScope::DEFAULT
+        || !is_valid_label(label, alphabet)
+        || label.starts_with(ESCAPE_MARKER)
 }
 
 /// Allocation-free rendering of the single canonical envelope spelling.
@@ -345,8 +348,8 @@ pub fn decode_blank_label(token: &str, alphabet: LabelAlphabet) -> (Cow<'_, str>
 
 /// Decode the same envelope and byte-exact image law under physical admission.
 ///
-/// The decoded label retains its original admission; image-test scratch is
-/// destroyed and released before returning. Malformed envelopes remain borrowed.
+/// An escaped decoded label retains its original admission; contiguous labels
+/// and the exact image test need no allocation. Malformed envelopes remain borrowed.
 ///
 /// # Errors
 /// Returns physical refusal instead of treating it as a malformed envelope.
@@ -361,16 +364,16 @@ pub fn decode_blank_label_with_memory<'a, S: Admission + ?Sized>(
     let Some((label, scope)) = decode_envelope(token, memory)? else {
         return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
     };
-    let encoded = encode_blank_label_with_memory(&label, scope, alphabet, memory)?;
-    let identical = encoded.as_ref() == token;
-    if let Cow::Owned(encoded) = encoded {
-        memory.release_string(encoded)?;
-    }
-    if !identical {
-        memory.release_string(label)?;
+    // The envelope parser accepts only the renderer's canonical scope and
+    // scalar spelling. The remaining image condition is whether the encoder
+    // would envelope this label at all; do not allocate an image-test copy.
+    if !needs_envelope(&label, scope, alphabet) {
+        if let Cow::Owned(label) = label {
+            memory.release_string(label)?;
+        }
         return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
     }
-    Ok((Cow::Owned(label), scope))
+    Ok((label, scope))
 }
 
 /// Re-target an OWNED-model blank label — the
@@ -410,13 +413,15 @@ pub fn retarget_owned_label(owned: &str, alphabet: LabelAlphabet) -> Cow<'_, str
 /// This is the syntactic half of the decode; [`decode_blank_label`] adds the
 /// image test that rejects a well-formed envelope the encoder would not have
 /// written.
-fn decode_envelope<S: Admission + ?Sized>(
-    token: &str,
-    memory: &mut Memory<'_, S>,
-) -> Result<Option<(String, BlankScope)>, StorageError> {
-    // Parse the envelope grammar first without storage, then render the same
-    // decoded scalars into the admitted destination.
-    fn parts(token: &str) -> Option<(&str, BlankScope)> {
+#[derive(Clone, Copy)]
+struct Envelope<'a> {
+    body: &'a str,
+    scope: BlankScope,
+    bytes: usize,
+}
+
+impl<'a> Envelope<'a> {
+    fn parse(token: &'a str) -> Option<Self> {
         let rest = token.strip_prefix(ESCAPE_MARKER)?;
         // The scope digits are the maximal digit run, always terminated by the `_`
         // that opens the body — so the split is unambiguous even when the body
@@ -440,43 +445,107 @@ fn decode_envelope<S: Admission + ?Sized>(
             }
             BlankScope(ordinal)
         };
-        Some((body, scope))
+        let mut chars = body.chars();
+        let mut bytes = 0;
+        while let Some(scalar) = envelope_scalar(&mut chars).ok()? {
+            bytes += scalar.len_utf8();
+        }
+        Some(Self { body, scope, bytes })
     }
-    let Some((body, scope)) = parts(token) else {
+
+    fn chars(self) -> impl Iterator<Item = char> + Clone + 'a {
+        let mut chars = self.body.chars();
+        std::iter::from_fn(move || envelope_scalar(&mut chars).expect("validated envelope"))
+    }
+}
+
+fn envelope_scalar(chars: &mut std::str::Chars<'_>) -> Result<Option<char>, ()> {
+    let Some(ch) = chars.next() else {
         return Ok(None);
     };
+    if ch.is_ascii_alphanumeric() {
+        return Ok(Some(ch));
+    }
+    if ch != '_' {
+        return Err(());
+    }
+    let mut cp = 0;
+    for _ in 0..6 {
+        cp = cp * 16 + chars.next().and_then(hex6_digit).ok_or(())?;
+    }
+    // ASCII alphanumerics are literal in the canonical renderer.
+    char::from_u32(cp)
+        .filter(|ch| !ch.is_ascii_alphanumeric())
+        .map(Some)
+        .ok_or(())
+}
+
+fn decode_envelope<'a, S: Admission + ?Sized>(
+    token: &'a str,
+    memory: &mut Memory<'_, S>,
+) -> Result<Option<(Cow<'a, str>, BlankScope)>, StorageError> {
+    let Some(envelope) = Envelope::parse(token) else {
+        return Ok(None);
+    };
+    if envelope
+        .body
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Ok(Some((Cow::Borrowed(envelope.body), envelope.scope)));
+    }
     let mut decoded = String::new();
-    memory.reserve_string(&mut decoded, body.len())?;
-    let mut chars = body.chars();
-    while let Some(ch) = chars.next() {
-        if ch.is_ascii_alphanumeric() {
-            memory.push_char(&mut decoded, ch)?;
-            continue;
-        }
-        let mut scalar = None;
-        if ch == '_' {
-            let mut cp: u32 = 0;
-            let mut valid = true;
-            for _ in 0..6 {
-                match chars.next().and_then(hex6_digit) {
-                    Some(digit) => cp = cp * 16 + digit,
-                    None => {
-                        valid = false;
-                        break;
-                    }
-                }
-            }
-            if valid {
-                scalar = char::from_u32(cp);
-            }
-        }
-        let Some(scalar) = scalar else {
-            memory.release_string(decoded)?;
-            return Ok(None);
-        };
+    memory.reserve_string(&mut decoded, envelope.bytes)?;
+    for scalar in envelope.chars() {
         memory.push_char(&mut decoded, scalar)?;
     }
-    Ok(Some((decoded, scope)))
+    Ok(Some((Cow::Owned(decoded), envelope.scope)))
+}
+
+/// Borrowed identity probe through the owned model's exact envelope grammar.
+pub(crate) struct OwnedBlankKey<'a> {
+    token: &'a str,
+    envelope: Option<Envelope<'a>>,
+}
+impl<'a> OwnedBlankKey<'a> {
+    pub(crate) fn new(token: &'a str) -> Self {
+        let envelope = Envelope::parse(token).filter(|envelope| {
+            envelope.scope != BlankScope::DEFAULT
+                || envelope
+                    .chars()
+                    .take(ESCAPE_MARKER.len())
+                    .eq(ESCAPE_MARKER.chars())
+        });
+        Self { token, envelope }
+    }
+    pub(crate) fn scope(&self) -> BlankScope {
+        self.envelope
+            .map_or(BlankScope::DEFAULT, |envelope| envelope.scope)
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.envelope
+            .map_or(self.token.len(), |envelope| envelope.bytes)
+    }
+    pub(crate) fn borrowed(&self) -> Option<&'a str> {
+        match self.envelope {
+            None => Some(self.token),
+            Some(envelope) if envelope.body.len() == envelope.bytes => Some(envelope.body),
+            Some(_) => None,
+        }
+    }
+    pub(crate) fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        let mut raw = self.token.chars();
+        let mut decoded = self.envelope.map(Envelope::chars);
+        std::iter::from_fn(move || match decoded.as_mut() {
+            Some(chars) => chars.next(),
+            None => raw.next(),
+        })
+        .flat_map(|scalar| {
+            let mut bytes = [0; 4];
+            let len = scalar.encode_utf8(&mut bytes).len();
+            bytes.into_iter().take(len)
+        })
+    }
 }
 
 /// One digit of a fixed-width escape group: `0-9` or UPPERCASE `A-F`, matching

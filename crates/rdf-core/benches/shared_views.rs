@@ -52,15 +52,21 @@ use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 fn fixture(rows: u32, payload_bytes: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let literal = builder.intern_literal(RdfLiteral::simple("x".repeat(payload_bytes)));
-    let inner = builder.intern_triple(predicate, predicate, literal);
-    let outer = builder.intern_triple(predicate, predicate, inner);
-    let empty = builder.intern_iri("http://example.org/empty");
-    builder.declare_named_graph(empty);
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral::simple("x".repeat(payload_bytes)))
+        .unwrap();
+    let inner = builder
+        .intern_triple(predicate, predicate, literal)
+        .unwrap();
+    let outer = builder.intern_triple(predicate, predicate, inner).unwrap();
+    let empty = builder.intern_iri("http://example.org/empty").unwrap();
+    builder.declare_named_graph(empty).unwrap();
     for index in 0..rows {
-        let subject = builder.intern_iri(&format!("http://example.org/s{index}"));
-        builder.push_quad(subject, predicate, outer, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, outer, None).unwrap();
     }
     builder.freeze().unwrap()
 }
@@ -79,11 +85,15 @@ fn changed(base: Arc<RdfDataset>) -> MutableDataset {
 
 fn scoped_blanks(rows: u32, scope: BlankScope) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
+    let p = builder.intern_iri("http://example.org/p").unwrap();
     for index in 0..rows {
-        let s = builder.intern_blank(&format!("blank{index}"), scope);
-        let o = builder.intern_iri(&format!("http://example.org/o{index}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_blank(&format!("blank{index}"), scope)
+            .unwrap();
+        let o = builder
+            .intern_iri(&format!("http://example.org/o{index}"))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().unwrap()
 }
@@ -291,35 +301,46 @@ fn from_report_with_work_delta(
 /// what a per-graph digest covers.
 fn carrier_base(groups: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let q = b.intern_iri("http://example.org/q");
-    let g1 = b.intern_iri(CARRIER_G1);
-    let g2 = b.intern_iri(CARRIER_G2);
-    let declared = b.intern_iri(CARRIER_DECLARED);
-    let plain = b.intern_literal(RdfLiteral::simple("bare"));
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("cat", "en"));
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let q = b.intern_iri("http://example.org/q").unwrap();
+    let g1 = b.intern_iri(CARRIER_G1).unwrap();
+    let g2 = b.intern_iri(CARRIER_G2).unwrap();
+    let declared = b.intern_iri(CARRIER_DECLARED).unwrap();
+    let plain = b.intern_literal(RdfLiteral::simple("bare")).unwrap();
+    let tagged = b
+        .intern_literal(RdfLiteral::language_tagged("cat", "en"))
+        .unwrap();
     for index in 0..groups {
-        let s = b.intern_iri(&format!("http://example.org/s{index}"));
-        let o = b.intern_iri(&format!("http://example.org/o{index}"));
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, q, plain, None);
-        b.push_quad(s, p, tagged, Some(g1));
-        b.push_quad(s, q, o, Some(g2));
+        let s = b
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        let o = b
+            .intern_iri(&format!("http://example.org/o{index}"))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, q, plain, None).unwrap();
+        b.push_quad(s, p, tagged, Some(g1)).unwrap();
+        b.push_quad(s, q, o, Some(g2)).unwrap();
         // One local label in two scopes: two nodes a label-keyed identity would
         // conflate, kept structurally distinguishable so canonicalization stays
         // linear rather than exploring automorphisms.
-        let shared = b.intern_blank(&format!("n{index}"), BlankScope::DEFAULT);
-        let scoped = b.intern_blank(&format!("n{index}"), BlankScope(4));
-        b.push_quad(shared, p, o, Some(g1));
-        b.push_quad(scoped, q, o, Some(g2));
+        let shared = b
+            .intern_blank(&format!("n{index}"), BlankScope::DEFAULT)
+            .unwrap();
+        let scoped = b.intern_blank(&format!("n{index}"), BlankScope(4)).unwrap();
+        b.push_quad(shared, p, o, Some(g1)).unwrap();
+        b.push_quad(scoped, q, o, Some(g2)).unwrap();
         if index % 8 == 0 {
-            let triple = b.intern_triple(shared, p, tagged);
-            let reifier = b.intern_blank(&format!("st{index}"), BlankScope(7));
-            b.push_reifier_in_graph(reifier, triple, Some(g1));
-            b.push_annotation_in_graph(reifier, q, plain, Some(g1));
+            let triple = b.intern_triple(shared, p, tagged).unwrap();
+            let reifier = b
+                .intern_blank(&format!("st{index}"), BlankScope(7))
+                .unwrap();
+            b.push_reifier_in_graph(reifier, triple, Some(g1)).unwrap();
+            b.push_annotation_in_graph(reifier, q, plain, Some(g1))
+                .unwrap();
         }
     }
-    b.declare_named_graph(declared);
+    b.declare_named_graph(declared).unwrap();
     b.freeze().expect("the carrier base freezes")
 }
 
@@ -333,12 +354,16 @@ fn carrier_base(groups: usize) -> Arc<RdfDataset> {
 /// also why a shape varies term overlap rather than row overlap.
 fn carrier_contribution(graph: &str, space: usize, rows: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://example.org/p");
-    let g = b.intern_iri(graph);
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let g = b.intern_iri(graph).unwrap();
     for index in 0..rows {
-        let s = b.intern_iri(&format!("http://example.org/space{space}/s{index}"));
-        let o = b.intern_iri(&format!("http://example.org/space{space}/o{index}"));
-        b.push_quad(s, p, o, Some(g));
+        let s = b
+            .intern_iri(&format!("http://example.org/space{space}/s{index}"))
+            .unwrap();
+        let o = b
+            .intern_iri(&format!("http://example.org/space{space}/o{index}"))
+            .unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
     }
     b.freeze().expect("the carrier contribution freezes")
 }
@@ -435,7 +460,7 @@ fn run_flat(shape: &CarrierShape) -> Observation {
         copies = copies.saturating_add(carrier.dataset().rdf_row_count());
         freezes += 1;
     }
-    black_box(carrier.pipeline_root());
+    black_box(carrier.pipeline_root().unwrap());
     for _ in 0..shape.consumers {
         let reader = PipelineBundle::<Stage>::new(
             Arc::clone(&shape.base),
@@ -444,7 +469,7 @@ fn run_flat(shape: &CarrierShape) -> Observation {
             DatasetProvenance::new(),
         );
         for graph in [CARRIER_G1, CARRIER_G2] {
-            black_box(reader.graph_digest(graph));
+            black_box(reader.graph_digest(graph).unwrap());
         }
     }
     let retained = carrier.dataset().rdf_payload_bytes();
@@ -832,16 +857,24 @@ const PROBE_OWNERS: usize = 8;
 /// annotation, so the statement tables are non-empty without dominating.
 fn probe_source(owner: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/o");
-    let graph = builder.intern_iri("http://example.org/g");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/o").unwrap();
+    let graph = builder.intern_iri("http://example.org/g").unwrap();
     for row in 0..PROBE_ROWS {
-        let subject = builder.intern_iri(&format!("http://example.org/source{owner}/s{row}"));
-        builder.push_quad(subject, predicate, object, Some(graph));
+        let subject = builder
+            .intern_iri(&format!("http://example.org/source{owner}/s{row}"))
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
         if row % 16 == 0 {
-            let triple = builder.intern_triple(subject, predicate, object);
-            builder.push_reifier_in_graph(subject, triple, Some(graph));
-            builder.push_annotation_in_graph(subject, predicate, object, Some(graph));
+            let triple = builder.intern_triple(subject, predicate, object).unwrap();
+            builder
+                .push_reifier_in_graph(subject, triple, Some(graph))
+                .unwrap();
+            builder
+                .push_annotation_in_graph(subject, predicate, object, Some(graph))
+                .unwrap();
         }
     }
     builder.freeze().unwrap()

@@ -28,8 +28,9 @@
 //! enum has no `Unknown` variant: the caller must supply a concrete kind or the
 //! provenance gate fails.
 
-use std::collections::hash_map::Entry;
+use purrdf_lex::allocation::{CapacityError, CapacitySpace, Memory, Resident, StorageError};
 use std::fmt;
+use std::hash::Hash;
 
 use crate::FastMap;
 use crate::ir::QuadHandle;
@@ -251,6 +252,56 @@ pub struct AssertionOccurrence {
 
 // ─── Interners ───────────────────────────────────────────────────────────────
 
+/// Zero-based provenance slots include raw `u32::MAX`. Tests reduce the same
+/// producer's count limit without allocating a multi-billion-entry table.
+#[derive(Clone, Copy, Debug, Default)]
+enum OriginCapacity {
+    #[default]
+    Native,
+    #[cfg(test)]
+    Reduced(u64),
+}
+
+impl OriginCapacity {
+    fn slot(self, len: usize, space: CapacitySpace) -> Result<u32, StorageError> {
+        let limit = match self {
+            Self::Native => u64::from(u32::MAX) + 1,
+            #[cfg(test)]
+            Self::Reduced(limit) => limit,
+        };
+        let index = u64::try_from(len).map_err(|_| StorageError::SizeOverflow)?;
+        CapacityError::slot(space, index, limit)?;
+        u32::try_from(index).map_err(|_| StorageError::SizeOverflow)
+    }
+}
+
+fn intern_origin<K: Eq + Hash, V: Copy>(
+    values: &mut Vec<K>,
+    index: &mut FastMap<K, V>,
+    key: K,
+    space: CapacitySpace,
+    capacity: OriginCapacity,
+    mint: impl FnOnce(u32) -> V,
+    copy: impl FnOnce(&K, &mut Memory<'_, Resident>) -> Result<K, StorageError>,
+) -> Result<V, StorageError> {
+    if let Some(&found) = index.get(&key) {
+        return Ok(found);
+    }
+    let slot = capacity.slot(values.len(), space)?;
+    values
+        .try_reserve(1)
+        .map_err(|_| StorageError::AllocationFailed)?;
+    index
+        .try_reserve(1)
+        .map_err(|_| StorageError::AllocationFailed)?;
+    let mut resident = Resident;
+    let duplicate = copy(&key, &mut Memory::new(&mut resident))?;
+    let id = mint(slot);
+    values.push(duplicate);
+    index.insert(key, id);
+    Ok(id)
+}
+
 /// Interner for `UnitId`s — maps a logical unit name to a dense numeric id.
 ///
 /// The interner is the single minter of `UnitId`s for one `DatasetProvenance`.
@@ -259,6 +310,7 @@ pub struct AssertionOccurrence {
 /// label); the kernel does not interpret them.
 #[derive(Debug, Clone)]
 pub struct UnitInterner {
+    capacity: OriginCapacity,
     /// Dense table of unit names, addressed by `UnitId::index`.
     names: Vec<String>,
     /// Value → id index.
@@ -269,6 +321,7 @@ impl UnitInterner {
     /// A fresh, empty interner.
     pub fn new() -> Self {
         Self {
+            capacity: OriginCapacity::default(),
             names: Vec::new(),
             index: FastMap::default(),
         }
@@ -276,21 +329,17 @@ impl UnitInterner {
 
     /// Intern a unit name, returning its (possibly existing) `UnitId`.
     /// Idempotent: equal names yield the same id.
-    pub fn intern(&mut self, name: impl Into<String>) -> UnitId {
+    pub fn intern(&mut self, name: impl Into<String>) -> Result<UnitId, StorageError> {
         let name = name.into();
-        // One hash + probe for both outcomes (`entry`), instead of the get + insert
-        // pair; the id is still numbered from `names.len()` before the push.
-        match self.index.entry(name) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let id = UnitId::from_index(
-                    u32::try_from(self.names.len()).expect("unit table exceeds u32::MAX entries"),
-                );
-                self.names.push(e.key().clone());
-                e.insert(id);
-                id
-            }
-        }
+        intern_origin(
+            &mut self.names,
+            &mut self.index,
+            name,
+            CapacitySpace::ProvenanceUnits,
+            self.capacity,
+            UnitId::from_index,
+            |key, memory| memory.string(key),
+        )
     }
 
     /// Resolve a `UnitId` to its name. Panics if the id is out of range (which
@@ -317,6 +366,7 @@ purrdf_hash::default_from_new!(UnitInterner);
 /// or a content-addressed digest); the kernel does not interpret it.
 #[derive(Debug, Clone)]
 pub struct ArtifactInterner {
+    capacity: OriginCapacity,
     /// Dense table of artifact logical paths.
     paths: Vec<String>,
     /// Value → id index.
@@ -327,6 +377,7 @@ impl ArtifactInterner {
     /// A fresh, empty interner.
     pub fn new() -> Self {
         Self {
+            capacity: OriginCapacity::default(),
             paths: Vec::new(),
             index: FastMap::default(),
         }
@@ -334,20 +385,17 @@ impl ArtifactInterner {
 
     /// Intern an artifact logical path, returning its (possibly existing)
     /// `ArtifactId`. Idempotent: equal paths yield the same id.
-    pub fn intern(&mut self, path: impl Into<String>) -> ArtifactId {
+    pub fn intern(&mut self, path: impl Into<String>) -> Result<ArtifactId, StorageError> {
         let path = path.into();
-        match self.index.entry(path) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let id = ArtifactId::from_index(
-                    u32::try_from(self.paths.len())
-                        .expect("artifact table exceeds u32::MAX entries"),
-                );
-                self.paths.push(e.key().clone());
-                e.insert(id);
-                id
-            }
-        }
+        intern_origin(
+            &mut self.paths,
+            &mut self.index,
+            path,
+            CapacitySpace::Artifacts,
+            self.capacity,
+            ArtifactId::from_index,
+            |key, memory| memory.string(key),
+        )
     }
 
     /// Resolve an `ArtifactId` to its logical path.
@@ -375,6 +423,7 @@ purrdf_hash::default_from_new!(ArtifactInterner);
 /// `OriginSetId` regardless of assertion order.
 #[derive(Debug, Clone)]
 pub struct OriginSetInterner {
+    capacity: OriginCapacity,
     /// Dense table of interned origin sets, as sorted `Vec`s.
     sets: Vec<Vec<(UnitId, ArtifactId)>>,
     /// Value → id index, keyed by the sorted set.
@@ -385,6 +434,7 @@ impl OriginSetInterner {
     /// A fresh, empty interner.
     pub fn new() -> Self {
         Self {
+            capacity: OriginCapacity::default(),
             sets: Vec::new(),
             index: FastMap::default(),
         }
@@ -393,22 +443,21 @@ impl OriginSetInterner {
     /// Intern an origin set. The set is canonicalized (sorted, deduped) before
     /// interning, so insertion order is irrelevant. Idempotent: the same set
     /// of pairs always yields the same `OriginSetId`.
-    pub fn intern(&mut self, mut pairs: Vec<(UnitId, ArtifactId)>) -> OriginSetId {
+    pub fn intern(
+        &mut self,
+        mut pairs: Vec<(UnitId, ArtifactId)>,
+    ) -> Result<OriginSetId, StorageError> {
         pairs.sort_unstable();
         pairs.dedup();
-        // `entry` hashes the whole pair set once, not twice.
-        match self.index.entry(pairs) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let id = OriginSetId::from_index(
-                    u32::try_from(self.sets.len())
-                        .expect("origin-set table exceeds u32::MAX entries"),
-                );
-                self.sets.push(e.key().clone());
-                e.insert(id);
-                id
-            }
-        }
+        intern_origin(
+            &mut self.sets,
+            &mut self.index,
+            pairs,
+            CapacitySpace::OriginSets,
+            self.capacity,
+            OriginSetId::from_index,
+            |key, memory| memory.collect(key.iter().copied()),
+        )
     }
 
     /// Resolve an `OriginSetId` to its canonical set of `(UnitId, ArtifactId)`
@@ -474,21 +523,37 @@ impl DatasetProvenance {
     ///
     /// Returns the `UnitId`. If the name was already interned the existing id
     /// is returned and `kind` is ignored (the first registration wins).
-    pub fn register_unit(&mut self, name: impl Into<String>, kind: OriginKind) -> UnitId {
+    pub fn register_unit(
+        &mut self,
+        name: impl Into<String>,
+        kind: OriginKind,
+    ) -> Result<UnitId, StorageError> {
         let name = name.into();
+        if let Some(&id) = self.units.index.get(&name) {
+            return Ok(id);
+        }
+        self.units
+            .capacity
+            .slot(self.units.len(), CapacitySpace::ProvenanceUnits)?;
         let before = self.units.len();
-        let id = self.units.intern(name);
+        self.unit_kinds
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        let id = self.units.intern(name)?;
         if self.units.len() > before {
             // New unit — record its kind at the corresponding index.
             self.unit_kinds.push(kind);
         }
-        id
+        Ok(id)
     }
 
     /// Register a new artifact.
     ///
     /// Returns the `ArtifactId`. Equal logical paths always yield the same id.
-    pub fn register_artifact(&mut self, path: impl Into<String>) -> ArtifactId {
+    pub fn register_artifact(
+        &mut self,
+        path: impl Into<String>,
+    ) -> Result<ArtifactId, StorageError> {
         self.artifacts.intern(path)
     }
 
@@ -515,7 +580,10 @@ impl DatasetProvenance {
     /// Intern an origin set, returning its `OriginSetId`.
     ///
     /// Canonicalizes (sorts + dedups) the `pairs` vector before interning.
-    pub fn intern_origin_set(&mut self, pairs: Vec<(UnitId, ArtifactId)>) -> OriginSetId {
+    pub fn intern_origin_set(
+        &mut self,
+        pairs: Vec<(UnitId, ArtifactId)>,
+    ) -> Result<OriginSetId, StorageError> {
         self.origin_sets.intern(pairs)
     }
 
@@ -739,6 +807,123 @@ pub fn check_provenance(
 mod tests {
     use super::*;
 
+    #[test]
+    fn provenance_capacity_refusal_preserves_all_public_interner_streams() {
+        let mut provenance = DatasetProvenance::new();
+        provenance.units.capacity = OriginCapacity::Reduced(2);
+        provenance.artifacts.capacity = OriginCapacity::Reduced(2);
+        provenance.origin_sets.capacity = OriginCapacity::Reduced(2);
+        let u0 = provenance
+            .register_unit("source", OriginKind::Source)
+            .unwrap();
+        let u1 = provenance
+            .register_unit("runtime", OriginKind::RuntimeInput)
+            .unwrap();
+        let a0 = provenance.register_artifact("first").unwrap();
+        let a1 = provenance.register_artifact("second").unwrap();
+        let s0 = provenance.intern_origin_set(vec![(u0, a0)]).unwrap();
+        let s1 = provenance.intern_origin_set(vec![(u1, a1)]).unwrap();
+        // Close the kind vector's spare physical capacity as well as the ID
+        // counters: probing a duplicate/refusal must not grow this side table.
+        provenance.unit_kinds = provenance.unit_kinds.into_boxed_slice().into_vec();
+        let unit_capacity = provenance.unit_kinds.capacity();
+        assert_eq!(unit_capacity, 2);
+        for _ in 0..3 {
+            for (result, space) in [
+                (
+                    provenance
+                        .register_unit("third", OriginKind::Generated)
+                        .map(UnitId::index),
+                    CapacitySpace::ProvenanceUnits,
+                ),
+                (
+                    provenance.register_artifact("third").map(ArtifactId::index),
+                    CapacitySpace::Artifacts,
+                ),
+                (
+                    provenance
+                        .intern_origin_set(vec![(u0, a0), (u1, a1)])
+                        .map(OriginSetId::index),
+                    CapacitySpace::OriginSets,
+                ),
+            ] {
+                assert_eq!(
+                    result,
+                    Err(StorageError::Capacity(CapacityError::new(space, 3, 2)))
+                );
+            }
+            assert_eq!(
+                provenance
+                    .register_unit("source", OriginKind::Generated)
+                    .unwrap(),
+                u0
+            );
+            assert_eq!(provenance.register_artifact("first").unwrap(), a0);
+            assert_eq!(
+                provenance
+                    .intern_origin_set(vec![(u1, a1), (u1, a1)])
+                    .unwrap(),
+                s1
+            );
+            assert_eq!(provenance.unit_kind(u0), Some(&OriginKind::Source));
+            assert_eq!(provenance.units.name(u1), "runtime");
+            assert_eq!(provenance.artifacts.path(a1), "second");
+            assert_eq!(provenance.origin_sets.set(s0), &[(u0, a0)]);
+            assert_eq!(
+                (
+                    provenance.units.len(),
+                    provenance.artifacts.len(),
+                    provenance.origin_sets.len()
+                ),
+                (2, 2, 2)
+            );
+            assert_eq!(provenance.unit_kinds.len(), 2);
+            assert_eq!(provenance.unit_kinds.capacity(), unit_capacity);
+        }
+        provenance.units.capacity = OriginCapacity::Reduced(3);
+        provenance.artifacts.capacity = OriginCapacity::Reduced(3);
+        provenance.origin_sets.capacity = OriginCapacity::Reduced(3);
+        assert_eq!(
+            provenance
+                .register_unit("third", OriginKind::Generated)
+                .unwrap()
+                .index(),
+            2
+        );
+        assert_eq!(provenance.register_artifact("third").unwrap().index(), 2);
+        assert_eq!(
+            provenance
+                .intern_origin_set(vec![(u1, a1), (u0, a0)])
+                .unwrap()
+                .index(),
+            2
+        );
+    }
+
+    #[test]
+    fn provenance_zero_based_capacity_includes_last_u32_slot() {
+        for space in [
+            CapacitySpace::ProvenanceUnits,
+            CapacitySpace::Artifacts,
+            CapacitySpace::OriginSets,
+        ] {
+            assert_eq!(
+                OriginCapacity::Native.slot(u32::MAX as usize, space),
+                Ok(u32::MAX)
+            );
+            if let Ok(next) = usize::try_from(u64::from(u32::MAX) + 1) {
+                assert_eq!(
+                    OriginCapacity::Native.slot(next, space),
+                    Err(StorageError::Capacity(CapacityError::new(
+                        space,
+                        u128::from(u32::MAX) + 2,
+                        u128::from(u32::MAX) + 1
+                    )))
+                );
+            }
+        }
+    }
+
     // Helper: create a QuadHandle from a raw index.
     fn qh(i: u32) -> QuadHandle {
         QuadHandle::from_index(i)
@@ -805,7 +990,7 @@ mod tests {
     #[test]
     fn unit_interner_name_resolves() {
         let mut i = UnitInterner::new();
-        let id = i.intern("root-ontology");
+        let id = i.intern("root-ontology").unwrap();
         assert_eq!(i.name(id), "root-ontology");
     }
 
@@ -831,7 +1016,7 @@ mod tests {
     #[test]
     fn artifact_interner_path_resolves() {
         let mut i = ArtifactInterner::new();
-        let id = i.intern("ontology/purrdf.ttl");
+        let id = i.intern("ontology/purrdf.ttl").unwrap();
         assert_eq!(i.path(id), "ontology/purrdf.ttl");
     }
 
@@ -877,7 +1062,7 @@ mod tests {
         let a1 = ArtifactId::from_index(1);
 
         let mut i = OriginSetInterner::new();
-        let id = i.intern(vec![(u1, a1), (u0, a0)]);
+        let id = i.intern(vec![(u1, a1), (u0, a0)]).unwrap();
         // The stored set is canonically sorted.
         let set = i.set(id);
         assert_eq!(set.len(), 2);
@@ -902,8 +1087,12 @@ mod tests {
     #[test]
     fn dataset_provenance_register_unit_is_idempotent() {
         let mut prov = DatasetProvenance::new();
-        let id1 = prov.register_unit("slices/core/epistemics", OriginKind::Source);
-        let id2 = prov.register_unit("slices/core/epistemics", OriginKind::Source);
+        let id1 = prov
+            .register_unit("slices/core/epistemics", OriginKind::Source)
+            .unwrap();
+        let id2 = prov
+            .register_unit("slices/core/epistemics", OriginKind::Source)
+            .unwrap();
         assert_eq!(id1, id2);
         assert_eq!(prov.units.len(), 1);
     }
@@ -911,7 +1100,9 @@ mod tests {
     #[test]
     fn dataset_provenance_unit_kind_accessible() {
         let mut prov = DatasetProvenance::new();
-        let id = prov.register_unit("root", OriginKind::RootOntology);
+        let id = prov
+            .register_unit("root", OriginKind::RootOntology)
+            .unwrap();
         assert_eq!(prov.unit_kind(id), Some(&OriginKind::RootOntology));
     }
 
@@ -919,10 +1110,18 @@ mod tests {
     fn dataset_provenance_all_non_source_kinds_representable() {
         // S0.2 explicitly states every non-slice unit kind is representable.
         let mut prov = DatasetProvenance::new();
-        let _root = prov.register_unit("root", OriginKind::RootOntology);
-        let _import = prov.register_unit("import:owl", OriginKind::Import);
-        let _gen = prov.register_unit("generated:crossref", OriginKind::Generated);
-        let _rt = prov.register_unit("runtime:fixture", OriginKind::RuntimeInput);
+        let _root = prov
+            .register_unit("root", OriginKind::RootOntology)
+            .unwrap();
+        let _import = prov
+            .register_unit("import:owl", OriginKind::Import)
+            .unwrap();
+        let _gen = prov
+            .register_unit("generated:crossref", OriginKind::Generated)
+            .unwrap();
+        let _rt = prov
+            .register_unit("runtime:fixture", OriginKind::RuntimeInput)
+            .unwrap();
         assert_eq!(prov.units.len(), 4);
     }
 
@@ -937,12 +1136,20 @@ mod tests {
         let mut prov = DatasetProvenance::new();
 
         // Register two distinct source units (e.g. two slice module files).
-        let unit_a = prov.register_unit("slices/core/epistemics", OriginKind::Source);
-        let unit_b = prov.register_unit("slices/ext/beliefs", OriginKind::Source);
+        let unit_a = prov
+            .register_unit("slices/core/epistemics", OriginKind::Source)
+            .unwrap();
+        let unit_b = prov
+            .register_unit("slices/ext/beliefs", OriginKind::Source)
+            .unwrap();
 
         // Register one artifact per unit.
-        let artifact_a = prov.register_artifact("slices/core/epistemics/epistemics.ttl");
-        let artifact_b = prov.register_artifact("slices/ext/beliefs/beliefs.ttl");
+        let artifact_a = prov
+            .register_artifact("slices/core/epistemics/epistemics.ttl")
+            .unwrap();
+        let artifact_b = prov
+            .register_artifact("slices/ext/beliefs/beliefs.ttl")
+            .unwrap();
 
         // Both files contain the same triple — the dataset deduplicates to one
         // QuadHandle (handle 0 in this example).
@@ -990,8 +1197,12 @@ mod tests {
     #[test]
     fn gate_passes_on_valid_single_file_provenance() {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("slices/core/observations", OriginKind::Source);
-        let artifact = prov.register_artifact("slices/core/observations/observations.ttl");
+        let unit = prov
+            .register_unit("slices/core/observations", OriginKind::Source)
+            .unwrap();
+        let artifact = prov
+            .register_artifact("slices/core/observations/observations.ttl")
+            .unwrap();
         let quad = qh(0);
         prov.record_occurrence(quad, unit, artifact, None);
 
@@ -1005,10 +1216,14 @@ mod tests {
     #[test]
     fn gate_passes_multi_file_fixture() {
         let mut prov = DatasetProvenance::new();
-        let unit_a = prov.register_unit("slices/core/a", OriginKind::Source);
-        let unit_b = prov.register_unit("slices/core/b", OriginKind::Source);
-        let art_a = prov.register_artifact("a/a.ttl");
-        let art_b = prov.register_artifact("b/b.ttl");
+        let unit_a = prov
+            .register_unit("slices/core/a", OriginKind::Source)
+            .unwrap();
+        let unit_b = prov
+            .register_unit("slices/core/b", OriginKind::Source)
+            .unwrap();
+        let art_a = prov.register_artifact("a/a.ttl").unwrap();
+        let art_b = prov.register_artifact("b/b.ttl").unwrap();
 
         let q0 = qh(0);
         let q1 = qh(1);
@@ -1025,8 +1240,10 @@ mod tests {
     #[test]
     fn gate_fails_when_occurrence_missing_for_quad() {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("root", OriginKind::RootOntology);
-        let artifact = prov.register_artifact("ontology/purrdf.ttl");
+        let unit = prov
+            .register_unit("root", OriginKind::RootOntology)
+            .unwrap();
+        let artifact = prov.register_artifact("ontology/purrdf.ttl").unwrap();
         let q0 = qh(0);
         let q1 = qh(1); // No occurrence for q1.
         prov.record_occurrence(q0, unit, artifact, None);
@@ -1051,8 +1268,8 @@ mod tests {
         // forged (no register_unit call), so unit_kinds is shorter than needed.
         let mut prov = DatasetProvenance::new();
         // Register unit 0 normally.
-        let _good_unit = prov.register_unit("good", OriginKind::Source);
-        let artifact = prov.register_artifact("good.ttl");
+        let _good_unit = prov.register_unit("good", OriginKind::Source).unwrap();
+        let artifact = prov.register_artifact("good.ttl").unwrap();
 
         // Forge a UnitId beyond the registered range.
         let bad_unit = UnitId::from_index(99);
@@ -1086,8 +1303,10 @@ mod tests {
     #[test]
     fn gate_rejects_occurrences_for_an_empty_dataset() {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("slices/core/a", OriginKind::Source);
-        let artifact = prov.register_artifact("a/a.ttl");
+        let unit = prov
+            .register_unit("slices/core/a", OriginKind::Source)
+            .unwrap();
+        let artifact = prov.register_artifact("a/a.ttl").unwrap();
         prov.record_occurrence(qh(0), unit, artifact, None);
 
         let errs = check_provenance(&prov, &[]).expect_err("an occurrence with no dataset quad");
@@ -1118,8 +1337,10 @@ mod tests {
     #[test]
     fn gate_reports_dangling_and_missing_together() {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("slices/core/a", OriginKind::Source);
-        let artifact = prov.register_artifact("a/a.ttl");
+        let unit = prov
+            .register_unit("slices/core/a", OriginKind::Source)
+            .unwrap();
+        let artifact = prov.register_artifact("a/a.ttl").unwrap();
         prov.record_occurrence(qh(0), unit, artifact, None);
         prov.record_occurrence(qh(7), unit, artifact, None); // not a dataset quad
 
@@ -1146,8 +1367,8 @@ mod tests {
             OriginKind::RuntimeInput,
         ] {
             let mut prov = DatasetProvenance::new();
-            let unit = prov.register_unit(kind.to_string(), kind);
-            let artifact = prov.register_artifact("some/artifact.ttl");
+            let unit = prov.register_unit(kind.to_string(), kind).unwrap();
+            let artifact = prov.register_artifact("some/artifact.ttl").unwrap();
             let q = qh(0);
             prov.record_occurrence(q, unit, artifact, None);
             let result = check_provenance(&prov, &[q]);
@@ -1162,18 +1383,18 @@ mod tests {
         // Two quads with the same `(unit, artifact)` origin set must share an
         // OriginSetId regardless of the order the sets are interned.
         let mut prov = DatasetProvenance::new();
-        let u0 = prov.register_unit("u0", OriginKind::Source);
-        let u1 = prov.register_unit("u1", OriginKind::Source);
-        let a0 = prov.register_artifact("a0.ttl");
-        let a1 = prov.register_artifact("a1.ttl");
+        let u0 = prov.register_unit("u0", OriginKind::Source).unwrap();
+        let u1 = prov.register_unit("u1", OriginKind::Source).unwrap();
+        let a0 = prov.register_artifact("a0.ttl").unwrap();
+        let a1 = prov.register_artifact("a1.ttl").unwrap();
 
-        let id_1 = prov.intern_origin_set(vec![(u0, a0), (u1, a1)]);
+        let id_1 = prov.intern_origin_set(vec![(u0, a0), (u1, a1)]).unwrap();
         // Same set but reversed order — must produce the same OriginSetId.
-        let id_2 = prov.intern_origin_set(vec![(u1, a1), (u0, a0)]);
+        let id_2 = prov.intern_origin_set(vec![(u1, a1), (u0, a0)]).unwrap();
         assert_eq!(id_1, id_2, "equal origin sets must share an OriginSetId");
 
         // A different singleton set must produce a new id.
-        let id_3 = prov.intern_origin_set(vec![(u0, a0)]);
+        let id_3 = prov.intern_origin_set(vec![(u0, a0)]).unwrap();
         assert_ne!(id_1, id_3, "distinct sets must have distinct OriginSetIds");
     }
 

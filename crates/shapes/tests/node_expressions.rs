@@ -268,7 +268,8 @@ fn path_values_multi_valued_focus_is_a_failure() {
     ));
     let mut guard = RecursionGuard::default();
     let err = eval_node_expr(&store, &focus, &expr, &mut guard)
-        .expect_err("a multi-valued shnex:focusNode is an evaluation failure");
+        .expect_err("a multi-valued shnex:focusNode is an evaluation failure")
+        .to_string();
     assert!(err.contains("shnex:focusNode"), "got: {err}");
 }
 
@@ -1200,7 +1201,8 @@ fn a_computed_shape_argument_that_names_no_shape_is_an_error() {
     ));
     let mut guard = RecursionGuard::default();
     let err = eval_node_expr(&store, &focus, &expr, &mut guard)
-        .expect_err("an unresolvable computed shape must be an error, never a vacuous true");
+        .expect_err("an unresolvable computed shape must be an error, never a vacuous true")
+        .to_string();
     assert!(
         err.contains("is not a shape of this shapes graph"),
         "got: {err}"
@@ -1245,7 +1247,8 @@ fn a_computed_shape_argument_must_produce_exactly_one_iri() {
         ));
         let mut guard = RecursionGuard::default();
         let err = eval_node_expr(&store, &focus, &expr, &mut guard)
-            .expect_err("a shape argument that is not exactly one IRI must be an error");
+            .expect_err("a shape argument that is not exactly one IRI must be an error")
+            .to_string();
         assert!(
             err.contains("must produce exactly one shape IRI"),
             "at {count} produced IRIs, got: {err}"
@@ -1270,6 +1273,7 @@ fn try_outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Result<Vec<Stri
     let mut guard = RecursionGuard::default();
     eval_node_expr(&store, &focus_term, &expr, &mut guard)
         .map(|out| out.iter().map(ToString::to_string).collect())
+        .map_err(|error| error.to_string())
 }
 
 /// The canonical rendering of an `xsd:integer` literal.

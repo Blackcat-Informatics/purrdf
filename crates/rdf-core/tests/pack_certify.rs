@@ -24,80 +24,90 @@ use sha2::{Digest, Sha256};
 fn rich_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
-    let s1 = b.intern_iri("http://example.org/s1");
-    let p1 = b.intern_iri("http://example.org/p1");
-    let o1 = b.intern_iri("http://example.org/o1");
-    b.push_quad(s1, p1, o1, None);
+    let s1 = b.intern_iri("http://example.org/s1").unwrap();
+    let p1 = b.intern_iri("http://example.org/p1").unwrap();
+    let o1 = b.intern_iri("http://example.org/o1").unwrap();
+    b.push_quad(s1, p1, o1, None).unwrap();
 
-    let s2 = b.intern_iri("http://example.org/s2");
-    let p2 = b.intern_iri("http://example.org/p2");
-    let lit_en = b.intern_literal(RdfLiteral {
-        lexical_form: "hello".to_owned(),
-        datatype: None,
-        language: Some("en".to_owned()),
-        direction: None,
-    });
-    b.push_quad(s2, p2, lit_en, None);
+    let s2 = b.intern_iri("http://example.org/s2").unwrap();
+    let p2 = b.intern_iri("http://example.org/p2").unwrap();
+    let lit_en = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "hello".to_owned(),
+            datatype: None,
+            language: Some("en".to_owned()),
+            direction: None,
+        })
+        .unwrap();
+    b.push_quad(s2, p2, lit_en, None).unwrap();
 
-    let lit_typed = b.intern_literal(RdfLiteral {
-        lexical_form: "42".to_owned(),
-        datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
-        language: None,
-        direction: None,
-    });
-    let p2b = b.intern_iri("http://example.org/p2b");
-    b.push_quad(s2, p2b, lit_typed, None);
+    let lit_typed = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "42".to_owned(),
+            datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    let p2b = b.intern_iri("http://example.org/p2b").unwrap();
+    b.push_quad(s2, p2b, lit_typed, None).unwrap();
 
-    let lit_dir = b.intern_literal(RdfLiteral {
-        lexical_form: "ltr text".to_owned(),
-        datatype: None,
-        language: Some("en".to_owned()),
-        direction: Some(purrdf_core::RdfTextDirection::Ltr),
-    });
-    let p2c = b.intern_iri("http://example.org/p2c");
-    b.push_quad(s2, p2c, lit_dir, None);
+    let lit_dir = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "ltr text".to_owned(),
+            datatype: None,
+            language: Some("en".to_owned()),
+            direction: Some(purrdf_core::RdfTextDirection::Ltr),
+        })
+        .unwrap();
+    let p2c = b.intern_iri("http://example.org/p2c").unwrap();
+    b.push_quad(s2, p2c, lit_dir, None).unwrap();
 
-    let blank1 = b.intern_blank("blank1", purrdf_core::BlankScope::default());
-    let blank2 = b.intern_blank("blank2", purrdf_core::BlankScope::default());
-    let p3 = b.intern_iri("http://example.org/p3");
-    b.push_quad(blank1, p3, blank2, None);
+    let blank1 = b
+        .intern_blank("blank1", purrdf_core::BlankScope::default())
+        .unwrap();
+    let blank2 = b
+        .intern_blank("blank2", purrdf_core::BlankScope::default())
+        .unwrap();
+    let p3 = b.intern_iri("http://example.org/p3").unwrap();
+    b.push_quad(blank1, p3, blank2, None).unwrap();
 
-    let triple1 = b.intern_triple(s1, p1, o1);
-    let s4 = b.intern_iri("http://example.org/s4");
-    let p4 = b.intern_iri("http://example.org/p4");
-    b.push_quad(s4, p4, triple1, None);
+    let triple1 = b.intern_triple(s1, p1, o1).unwrap();
+    let s4 = b.intern_iri("http://example.org/s4").unwrap();
+    let p4 = b.intern_iri("http://example.org/p4").unwrap();
+    b.push_quad(s4, p4, triple1, None).unwrap();
 
     // A second, side-table-only triple term (never a base quad's S/P/O).
-    let s6 = b.intern_iri("http://example.org/s6");
-    let p6 = b.intern_iri("http://example.org/p6");
-    let o6 = b.intern_iri("http://example.org/o6");
-    let triple2 = b.intern_triple(s6, p6, o6);
+    let s6 = b.intern_iri("http://example.org/s6").unwrap();
+    let p6 = b.intern_iri("http://example.org/p6").unwrap();
+    let o6 = b.intern_iri("http://example.org/o6").unwrap();
+    let triple2 = b.intern_triple(s6, p6, o6).unwrap();
 
-    let g1 = b.intern_iri("http://example.org/g1");
-    let g2 = b.intern_iri("http://example.org/g2");
-    let s5 = b.intern_iri("http://example.org/s5");
-    let p5 = b.intern_iri("http://example.org/p5");
-    let o5 = b.intern_iri("http://example.org/o5");
-    b.push_quad(s5, p5, o5, Some(g1));
-    b.push_quad(s5, p5, triple1, Some(g2));
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    let g2 = b.intern_iri("http://example.org/g2").unwrap();
+    let s5 = b.intern_iri("http://example.org/s5").unwrap();
+    let p5 = b.intern_iri("http://example.org/p5").unwrap();
+    let o5 = b.intern_iri("http://example.org/o5").unwrap();
+    b.push_quad(s5, p5, o5, Some(g1)).unwrap();
+    b.push_quad(s5, p5, triple1, Some(g2)).unwrap();
 
-    let r1 = b.intern_iri("http://example.org/r1");
-    let r2 = b.intern_iri("http://example.org/r2");
-    b.push_reifier(r1, triple1);
+    let r1 = b.intern_iri("http://example.org/r1").unwrap();
+    let r2 = b.intern_iri("http://example.org/r2").unwrap();
+    b.push_reifier(r1, triple1).unwrap();
     // r2 binds a side-table-only triple term, inside a named graph that owns
     // no base quad of its own.
-    let g3 = b.intern_iri("http://example.org/g3");
-    b.push_reifier_in_graph(r2, triple2, Some(g3));
+    let g3 = b.intern_iri("http://example.org/g3").unwrap();
+    b.push_reifier_in_graph(r2, triple2, Some(g3)).unwrap();
 
-    let ap1 = b.intern_iri("http://example.org/ap1");
-    let ao1 = b.intern_iri("http://example.org/ao1");
-    b.push_annotation(r1, ap1, ao1);
-    let ap2 = b.intern_iri("http://example.org/ap2");
-    let ao2 = b.intern_iri("http://example.org/ao2");
-    b.push_annotation_in_graph(r1, ap2, ao2, Some(g2));
-    let ap3 = b.intern_iri("http://example.org/ap3");
-    let ao3 = b.intern_iri("http://example.org/ao3");
-    b.push_annotation(r2, ap3, ao3);
+    let ap1 = b.intern_iri("http://example.org/ap1").unwrap();
+    let ao1 = b.intern_iri("http://example.org/ao1").unwrap();
+    b.push_annotation(r1, ap1, ao1).unwrap();
+    let ap2 = b.intern_iri("http://example.org/ap2").unwrap();
+    let ao2 = b.intern_iri("http://example.org/ao2").unwrap();
+    b.push_annotation_in_graph(r1, ap2, ao2, Some(g2)).unwrap();
+    let ap3 = b.intern_iri("http://example.org/ap3").unwrap();
+    let ao3 = b.intern_iri("http://example.org/ao3").unwrap();
+    b.push_annotation(r2, ap3, ao3).unwrap();
 
     b.freeze().expect("rich fixture is a valid dataset")
 }

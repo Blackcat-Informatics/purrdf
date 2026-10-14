@@ -1073,10 +1073,12 @@ fn final_checkpoint_failure_discards_success_and_keeps_workspace_held() {
 /// Seeds a destination with a sentinel quad to detect any partial graph publication.
 fn destination() -> RdfDatasetBuilder {
     let mut destination = RdfDatasetBuilder::new();
-    let s = destination.intern_iri("https://example.org/retained");
-    let p = destination.intern_iri("https://example.org/edge");
-    let o = destination.intern_iri("https://example.org/value");
-    destination.push_quad(s, p, o, None);
+    let s = destination
+        .intern_iri("https://example.org/retained")
+        .unwrap();
+    let p = destination.intern_iri("https://example.org/edge").unwrap();
+    let o = destination.intern_iri("https://example.org/value").unwrap();
+    destination.push_quad(s, p, o, None).unwrap();
     destination
 }
 /// Graph failures preserve the destination; successful publication appends only after checking.

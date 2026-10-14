@@ -59,16 +59,25 @@ fn build_simple_page(subject: &str, predicate: &str, object: &str) -> Arc<RdfDat
         &format!("http://example.org/{predicate}"),
         &format!("http://example.org/{object}"),
     )
+    .expect("authored fixture")
 }
 
 /// One `(subject predicate object)` triple in named graph `graph`, as its own page.
 fn build_graph_page(subject: &str, predicate: &str, object: &str, graph: &str) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("http://example.org/{subject}"));
-    let p = b.intern_iri(&format!("http://example.org/{predicate}"));
-    let o = b.intern_iri(&format!("http://example.org/{object}"));
-    let g = b.intern_iri(&format!("http://example.org/{graph}"));
-    b.push_quad(s, p, o, Some(g));
+    let s = b
+        .intern_iri(&format!("http://example.org/{subject}"))
+        .unwrap();
+    let p = b
+        .intern_iri(&format!("http://example.org/{predicate}"))
+        .unwrap();
+    let o = b
+        .intern_iri(&format!("http://example.org/{object}"))
+        .unwrap();
+    let g = b
+        .intern_iri(&format!("http://example.org/{graph}"))
+        .unwrap();
+    b.push_quad(s, p, o, Some(g)).unwrap();
     b.freeze().expect("page freeze")
 }
 
@@ -175,16 +184,16 @@ mod fuzz {
         let mut r_side_ids = Vec::with_capacity(page_count);
         for b in &mut builders {
             let pool: Vec<_> = (0..POOL_LEN)
-                .map(|i| b.intern_iri(&format!("http://example.org/n{i}")))
+                .map(|i| b.intern_iri(&format!("http://example.org/n{i}")).unwrap())
                 .collect();
             let gs: Vec<_> = (0..GRAPH_LEN)
-                .map(|i| b.intern_iri(&format!("http://example.org/g{i}")))
+                .map(|i| b.intern_iri(&format!("http://example.org/g{i}")).unwrap())
                 .collect();
-            let triple = b.intern_triple(pool[0], pool[1], pool[2]);
-            let g_empty = b.intern_iri("http://example.org/gEmpty");
-            let g_side = b.intern_iri("http://example.org/gSide");
-            let g_anno = b.intern_iri("http://example.org/gAnno");
-            let r_side = b.intern_iri("http://example.org/rSide");
+            let triple = b.intern_triple(pool[0], pool[1], pool[2]).unwrap();
+            let g_empty = b.intern_iri("http://example.org/gEmpty").unwrap();
+            let g_side = b.intern_iri("http://example.org/gSide").unwrap();
+            let g_anno = b.intern_iri("http://example.org/gAnno").unwrap();
+            let r_side = b.intern_iri("http://example.org/rSide").unwrap();
             pools.push(pool);
             graphs.push(gs);
             triples.push(triple);
@@ -206,7 +215,7 @@ mod fuzz {
                 pool[o_choice as usize]
             };
             let g_id = g.map(|gi| gs[gi as usize]);
-            builders[page].push_quad(s_id, p_id, o_id, g_id);
+            builders[page].push_quad(s_id, p_id, o_id, g_id).unwrap();
             // The RDF 1.2 twins of this row, in this row's own graph: a reifier
             // binding for the quoted triple and an annotation carrying the row's
             // predicate and object. Both are keyed on the row's SUBJECT, so a term
@@ -220,37 +229,43 @@ mod fuzz {
             // the pages disjoint.
             let r_page = reifier_page(s, g, page_count);
             let r_graph = g.map(|gi| graphs[r_page][gi as usize]);
-            builders[r_page].push_reifier_in_graph(
-                pools[r_page][s as usize],
-                triples[r_page],
-                r_graph,
-            );
-            builders[page].push_annotation_in_graph(s_id, p_id, o_id, g_id);
+            builders[r_page]
+                .push_reifier_in_graph(pools[r_page][s as usize], triples[r_page], r_graph)
+                .unwrap();
+            builders[page]
+                .push_annotation_in_graph(s_id, p_id, o_id, g_id)
+                .unwrap();
         }
 
         // Guaranteed declared-empty graph: this page knows `gEmpty` exists but owns
         // no row in it.
-        builders[empty_graph_page].declare_named_graph(g_empty_ids[empty_graph_page]);
+        builders[empty_graph_page]
+            .declare_named_graph(g_empty_ids[empty_graph_page])
+            .unwrap();
 
         // Guaranteed side-table-only graph: a reifier row in `gSide`, with NO base
         // quad ever naming that graph.
-        builders[side_graph_page].push_reifier_in_graph(
-            r_side_ids[side_graph_page],
-            triples[side_graph_page],
-            Some(g_side_ids[side_graph_page]),
-        );
+        builders[side_graph_page]
+            .push_reifier_in_graph(
+                r_side_ids[side_graph_page],
+                triples[side_graph_page],
+                Some(g_side_ids[side_graph_page]),
+            )
+            .unwrap();
 
         // Its annotation-stream mirror: an annotation row in `gAnno`, a graph named
         // by NO base quad and by NO reifier row either. `gSide` and `gAnno` are
         // therefore single-stream graphs pointing in opposite directions, which is
         // what forces the reifier and annotation page-postings to be read
         // separately rather than through one shared list.
-        builders[side_graph_page].push_annotation_in_graph(
-            r_side_ids[side_graph_page],
-            pools[side_graph_page][0],
-            pools[side_graph_page][1],
-            Some(g_anno_ids[side_graph_page]),
-        );
+        builders[side_graph_page]
+            .push_annotation_in_graph(
+                r_side_ids[side_graph_page],
+                pools[side_graph_page][0],
+                pools[side_graph_page][1],
+                Some(g_anno_ids[side_graph_page]),
+            )
+            .unwrap();
 
         // Guaranteed quoted-triple object: a base quad whose object is the triple
         // term, on the page the SAME deterministic row-page function assigns it to
@@ -260,7 +275,9 @@ mod fuzz {
         {
             let pool = &pools[guaranteed_page];
             let triple = triples[guaranteed_page];
-            builders[guaranteed_page].push_quad(pool[3], pool[4], triple, None);
+            builders[guaranteed_page]
+                .push_quad(pool[3], pool[4], triple, None)
+                .unwrap();
         }
 
         builders
@@ -749,7 +766,7 @@ mod fuzz {
 
         // Variant 2: after compact() (renumbers GlobalTermIds; page SLOTS are
         // untouched, so the identity map still applies).
-        let compacted = paged.compact();
+        let compacted = paged.compact().unwrap();
         assert_pattern_matches_reference(
             &compacted,
             &raw_pages,
@@ -1115,11 +1132,11 @@ fn compaction_preserves_the_named_graphs_value_set_in_canonical_order() {
     let mut pages = Vec::new();
     for name in ["zzz", "aaa", "mmm"] {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        let g = b.intern_iri(&format!("http://example.org/{name}"));
-        b.push_quad(s, p, o, Some(g));
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let g = b.intern_iri(&format!("http://example.org/{name}")).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
         pages.push(b.freeze().expect("page freeze"));
     }
     let provider = Arc::new(InMemoryPageProvider::new(pages));
@@ -1130,7 +1147,7 @@ fn compaction_preserves_the_named_graphs_value_set_in_canonical_order() {
         .map(|id| to_value(&paged, id))
         .collect();
 
-    let compacted = paged.compact();
+    let compacted = paged.compact().unwrap();
     let post_order: Vec<TermValue> = compacted
         .named_graphs()
         .map(|id| to_value(&compacted, id))
@@ -1183,8 +1200,8 @@ fn identical_query_on_two_fresh_views_produces_identical_requested_pages() {
 #[test]
 fn a_genuinely_empty_graph_selective_answer_is_a_complete_ready_result_not_an_error() {
     let mut b = RdfDatasetBuilder::new();
-    let g_empty = b.intern_iri("http://example.org/gEmpty");
-    b.declare_named_graph(g_empty);
+    let g_empty = b.intern_iri("http://example.org/gEmpty").unwrap();
+    b.declare_named_graph(g_empty).unwrap();
     let page = b.freeze().expect("page freeze");
     let provider = Arc::new(InMemoryPageProvider::new(vec![page]));
     let paged = PagedDataset::from_provider(provider).expect("seal page");

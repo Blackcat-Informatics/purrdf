@@ -21,20 +21,23 @@ impl Ontology {
     fn named(&mut self, name: &str) -> TermId {
         self.builder
             .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap()
     }
 
     fn blank(&mut self) -> TermId {
         let label = format!("syntax{}", self.next);
         self.next += 1;
-        self.builder.intern_blank(&label, BlankScope::DEFAULT)
+        self.builder
+            .intern_blank(&label, BlankScope::DEFAULT)
+            .unwrap()
     }
 
     fn standard(&mut self, iri: &str) -> TermId {
-        self.builder.intern_iri(iri)
+        self.builder.intern_iri(iri).unwrap()
     }
 
     fn triple(&mut self, s: TermId, p: TermId, o: TermId) {
-        self.builder.push_quad(s, p, o, None);
+        self.builder.push_quad(s, p, o, None).unwrap();
     }
 
     fn inverse(&mut self, role: TermId) -> TermId {

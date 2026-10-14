@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::ir::{RdfDataset, RdfDatasetBuilder};
 use crate::native_quads::flat_rdf_quads_from_dataset;
-use crate::{NativeRdfFormat, parse_dataset};
+use crate::{NativeRdfFormat, RdfDiagnostic, parse_dataset};
 
 /// The canonical, review-friendly Turtle renderer, which lives in the wasm-clean
 /// kernel. Re-exported so `purrdf::turtle_normalize::render`
@@ -35,7 +35,7 @@ pub use crate::turtle_render::render;
 pub fn canonical_turtle(
     input: &[u8],
     extra_prefixes: &[(String, String)],
-) -> Result<String, String> {
+) -> Result<String, RdfDiagnostic> {
     let dataset = ingest(input)?;
     Ok(render(&dataset, extra_prefixes))
 }
@@ -44,20 +44,19 @@ pub fn canonical_turtle(
 /// is flattened back to the un-folded flat quad stream (RDF-star triple terms
 /// preserved as triple-term objects, nothing reclassified) and re-interned verbatim
 /// into a fresh builder so the rendered graph is identical to the input.
-fn ingest(input: &[u8]) -> Result<Arc<RdfDataset>, String> {
-    let parsed = parse_dataset(input, NativeRdfFormat::Turtle.media_type(), None)
-        .map_err(|e| format!("Turtle parse error: {e}"))?;
+fn ingest(input: &[u8]) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let parsed = parse_dataset(input, NativeRdfFormat::Turtle.media_type(), None)?;
     let mut builder = RdfDatasetBuilder::new();
     for quad in flat_rdf_quads_from_dataset(&parsed) {
         // `intern_owned_term` is the exact inverse of the owned rendering the flat
         // stream carries, so a blank node's `(label, scope)` pair survives the
         // re-intern verbatim rather than being scope-qualified a second time.
-        let s = builder.intern_owned_term(&quad.subject);
-        let p = builder.intern_iri(&quad.predicate);
-        let o = builder.intern_owned_term(&quad.object);
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_owned_term(&quad.subject)?;
+        let p = builder.intern_iri(&quad.predicate)?;
+        let o = builder.intern_owned_term(&quad.object)?;
+        builder.push_quad(s, p, o, None)?;
     }
-    builder.freeze().map_err(|e| e.to_string())
+    builder.freeze()
 }
 
 #[cfg(test)]

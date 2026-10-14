@@ -2811,6 +2811,17 @@ impl AsyncJob {
             .and_then(JobError::presentation_json)
     }
 
+    /// A storage failure's original diagnostic JSON, or `undefined` for other
+    /// failures and unfinished or successful jobs. Capacity counts are decimal strings.
+    #[wasm_bindgen(getter, js_name = errorDiagnosticJson)]
+    pub fn error_diagnostic_json(&self) -> Option<String> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .and_then(JobError::diagnostic_json)
+    }
+
     /// The effect the job is suspended on, once; `undefined` when there is none.
     #[wasm_bindgen(js_name = takeEffect)]
     pub fn take_effect(&self) -> Option<AsyncEffect> {
@@ -3085,7 +3096,7 @@ impl AsyncJob {
                 return Err(kind_mismatch(expected, &result).into());
             }
         }
-        Ok(query_result_from_sparql(result, self.inner.blank_scope)?)
+        query_result_from_sparql(result, self.inner.blank_scope)
     }
 
     /// A raw job's serialized bytes, an explain job's rendered ledger, or a SHACL job's

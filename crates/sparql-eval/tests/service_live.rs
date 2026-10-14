@@ -125,10 +125,10 @@ fn the_stop_signal_travels_with_the_request_and_gates_it() {
 #[test]
 fn service_clause_federates_through_injected_http_transport() {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("http://ex/p");
-    let s = b.intern_iri("http://ex/s");
-    let o = b.intern_iri("http://ex/o");
-    b.push_quad(s, p, o, None);
+    let p = b.intern_iri("http://ex/p").unwrap();
+    let s = b.intern_iri("http://ex/s").unwrap();
+    let o = b.intern_iri("http://ex/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let dataset = b.freeze().expect("freeze");
 
     let query = "SELECT ?x WHERE { \

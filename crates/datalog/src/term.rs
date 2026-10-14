@@ -56,6 +56,7 @@ use core::hash::BuildHasher;
 
 use hashbrown::HashTable;
 use purrdf_hash::fixed::FixedState;
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 use crate::id::{MetaId, NodeId, SymId};
 
@@ -104,13 +105,19 @@ pub enum NodeData {
 
 /// Merge two already-sorted, already-deduplicated `MetaId` slices into one sorted,
 /// deduplicated `Vec`.
-fn merge_free_meta(left: &[MetaId], right: &[MetaId]) -> Vec<MetaId> {
-    let mut out = Vec::with_capacity(left.len() + right.len());
+fn merge_free_meta(left: &[MetaId], right: &[MetaId]) -> Result<Vec<MetaId>, StorageError> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(
+        left.len()
+            .checked_add(right.len())
+            .ok_or(StorageError::SizeOverflow)?,
+    )
+    .map_err(|_| StorageError::AllocationFailed)?;
     out.extend_from_slice(left);
     out.extend_from_slice(right);
     out.sort_unstable();
     out.dedup();
-    out
+    Ok(out)
 }
 
 /// A hash-consed arena of compound terms.
@@ -136,7 +143,13 @@ pub struct TermDag {
     /// assigned in mint order, independent of node interning order (a `Meta` node
     /// is interned once per DISTINCT metavariable, but a metavariable itself is
     /// minted exactly once, by [`Self::fresh_meta`]).
-    next_meta: u32,
+    next_meta: u64,
+    /// Reduced-width owner model; absent from shipping layouts and APIs.
+    #[cfg(test)]
+    node_limit: Option<u64>,
+    /// Reduced-width symbol model at the original mint boundary.
+    #[cfg(test)]
+    symbol_limit: Option<u64>,
 }
 
 impl TermDag {
@@ -177,30 +190,43 @@ impl TermDag {
     /// A fresh metavariable is, by construction, distinct from every metavariable
     /// minted before it, so its node's free-meta set is exactly `{itself}` and can
     /// never coincide with an earlier node's cache through hash-consing.
-    pub fn fresh_meta(&mut self) -> (MetaId, NodeId) {
-        let meta = MetaId::from_index(self.next_meta as usize);
+    pub fn fresh_meta(&mut self) -> Result<(MetaId, NodeId), StorageError> {
+        let meta = MetaId::from_index(self.next_meta)?;
+        let node = self.intern(NodeData::Meta(meta))?;
         self.next_meta += 1;
-        let node = self.intern(NodeData::Meta(meta));
-        (meta, node)
+        Ok((meta, node))
     }
 
     /// Intern a symbol string, returning its dense [`SymId`].
-    pub fn intern_symbol(&mut self, symbol: &str) -> SymId {
+    pub fn intern_symbol(&mut self, symbol: &str) -> Result<SymId, StorageError> {
         let hash = FixedState::new().hash_one(symbol);
         let symbols = &self.symbols;
         if let Some(&id) = self
             .symbols_by_content
-            .find(hash, |&id| symbols[id.index()] == symbol)
+            .find(hash, |&id| symbols[id.resident_index()] == symbol)
         {
-            return id;
+            return Ok(id);
         }
-        let id = SymId::from_index(self.symbols.len());
-        self.symbols.push(symbol.to_owned());
+        let limit = u64::MAX;
+        #[cfg(test)]
+        let limit = self.symbol_limit.unwrap_or(limit);
+        let id = SymId::from_address_with_limit(self.symbols.len(), limit)?;
+        self.symbols
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.symbols_by_content
+            .try_reserve(1, |&id| {
+                FixedState::new().hash_one(&self.symbols[id.resident_index()])
+            })
+            .map_err(|_| StorageError::AllocationFailed)?;
+        let mut resident = Resident;
+        let symbol = Memory::new(&mut resident).string(symbol)?;
+        self.symbols.push(symbol);
         let symbols = &self.symbols;
         self.symbols_by_content.insert_unique(hash, id, |&id| {
-            FixedState::new().hash_one(&symbols[id.index()])
+            FixedState::new().hash_one(&symbols[id.resident_index()])
         });
-        id
+        Ok(id)
     }
 
     /// The symbol string a [`SymId`] addresses.
@@ -213,29 +239,56 @@ impl TermDag {
     }
 
     /// Intern a [`NodeData::Leaf`] naming `symbol`.
-    pub fn intern_leaf(&mut self, symbol: &str) -> NodeId {
-        let sym = self.intern_symbol(symbol);
-        self.intern(NodeData::Leaf(sym))
+    pub fn intern_leaf(&mut self, symbol: &str) -> Result<NodeId, StorageError> {
+        self.intern_named(symbol, NodeData::Leaf)
     }
 
     /// Intern a [`NodeData::Free`] naming `symbol`.
-    pub fn intern_free(&mut self, symbol: &str) -> NodeId {
-        let sym = self.intern_symbol(symbol);
-        self.intern(NodeData::Free(sym))
+    pub fn intern_free(&mut self, symbol: &str) -> Result<NodeId, StorageError> {
+        self.intern_named(symbol, NodeData::Free)
+    }
+
+    /// Publish a named node atomically with any new dependent symbol identity.
+    fn intern_named(
+        &mut self,
+        symbol: &str,
+        node: fn(SymId) -> NodeData,
+    ) -> Result<NodeId, StorageError> {
+        let checkpoint = self.symbols.len();
+        let sym = self.intern_symbol(symbol)?;
+        match self.intern(node(sym)) {
+            Ok(id) => Ok(id),
+            Err(error) => {
+                if self.symbols.len() > checkpoint {
+                    let entry = self
+                        .symbols_by_content
+                        .find_entry(FixedState::new().hash_one(symbol), |&id| id == sym)
+                        .expect("the new symbol retains its original index entry");
+                    entry.remove();
+                    self.symbols.pop();
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Intern a [`NodeData::Bound`] occurrence.
-    pub fn intern_bound(&mut self, debruijn: u32, slot: u16) -> NodeId {
+    pub fn intern_bound(&mut self, debruijn: u32, slot: u16) -> Result<NodeId, StorageError> {
         self.intern(NodeData::Bound { debruijn, slot })
     }
 
     /// Intern an [`NodeData::App`] node.
-    pub fn intern_app(&mut self, op: NodeId, args: Vec<NodeId>) -> NodeId {
+    pub fn intern_app(&mut self, op: NodeId, args: Vec<NodeId>) -> Result<NodeId, StorageError> {
         self.intern(NodeData::App { op, args })
     }
 
     /// Intern a [`NodeData::Binder`] node.
-    pub fn intern_binder(&mut self, op: NodeId, sorts: Vec<NodeId>, body: NodeId) -> NodeId {
+    pub fn intern_binder(
+        &mut self,
+        op: NodeId,
+        sorts: Vec<NodeId>,
+        body: NodeId,
+    ) -> Result<NodeId, StorageError> {
         self.intern(NodeData::Binder { op, sorts, body })
     }
 
@@ -245,47 +298,66 @@ impl TermDag {
     /// is already resident (a precondition every public `intern_*` constructor
     /// upholds, since a caller can only ever hold a `NodeId` this arena already
     /// minted).
-    fn compute_free_meta(&self, data: &NodeData) -> Vec<MetaId> {
-        match data {
+    fn compute_free_meta(&self, data: &NodeData) -> Result<Vec<MetaId>, StorageError> {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        Ok(match data {
             NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => Vec::new(),
-            NodeData::Meta(meta) => vec![*meta],
+            NodeData::Meta(meta) => memory.collect([*meta])?,
             NodeData::App { op, args } => {
-                let mut acc = self.free_meta(*op).to_vec();
+                let mut acc = memory.collect(self.free_meta(*op).iter().copied())?;
                 for &arg in args {
-                    acc = merge_free_meta(&acc, self.free_meta(arg));
+                    acc = merge_free_meta(&acc, self.free_meta(arg))?;
                 }
                 acc
             }
             // Binders don't bind metavariables, only de Bruijn positions, so a
             // binder's free-meta set is exactly its children's union too.
             NodeData::Binder { op, sorts, body } => {
-                let mut acc = self.free_meta(*op).to_vec();
+                let mut acc = memory.collect(self.free_meta(*op).iter().copied())?;
                 for &sort in sorts {
-                    acc = merge_free_meta(&acc, self.free_meta(sort));
+                    acc = merge_free_meta(&acc, self.free_meta(sort))?;
                 }
-                acc = merge_free_meta(&acc, self.free_meta(*body));
+                acc = merge_free_meta(&acc, self.free_meta(*body))?;
                 acc
             }
-        }
+        })
     }
 
     /// Intern `data`, returning the existing id if an identical node is already
     /// held, and caching its free-metavariable set on first insertion.
-    fn intern(&mut self, data: NodeData) -> NodeId {
+    fn intern(&mut self, data: NodeData) -> Result<NodeId, StorageError> {
         let hash = FixedState::new().hash_one(&data);
         let nodes = &self.nodes;
-        if let Some(&id) = self.by_content.find(hash, |&id| nodes[id.index()] == data) {
-            return id;
+        if let Some(&id) = self
+            .by_content
+            .find(hash, |&id| nodes[id.resident_index()] == data)
+        {
+            return Ok(id);
         }
-        let cache = self.compute_free_meta(&data);
-        let id = NodeId::from_index(self.nodes.len());
+        let limit = u64::MAX;
+        #[cfg(test)]
+        let limit = self.node_limit.unwrap_or(limit);
+        let id = NodeId::from_address_with_limit(self.nodes.len(), limit)?;
+        self.nodes
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.free_meta
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.by_content
+            .try_reserve(1, |&id| {
+                FixedState::new().hash_one(&self.nodes[id.resident_index()])
+            })
+            .map_err(|_| StorageError::AllocationFailed)?;
+        let cache = self.compute_free_meta(&data)?;
         self.nodes.push(data);
         self.free_meta.push(cache);
         let nodes = &self.nodes;
         self.by_content.insert_unique(hash, id, |&id| {
-            FixedState::new().hash_one(&nodes[id.index()])
+            FixedState::new().hash_one(&nodes[id.resident_index()])
         });
-        id
+        Ok(id)
     }
 }
 
@@ -293,12 +365,80 @@ impl TermDag {
 mod tests {
     use super::*;
 
+    #[test]
+    fn named_node_capacity_rolls_back_only_new_symbols_and_preserves_hits() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        let mut dag = TermDag::default();
+        let kept = dag.intern_leaf("kept").unwrap();
+        dag.node_limit = Some(1);
+        let expected =
+            StorageError::Capacity(CapacityError::new(CapacitySpace::DatalogNodes, 2, 1));
+        assert_eq!(dag.intern_leaf("kept"), Ok(kept));
+        assert_eq!(dag.intern_leaf("new-leaf"), Err(expected));
+        assert_eq!(dag.intern_free("new-free"), Err(expected));
+        assert_eq!(dag.intern_free("kept"), Err(expected));
+        assert_eq!(dag.fresh_meta().unwrap_err(), expected);
+        assert_eq!(dag.next_meta, 0);
+        assert_eq!(dag.len(), 1);
+        assert_eq!(dag.free_meta.len(), 1);
+        assert_eq!(dag.by_content.len(), 1);
+        assert_eq!(dag.symbols, ["kept"]);
+        assert_eq!(dag.symbols_by_content.len(), 1);
+        dag.node_limit = None;
+        let next = dag.intern_free("new-free").unwrap();
+        assert_eq!(next.index(), 1);
+        assert_eq!(dag.symbols, ["kept", "new-free"]);
+    }
+
+    #[test]
+    fn symbol_capacity_preserves_existing_named_nodes() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        let mut dag = TermDag::default();
+        let kept = dag.intern_leaf("kept").unwrap();
+        dag.symbol_limit = Some(1);
+        assert_eq!(dag.intern_leaf("kept"), Ok(kept));
+        assert_eq!(
+            dag.intern_free("new"),
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogSymbols,
+                2,
+                1
+            )))
+        );
+        assert_eq!(dag.len(), 1);
+        assert_eq!(dag.symbols, ["kept"]);
+        dag.symbol_limit = None;
+        assert_eq!(dag.intern_free("new").unwrap().index(), 1);
+    }
+
+    #[test]
+    fn fresh_meta_last_slot_and_refusal_keep_the_original_node_owner() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
+        let mut dag = TermDag {
+            next_meta: u64::MAX - 1,
+            ..TermDag::default()
+        };
+        let (meta, node) = dag.fresh_meta().unwrap();
+        assert_eq!(meta.index(), u64::MAX - 1);
+        assert_eq!(dag.free_meta(node), [meta]);
+        assert_eq!(
+            dag.fresh_meta(),
+            Err(StorageError::Capacity(CapacityError::new(
+                CapacitySpace::DatalogMetas,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX)
+            )))
+        );
+        assert_eq!(dag.len(), 1);
+        assert_eq!(dag.next_meta, u64::MAX);
+    }
+
     /// Interning the same leaf symbol twice yields the same `NodeId`.
     #[test]
     fn hash_consing_collapses_identical_leaves() {
         let mut dag = TermDag::default();
-        let a = dag.intern_leaf("https://example.org/a");
-        let b = dag.intern_leaf("https://example.org/a");
+        let a = dag.intern_leaf("https://example.org/a").unwrap();
+        let b = dag.intern_leaf("https://example.org/a").unwrap();
         assert_eq!(a, b);
         assert_eq!(dag.len(), 1, "one leaf, one node");
     }
@@ -308,13 +448,13 @@ mod tests {
     #[test]
     fn hash_consing_collapses_identical_applications() {
         let mut dag = TermDag::default();
-        let f = dag.intern_leaf("f");
-        let a = dag.intern_leaf("a");
-        let b = dag.intern_leaf("b");
-        let first = dag.intern_app(f, vec![a, b]);
-        let second = dag.intern_app(f, vec![a, b]);
+        let f = dag.intern_leaf("f").unwrap();
+        let a = dag.intern_leaf("a").unwrap();
+        let b = dag.intern_leaf("b").unwrap();
+        let first = dag.intern_app(f, vec![a, b]).unwrap();
+        let second = dag.intern_app(f, vec![a, b]).unwrap();
         assert_eq!(first, second);
-        let different = dag.intern_app(f, vec![b, a]);
+        let different = dag.intern_app(f, vec![b, a]).unwrap();
         assert_ne!(first, different, "argument order is part of the shape");
     }
 
@@ -322,11 +462,11 @@ mod tests {
     #[test]
     fn hash_consing_collapses_identical_binders() {
         let mut dag = TermDag::default();
-        let forall = dag.intern_leaf("forall");
-        let sort = dag.intern_leaf("thing");
-        let body = dag.intern_bound(0, 0);
-        let first = dag.intern_binder(forall, vec![sort], body);
-        let second = dag.intern_binder(forall, vec![sort], body);
+        let forall = dag.intern_leaf("forall").unwrap();
+        let sort = dag.intern_leaf("thing").unwrap();
+        let body = dag.intern_bound(0, 0).unwrap();
+        let first = dag.intern_binder(forall, vec![sort], body).unwrap();
+        let second = dag.intern_binder(forall, vec![sort], body).unwrap();
         assert_eq!(first, second);
     }
 
@@ -335,8 +475,8 @@ mod tests {
     #[test]
     fn fresh_meta_is_unique_and_self_free() {
         let mut dag = TermDag::default();
-        let (m1, n1) = dag.fresh_meta();
-        let (m2, n2) = dag.fresh_meta();
+        let (m1, n1) = dag.fresh_meta().unwrap();
+        let (m2, n2) = dag.fresh_meta().unwrap();
         assert_ne!(m1, m2);
         assert_ne!(n1, n2);
         assert_eq!(dag.free_meta(n1), &[m1]);
@@ -348,10 +488,10 @@ mod tests {
     #[test]
     fn app_free_meta_is_the_union_of_children() {
         let mut dag = TermDag::default();
-        let f = dag.intern_leaf("f");
-        let (m1, meta1) = dag.fresh_meta();
-        let (m2, meta2) = dag.fresh_meta();
-        let app = dag.intern_app(f, vec![meta1, meta2, meta1]);
+        let f = dag.intern_leaf("f").unwrap();
+        let (m1, meta1) = dag.fresh_meta().unwrap();
+        let (m2, meta2) = dag.fresh_meta().unwrap();
+        let app = dag.intern_app(f, vec![meta1, meta2, meta1]).unwrap();
         let mut expected = [m1, m2];
         expected.sort_unstable();
         assert_eq!(dag.free_meta(app), &expected);
@@ -363,10 +503,10 @@ mod tests {
     #[test]
     fn binder_free_meta_excludes_nothing() {
         let mut dag = TermDag::default();
-        let op = dag.intern_leaf("forall");
-        let sort = dag.intern_leaf("thing");
-        let (m, meta) = dag.fresh_meta();
-        let binder = dag.intern_binder(op, vec![sort], meta);
+        let op = dag.intern_leaf("forall").unwrap();
+        let sort = dag.intern_leaf("thing").unwrap();
+        let (m, meta) = dag.fresh_meta().unwrap();
+        let binder = dag.intern_binder(op, vec![sort], meta).unwrap();
         assert_eq!(dag.free_meta(binder), &[m]);
     }
 
@@ -375,9 +515,9 @@ mod tests {
     #[test]
     fn leaves_free_variables_and_bound_occurrences_have_no_free_meta() {
         let mut dag = TermDag::default();
-        let leaf = dag.intern_leaf("a");
-        let free = dag.intern_free("x");
-        let bound = dag.intern_bound(0, 0);
+        let leaf = dag.intern_leaf("a").unwrap();
+        let free = dag.intern_free("x").unwrap();
+        let bound = dag.intern_bound(0, 0).unwrap();
         assert_eq!(dag.free_meta(leaf), []);
         assert_eq!(dag.free_meta(free), []);
         assert_eq!(dag.free_meta(bound), []);
@@ -388,8 +528,8 @@ mod tests {
     #[test]
     fn symbol_interning_round_trips() {
         let mut dag = TermDag::default();
-        let id = dag.intern_symbol("https://example.org/p");
-        let again = dag.intern_symbol("https://example.org/p");
+        let id = dag.intern_symbol("https://example.org/p").unwrap();
+        let again = dag.intern_symbol("https://example.org/p").unwrap();
         assert_eq!(id, again);
         assert_eq!(dag.symbol(id), "https://example.org/p");
     }
@@ -399,8 +539,8 @@ mod tests {
     #[test]
     fn free_and_leaf_over_the_same_symbol_are_distinct_nodes() {
         let mut dag = TermDag::default();
-        let leaf = dag.intern_leaf("x");
-        let free = dag.intern_free("x");
+        let leaf = dag.intern_leaf("x").unwrap();
+        let free = dag.intern_free("x").unwrap();
         assert_ne!(leaf, free);
     }
 
@@ -409,12 +549,12 @@ mod tests {
     fn len_and_is_empty_track_distinct_nodes() {
         let mut dag = TermDag::default();
         assert!(dag.is_empty());
-        let a = dag.intern_leaf("a");
+        let a = dag.intern_leaf("a").unwrap();
         assert_eq!(dag.len(), 1);
-        let again = dag.intern_leaf("a");
+        let again = dag.intern_leaf("a").unwrap();
         assert_eq!(a, again, "re-interning the same leaf returns the same id");
         assert_eq!(dag.len(), 1, "re-interning must not grow the arena");
-        let _ = dag.intern_leaf("b");
+        let _ = dag.intern_leaf("b").unwrap();
         assert_eq!(dag.len(), 2);
     }
 
@@ -426,7 +566,7 @@ mod tests {
     #[test]
     fn fresh_meta_node_resolves_back_to_a_meta_shape() {
         let mut dag = TermDag::default();
-        let (meta, node) = dag.fresh_meta();
+        let (meta, node) = dag.fresh_meta().unwrap();
         assert_eq!(dag.data(node), &NodeData::Meta(meta));
     }
 }

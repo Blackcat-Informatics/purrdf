@@ -89,6 +89,10 @@ pub const GENID_WELL_KNOWN_PATH: &str = "/.well-known/genid/";
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SkolemError {
+    /// The rewritten dataset could not be frozen with its original diagnostic.
+    Invalid(crate::RdfDiagnostic),
+    /// Logical capacity or physical storage refusal during the rewrite.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The caller-supplied authority cannot prefix an IRI: empty, whitespace or
     /// control characters, characters the IRI grammar forbids, a `#` or `?`
     /// (either would land the minted genid path inside a fragment or query
@@ -141,6 +145,8 @@ pub enum SkolemError {
 impl std::fmt::Display for SkolemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Invalid(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
             Self::InvalidAuthority { authority, reason } => write!(
                 f,
                 "the skolem authority {authority:?} is unusable: {reason}; PurRDF mints no \
@@ -174,7 +180,20 @@ impl std::fmt::Display for SkolemError {
     }
 }
 
-impl std::error::Error for SkolemError {}
+impl std::error::Error for SkolemError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Invalid(error) => Some(error),
+            Self::Storage(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+purrdf_lex::variant_from!(SkolemError {
+    Storage(purrdf_lex::allocation::StorageError),
+    Invalid(crate::RdfDiagnostic)
+});
 
 /// Validate the caller-supplied authority and return the full genid prefix
 /// `{authority}/.well-known/genid/`.
@@ -318,7 +337,7 @@ fn decode_blank(encoded: &str) -> Result<(String, BlankScope), &'static str> {
 /// bindings, annotations, named-graph declarations, literal datatypes).
 pub(crate) trait TermMapper {
     /// The rewrite's refusal type.
-    type Error;
+    type Error: From<purrdf_lex::allocation::StorageError> + From<crate::RdfDiagnostic>;
 
     /// Map one blank node (identified by its source-dataset id and resolved
     /// `(label, scope)`) to a term interned in `builder`.
@@ -396,7 +415,7 @@ fn reintern<M: TermMapper>(
                         datatype: Some(dt.to_owned()),
                         language: language.map(str::to_owned),
                         direction,
-                    }))
+                    })?)
                 }
                 TermRef::Triple { s, p, o } => {
                     return Ok(Nested::Triple((s, false), (p, true), (o, false)));
@@ -406,7 +425,7 @@ fn reintern<M: TermMapper>(
             Ok(Nested::Leaf(mapped))
         },
         |(builder, mapper), (id, _), s, p, o| {
-            let mapped = builder.intern_triple(s, p, o);
+            let mapped = builder.intern_triple(s, p, o)?;
             mapper.record_term(id, mapped);
             Ok(mapped)
         },
@@ -576,7 +595,7 @@ pub(crate) fn rebuild_dataset<M: TermMapper>(
             Some(g) => Some(reintern(ds, &mut builder, g, mapper, false)?),
             None => None,
         };
-        let handle = builder.push_quad_with_handle(s, p, o, g);
+        let handle = builder.push_quad_with_handle(s, p, o, g)?;
         if let Some(loc) = ds.location_of(QuadHandle::from_index(index as u32)) {
             builder.attach_location(handle, loc.clone());
         }
@@ -588,7 +607,7 @@ pub(crate) fn rebuild_dataset<M: TermMapper>(
             Some(g) => Some(reintern(ds, &mut builder, g, mapper, false)?),
             None => None,
         };
-        builder.push_reifier_in_graph(r, t, g);
+        builder.push_reifier_in_graph(r, t, g)?;
     }
     mapper.record_reifier_predicate(&builder);
     for (r, p, o, g) in ds.annotations_with_graph() {
@@ -599,18 +618,16 @@ pub(crate) fn rebuild_dataset<M: TermMapper>(
             Some(g) => Some(reintern(ds, &mut builder, g, mapper, false)?),
             None => None,
         };
-        builder.push_annotation_in_graph(r, p, o, g);
+        builder.push_annotation_in_graph(r, p, o, g)?;
     }
     for g in ds.named_graphs() {
         let g = reintern(ds, &mut builder, g, mapper, false)?;
-        builder.declare_named_graph(g);
+        builder.declare_named_graph(g)?;
     }
-    Ok(Arc::try_unwrap(
-        builder
-            .freeze()
-            .expect("a positionally valid term rewrite of a valid dataset is valid"),
-    )
-    .unwrap_or_else(|arc| arc.owned_snapshot()))
+    match Arc::try_unwrap(builder.freeze()?) {
+        Ok(dataset) => Ok(dataset),
+        Err(arc) => Ok(arc.owned_snapshot()?),
+    }
 }
 
 /// The [`skolemize`] mapper: every blank becomes a genid IRI; a pre-existing
@@ -631,7 +648,7 @@ impl TermMapper for Skolemizer {
         scope: BlankScope,
     ) -> Result<TermId, SkolemError> {
         let iri = format!("{}{}", self.prefix, encode_blank(label, scope));
-        Ok(builder.intern_iri(&iri))
+        Ok(builder.intern_iri(&iri)?)
     }
 
     fn map_iri(
@@ -643,7 +660,7 @@ impl TermMapper for Skolemizer {
         if iri.starts_with(&self.prefix) {
             return Err(SkolemError::ReservedGenid { iri: iri.into() });
         }
-        Ok(builder.intern_iri(iri))
+        Ok(builder.intern_iri(iri)?)
     }
 }
 
@@ -667,7 +684,7 @@ impl TermMapper for Deskolemizer {
         label: &str,
         scope: BlankScope,
     ) -> Result<TermId, SkolemError> {
-        Ok(builder.intern_blank(label, scope))
+        Ok(builder.intern_blank(label, scope)?)
     }
 
     fn map_iri(
@@ -679,7 +696,7 @@ impl TermMapper for Deskolemizer {
         let Some(segment) = iri.strip_prefix(&self.prefix) else {
             // Not under OUR authority's genid space: untouched — including any
             // other authority's `/.well-known/genid/` IRIs.
-            return Ok(builder.intern_iri(iri));
+            return Ok(builder.intern_iri(iri)?);
         };
         if iri_only {
             return Err(SkolemError::GenidInIriOnlyPosition { iri: iri.into() });
@@ -695,7 +712,7 @@ impl TermMapper for Deskolemizer {
                 scope,
             });
         }
-        Ok(builder.intern_blank(&label, scope))
+        Ok(builder.intern_blank(&label, scope)?)
     }
 }
 
@@ -815,21 +832,26 @@ mod tests {
     /// inside a quoted-triple term, a blank reifier, and an annotation.
     fn hostile_dataset() -> RdfDataset {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        let bad = b.intern_blank("bad label", BlankScope::DEFAULT);
-        let ctl = b.intern_blank("ctl\u{1}\u{7f}byte", BlankScope::DEFAULT);
-        let uni = b.intern_blank("日本-λ", BlankScope(3));
-        let bg = b.intern_blank("graph blank", BlankScope(2));
-        b.push_quad(bad, p, ctl, None);
-        b.push_quad(uni, p, o, Some(bg));
-        let qs = b.intern_blank("quoted subject", BlankScope::DEFAULT);
-        let triple = b.intern_triple(qs, p, o);
-        b.push_quad(bad, p, triple, None);
-        let r = b.intern_blank("reifier blank", BlankScope(5));
-        b.push_reifier(r, triple);
-        b.push_annotation(r, p, ctl);
-        Arc::try_unwrap(b.freeze().expect("valid")).unwrap_or_else(|arc| arc.owned_snapshot())
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let bad = b.intern_blank("bad label", BlankScope::DEFAULT).unwrap();
+        let ctl = b
+            .intern_blank("ctl\u{1}\u{7f}byte", BlankScope::DEFAULT)
+            .unwrap();
+        let uni = b.intern_blank("日本-λ", BlankScope(3)).unwrap();
+        let bg = b.intern_blank("graph blank", BlankScope(2)).unwrap();
+        b.push_quad(bad, p, ctl, None).unwrap();
+        b.push_quad(uni, p, o, Some(bg)).unwrap();
+        let qs = b
+            .intern_blank("quoted subject", BlankScope::DEFAULT)
+            .unwrap();
+        let triple = b.intern_triple(qs, p, o).unwrap();
+        b.push_quad(bad, p, triple, None).unwrap();
+        let r = b.intern_blank("reifier blank", BlankScope(5)).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, p, ctl).unwrap();
+        Arc::try_unwrap(b.freeze().expect("valid"))
+            .unwrap_or_else(|arc| arc.owned_snapshot().unwrap())
     }
 
     /// Every blank `(label, scope)` reachable in `ds`'s statement surfaces.
@@ -851,7 +873,8 @@ mod tests {
             "skolemize must convert ALL blanks"
         );
         for i in 0..sk.term_count() {
-            if let TermRef::Iri(iri) = sk.resolve(TermId::from_index(i as u32))
+            if let TermRef::Iri(iri) = sk
+                .resolve(TermId::from_index(i as u32).expect("stored term index is representable"))
                 && let Some(segment) = iri.strip_prefix(PREFIX)
             {
                 assert!(
@@ -891,14 +914,14 @@ mod tests {
     fn deskolemize_leaves_foreign_genid_authorities_untouched() {
         let foreign = "https://other.example/.well-known/genid/s0-x";
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(foreign);
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri(foreign).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         let out = deskolemize(&ds, AUTHORITY).expect("foreign genids are not ours to decode");
         let survived = (0..out.term_count())
-            .any(|i| matches!(out.resolve(TermId::from_index(i as u32)), TermRef::Iri(iri) if iri == foreign));
+            .any(|i| matches!(out.resolve(TermId::from_index(i as u32).expect("stored term index is representable")), TermRef::Iri(iri) if iri == foreign));
         assert!(
             survived,
             "the foreign genid IRI must pass through unchanged"
@@ -918,10 +941,10 @@ mod tests {
             "extra/segments",
         ] {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri(&format!("{PREFIX}{segment}"));
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o");
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri(&format!("{PREFIX}{segment}")).unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o").unwrap();
+            b.push_quad(s, p, o, None).unwrap();
             let ds = b.freeze().expect("valid");
             assert!(
                 matches!(
@@ -937,10 +960,10 @@ mod tests {
     fn deskolemize_refuses_a_genid_in_predicate_or_datatype_position() {
         // Predicate.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let genid_p = b.intern_iri(&format!("{PREFIX}s0-x"));
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, genid_p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let genid_p = b.intern_iri(&format!("{PREFIX}s0-x")).unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, genid_p, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(matches!(
             deskolemize(&ds, AUTHORITY),
@@ -949,10 +972,12 @@ mod tests {
 
         // Literal datatype.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let lit = b.intern_literal(RdfLiteral::typed("5", format!("{PREFIX}s0-x")));
-        b.push_quad(s, p, lit, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral::typed("5", format!("{PREFIX}s0-x")))
+            .unwrap();
+        b.push_quad(s, p, lit, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(matches!(
             deskolemize(&ds, AUTHORITY),
@@ -963,10 +988,10 @@ mod tests {
     #[test]
     fn deskolemize_refuses_a_decode_that_collides_with_a_live_blank() {
         let mut b = RdfDatasetBuilder::new();
-        let existing = b.intern_blank("x", BlankScope::DEFAULT);
-        let genid = b.intern_iri(&format!("{PREFIX}s0-x"));
-        let p = b.intern_iri("http://example.org/p");
-        b.push_quad(existing, p, genid, None);
+        let existing = b.intern_blank("x", BlankScope::DEFAULT).unwrap();
+        let genid = b.intern_iri(&format!("{PREFIX}s0-x")).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        b.push_quad(existing, p, genid, None).unwrap();
         let ds = b.freeze().expect("valid");
         match deskolemize(&ds, AUTHORITY) {
             Err(SkolemError::BlankCollision { label, scope }) => {
@@ -980,10 +1005,10 @@ mod tests {
     #[test]
     fn skolemize_refuses_a_dataset_already_carrying_our_genid_space() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(&format!("{PREFIX}s0-x"));
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_blank("b", BlankScope::DEFAULT);
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri(&format!("{PREFIX}s0-x")).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_blank("b", BlankScope::DEFAULT).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(matches!(
             skolemize(&ds, AUTHORITY),
@@ -1126,7 +1151,7 @@ mod tests {
         struct CoalescingMapper;
 
         impl TermMapper for CoalescingMapper {
-            type Error = Infallible;
+            type Error = SkolemError;
 
             fn map_blank(
                 &mut self,
@@ -1135,7 +1160,7 @@ mod tests {
                 label: &str,
                 scope: BlankScope,
             ) -> Result<TermId, Self::Error> {
-                Ok(builder.intern_blank(label, scope))
+                Ok(builder.intern_blank(label, scope).unwrap())
             }
 
             fn map_iri(
@@ -1149,21 +1174,21 @@ mod tests {
                 } else {
                     iri
                 };
-                Ok(builder.intern_iri(mapped))
+                Ok(builder.intern_iri(mapped).unwrap())
             }
         }
 
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        let first = builder.intern_iri("http://example.org/first");
-        let second = builder.intern_iri("http://example.org/second");
-        let next = builder.intern_iri("http://example.org/next");
-        builder.push_quad(s, p, first, None);
-        let located = builder.push_quad_with_handle(s, p, second, None);
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let first = builder.intern_iri("http://example.org/first").unwrap();
+        let second = builder.intern_iri("http://example.org/second").unwrap();
+        let next = builder.intern_iri("http://example.org/next").unwrap();
+        builder.push_quad(s, p, first, None).unwrap();
+        let located = builder.push_quad_with_handle(s, p, second, None).unwrap();
         let location = crate::RdfLocation::file("source.ttl").with_line(7);
         builder.attach_location(located, location.clone());
-        builder.push_quad(s, p, next, None);
+        builder.push_quad(s, p, next, None).unwrap();
         let source = builder.freeze().expect("valid source");
         let rewritten = rebuild_dataset(&source, &mut CoalescingMapper).expect("valid rewrite");
         assert_eq!(rewritten.quad_count(), 2);
@@ -1180,11 +1205,11 @@ mod tests {
     #[test]
     fn the_rewrite_preserves_quad_source_locations() {
         let mut b = RdfDatasetBuilder::new();
-        let handle = b.next_quad_handle();
-        let s = b.intern_blank("bad label", BlankScope::DEFAULT);
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let handle = b.next_quad_handle().unwrap();
+        let s = b.intern_blank("bad label", BlankScope::DEFAULT).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let loc = crate::RdfLocation {
             path: Some("input.jsonld".to_owned()),
             line: Some(7),
@@ -1220,7 +1245,7 @@ mod tests {
     /// in the source) must look it up by value.
     fn find_iri(ds: &RdfDataset, iri: &str) -> TermId {
         (0..ds.term_count())
-            .map(|i| TermId::from_index(i as u32))
+            .map(|i| TermId::from_index(i as u32).expect("stored term index is representable"))
             .find(|&id| matches!(ds.resolve(id), TermRef::Iri(found) if found == iri))
             .unwrap_or_else(|| panic!("IRI {iri:?} not found in the rewritten dataset"))
     }
@@ -1242,13 +1267,16 @@ mod tests {
 
         let mut b =
             RdfDatasetBuilder::with_content_addressing(scheme.clone(), Some(DERIVED_FROM.into()));
-        let successor = b.intern_iri(SUCCESSOR_IRI);
-        let predecessor = b.intern_iri(PREDECESSOR_IRI);
-        let derived_from = b.intern_iri(DERIVED_FROM);
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_blank("hostile label", BlankScope::DEFAULT);
-        b.push_quad(successor, p, o, None);
-        b.push_annotation(successor, derived_from, predecessor);
+        let successor = b.intern_iri(SUCCESSOR_IRI).unwrap();
+        let predecessor = b.intern_iri(PREDECESSOR_IRI).unwrap();
+        let derived_from = b.intern_iri(DERIVED_FROM).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b
+            .intern_blank("hostile label", BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(successor, p, o, None).unwrap();
+        b.push_annotation(successor, derived_from, predecessor)
+            .unwrap();
         let ds = b.freeze().expect("freeze");
 
         assert_eq!(
@@ -1324,11 +1352,10 @@ mod term_walk_tests {
     //! The term rewrite and the blank survey against their recursive references.
 
     use std::collections::BTreeSet;
-    use std::convert::Infallible;
 
     use super::{
-        BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermMapper, TermRef,
-        existing_blanks, reintern, remap_composite_lexical,
+        BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SkolemError, TermId, TermMapper,
+        TermRef, existing_blanks, reintern, remap_composite_lexical,
     };
     use crate::backend::TermFactory as _;
     use crate::term_fixture::TermShape;
@@ -1338,7 +1365,7 @@ mod term_walk_tests {
     struct Logging(Vec<String>);
 
     impl TermMapper for Logging {
-        type Error = Infallible;
+        type Error = SkolemError;
 
         fn map_blank(
             &mut self,
@@ -1348,7 +1375,7 @@ mod term_walk_tests {
             scope: BlankScope,
         ) -> Result<TermId, Self::Error> {
             self.0.push(format!("blank {id:?} {label} {scope:?}"));
-            Ok(builder.intern_blank(label, scope))
+            Ok(builder.intern_blank(label, scope).unwrap())
         }
 
         fn map_iri(
@@ -1358,7 +1385,7 @@ mod term_walk_tests {
             iri_only: bool,
         ) -> Result<TermId, Self::Error> {
             self.0.push(format!("iri {iri} {iri_only}"));
-            Ok(builder.intern_iri(iri))
+            Ok(builder.intern_iri(iri).unwrap())
         }
 
         fn record_term(&mut self, source: TermId, target: TermId) {
@@ -1372,7 +1399,7 @@ mod term_walk_tests {
         id: TermId,
         mapper: &mut Logging,
         iri_only: bool,
-    ) -> Result<TermId, Infallible> {
+    ) -> Result<TermId, SkolemError> {
         let mapped = match ds.resolve(id) {
             TermRef::Iri(iri) => mapper.map_iri(builder, iri, iri_only),
             TermRef::Blank { label, scope } => mapper.map_blank(builder, id, label, scope),
@@ -1388,18 +1415,20 @@ mod term_walk_tests {
                 let mapped_datatype = mapper.map_iri(builder, dt, true)?;
                 mapper.record_term(datatype, mapped_datatype);
                 let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, mapper)?;
-                Ok(builder.intern_literal(RdfLiteral {
-                    lexical_form,
-                    datatype: Some(dt.to_owned()),
-                    language: language.map(str::to_owned),
-                    direction,
-                }))
+                Ok(builder
+                    .intern_literal(RdfLiteral {
+                        lexical_form,
+                        datatype: Some(dt.to_owned()),
+                        language: language.map(str::to_owned),
+                        direction,
+                    })
+                    .unwrap())
             }
             TermRef::Triple { s, p, o } => {
                 let s = reference_reintern(ds, builder, s, mapper, false)?;
                 let p = reference_reintern(ds, builder, p, mapper, true)?;
                 let o = reference_reintern(ds, builder, o, mapper, false)?;
-                Ok(builder.intern_triple(s, p, o))
+                Ok(builder.intern_triple(s, p, o).unwrap())
             }
         }?;
         mapper.record_term(id, mapped);
@@ -1435,18 +1464,18 @@ mod term_walk_tests {
                 TermShape::WellFormed,
             );
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let ds = builder.freeze().expect("a generated term freezes");
             let quad = ds.quads().next().expect("one quad");
             let object = quad.o;
             let (mut found, mut expected) = (Logging::default(), Logging::default());
             let (mut into, mut expected_into) =
                 (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
-            let id = reintern(&ds, &mut into, object, &mut found, false);
+            let id = reintern(&ds, &mut into, object, &mut found, false).unwrap();
             let reference =
-                reference_reintern(&ds, &mut expected_into, object, &mut expected, false);
+                reference_reintern(&ds, &mut expected_into, object, &mut expected, false).unwrap();
             assert_eq!(id, reference, "seed {seed}");
             assert_eq!(found.0, expected.0, "seed {seed}");
             let mut blanks = BTreeSet::new();

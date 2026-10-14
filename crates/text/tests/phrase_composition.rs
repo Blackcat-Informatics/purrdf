@@ -72,11 +72,13 @@ fn corpus() -> (Arc<RdfDataset>, Arc<TextIndex>) {
         ("near", "the quick brown fox"),
     ];
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for (local, text) in rows {
-        let s = builder.intern_iri(&format!("http://example.org/{local}"));
-        let o = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(s, note, o, None);
+        let s = builder
+            .intern_iri(&format!("http://example.org/{local}"))
+            .unwrap();
+        let o = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(s, note, o, None).unwrap();
     }
     let dataset = builder.freeze().expect("the fixture must validate");
     let index = TextIndex::from_dataset(

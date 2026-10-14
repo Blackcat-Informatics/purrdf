@@ -127,11 +127,15 @@ fn iri(local: &str) -> String {
 /// `:s0 … :s{n-1}`, each with one `:p` edge to its own `:o{i}`.
 fn edge_per_subject(n: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&iri("p"));
+    let p = b.intern_iri(&iri("p")).expect("fixture capacity");
     for i in 0..n {
-        let s = b.intern_iri(&format!("{EX}s{i}"));
-        let o = b.intern_iri(&format!("{EX}o{i}"));
-        b.push_quad(s, p, o, None);
+        let s = b
+            .intern_iri(&format!("{EX}s{i}"))
+            .expect("fixture capacity");
+        let o = b
+            .intern_iri(&format!("{EX}o{i}"))
+            .expect("fixture capacity");
+        b.push_quad(s, p, o, None).expect("fixture capacity");
     }
     b.freeze().expect("freeze")
 }
@@ -288,11 +292,11 @@ const NEXT: [(&str, &str); 5] = [
 
 fn next_graph() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let next = b.intern_iri(&iri("next"));
+    let next = b.intern_iri(&iri("next")).expect("fixture capacity");
     for (from, to) in NEXT {
-        let from = b.intern_iri(&iri(from));
-        let to = b.intern_iri(&iri(to));
-        b.push_quad(from, next, to, None);
+        let from = b.intern_iri(&iri(from)).expect("fixture capacity");
+        let to = b.intern_iri(&iri(to)).expect("fixture capacity");
+        b.push_quad(from, next, to, None).expect("fixture capacity");
     }
     b.freeze().expect("freeze")
 }
@@ -417,19 +421,27 @@ fn two_hundred_nested_levels_answer_within_a_governor_bound() {
 /// corpus below.
 fn mixed_graph() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&iri("p"));
-    let q = b.intern_iri(&iri("q"));
-    let r = b.intern_iri(&iri("r"));
-    let label = b.intern_iri(&iri("label"));
-    let g = b.intern_iri(&iri("g"));
-    let a = b.intern_iri(&iri("a"));
-    let bb = b.intern_iri(&iri("b"));
-    let c = b.intern_iri(&iri("c"));
-    let d = b.intern_iri(&iri("d"));
-    let blank1 = b.intern_blank("b1", BlankScope::default());
-    let blank2 = b.intern_blank("b2", BlankScope::default());
-    let one = b.intern_literal(purrdf_core::RdfLiteral::simple("one"));
-    let two = b.intern_literal(purrdf_core::RdfLiteral::simple("two"));
+    let p = b.intern_iri(&iri("p")).expect("fixture capacity");
+    let q = b.intern_iri(&iri("q")).expect("fixture capacity");
+    let r = b.intern_iri(&iri("r")).expect("fixture capacity");
+    let label = b.intern_iri(&iri("label")).expect("fixture capacity");
+    let g = b.intern_iri(&iri("g")).expect("fixture capacity");
+    let a = b.intern_iri(&iri("a")).expect("fixture capacity");
+    let bb = b.intern_iri(&iri("b")).expect("fixture capacity");
+    let c = b.intern_iri(&iri("c")).expect("fixture capacity");
+    let d = b.intern_iri(&iri("d")).expect("fixture capacity");
+    let blank1 = b
+        .intern_blank("b1", BlankScope::default())
+        .expect("fixture capacity");
+    let blank2 = b
+        .intern_blank("b2", BlankScope::default())
+        .expect("fixture capacity");
+    let one = b
+        .intern_literal(purrdf_core::RdfLiteral::simple("one"))
+        .expect("fixture capacity");
+    let two = b
+        .intern_literal(purrdf_core::RdfLiteral::simple("two"))
+        .expect("fixture capacity");
     for (s, o) in [
         (a, bb),
         (bb, c),
@@ -438,16 +450,17 @@ fn mixed_graph() -> Arc<RdfDataset> {
         (blank1, a),
         (blank2, blank1),
     ] {
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).expect("fixture capacity");
     }
     for (s, o) in [(a, c), (bb, blank1), (blank1, bb), (c, d)] {
-        b.push_quad(s, q, o, None);
+        b.push_quad(s, q, o, None).expect("fixture capacity");
     }
     for (s, o) in [(a, one), (bb, two), (blank1, one)] {
-        b.push_quad(s, label, o, None);
+        b.push_quad(s, label, o, None).expect("fixture capacity");
     }
-    b.push_quad(a, r, bb, Some(g));
-    b.push_quad(blank1, r, c, Some(g));
+    b.push_quad(a, r, bb, Some(g)).expect("fixture capacity");
+    b.push_quad(blank1, r, c, Some(g))
+        .expect("fixture capacity");
     b.freeze().expect("freeze")
 }
 
@@ -584,20 +597,20 @@ fn filter_exists(inner: GraphPattern, body: GraphPattern) -> GraphPattern {
 #[test]
 fn disagreeing_layers_answer_as_the_full_substitution_does() {
     let mut b = RdfDatasetBuilder::new();
-    let tag = b.intern_iri(&iri("tag"));
-    let q = b.intern_iri(&iri("q"));
-    let r = b.intern_iri(&iri("r"));
-    let x1 = b.intern_iri(&iri("x1"));
-    let x2 = b.intern_iri(&iri("x2"));
-    let k = b.intern_iri(&iri("k"));
-    let other = b.intern_iri(&iri("other"));
-    let z = b.intern_iri(&iri("z"));
-    b.push_quad(x1, tag, x1, None);
-    b.push_quad(x2, tag, x2, None);
-    b.push_quad(x1, q, k, None);
-    b.push_quad(x2, q, other, None);
-    b.push_quad(k, r, z, None);
-    b.push_quad(other, r, z, None);
+    let tag = b.intern_iri(&iri("tag")).expect("fixture capacity");
+    let q = b.intern_iri(&iri("q")).expect("fixture capacity");
+    let r = b.intern_iri(&iri("r")).expect("fixture capacity");
+    let x1 = b.intern_iri(&iri("x1")).expect("fixture capacity");
+    let x2 = b.intern_iri(&iri("x2")).expect("fixture capacity");
+    let k = b.intern_iri(&iri("k")).expect("fixture capacity");
+    let other = b.intern_iri(&iri("other")).expect("fixture capacity");
+    let z = b.intern_iri(&iri("z")).expect("fixture capacity");
+    b.push_quad(x1, tag, x1, None).expect("fixture capacity");
+    b.push_quad(x2, tag, x2, None).expect("fixture capacity");
+    b.push_quad(x1, q, k, None).expect("fixture capacity");
+    b.push_quad(x2, q, other, None).expect("fixture capacity");
+    b.push_quad(k, r, z, None).expect("fixture capacity");
+    b.push_quad(other, r, z, None).expect("fixture capacity");
     let ds: Arc<RdfDataset> = b.freeze().expect("freeze");
 
     // ?x :tag ?w FILTER EXISTS {
@@ -671,15 +684,19 @@ fn disagreeing_layers_answer_as_the_full_substitution_does() {
 #[test]
 fn an_explained_nested_exists_substitutes_each_outer_row() {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&iri("p"));
-    let q = b.intern_iri(&iri("q"));
-    let y = b.intern_iri(&iri("y"));
+    let p = b.intern_iri(&iri("p")).expect("fixture capacity");
+    let q = b.intern_iri(&iri("q")).expect("fixture capacity");
+    let y = b.intern_iri(&iri("y")).expect("fixture capacity");
     for i in 1..=3 {
-        let s = b.intern_iri(&format!("{EX}s{i}"));
-        let o = b.intern_iri(&format!("{EX}o{i}"));
-        b.push_quad(s, p, o, None);
+        let s = b
+            .intern_iri(&format!("{EX}s{i}"))
+            .expect("fixture capacity");
+        let o = b
+            .intern_iri(&format!("{EX}o{i}"))
+            .expect("fixture capacity");
+        b.push_quad(s, p, o, None).expect("fixture capacity");
         if i < 3 {
-            b.push_quad(s, q, y, None);
+            b.push_quad(s, q, y, None).expect("fixture capacity");
         }
     }
     let ds: Arc<RdfDataset> = b.freeze().expect("freeze");

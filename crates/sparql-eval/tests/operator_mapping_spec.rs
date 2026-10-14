@@ -30,22 +30,24 @@ const EX: &str = "http://example.org/";
 /// `ex:s ex:p 1`, plus — with `with_nan` — `ex:n ex:p "NaN"^^xsd:double`.
 fn dataset_with(with_nan: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}s"));
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     let literal = |builder: &mut RdfDatasetBuilder, lexical: &str, datatype: &str| {
-        builder.intern_literal(RdfLiteral {
-            lexical_form: lexical.to_owned(),
-            datatype: Some(format!("{XSD}{datatype}")),
-            language: None,
-            direction: None,
-        })
+        builder
+            .intern_literal(RdfLiteral {
+                lexical_form: lexical.to_owned(),
+                datatype: Some(format!("{XSD}{datatype}")),
+                language: None,
+                direction: None,
+            })
+            .unwrap()
     };
     let one = literal(&mut builder, "1", "integer");
-    builder.push_quad(s, p, one, None);
+    builder.push_quad(s, p, one, None).unwrap();
     if with_nan {
-        let n = builder.intern_iri(&format!("{EX}n"));
+        let n = builder.intern_iri(&format!("{EX}n")).unwrap();
         let nan = literal(&mut builder, "NaN", "double");
-        builder.push_quad(n, p, nan, None);
+        builder.push_quad(n, p, nan, None).unwrap();
     }
     builder.freeze().expect("a dataset")
 }

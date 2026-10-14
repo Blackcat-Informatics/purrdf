@@ -314,6 +314,10 @@ pub enum EvalError {
     /// The certified worst-case workspace bound exceeds the logical byte width.
     WorkspaceBoundOverflow,
 
+    /// A native logical table or address space exhausted its representable count.
+    /// The exact space and attempted count survive public query publication.
+    Capacity(purrdf_lex::allocation::CapacityError),
+
     /// The host could not allocate storage for materialized query solutions.
     /// An operational failure, not an expression error or a governor trip: no
     /// partial answer is certified when its result storage cannot be grown.
@@ -755,6 +759,7 @@ impl EvalError {
             Self::ExchangeIdExhausted => Some("native-sparql-exchange-id-exhausted"),
             Self::WorkspaceUnpriced(_) => Some("native-sparql-workspace-unpriced"),
             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
+            Self::Capacity(_) => Some("native-sparql-capacity-exhausted"),
             Self::AllocationFailed { .. } => Some(Self::ALLOCATION_FAILED_CODE),
             Self::Internal(_) => Some(Self::INTERNAL_CODE),
             Self::CompositeBound(_) => Some(Self::COMPOSITE_BOUND_CODE),
@@ -950,6 +955,7 @@ impl core::fmt::Display for EvalError {
             Self::WorkspaceBoundOverflow => {
                 f.write_str("bounded query workspace price exceeds the logical byte width")
             }
+            Self::Capacity(error) => core::fmt::Display::fmt(error, f),
             Self::AllocationFailed { construct } => {
                 write!(f, "memory allocation failed for {construct}")
             }

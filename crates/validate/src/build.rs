@@ -1665,7 +1665,7 @@ mod tests {
         // Mint a UnitId for a public slice IRI via the interner (the sole minter).
         const SLICE_IRI: &str = "http://example.org/slice/1";
         let mut interner = UnitInterner::new();
-        let unit = interner.intern(SLICE_IRI);
+        let unit = interner.intern(SLICE_IRI).expect("unit interns");
 
         // A result carrying a structured attribution referencing that unit.
         let mut vr = result(

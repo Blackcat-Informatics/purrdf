@@ -185,8 +185,8 @@ ex:Tally a sh:NodeShape ; sh:targetNode n:n0 ;
     // extended and compacted beside the first; the rules do not read it, so the inference
     // is the same.
     let exposed = ShaclData::new(
-        data.core_arc(),
-        data.core_arc(),
+        data.core_arc().expect("authored native data"),
+        data.core_arc().expect("authored native data"),
         Some("http://example.org/shapes".to_owned()),
     );
     assert_eq!(

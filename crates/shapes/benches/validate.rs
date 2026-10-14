@@ -288,52 +288,92 @@ fn core_focus_fixture(focus_nodes: usize) -> ValidationFixture {
 /// interning or target resolution.
 fn core_focus_dataset(focus_nodes: usize, violating: usize) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let subclass = builder.intern_iri(RDFS_SUBCLASS_OF);
-    let label_predicate = builder.intern_iri(&format!("{BENCH_EX}label"));
-    let value_predicate = builder.intern_iri(&format!("{BENCH_EX}value"));
-    let member_predicate = builder.intern_iri(&format!("{BENCH_EX}member"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let subclass = builder.intern_iri(RDFS_SUBCLASS_OF).unwrap();
+    let label_predicate = builder.intern_iri(&format!("{BENCH_EX}label")).unwrap();
+    let value_predicate = builder.intern_iri(&format!("{BENCH_EX}value")).unwrap();
+    let member_predicate = builder.intern_iri(&format!("{BENCH_EX}member")).unwrap();
 
     let focus_classes: Vec<_> = (0..CLASS_DEPTH)
-        .map(|index| builder.intern_iri(&format!("{BENCH_EX}FocusClass{index}")))
+        .map(|index| {
+            builder
+                .intern_iri(&format!("{BENCH_EX}FocusClass{index}"))
+                .unwrap()
+        })
         .collect();
     let value_classes: Vec<_> = (0..CLASS_DEPTH)
-        .map(|index| builder.intern_iri(&format!("{BENCH_EX}ValueClass{index}")))
+        .map(|index| {
+            builder
+                .intern_iri(&format!("{BENCH_EX}ValueClass{index}"))
+                .unwrap()
+        })
         .collect();
     for index in 1..CLASS_DEPTH {
-        builder.push_quad(
-            focus_classes[index],
-            subclass,
-            focus_classes[index - 1],
-            None,
-        );
-        builder.push_quad(
-            value_classes[index],
-            subclass,
-            value_classes[index - 1],
-            None,
-        );
+        builder
+            .push_quad(
+                focus_classes[index],
+                subclass,
+                focus_classes[index - 1],
+                None,
+            )
+            .unwrap();
+        builder
+            .push_quad(
+                value_classes[index],
+                subclass,
+                value_classes[index - 1],
+                None,
+            )
+            .unwrap();
     }
 
-    let member = builder.intern_iri(&format!("{BENCH_EX}shared-member"));
-    builder.push_quad(member, rdf_type, value_classes[CLASS_DEPTH - 1], None);
+    let member = builder
+        .intern_iri(&format!("{BENCH_EX}shared-member"))
+        .unwrap();
+    builder
+        .push_quad(member, rdf_type, value_classes[CLASS_DEPTH - 1], None)
+        .unwrap();
 
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}item{index}"));
-        let label = builder.intern_literal(RdfLiteral::simple(format!("item-{index}")));
-        let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
-        builder.push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None);
-        builder.push_quad(focus, label_predicate, label, None);
-        builder.push_quad(focus, value_predicate, value, None);
-        builder.push_quad(focus, member_predicate, member, None);
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}item{index}"))
+            .unwrap();
+        let label = builder
+            .intern_literal(RdfLiteral::simple(format!("item-{index}")))
+            .unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER))
+            .unwrap();
+        builder
+            .push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None)
+            .unwrap();
+        builder
+            .push_quad(focus, label_predicate, label, None)
+            .unwrap();
+        builder
+            .push_quad(focus, value_predicate, value, None)
+            .unwrap();
+        builder
+            .push_quad(focus, member_predicate, member, None)
+            .unwrap();
     }
 
     for index in 0..violating {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}unlabelled-item{index}"));
-        let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
-        builder.push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None);
-        builder.push_quad(focus, value_predicate, value, None);
-        builder.push_quad(focus, member_predicate, member, None);
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}unlabelled-item{index}"))
+            .unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER))
+            .unwrap();
+        builder
+            .push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None)
+            .unwrap();
+        builder
+            .push_quad(focus, value_predicate, value, None)
+            .unwrap();
+        builder
+            .push_quad(focus, member_predicate, member, None)
+            .unwrap();
     }
 
     let dataset = builder.freeze().expect("Core focus fixture must freeze");
@@ -385,30 +425,56 @@ ex:WholeBundleShape a sh:NodeShape ;
 /// §7.9.1) — the same five, so both forms conform and do the same constraint work.
 fn closed_focus_fixture(focus_nodes: usize, by_types: bool) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let closed_class = builder.intern_iri(&format!("{BENCH_EX}ClosedClass"));
-    let label_predicate = builder.intern_iri(&format!("{BENCH_EX}label"));
-    let name_predicate = builder.intern_iri(&format!("{BENCH_EX}name"));
-    let code_predicate = builder.intern_iri(&format!("{BENCH_EX}code"));
-    let value_predicate = builder.intern_iri(&format!("{BENCH_EX}value"));
-    let member_predicate = builder.intern_iri(&format!("{BENCH_EX}member"));
-    let member = builder.intern_iri(&format!("{BENCH_EX}closed-member"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let closed_class = builder
+        .intern_iri(&format!("{BENCH_EX}ClosedClass"))
+        .unwrap();
+    let label_predicate = builder.intern_iri(&format!("{BENCH_EX}label")).unwrap();
+    let name_predicate = builder.intern_iri(&format!("{BENCH_EX}name")).unwrap();
+    let code_predicate = builder.intern_iri(&format!("{BENCH_EX}code")).unwrap();
+    let value_predicate = builder.intern_iri(&format!("{BENCH_EX}value")).unwrap();
+    let member_predicate = builder.intern_iri(&format!("{BENCH_EX}member")).unwrap();
+    let member = builder
+        .intern_iri(&format!("{BENCH_EX}closed-member"))
+        .unwrap();
 
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}closed-item{index}"));
-        let label = builder.intern_literal(RdfLiteral::simple(format!("item-{index}")));
-        let name = builder.intern_literal(RdfLiteral::language_tagged(
-            format!("name {index}"),
-            if index % 2 == 0 { "en" } else { "fr-CA" },
-        ));
-        let code = builder.intern_literal(RdfLiteral::simple(format!("CODE-{index:05}")));
-        let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
-        builder.push_quad(focus, rdf_type, closed_class, None);
-        builder.push_quad(focus, label_predicate, label, None);
-        builder.push_quad(focus, name_predicate, name, None);
-        builder.push_quad(focus, code_predicate, code, None);
-        builder.push_quad(focus, value_predicate, value, None);
-        builder.push_quad(focus, member_predicate, member, None);
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}closed-item{index}"))
+            .unwrap();
+        let label = builder
+            .intern_literal(RdfLiteral::simple(format!("item-{index}")))
+            .unwrap();
+        let name = builder
+            .intern_literal(RdfLiteral::language_tagged(
+                format!("name {index}"),
+                if index % 2 == 0 { "en" } else { "fr-CA" },
+            ))
+            .unwrap();
+        let code = builder
+            .intern_literal(RdfLiteral::simple(format!("CODE-{index:05}")))
+            .unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER))
+            .unwrap();
+        builder
+            .push_quad(focus, rdf_type, closed_class, None)
+            .unwrap();
+        builder
+            .push_quad(focus, label_predicate, label, None)
+            .unwrap();
+        builder
+            .push_quad(focus, name_predicate, name, None)
+            .unwrap();
+        builder
+            .push_quad(focus, code_predicate, code, None)
+            .unwrap();
+        builder
+            .push_quad(focus, value_predicate, value, None)
+            .unwrap();
+        builder
+            .push_quad(focus, member_predicate, member, None)
+            .unwrap();
     }
 
     let dataset = builder.freeze().expect("closed focus fixture must freeze");
@@ -475,24 +541,36 @@ fn closed_focus_fixture(focus_nodes: usize, by_types: bool) -> ValidationFixture
 /// quadratically.
 fn unique_values_focus_fixture(focus_nodes: usize) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let concept = builder.intern_iri(&format!("{BENCH_EX}Concept"));
-    let notation_predicate = builder.intern_iri(&format!("{BENCH_EX}notation"));
-    let scheme_predicate = builder.intern_iri(&format!("{BENCH_EX}scheme"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let concept = builder.intern_iri(&format!("{BENCH_EX}Concept")).unwrap();
+    let notation_predicate = builder.intern_iri(&format!("{BENCH_EX}notation")).unwrap();
+    let scheme_predicate = builder.intern_iri(&format!("{BENCH_EX}scheme")).unwrap();
     let schemes: Vec<TermId> = (0..16)
-        .map(|scheme| builder.intern_iri(&format!("{BENCH_EX}scheme{scheme}")))
+        .map(|scheme| {
+            builder
+                .intern_iri(&format!("{BENCH_EX}scheme{scheme}"))
+                .unwrap()
+        })
         .collect();
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}unique-item{index}"));
-        let notation = builder.intern_literal(RdfLiteral::simple(format!("N-{index}")));
-        builder.push_quad(focus, rdf_type, concept, None);
-        builder.push_quad(focus, notation_predicate, notation, None);
-        builder.push_quad(
-            focus,
-            scheme_predicate,
-            schemes[index % schemes.len()],
-            None,
-        );
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}unique-item{index}"))
+            .unwrap();
+        let notation = builder
+            .intern_literal(RdfLiteral::simple(format!("N-{index}")))
+            .unwrap();
+        builder.push_quad(focus, rdf_type, concept, None).unwrap();
+        builder
+            .push_quad(focus, notation_predicate, notation, None)
+            .unwrap();
+        builder
+            .push_quad(
+                focus,
+                scheme_predicate,
+                schemes[index % schemes.len()],
+                None,
+            )
+            .unwrap();
     }
     let dataset = builder
         .freeze()
@@ -527,18 +605,21 @@ ex:UniqueNotationShape a sh:NodeShape ;
 /// same constraint work over one value node per focus node.
 fn computed_values_focus_fixture(focus_nodes: usize, form: &str) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let rectangle = builder.intern_iri(&format!("{BENCH_EX}Rectangle"));
-    let area = builder.intern_iri(&format!("{BENCH_EX}area"));
-    let width = builder.intern_iri(&format!("{BENCH_EX}width"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let rectangle = builder.intern_iri(&format!("{BENCH_EX}Rectangle")).unwrap();
+    let area = builder.intern_iri(&format!("{BENCH_EX}area")).unwrap();
+    let width = builder.intern_iri(&format!("{BENCH_EX}width")).unwrap();
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}rectangle{index}"));
-        builder.push_quad(focus, rdf_type, rectangle, None);
-        let value =
-            builder.intern_literal(RdfLiteral::typed((index % 97 + 1).to_string(), XSD_INTEGER));
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}rectangle{index}"))
+            .unwrap();
+        builder.push_quad(focus, rdf_type, rectangle, None).unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::typed((index % 97 + 1).to_string(), XSD_INTEGER))
+            .unwrap();
         match form {
-            "asserted" => builder.push_quad(focus, area, value, None),
-            "values" => builder.push_quad(focus, width, value, None),
+            "asserted" => builder.push_quad(focus, area, value, None).unwrap(),
+            "values" => builder.push_quad(focus, width, value, None).unwrap(),
             _ => {}
         }
     }
@@ -580,17 +661,23 @@ ex:RectangleShape a sh:NodeShape ;
 /// `shnex:exists`, which is `true` for every item, so the report is empty.
 fn sequence_focus_fixture(focus_nodes: usize, tags: usize, form: &str) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let item = builder.intern_iri(&format!("{BENCH_EX}Item"));
-    let tag = builder.intern_iri(&format!("{BENCH_EX}tag"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let item = builder.intern_iri(&format!("{BENCH_EX}Item")).unwrap();
+    let tag = builder.intern_iri(&format!("{BENCH_EX}tag")).unwrap();
     let tag_values: Vec<TermId> = (0..tags)
-        .map(|index| builder.intern_iri(&format!("{BENCH_EX}tag{index}")))
+        .map(|index| {
+            builder
+                .intern_iri(&format!("{BENCH_EX}tag{index}"))
+                .unwrap()
+        })
         .collect();
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}item{index}"));
-        builder.push_quad(focus, rdf_type, item, None);
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}item{index}"))
+            .unwrap();
+        builder.push_quad(focus, rdf_type, item, None).unwrap();
         for &value in &tag_values {
-            builder.push_quad(focus, tag, value, None);
+            builder.push_quad(focus, tag, value, None).unwrap();
         }
     }
     let dataset = builder
@@ -681,17 +768,27 @@ ex:HolderShape a sh:NodeShape ;
 /// look inside — the full scan over every node of the graph.
 fn target_where_focus_fixture(focus_nodes: usize, narrowed: bool) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let concept = builder.intern_iri(&format!("{BENCH_EX}Concept"));
-    let notation_predicate = builder.intern_iri(&format!("{BENCH_EX}notation"));
-    let other_predicate = builder.intern_iri(&format!("{BENCH_EX}other"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let concept = builder.intern_iri(&format!("{BENCH_EX}Concept")).unwrap();
+    let notation_predicate = builder.intern_iri(&format!("{BENCH_EX}notation")).unwrap();
+    let other_predicate = builder.intern_iri(&format!("{BENCH_EX}other")).unwrap();
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}where-item{index}"));
-        let notation = builder.intern_literal(RdfLiteral::simple(format!("N-{index}")));
-        builder.push_quad(focus, rdf_type, concept, None);
-        builder.push_quad(focus, notation_predicate, notation, None);
-        let unrelated = builder.intern_iri(&format!("{BENCH_EX}where-other{index}"));
-        builder.push_quad(unrelated, other_predicate, focus, None);
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}where-item{index}"))
+            .unwrap();
+        let notation = builder
+            .intern_literal(RdfLiteral::simple(format!("N-{index}")))
+            .unwrap();
+        builder.push_quad(focus, rdf_type, concept, None).unwrap();
+        builder
+            .push_quad(focus, notation_predicate, notation, None)
+            .unwrap();
+        let unrelated = builder
+            .intern_iri(&format!("{BENCH_EX}where-other{index}"))
+            .unwrap();
+        builder
+            .push_quad(unrelated, other_predicate, focus, None)
+            .unwrap();
     }
     let dataset = builder
         .freeze()
@@ -724,14 +821,20 @@ ex:ConceptShape a sh:NodeShape ;
 
 fn sparql_focus_fixture(focus_nodes: usize) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let person = builder.intern_iri(&format!("{BENCH_EX}Person"));
-    let amount_predicate = builder.intern_iri(&format!("{BENCH_EX}amount"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let person = builder.intern_iri(&format!("{BENCH_EX}Person")).unwrap();
+    let amount_predicate = builder.intern_iri(&format!("{BENCH_EX}amount")).unwrap();
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}sparql-item{index}"));
-        let amount = builder.intern_literal(RdfLiteral::typed("1", XSD_INTEGER));
-        builder.push_quad(focus, rdf_type, person, None);
-        builder.push_quad(focus, amount_predicate, amount, None);
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}sparql-item{index}"))
+            .unwrap();
+        let amount = builder
+            .intern_literal(RdfLiteral::typed("1", XSD_INTEGER))
+            .unwrap();
+        builder.push_quad(focus, rdf_type, person, None).unwrap();
+        builder
+            .push_quad(focus, amount_predicate, amount, None)
+            .unwrap();
     }
     let dataset = builder.freeze().expect("SPARQL focus fixture must freeze");
     let shapes = parse_shapes(&format!(
@@ -762,14 +865,20 @@ ex:WholeBundleSparqlShape a sh:NodeShape ;
 
 fn membership_fixture(focus_nodes: usize, variant: MembershipVariant) -> MembershipFixture {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let subclass = builder.intern_iri(RDFS_SUBCLASS_OF);
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let subclass = builder.intern_iri(RDFS_SUBCLASS_OF).unwrap();
     let classes: Vec<_> = (0..CLASS_DEPTH)
-        .map(|index| builder.intern_iri(&format!("{BENCH_EX}MembershipClass{index}")))
+        .map(|index| {
+            builder
+                .intern_iri(&format!("{BENCH_EX}MembershipClass{index}"))
+                .unwrap()
+        })
         .collect();
     if variant.has_hierarchy() {
         for index in 1..CLASS_DEPTH {
-            builder.push_quad(classes[index], subclass, classes[index - 1], None);
+            builder
+                .push_quad(classes[index], subclass, classes[index - 1], None)
+                .unwrap();
         }
     }
     let asserted_class = match variant {
@@ -783,8 +892,12 @@ fn membership_fixture(focus_nodes: usize, variant: MembershipVariant) -> Members
     );
     let mut focus_ids = Vec::with_capacity(retained_focus);
     for index in 0..focus_nodes {
-        let focus = builder.intern_iri(&format!("{BENCH_EX}membership-item{index}"));
-        builder.push_quad(focus, rdf_type, asserted_class, None);
+        let focus = builder
+            .intern_iri(&format!("{BENCH_EX}membership-item{index}"))
+            .unwrap();
+        builder
+            .push_quad(focus, rdf_type, asserted_class, None)
+            .unwrap();
         if focus_ids.len() < retained_focus {
             focus_ids.push(focus);
         }
@@ -2104,10 +2217,12 @@ fn blank_chain_fixture(n: usize, cycle: bool) -> ValidationFixture {
         ValidationOptions::default().with_subclass_of_in_shapes_graph(true),
     );
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri(&format!("{BENCH_EX}x"));
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let class = builder.intern_iri(&format!("{BENCH_EX}C{}", n - 1));
-    builder.push_quad(subject, rdf_type, class, None);
+    let subject = builder.intern_iri(&format!("{BENCH_EX}x")).unwrap();
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let class = builder
+        .intern_iri(&format!("{BENCH_EX}C{}", n - 1))
+        .unwrap();
+    builder.push_quad(subject, rdf_type, class, None).unwrap();
     ValidationFixture {
         dataset: builder.freeze().expect("the bench's data graph freezes"),
         shapes,

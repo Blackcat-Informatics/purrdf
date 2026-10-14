@@ -14,7 +14,7 @@ use super::carrier::{Document, Literal, NamedGraph, Node, Part, Term, Triple, Va
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
     JsonLdTypeMapping, RDF_FIRST, RDF_JSON, RDF_NIL, RDF_REIFIES, RDF_REST, RDF_TYPE, RdfDataset,
-    RdfDiagnostic, RdfQuad, RdfTerm, XSD_STRING, decode, parse, validated_iri_term,
+    RdfDiagnostic, RdfQuad, RdfTerm, XSD_STRING, decode, validated_iri_term,
 };
 use crate::{RdfLiteral, RdfTextDirection, RdfTriple};
 use purrdf_core::collections::{ListVocab, build_rdf_list};
@@ -115,7 +115,6 @@ pub(super) fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDatase
         declared_graphs.push(graph_name);
     }
     crate::native_quads::dataset_from_quads_declaring(&lowerer.quads, &declared_graphs)
-        .map_err(|source| parse(format!("freeze JSON-LD-star quads: {source}")))
 }
 
 #[derive(Debug, Clone, Copy)]

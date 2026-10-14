@@ -544,7 +544,10 @@ fn annotations_survive_the_prepared_product() {
         .admit(&ShapesProfile::CORE, &HostBindings::empty())
         .expect("the product admits");
     let again = validate_with(restored.shapes(), "ex:a ex:p 1 .");
-    assert_eq!(fresh.to_ntriples(), again.to_ntriples());
+    assert_eq!(
+        fresh.to_ntriples().expect("report serializes"),
+        again.to_ntriples().expect("report serializes")
+    );
     assert_eq!(
         rows(&again),
         vec![row("NodeKindConstraintComponent", "Debug", &["\"debug\""])]
@@ -589,10 +592,14 @@ fn a_warning_only_report_follows_the_set_and_echoes_it() {
     assert!(
         !default_report
             .to_ntriples()
+            .expect("report serializes")
             .contains("conformanceDisallows")
     );
     assert_eq!(
-        conformance_disallows_from_dataset(&default_report.to_dataset()).expect("readable"),
+        conformance_disallows_from_dataset(
+            &default_report.to_dataset().expect("report serializes")
+        )
+        .expect("readable"),
         ConformanceDisallows::default()
     );
 
@@ -604,10 +611,11 @@ fn a_warning_only_report_follows_the_set_and_echoes_it() {
     );
     assert_eq!(report.results.len(), 1, "the result is still reported");
     assert_eq!(
-        conformance_disallows_from_dataset(&report.to_dataset()).expect("readable"),
+        conformance_disallows_from_dataset(&report.to_dataset().expect("report serializes"))
+            .expect("readable"),
         ConformanceDisallows::new([Severity::Violation]).expect("non-empty")
     );
-    assert!(report.to_ntriples().contains(
+    assert!(report.to_ntriples().expect("report serializes").contains(
         "<http://www.w3.org/ns/shacl#conformanceDisallows> <http://www.w3.org/ns/shacl#Violation>"
     ));
 }
@@ -764,7 +772,7 @@ fn every_shape_message_reaches_the_result_with_its_language_tag() {
             &["\"Too many\"@en", "\"Zu viele\"@de"]
         )]
     );
-    let nt = tagged.to_ntriples();
+    let nt = tagged.to_ntriples().expect("report serializes");
     assert!(
         nt.contains("<http://www.w3.org/ns/shacl#resultMessage> \"Too many\"@en ."),
         "{nt}"
@@ -786,7 +794,7 @@ fn every_shape_message_reaches_the_result_with_its_language_tag() {
             &["\"one\""]
         )]
     );
-    let nt = plain.to_ntriples();
+    let nt = plain.to_ntriples().expect("report serializes");
     assert_eq!(nt.matches("resultMessage").count(), 1, "{nt}");
     assert!(
         nt.contains("<http://www.w3.org/ns/shacl#resultMessage> \"one\" ."),

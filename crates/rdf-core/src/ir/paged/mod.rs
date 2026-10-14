@@ -144,6 +144,8 @@ pub(crate) struct PageSlot {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum PagedFreezeError {
+    /// Logical capacity or physical storage refusal while sealing metadata.
+    Storage(purrdf_lex::allocation::StorageError),
     /// A page could not be materialized by the provider.
     Page(PageFault),
     /// A composed logical quad count exceeded the global address space.
@@ -244,6 +246,7 @@ impl From<PageFault> for PagedFreezeError {
 impl std::fmt::Display for PagedFreezeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::Page(fault) => write!(f, "{fault}"),
             Self::LogicalCountExhausted => f.write_str("paged logical quad count exhausted"),
             Self::GenerationMismatch { expected, actual } => write!(
@@ -281,6 +284,7 @@ impl std::fmt::Display for PagedFreezeError {
 impl std::error::Error for PagedFreezeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(error) => Some(error),
             Self::Page(fault) => Some(fault),
             Self::LogicalCountExhausted
             | Self::GenerationMismatch { .. }
@@ -440,13 +444,19 @@ impl PagedDataset {
             // This must happen for every page before any query so the dictionary is
             // complete (value lookups are correct for terms on not-yet-requeried
             // pages).
-            let translation =
-                PageTranslation::try_build(&page, &mut dictionary).map_err(|defect| {
-                    PagedFreezeError::SummaryDrift {
-                        page: id,
-                        message: defect.to_string(),
+            let translation = PageTranslation::try_build(&page, &mut dictionary).map_err(
+                |error| match error {
+                    translation::TranslationError::Storage(error) => {
+                        PagedFreezeError::Storage(error)
                     }
-                })?;
+                    translation::TranslationError::Summary(defect) => {
+                        PagedFreezeError::SummaryDrift {
+                            page: id,
+                            message: defect.to_string(),
+                        }
+                    }
+                },
+            )?;
             let page_caps = page.capabilities();
             let page_quads = u64::try_from(page.quad_count()).expect("bounded page count fits u64");
             // G3: map each of this page's quads (primary + side tables) to the shared id
@@ -760,8 +770,7 @@ impl PagedDataset {
     ///
     /// The result has no dead ids and a canonical global numbering, and preserves
     /// every quad's meaning (each survivor resolves to the identical `TermValue`).
-    #[must_use]
-    pub fn compact(&self) -> Self {
+    pub fn compact(&self) -> Result<Self, purrdf_lex::allocation::StorageError> {
         // 1. Mark-live: the sorted union of every retained page's global ids.
         let mut live: BTreeSet<GlobalTermId> = BTreeSet::new();
         for slot in &self.pages {
@@ -781,8 +790,8 @@ impl PagedDataset {
         for (old, value) in &live_values {
             // Every value here was read out of `self.dictionary`, where it passed
             // `GlobalDictionary::intern_iri` on the way in, so compaction re-interns
-            // without re-parsing. See `GlobalDictionary::reintern_validated`.
-            remap.insert(*old, dictionary.reintern_validated(value));
+            // without re-parsing. See `GlobalDictionary::try_reintern_validated`.
+            remap.insert(*old, dictionary.try_reintern_validated(value)?);
         }
         // 3. Rebuild each page's translation through the remap; local spaces unchanged.
         let pages: Vec<PageSlot> = self
@@ -808,7 +817,7 @@ impl PagedDataset {
         // keyed by GLOBAL id, which compaction DOES renumber, so it must be rebuilt
         // from the completed `pages` slice rather than remapped in place.
         let graph_index = GraphPageIndex::derive(&pages);
-        Self {
+        Ok(Self {
             dictionary,
             pages,
             provider: self.provider.clone(),
@@ -816,7 +825,7 @@ impl PagedDataset {
             caps: self.caps,
             total_quads: self.total_quads,
             graph_index,
-        }
+        })
     }
 
     /// The number of pages composing this dataset.

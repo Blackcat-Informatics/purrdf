@@ -552,19 +552,21 @@ mod tests {
     /// A tiny frozen dataset with one triple — hermetic, no `slices/` tree.
     fn tiny_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         b.freeze().expect("valid dataset")
     }
 
     /// Build a small, fully-authored bundle in-test.
     fn sample_bundle() -> RdfBundle {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("slices/core/sample", OriginKind::Source);
-        let art_mod = prov.register_artifact("module.ttl");
-        let art_doc = prov.register_artifact("docs.md");
+        let unit = prov
+            .register_unit("slices/core/sample", OriginKind::Source)
+            .unwrap();
+        let art_mod = prov.register_artifact("module.ttl").unwrap();
+        let art_doc = prov.register_artifact("docs.md").unwrap();
 
         let mut bundle = RdfBundle::new(tiny_dataset(), prov);
         bundle.add_unit(
@@ -603,7 +605,11 @@ mod tests {
         // but the unit now spans segments 0 AND 1 (and segment 1 also carries no
         // exclusive unit — a packaging choice).
         let mut resegmented = sample_bundle();
-        let unit = resegmented.provenance.units.intern("slices/core/sample"); // idempotent: existing id
+        let unit = resegmented
+            .provenance
+            .units
+            .intern("slices/core/sample")
+            .unwrap(); // idempotent: existing id
         resegmented.segments = SegmentUnitMap::default();
         resegmented.associate_segment(0, unit);
         resegmented.associate_segment(1, unit);
@@ -696,9 +702,9 @@ mod tests {
     #[test]
     fn reject_duplicate_logical_paths() {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("u", OriginKind::Source);
-        let a0 = prov.register_artifact("a");
-        let a1 = prov.register_artifact("b");
+        let unit = prov.register_unit("u", OriginKind::Source).unwrap();
+        let a0 = prov.register_artifact("a").unwrap();
+        let a1 = prov.register_artifact("b").unwrap();
         let mut bundle = RdfBundle::new(tiny_dataset(), prov);
         bundle.add_unit(unit, UnitMetadata::new("iri", "u"));
         bundle.add_artifact(a0, unit, "same.ttl", "Module", b"x".to_vec());
@@ -712,8 +718,8 @@ mod tests {
     #[test]
     fn reject_duplicate_artifact_ids() {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("u", OriginKind::Source);
-        let a0 = prov.register_artifact("a");
+        let unit = prov.register_unit("u", OriginKind::Source).unwrap();
+        let a0 = prov.register_artifact("a").unwrap();
         let mut bundle = RdfBundle::new(tiny_dataset(), prov);
         bundle.add_unit(unit, UnitMetadata::new("iri", "u"));
         // Two records with DISTINCT logical paths but the SAME ArtifactId.
@@ -728,8 +734,8 @@ mod tests {
     #[test]
     fn reject_absolute_path() {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("u", OriginKind::Source);
-        let a0 = prov.register_artifact("a");
+        let unit = prov.register_unit("u", OriginKind::Source).unwrap();
+        let a0 = prov.register_artifact("a").unwrap();
         let mut bundle = RdfBundle::new(tiny_dataset(), prov);
         bundle.add_unit(unit, UnitMetadata::new("iri", "u"));
         bundle.add_artifact(a0, unit, "/foo/bar", "Module", b"x".to_vec());
@@ -742,8 +748,8 @@ mod tests {
     #[test]
     fn reject_path_traversal() {
         let mut prov = DatasetProvenance::new();
-        let unit = prov.register_unit("u", OriginKind::Source);
-        let a0 = prov.register_artifact("a");
+        let unit = prov.register_unit("u", OriginKind::Source).unwrap();
+        let a0 = prov.register_artifact("a").unwrap();
         let mut bundle = RdfBundle::new(tiny_dataset(), prov);
         bundle.add_unit(unit, UnitMetadata::new("iri", "u"));
         bundle.add_artifact(a0, unit, "foo/../bar", "Module", b"x".to_vec());
@@ -756,8 +762,8 @@ mod tests {
     #[test]
     fn reject_conflicting_manifests_for_one_unit_iri() {
         let mut prov = DatasetProvenance::new();
-        let u0 = prov.register_unit("u0", OriginKind::Source);
-        let u1 = prov.register_unit("u1", OriginKind::Source);
+        let u0 = prov.register_unit("u0", OriginKind::Source).unwrap();
+        let u1 = prov.register_unit("u1", OriginKind::Source).unwrap();
         let mut bundle = RdfBundle::new(tiny_dataset(), prov);
         // Two distinct units claim the SAME IRI but disagree on `name`.
         bundle.add_unit(u0, UnitMetadata::new("https://x/slice", "name A"));

@@ -204,14 +204,16 @@ fn invalid_inputs_fail_before_zero_contribution_shortcuts() {
 
 fn fixture() -> TextIndex {
     let mut builder = RdfDatasetBuilder::new();
-    let title = builder.intern_iri("https://example.org/title");
-    let body = builder.intern_iri("https://example.org/body");
+    let title = builder.intern_iri("https://example.org/title").unwrap();
+    let body = builder.intern_iri("https://example.org/body").unwrap();
     for (subject, head, text) in [("a", "cat", "dog dog dog"), ("b", "dog", "cat cat cat")] {
-        let subject = builder.intern_iri(&format!("https://example.org/{subject}"));
-        let head = builder.intern_literal(RdfLiteral::simple(head));
-        let text = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, title, head, None);
-        builder.push_quad(subject, body, text, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{subject}"))
+            .unwrap();
+        let head = builder.intern_literal(RdfLiteral::simple(head)).unwrap();
+        let text = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, title, head, None).unwrap();
+        builder.push_quad(subject, body, text, None).unwrap();
     }
     let dataset = builder.freeze().expect("dataset");
     TextIndex::from_dataset(

@@ -255,35 +255,39 @@ fn bench_json_read(c: &mut Bench) {
 
 fn build_dataset(rows: usize, reified: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let named_graph = b.intern_iri("https://example.org/g");
-    let certainty = b.intern_iri("https://example.org/certainty");
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let named_graph = b.intern_iri("https://example.org/g").unwrap();
+    let certainty = b.intern_iri("https://example.org/certainty").unwrap();
 
     for i in 0..rows {
         // Every fourth subject is a blank node instead of an IRI, so the writer
         // takes both the `_:` and `<...>` subject-emission paths.
         let s = if i % 4 == 0 {
-            b.intern_blank(&format!("s{i}"), BlankScope(0))
+            b.intern_blank(&format!("s{i}"), BlankScope(0)).unwrap()
         } else {
-            b.intern_iri(&format!("https://example.org/s{i}"))
+            b.intern_iri(&format!("https://example.org/s{i}")).unwrap()
         };
-        let o = b.intern_literal(RdfLiteral {
-            lexical_form: format!("value \"{i}\" with \\backslash and\nnewline"),
-            datatype: None,
-            language: Some("en".to_owned()),
-            direction: None,
-        });
+        let o = b
+            .intern_literal(RdfLiteral {
+                lexical_form: format!("value \"{i}\" with \\backslash and\nnewline"),
+                datatype: None,
+                language: Some("en".to_owned()),
+                direction: None,
+            })
+            .unwrap();
         // A sparse named-graph split (~20%), so the writer's optional GRAPH
         // term is also on the hot path, not just the default-graph quad.
         let graph = if i % 5 == 0 { Some(named_graph) } else { None };
-        b.push_quad(s, p, o, graph);
+        b.push_quad(s, p, o, graph).unwrap();
 
         if i < reified {
-            let statement = b.intern_triple(s, p, o);
-            let reifier = b.intern_iri(&format!("https://example.org/r{i}"));
-            let confidence = b.intern_literal(RdfLiteral::typed("0.9", XSD_DECIMAL));
-            b.push_reifier(reifier, statement);
-            b.push_annotation(reifier, certainty, confidence);
+            let statement = b.intern_triple(s, p, o).unwrap();
+            let reifier = b.intern_iri(&format!("https://example.org/r{i}")).unwrap();
+            let confidence = b
+                .intern_literal(RdfLiteral::typed("0.9", XSD_DECIMAL))
+                .unwrap();
+            b.push_reifier(reifier, statement).unwrap();
+            b.push_annotation(reifier, certainty, confidence).unwrap();
         }
     }
 

@@ -27,6 +27,7 @@ pub fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
         .validate()
         .expect("validation runs")
         .to_ntriples()
+        .expect("report serializes")
 }
 
 /// Every result's focus node, rendered, sorted (duplicates kept).
@@ -43,7 +44,7 @@ pub fn focus_nodes(report: &ValidationReport) -> Vec<String> {
 /// `base` with `derived` pushed after it, frozen into one dataset.
 pub fn merge(base: &RdfDataset, derived: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(base);
-    builder.push_dataset(derived);
+    builder.push_dataset(base).unwrap();
+    builder.push_dataset(derived).unwrap();
     builder.freeze().map_err(|e| e.to_string())
 }

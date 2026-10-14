@@ -400,7 +400,7 @@ mod tests {
     /// exactly what [`RdfDatasetBuilder::intern_owned_term`] is (blank labels
     /// decoded back to their `(label, scope)` pair, triple terms recursed).
     fn intern_owned(b: &mut RdfDatasetBuilder, term: &RdfTerm) -> TermId {
-        b.intern_owned_term(term)
+        b.intern_owned_term(term).unwrap()
     }
 
     /// Freeze owned rows (quads + RDF 1.2 statement layer) into the frozen IR the
@@ -413,24 +413,24 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         for q in quads {
             let s = intern_owned(&mut b, &q.subject);
-            let p = b.intern_iri(&q.predicate);
+            let p = b.intern_iri(&q.predicate).unwrap();
             let o = intern_owned(&mut b, &q.object);
             let g = q.graph_name.as_ref().map(|g| intern_owned(&mut b, g));
-            b.push_quad(s, p, o, g);
+            b.push_quad(s, p, o, g).unwrap();
         }
         for r in reifiers {
             let rid = intern_owned(&mut b, &r.reifier);
             let s = intern_owned(&mut b, &r.statement.subject);
-            let p = b.intern_iri(&r.statement.predicate);
+            let p = b.intern_iri(&r.statement.predicate).unwrap();
             let o = intern_owned(&mut b, &r.statement.object);
-            let triple = b.intern_triple(s, p, o);
-            b.push_reifier(rid, triple);
+            let triple = b.intern_triple(s, p, o).unwrap();
+            b.push_reifier(rid, triple).unwrap();
         }
         for a in annotations {
             let rid = intern_owned(&mut b, &a.reifier);
-            let p = b.intern_iri(&a.predicate);
+            let p = b.intern_iri(&a.predicate).unwrap();
             let o = intern_owned(&mut b, &a.object);
-            b.push_annotation(rid, p, o);
+            b.push_annotation(rid, p, o).unwrap();
         }
         b.freeze().expect("rows must freeze into a valid dataset")
     }

@@ -5,10 +5,7 @@
 
 use super::{BorrowedLedgerTerms, LedgerError, LedgerStatement, LedgerTermId};
 use crate::dataset_view::lock_read_state;
-use crate::{
-    DatasetView, GraphMatch, QuadIds, RdfStoreCapabilities, TermRef, TermValue,
-    WorkspaceReservation,
-};
+use crate::{DatasetView, GraphMatch, QuadIds, TermRef, TermValue, WorkspaceReservation};
 use purrdf_lex::allocation::{Admission, StorageError};
 use std::sync::Mutex;
 
@@ -189,12 +186,7 @@ impl<'a, S: Admission, L: LedgerSource<'a>> DatasetView for LedgerDataset<'a, S,
         }
     }
 
-    fn capabilities(&self) -> RdfStoreCapabilities {
-        RdfStoreCapabilities {
-            quoted_triples: true,
-            ..RdfStoreCapabilities::plain_rdf()
-        }
-    }
+    crate::fixed_store_capabilities!(quoted_triples);
 
     fn term_count(&self) -> u64 {
         self.terms.len() as u64

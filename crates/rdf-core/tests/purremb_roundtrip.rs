@@ -64,10 +64,10 @@ fn family_contract() -> EmbeddingFamilyContract {
 
 fn build_fixture(reverse_input: bool) -> Fixture {
     let mut rdf = RdfDatasetBuilder::new();
-    let subject = rdf.intern_iri("https://example.org/rdf/subject");
-    let predicate = rdf.intern_iri("https://example.org/rdf/predicate");
-    let object = rdf.intern_iri("https://example.org/rdf/object");
-    rdf.push_quad(subject, predicate, object, None);
+    let subject = rdf.intern_iri("https://example.org/rdf/subject").unwrap();
+    let predicate = rdf.intern_iri("https://example.org/rdf/predicate").unwrap();
+    let object = rdf.intern_iri("https://example.org/rdf/object").unwrap();
+    rdf.push_quad(subject, predicate, object, None).unwrap();
     let rdf = rdf.freeze().expect("valid RDF 1.2 dataset");
     let (source, source_bytes) = CertifiedPurrpckSource::from_dataset(&rdf).expect("source pack");
 

@@ -59,20 +59,20 @@ use purrdf_sparql_eval::{EvalCtx, evaluate_query};
 /// single-row inner result.
 fn knows_dataset(n: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let knows = b.intern_iri("http://ex/knows");
-    let member = b.intern_iri("http://ex/member");
-    let club = b.intern_iri("http://ex/club");
+    let knows = b.intern_iri("http://ex/knows").unwrap();
+    let member = b.intern_iri("http://ex/member").unwrap();
+    let club = b.intern_iri("http://ex/club").unwrap();
     let mut first_obj = None;
     for i in 0..n {
-        let s = b.intern_iri(&format!("http://ex/s{i}"));
-        let o = b.intern_iri(&format!("http://ex/o{i}"));
-        b.push_quad(s, knows, o, None);
+        let s = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+        let o = b.intern_iri(&format!("http://ex/o{i}")).unwrap();
+        b.push_quad(s, knows, o, None).unwrap();
         if first_obj.is_none() {
             first_obj = Some(o);
         }
     }
     if let Some(o) = first_obj {
-        b.push_quad(o, member, club, None);
+        b.push_quad(o, member, club, None).unwrap();
     }
     b.freeze().expect("freeze")
 }
@@ -85,19 +85,19 @@ fn knows_dataset(n: usize) -> Arc<RdfDataset> {
 /// produce outer rows that leave `?o` unbound (the scan-branch shape).
 fn hub_dataset(n_outer: usize, m_inner: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let knows = b.intern_iri("http://ex/knows");
-    let likes = b.intern_iri("http://ex/likes");
-    let member = b.intern_iri("http://ex/member");
-    let hub = b.intern_iri("http://ex/hub");
+    let knows = b.intern_iri("http://ex/knows").unwrap();
+    let likes = b.intern_iri("http://ex/likes").unwrap();
+    let member = b.intern_iri("http://ex/member").unwrap();
+    let hub = b.intern_iri("http://ex/hub").unwrap();
     for i in 0..n_outer {
-        let s = b.intern_iri(&format!("http://ex/s{i}"));
-        let z = b.intern_iri(&format!("http://ex/z{i}"));
-        b.push_quad(s, knows, hub, None);
-        b.push_quad(s, likes, z, None);
+        let s = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+        let z = b.intern_iri(&format!("http://ex/z{i}")).unwrap();
+        b.push_quad(s, knows, hub, None).unwrap();
+        b.push_quad(s, likes, z, None).unwrap();
     }
     for j in 0..m_inner {
-        let m = b.intern_iri(&format!("http://ex/m{j}"));
-        b.push_quad(hub, member, m, None);
+        let m = b.intern_iri(&format!("http://ex/m{j}")).unwrap();
+        b.push_quad(hub, member, m, None).unwrap();
     }
     b.freeze().expect("freeze")
 }
@@ -110,23 +110,23 @@ fn hub_dataset(n_outer: usize, m_inner: usize) -> Arc<RdfDataset> {
 /// restrictions for the μ-restriction memo to collapse `n_outer` rows onto.
 fn hub_optional_dataset(n_outer: usize, m_hubs: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let knows = b.intern_iri("http://ex/knows");
-    let p = b.intern_iri("http://ex/p");
-    let q = b.intern_iri("http://ex/q");
+    let knows = b.intern_iri("http://ex/knows").unwrap();
+    let p = b.intern_iri("http://ex/p").unwrap();
+    let q = b.intern_iri("http://ex/q").unwrap();
     let mut hubs = Vec::with_capacity(m_hubs);
     for j in 0..m_hubs {
-        let hub = b.intern_iri(&format!("http://ex/hub{j}"));
-        let w = b.intern_iri(&format!("http://ex/w{j}"));
-        b.push_quad(hub, p, w, None);
+        let hub = b.intern_iri(&format!("http://ex/hub{j}")).unwrap();
+        let w = b.intern_iri(&format!("http://ex/w{j}")).unwrap();
+        b.push_quad(hub, p, w, None).unwrap();
         if j % 2 == 0 {
-            let y = b.intern_iri(&format!("http://ex/y{j}"));
-            b.push_quad(hub, q, y, None);
+            let y = b.intern_iri(&format!("http://ex/y{j}")).unwrap();
+            b.push_quad(hub, q, y, None).unwrap();
         }
         hubs.push(hub);
     }
     for i in 0..n_outer {
-        let s = b.intern_iri(&format!("http://ex/s{i}"));
-        b.push_quad(s, knows, hubs[i % m_hubs], None);
+        let s = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+        b.push_quad(s, knows, hubs[i % m_hubs], None).unwrap();
     }
     b.freeze().expect("freeze")
 }

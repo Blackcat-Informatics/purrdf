@@ -193,9 +193,11 @@ pub use ir::embedding;
 pub use ir::embedding::*;
 pub use ir::segmented::{
     SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError, SegmentedEvidence,
-    SegmentedExportError, SegmentedHandle, SegmentedImage, SegmentedProvider, SegmentedReadLimits,
-    SegmentedReceipt, SegmentedReceiptAuthority, SegmentedRequest, SegmentedReservation,
-    SegmentedSession, SegmentedSnapshot, SegmentedTermGuard,
+    SegmentedExportError, SegmentedHandle, SegmentedImage, SegmentedLayer, SegmentedLayerMetadata,
+    SegmentedProvider, SegmentedReadLimits, SegmentedReceipt, SegmentedReceiptAuthority,
+    SegmentedRequest, SegmentedReservation, SegmentedResidentHead, SegmentedSession,
+    SegmentedSnapshot, SegmentedStack, SegmentedStackQuery, SegmentedStackSnapshot,
+    SegmentedStackSource, SegmentedStackTerm, SegmentedStackTermGuard, SegmentedTermGuard,
 };
 pub use ir::{
     BlankScope, BudgetExceeded, BundleDigestWork, CANON_CORPUS_DIGEST,

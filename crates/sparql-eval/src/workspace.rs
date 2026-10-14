@@ -437,6 +437,10 @@ impl LexicalFrame {
         error: purrdf_lex::allocation::StorageError,
         construct: &'static str,
     ) -> EvalError {
+        if let purrdf_lex::allocation::StorageError::Capacity(error) = error {
+            self.take_failure();
+            return EvalError::Capacity(error);
+        }
         self.take_failure()
             .unwrap_or_else(|| self.workspace.storage_error(error, construct))
     }
@@ -1604,6 +1608,7 @@ impl WorkspaceCapability {
         construct: &'static str,
     ) -> EvalError {
         match error {
+            purrdf_lex::allocation::StorageError::Capacity(error) => EvalError::Capacity(error),
             purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
             purrdf_lex::allocation::StorageError::AllocationFailed => {
                 EvalError::AllocationFailed { construct }
@@ -3560,17 +3565,23 @@ pub(crate) mod owned_row_regressions {
     fn borrowed_id_grounding_moves_exact_source_cause_and_releases_partial_triple() {
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/s");
-        let predicate = builder.intern_iri("http://example.org/p");
-        let object = builder.intern_iri("http://example.org/o");
-        let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_STRING);
-        let literal = builder.intern_literal(RdfLiteral::simple("literal"));
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder.intern_iri("http://example.org/o").unwrap();
+        let datatype = builder
+            .intern_iri(purrdf_xsd::datatype::XSD_STRING)
+            .unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral::simple("literal"))
+            .unwrap();
         // RDF 1.2 nests a triple term in OBJECT, never in subject. Resolution
         // still completes outer and nested subject/predicate leaves before the
         // literal's datatype read fails under the same original source cause.
-        let nested_object = builder.intern_triple(subject, predicate, literal);
-        let root = builder.intern_triple(object, predicate, nested_object);
-        builder.push_quad(subject, predicate, root, None);
+        let nested_object = builder.intern_triple(subject, predicate, literal).unwrap();
+        let root = builder
+            .intern_triple(object, predicate, nested_object)
+            .unwrap();
+        builder.push_quad(subject, predicate, root, None).unwrap();
         let dataset = builder.freeze().expect("a valid shallow dataset");
         let (workspace, ledger, base) = account(1_000_000);
         let capability = workspace.capability();
@@ -4821,13 +4832,14 @@ pub(crate) mod owned_row_regressions {
     fn resident_view_native_copy_needs_no_dictionary_certificate_and_keeps_original_payload_grant()
     {
         let mut builder = purrdf_core::RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/s");
-        let predicate = builder.intern_iri("http://example.org/p");
-        let literal =
-            builder.intern_literal(purrdf_core::RdfLiteral::simple("original lexical value"));
-        let nested = builder.intern_triple(subject, predicate, literal);
-        let root = builder.intern_triple(subject, predicate, nested);
-        builder.push_quad(subject, predicate, root, None);
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let literal = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple("original lexical value"))
+            .unwrap();
+        let nested = builder.intern_triple(subject, predicate, literal).unwrap();
+        let root = builder.intern_triple(subject, predicate, nested).unwrap();
+        builder.push_quad(subject, predicate, root, None).unwrap();
         let dataset = builder.freeze().expect("valid RDF 1.2 object nesting");
         assert!(purrdf_core::DatasetView::max_owned_term_bytes(dataset.as_ref()).is_none());
         let expected = purrdf_core::DatasetView::term_value(dataset.as_ref(), root).unwrap();
@@ -4855,14 +4867,16 @@ pub(crate) mod owned_row_regressions {
     #[test]
     fn native_term_copy_refusal_destroys_partial_strings_boxes_and_work_before_refund() {
         let mut builder = purrdf_core::RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/s");
-        let predicate = builder.intern_iri("http://example.org/p");
-        let literal = builder.intern_literal(purrdf_core::RdfLiteral::simple(
-            "large original lexical value".repeat(8192),
-        ));
-        let nested = builder.intern_triple(subject, predicate, literal);
-        let root = builder.intern_triple(subject, predicate, nested);
-        builder.push_quad(subject, predicate, root, None);
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let literal = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple(
+                "large original lexical value".repeat(8192),
+            ))
+            .unwrap();
+        let nested = builder.intern_triple(subject, predicate, literal).unwrap();
+        let root = builder.intern_triple(subject, predicate, nested).unwrap();
+        builder.push_quad(subject, predicate, root, None).unwrap();
         let dataset = builder.freeze().expect("valid RDF 1.2 object nesting");
         let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
         for extra in [0, 1, 64, 512, 1024] {
@@ -4898,12 +4912,16 @@ pub(crate) mod owned_row_regressions {
     #[test]
     fn native_existing_copy_preserves_typed_datatype_read_failure_without_a_view_maximum() {
         let mut builder = purrdf_core::RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/s");
-        let predicate = builder.intern_iri("http://example.org/p");
-        let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_STRING);
-        let literal = builder.intern_literal(purrdf_core::RdfLiteral::simple("original lexical"));
-        let root = builder.intern_triple(subject, predicate, literal);
-        builder.push_quad(subject, predicate, root, None);
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let datatype = builder
+            .intern_iri(purrdf_xsd::datatype::XSD_STRING)
+            .unwrap();
+        let literal = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple("original lexical"))
+            .unwrap();
+        let root = builder.intern_triple(subject, predicate, literal).unwrap();
+        builder.push_quad(subject, predicate, root, None).unwrap();
         let dataset = builder.freeze().expect("valid RDF 1.2 terms");
         let (workspace, ledger, base) = account(262_144);
         let capability = workspace.capability();

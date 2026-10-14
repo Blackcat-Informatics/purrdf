@@ -1429,19 +1429,23 @@ mod tests {
             statements.reverse();
         }
         for (subject, predicate, object, object_is_iri) in statements {
-            let subject = builder.intern_iri(&format!("https://example.org/{subject}"));
-            let predicate = builder.intern_iri(predicate);
+            let subject = builder
+                .intern_iri(&format!("https://example.org/{subject}"))
+                .unwrap();
+            let predicate = builder.intern_iri(predicate).unwrap();
             let object = if object_is_iri {
                 let iri = if object == "B" {
                     format!("https://example.org/{object}")
                 } else {
                     object.to_owned()
                 };
-                builder.intern_iri(&iri)
+                builder.intern_iri(&iri).unwrap()
             } else {
-                builder.intern_literal(RdfLiteral::typed(object, XSD_STRING))
+                builder
+                    .intern_literal(RdfLiteral::typed(object, XSD_STRING))
+                    .unwrap()
             };
-            builder.push_quad(subject, predicate, object, None);
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         builder.freeze().expect("dataset")
     }
@@ -1508,25 +1512,37 @@ mod tests {
     #[test]
     fn loss_ledger_locates_every_dropped_rdf12_record() {
         let mut builder = RdfDatasetBuilder::new();
-        let concept = builder.intern_iri("https://example.org/A");
-        let rdf_type = builder.intern_iri(RDF_TYPE);
-        let class = builder.intern_iri(CLASS);
-        let label = builder.intern_iri(LABEL);
-        let title = builder.intern_literal(RdfLiteral::typed("Alpha", XSD_STRING));
-        let graph = builder.intern_iri("https://example.org/source-graph");
-        builder.declare_named_graph(graph);
-        builder.push_quad(concept, rdf_type, class, Some(graph));
-        builder.push_quad(concept, label, title, None);
+        let concept = builder.intern_iri("https://example.org/A").unwrap();
+        let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+        let class = builder.intern_iri(CLASS).unwrap();
+        let label = builder.intern_iri(LABEL).unwrap();
+        let title = builder
+            .intern_literal(RdfLiteral::typed("Alpha", XSD_STRING))
+            .unwrap();
+        let graph = builder
+            .intern_iri("https://example.org/source-graph")
+            .unwrap();
+        builder.declare_named_graph(graph).unwrap();
+        builder
+            .push_quad(concept, rdf_type, class, Some(graph))
+            .unwrap();
+        builder.push_quad(concept, label, title, None).unwrap();
 
-        let unmapped = builder.intern_iri("https://example.org/unmapped");
-        let ignored = builder.intern_iri("https://example.org/ignored");
-        builder.push_quad(concept, unmapped, ignored, None);
+        let unmapped = builder.intern_iri("https://example.org/unmapped").unwrap();
+        let ignored = builder.intern_iri("https://example.org/ignored").unwrap();
+        builder.push_quad(concept, unmapped, ignored, None).unwrap();
 
-        let quoted = builder.intern_triple(concept, unmapped, ignored);
-        let reifier = builder.intern_blank("r", BlankScope(7));
-        builder.push_reifier_in_graph(reifier, quoted, Some(graph));
-        let confidence = builder.intern_iri("https://example.org/confidence");
-        builder.push_annotation_in_graph(reifier, confidence, quoted, Some(graph));
+        let quoted = builder.intern_triple(concept, unmapped, ignored).unwrap();
+        let reifier = builder.intern_blank("r", BlankScope(7)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, quoted, Some(graph))
+            .unwrap();
+        let confidence = builder
+            .intern_iri("https://example.org/confidence")
+            .unwrap();
+        builder
+            .push_annotation_in_graph(reifier, confidence, quoted, Some(graph))
+            .unwrap();
 
         let dataset = builder.freeze().expect("dataset");
         let projected = project_okf_terms(&dataset, &config()).expect("project");
@@ -1588,10 +1604,10 @@ mod tests {
             "https://example.org/one/Thing",
             "https://example.org/two/Thing",
         ] {
-            let subject = builder.intern_iri(subject);
-            let predicate = builder.intern_iri(RDF_TYPE);
-            let object = builder.intern_iri(CLASS);
-            builder.push_quad(subject, predicate, object, None);
+            let subject = builder.intern_iri(subject).unwrap();
+            let predicate = builder.intern_iri(RDF_TYPE).unwrap();
+            let object = builder.intern_iri(CLASS).unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         let collision_dataset = builder.freeze().expect("collision dataset");
         let error = project_okf_terms(&collision_dataset, &collision)
@@ -1599,14 +1615,16 @@ mod tests {
         assert!(error.to_string().contains("path collision"));
 
         let mut builder = RdfDatasetBuilder::new();
-        let concept = builder.intern_iri("https://example.org/A");
-        let rdf_type = builder.intern_iri(RDF_TYPE);
-        let class = builder.intern_iri(CLASS);
-        builder.push_quad(concept, rdf_type, class, None);
+        let concept = builder.intern_iri("https://example.org/A").unwrap();
+        let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+        let class = builder.intern_iri(CLASS).unwrap();
+        builder.push_quad(concept, rdf_type, class, None).unwrap();
         for value in ["Alpha", "Alternate"] {
-            let label = builder.intern_iri(LABEL);
-            let value = builder.intern_literal(RdfLiteral::typed(value, XSD_STRING));
-            builder.push_quad(concept, label, value, None);
+            let label = builder.intern_iri(LABEL).unwrap();
+            let value = builder
+                .intern_literal(RdfLiteral::typed(value, XSD_STRING))
+                .unwrap();
+            builder.push_quad(concept, label, value, None).unwrap();
         }
         let cardinality_dataset = builder.freeze().expect("cardinality dataset");
         let error = project_okf_terms(&cardinality_dataset, &config())

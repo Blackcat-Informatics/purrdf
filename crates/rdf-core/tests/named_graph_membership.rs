@@ -66,14 +66,14 @@ where
 
 #[test]
 fn frozen_dataset_membership_agrees() {
-    let dataset = fixture("");
+    let dataset = fixture("").expect("authored fixture");
     assert_agrees(&*dataset, "frozen", &["g", "empty"], &["phantom", "s", "o"]);
     assert_agrees(&dataset, "frozen/arc", &["g", "empty"], &["phantom"]);
 }
 
 #[test]
 fn delta_snapshot_membership_agrees() {
-    let mut mutable = MutableDataset::new(fixture(""));
+    let mut mutable = MutableDataset::new(fixture("").expect("authored fixture"));
     for (o, g) in [
         ("delta-phantom", None),
         ("o", Some("delta-g")),
@@ -99,9 +99,14 @@ fn delta_snapshot_membership_agrees() {
 
 #[test]
 fn composite_membership_agrees_under_every_placement_and_selection() {
-    let preserve =
-        CompositeDatasetView::new(vec![fixture("A"), fixture("B")], ViewLimits::default())
-            .expect("two sources compose");
+    let preserve = CompositeDatasetView::new(
+        vec![
+            fixture("A").expect("authored fixture"),
+            fixture("B").expect("authored fixture"),
+        ],
+        ViewLimits::default(),
+    )
+    .expect("two sources compose");
     assert_agrees(
         &preserve,
         "composite",
@@ -111,10 +116,11 @@ fn composite_membership_agrees_under_every_placement_and_selection() {
 
     let placed = CompositeDatasetView::from_sources(
         vec![
-            CompositeSource::new(fixture("A")).with_graph_placement(GraphPlacement::Default),
-            CompositeSource::new(fixture("B"))
+            CompositeSource::new(fixture("A").expect("authored fixture"))
+                .with_graph_placement(GraphPlacement::Default),
+            CompositeSource::new(fixture("B").expect("authored fixture"))
                 .with_graph_placement(GraphPlacement::Named(iri("placed"))),
-            CompositeSource::new(fixture("C")),
+            CompositeSource::new(fixture("C").expect("authored fixture")),
         ],
         ViewLimits::default(),
     )
@@ -126,7 +132,7 @@ fn composite_membership_agrees_under_every_placement_and_selection() {
         &["gA", "emptyA", "gB", "emptyB", "phantomC"],
     );
 
-    let mut mutable = MutableDataset::new(fixture("D"));
+    let mut mutable = MutableDataset::new(fixture("D").expect("authored fixture"));
     mutable
         .insert(QuadValues {
             s: iri("s"),
@@ -136,8 +142,11 @@ fn composite_membership_agrees_under_every_placement_and_selection() {
         })
         .expect("insert applies");
     let retained = Arc::new(
-        CompositeDatasetView::new(vec![fixture("A")], ViewLimits::default())
-            .expect("one source composes"),
+        CompositeDatasetView::new(
+            vec![fixture("A").expect("authored fixture")],
+            ViewLimits::default(),
+        )
+        .expect("one source composes"),
     );
     let mixed = CompositeDatasetView::from_sources(
         vec![
@@ -159,8 +168,8 @@ fn composite_membership_agrees_under_every_placement_and_selection() {
 #[test]
 fn paged_membership_agrees() {
     let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![
-        fixture("A"),
-        fixture("B"),
+        fixture("A").expect("authored fixture"),
+        fixture("B").expect("authored fixture"),
     ])))
     .expect("seal pages");
     let expected = ["gA", "emptyA", "gB", "emptyB"];
@@ -172,7 +181,7 @@ fn paged_membership_agrees() {
 
 #[test]
 fn pack_membership_agrees() {
-    let bytes = purrdf_core::term_fixture::pack_bytes(&fixture(""));
+    let bytes = purrdf_core::term_fixture::pack_bytes(&fixture("").expect("authored fixture"));
     let view = PackView::from_bytes(&bytes).expect("the pack opens");
     assert_agrees(&view, "pack", &["g"], &["phantom", "s", "o"]);
 }
@@ -183,7 +192,7 @@ fn pack_membership_agrees() {
 fn segmented(graphs: usize) -> SegmentedImage {
     let limits = SegmentedBuildLimits::new(65_536, 4_000_000, 65_536, 512, 16)
         .expect("valid segmented limits");
-    let mut builder = SegmentedBuilder::new(limits);
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut push = |s: &str, o: &str, g: Option<&str>| {
         let mut terms = vec![iri(s), iri("p"), iri(o)];
         terms.extend(g.map(iri));

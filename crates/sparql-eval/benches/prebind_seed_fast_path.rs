@@ -76,12 +76,16 @@ fn rewrite(c: &mut Bench) {
 
 fn execute(c: &mut Bench) {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
+    let p = builder.intern_iri("http://example.org/p").unwrap();
     for index in 0..16 {
-        let s = builder.intern_iri(&format!("http://example.org/s{index}"));
+        let s = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
         for object in 0..4 {
-            let o = builder.intern_iri(&format!("http://example.org/o{index}-{object}"));
-            builder.push_quad(s, p, o, None);
+            let o = builder
+                .intern_iri(&format!("http://example.org/o{index}-{object}"))
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
         }
     }
     let data = builder.freeze().expect("valid benchmark dataset");

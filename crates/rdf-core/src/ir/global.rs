@@ -30,14 +30,16 @@ use std::ops::ControlFlow;
 use std::sync::OnceLock;
 
 use hashbrown::HashTable;
-use purrdf_iri::IriError;
+use purrdf_iri::IriReadError;
+use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
 
 use crate::RdfTextDirection;
 use crate::dataset_view::ViewTermId;
 use crate::hash::FastHasher;
 
 use super::dataset::TermRef;
-use super::term::{BlankScope, StrRange, TermId, TermValue, arena_str, push_arena_str};
+use super::term::{BlankScope, TermId, TermValue, arena_str, push_arena_str_with_memory};
+type StrRange = super::term::StrRange<u64>;
 use super::term_walk::{Nested, try_fold_nested, visit_nested};
 
 /// Opaque **global** term identity — the id space a paged / cross-segment backend
@@ -99,17 +101,15 @@ impl GlobalTermId {
         usize::try_from(self.index()).expect("resident dictionary index fits its buffer")
     }
 
-    /// Construct a `GlobalTermId` from a dense table index. Hard-fails (rather than
+    /// Construct a `GlobalTermId` from a dense table index. Refuses (rather than
     /// wrapping) if `index` is `u64::MAX`, since `index + 1` would overflow the id
     /// space — the largest dense index is `u64::MAX - 1`.
     #[inline]
-    #[must_use]
-    pub fn from_index(index: u64) -> Self {
-        let raw = index
-            .checked_add(1)
-            .expect("global dictionary cannot exceed u64::MAX-1 entries");
-        // `raw = index + 1 >= 1`, so the `NonZeroU64` invariant always holds.
-        Self(NonZeroU64::new(raw).expect("index + 1 is always >= 1"))
+    pub fn from_index(index: u64) -> Result<Self, CapacityError> {
+        CapacityError::slot(CapacitySpace::GlobalTerms, index, u64::MAX)?;
+        Ok(Self(
+            NonZeroU64::new(index + 1).expect("checked nonzero global term representation"),
+        ))
     }
 }
 
@@ -349,30 +349,35 @@ impl GlobalDictionary {
     }
 
     /// Append a string to the arena, returning its range. Validates the range fits
-    /// `u32` BEFORE mutating the arena, so a checked overflow fails fast and leaves
+    /// `u64` BEFORE mutating the arena, so a checked overflow fails fast and leaves
     /// the dictionary consistent.
-    fn push_str(&mut self, s: &str) -> StrRange {
-        push_arena_str(&mut self.arena, s)
+    fn push_str(&mut self, s: &str) -> Result<StrRange, StorageError> {
+        use purrdf_lex::allocation::{Memory, Resident};
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.arena.capacity());
+        push_arena_str_with_memory(&mut self.arena, s, &mut memory)
     }
 
     /// Intern a borrowed lookup BY VALUE: dedups against existing terms (resolving
     /// their ranges through the arena) and pushes strings to the arena only on a
     /// MISS. Idempotent: equal values map to one id, minted in insertion order.
-    fn intern_lookup(&mut self, lookup: GlobalTermLookup<'_>) -> GlobalTermId {
+    fn intern_lookup(
+        &mut self,
+        lookup: GlobalTermLookup<'_>,
+    ) -> Result<GlobalTermId, StorageError> {
         let hash = hash_lookup_value(&lookup);
         match self.find(&lookup, hash) {
-            Some(id) => id,
+            Some(id) => Ok(id),
             None => self.insert_missing(lookup, hash),
         }
     }
 
-    /// Checked allocation/address admission for composed retained metadata. The
-    /// ordinary lookup and miss insertion remain the dictionary's single homes.
-    fn try_intern_lookup(&mut self, lookup: GlobalTermLookup<'_>) -> Result<GlobalTermId, ()> {
-        let hash = hash_lookup_value(&lookup);
-        if let Some(id) = self.find(&lookup, hash) {
-            return Ok(id);
-        }
+    /// Reserve the entire miss before recording ranges or invalidating caches.
+    /// This is shared by ordinary and already-validated ingress.
+    fn reserve_missing(
+        &mut self,
+        lookup: &GlobalTermLookup<'_>,
+    ) -> Result<GlobalTermId, StorageError> {
         let bytes = match &lookup {
             GlobalTermLookup::Iri(iri) => iri.len(),
             GlobalTermLookup::Blank { label, .. } => label.len(),
@@ -381,20 +386,35 @@ impl GlobalDictionary {
             } => lexical
                 .len()
                 .checked_add(language.map_or(0, str::len))
-                .ok_or(())?,
+                .ok_or(StorageError::SizeOverflow)?,
             GlobalTermLookup::Triple { .. } => 0,
         };
-        let total = self.arena.len().checked_add(bytes).ok_or(())?;
-        u32::try_from(total).map_err(|_| ())?;
-        GlobalTermId::checked_from_index(u64::try_from(self.terms.len()).map_err(|_| ())?)
-            .ok_or(())?;
-        self.arena.try_reserve(bytes).map_err(|_| ())?;
-        self.terms.try_reserve(1).map_err(|_| ())?;
+        CapacityError::check(
+            CapacitySpace::GlobalTermBytes,
+            self.arena.len() as u128 + bytes as u128,
+            u128::from(u64::MAX),
+        )?;
+        let index = u64::try_from(self.terms.len()).map_err(|_| StorageError::SizeOverflow)?;
+        let attempted = u128::from(index) + 1;
+        CapacityError::check(CapacitySpace::GlobalTerms, attempted, u128::from(u64::MAX))?;
+        let id = GlobalTermId::checked_from_index(index).ok_or_else(|| {
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::GlobalTerms,
+                attempted,
+                u128::from(u64::MAX),
+            ))
+        })?;
+        self.arena
+            .try_reserve(bytes)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.terms
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
         let (arena, terms) = (&self.arena, &self.terms);
         self.index
             .try_reserve(1, |&i| hash_stored_value(arena, &terms[i as usize]))
-            .map_err(|_| ())?;
-        Ok(self.insert_missing(lookup, hash))
+            .map_err(|_| StorageError::AllocationFailed)?;
+        Ok(id)
     }
 
     /// The HIT half of [`intern_lookup`](Self::intern_lookup): the id of a value this
@@ -408,21 +428,27 @@ impl GlobalDictionary {
         self.index
             .find(hash, |&i| term_eq(arena, &terms[i as usize], lookup))
             .copied()
-            .map(GlobalTermId::from_index)
+            .map(|index| {
+                GlobalTermId::from_index(index).expect("stored term index is representable")
+            })
     }
 
     /// The MISS half of [`intern_lookup`](Self::intern_lookup): push the strings to
     /// the arena, build and store the term, and index it. `hash` must be
     /// `hash_lookup_value(&lookup)` and the caller must already have established
     /// that [`find`](Self::find) missed.
-    fn insert_missing(&mut self, lookup: GlobalTermLookup<'_>, hash: u64) -> GlobalTermId {
-        let i = u64::try_from(self.terms.len())
-            .expect("global dictionary table exceeds u64::MAX entries");
+    fn insert_missing(
+        &mut self,
+        lookup: GlobalTermLookup<'_>,
+        hash: u64,
+    ) -> Result<GlobalTermId, StorageError> {
+        let id = self.reserve_missing(&lookup)?;
+        let i = id.index();
         // Miss: now (and only now) push the strings to the arena and build the term.
         let term = match lookup {
-            GlobalTermLookup::Iri(iri) => GlobalInternedTerm::Iri(self.push_str(iri)),
+            GlobalTermLookup::Iri(iri) => GlobalInternedTerm::Iri(self.push_str(iri)?),
             GlobalTermLookup::Blank { label, scope } => GlobalInternedTerm::Blank {
-                label: self.push_str(label),
+                label: self.push_str(label)?,
                 scope,
             },
             GlobalTermLookup::Literal {
@@ -431,8 +457,8 @@ impl GlobalDictionary {
                 language,
                 direction,
             } => {
-                let lexical_form = self.push_str(lexical);
-                let language = language.map(|l| self.push_str(l));
+                let lexical_form = self.push_str(lexical)?;
+                let language = language.map(|l| self.push_str(l)).transpose()?;
                 GlobalInternedTerm::Literal(GlobalInternedLiteral {
                     lexical_form,
                     datatype,
@@ -453,7 +479,7 @@ impl GlobalDictionary {
         let (arena, terms) = (&self.arena, &self.terms);
         self.index
             .insert_unique(hash, i, |&i| hash_stored_value(arena, &terms[i as usize]));
-        GlobalTermId::from_index(i)
+        Ok(id)
     }
 
     /// Intern an IRI term. Idempotent: the same IRI string yields the same id.
@@ -476,16 +502,17 @@ impl GlobalDictionary {
     ///
     /// # Errors
     ///
-    /// [`IriError`] when `iri` is not an absolute IRI. The rule has one owner, the
-    /// crate-private `ir::absolute` module, which every ingress reaches.
-    pub fn intern_iri(&mut self, iri: &str) -> Result<GlobalTermId, IriError> {
+    /// [`IriReadError::Lexical`] when `iri` is not an absolute IRI. The rule has
+    /// one owner, the crate-private `ir::absolute` module, which every ingress
+    /// reaches. [`IriReadError::Storage`] preserves capacity or allocation refusal.
+    pub fn intern_iri(&mut self, iri: &str) -> Result<GlobalTermId, IriReadError> {
         let lookup = GlobalTermLookup::Iri(iri);
         let hash = hash_lookup_value(&lookup);
         if let Some(id) = self.find(&lookup, hash) {
             return Ok(id);
         }
         super::absolute::check_absolute(iri)?;
-        Ok(self.insert_missing(lookup, hash))
+        self.insert_missing(lookup, hash).map_err(Into::into)
     }
 
     /// Re-intern a [`TermValue`] that PROVABLY satisfies the absoluteness invariant
@@ -511,22 +538,20 @@ impl GlobalDictionary {
     ///
     /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
     /// predicate and object, each fully before the next, then the triple itself.
-    pub(crate) fn reintern_validated(&mut self, value: &TermValue) -> GlobalTermId {
-        self.try_reintern_validated(value)
-            .expect("validated dictionary value fits resident capacity")
-    }
-
     /// Refuse resident address/allocation exhaustion while composing independent
     /// dictionaries. Partial private dictionary growth is never published on error.
-    pub(crate) fn try_reintern_validated(&mut self, value: &TermValue) -> Result<GlobalTermId, ()> {
+    pub(crate) fn try_reintern_validated(
+        &mut self,
+        value: &TermValue,
+    ) -> Result<GlobalTermId, StorageError> {
         try_fold_nested(
             value,
             self,
             |dict, value| {
                 Ok(Nested::Leaf(match value {
-                    TermValue::Iri(iri) => dict.try_intern_lookup(GlobalTermLookup::Iri(iri))?,
+                    TermValue::Iri(iri) => dict.intern_lookup(GlobalTermLookup::Iri(iri))?,
                     TermValue::Blank { label, scope } => {
-                        dict.try_intern_lookup(GlobalTermLookup::Blank {
+                        dict.intern_lookup(GlobalTermLookup::Blank {
                             label,
                             scope: *scope,
                         })?
@@ -537,8 +562,7 @@ impl GlobalDictionary {
                         language,
                         direction,
                     } => {
-                        let datatype_id =
-                            dict.try_intern_lookup(GlobalTermLookup::Iri(datatype))?;
+                        let datatype_id = dict.intern_lookup(GlobalTermLookup::Iri(datatype))?;
                         dict.try_intern_literal(
                             lexical_form,
                             datatype_id,
@@ -551,12 +575,16 @@ impl GlobalDictionary {
                     }
                 }))
             },
-            |dict, _, s, p, o| dict.try_intern_lookup(GlobalTermLookup::Triple { s, p, o }),
+            |dict, _, s, p, o| dict.intern_lookup(GlobalTermLookup::Triple { s, p, o }),
         )
     }
 
     /// Intern a blank node. Identity is `(label, scope)` (C0.2).
-    pub fn intern_blank(&mut self, label: &str, scope: BlankScope) -> GlobalTermId {
+    pub fn intern_blank(
+        &mut self,
+        label: &str,
+        scope: BlankScope,
+    ) -> Result<GlobalTermId, StorageError> {
         self.intern_lookup(GlobalTermLookup::Blank { label, scope })
     }
 
@@ -574,9 +602,8 @@ impl GlobalDictionary {
         datatype: GlobalTermId,
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
-    ) -> GlobalTermId {
+    ) -> Result<GlobalTermId, StorageError> {
         self.try_intern_literal(lexical, datatype, language, direction)
-            .expect("literal and referenced blanks fit resident capacity")
     }
 
     /// One literal registration home for ordinary and validated ingress. Every
@@ -588,18 +615,18 @@ impl GlobalDictionary {
         datatype: GlobalTermId,
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
-    ) -> Result<GlobalTermId, ()> {
+    ) -> Result<GlobalTermId, StorageError> {
         let blanks = match self.resolve(datatype) {
             TermRef::Iri(iri) => crate::cdt_blank::cdt_embedded_blanks(lexical, iri),
             _ => Vec::new(),
         };
         for (label, scope) in blanks {
-            self.try_intern_lookup(GlobalTermLookup::Blank {
+            self.intern_lookup(GlobalTermLookup::Blank {
                 label: &label,
                 scope,
             })?;
         }
-        self.try_intern_lookup(GlobalTermLookup::Literal {
+        self.intern_lookup(GlobalTermLookup::Literal {
             lexical,
             datatype,
             language,
@@ -614,7 +641,7 @@ impl GlobalDictionary {
         s: GlobalTermId,
         p: GlobalTermId,
         o: GlobalTermId,
-    ) -> GlobalTermId {
+    ) -> Result<GlobalTermId, StorageError> {
         self.intern_lookup(GlobalTermLookup::Triple { s, p, o })
     }
 
@@ -627,22 +654,23 @@ impl GlobalDictionary {
     ///
     /// # Errors
     ///
-    /// [`IriError`] when any IRI the value carries — its own, a literal's datatype, or
-    /// one nested inside a triple term — is not absolute. See
+    /// [`IriReadError::Lexical`] when any IRI the value carries — its own, a literal's
+    /// datatype, or one nested inside a triple term — is not absolute.
+    /// [`IriReadError::Storage`] preserves capacity or allocation refusal. See
     /// [`intern_iri`](Self::intern_iri).
     ///
     /// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
     /// predicate and object, each fully before the next, then the triple itself. The
     /// first IRI refused ends the walk, with everything interned before it left in
     /// place.
-    pub fn intern(&mut self, value: &TermValue) -> Result<GlobalTermId, IriError> {
+    pub fn intern(&mut self, value: &TermValue) -> Result<GlobalTermId, IriReadError> {
         try_fold_nested(
             value,
             self,
             |dict, value| {
                 Ok(Nested::Leaf(match value {
                     TermValue::Iri(iri) => dict.intern_iri(iri)?,
-                    TermValue::Blank { label, scope } => dict.intern_blank(label, *scope),
+                    TermValue::Blank { label, scope } => dict.intern_blank(label, *scope)?,
                     TermValue::Literal {
                         lexical_form,
                         datatype,
@@ -655,14 +683,14 @@ impl GlobalDictionary {
                             datatype_id,
                             language.as_deref(),
                             *direction,
-                        )
+                        )?
                     }
                     TermValue::Triple { s, p, o } => {
                         return Ok(Nested::Triple(&**s, &**p, &**o));
                     }
                 }))
             },
-            |dict, _, s, p, o| Ok(dict.intern_triple(s, p, o)),
+            |dict, _, s, p, o| dict.intern_triple(s, p, o).map_err(Into::into),
         )
     }
 
@@ -861,7 +889,8 @@ impl GlobalDictionary {
             for i in 0..self.terms.len() {
                 let id = GlobalTermId::from_index(
                     u64::try_from(i).expect("dense index fits u64 for a Vec-bounded table"),
-                );
+                )
+                .expect("stored term index is representable");
                 let mut hasher = purrdf_hash::fixed::FixedHasher::default();
                 self.hash_term_value(id, &mut hasher);
                 map.entry(hasher.finish()).or_default().push(id);
@@ -930,7 +959,7 @@ mod tests {
                 "borrowed and stored IRI hashes differ at length {}",
                 iri.len()
             );
-            assert_eq!(dict.intern_iri(iri), Ok(id));
+            assert_eq!(dict.intern_iri(iri).unwrap(), id);
         }
     }
 
@@ -943,20 +972,20 @@ mod tests {
             label: "b",
             scope: BlankScope(7),
         };
-        let blank_id = dict.intern_lookup(blank);
+        let blank_id = dict.intern_lookup(blank).unwrap();
         let literal = GlobalTermLookup::Literal {
             lexical: "hello",
             datatype,
             language: Some("en"),
             direction: Some(RdfTextDirection::Ltr),
         };
-        let literal_id = dict.intern_lookup(literal);
+        let literal_id = dict.intern_lookup(literal).unwrap();
         let triple = GlobalTermLookup::Triple {
             s: blank_id,
             p: datatype,
             o: literal_id,
         };
-        let triple_id = dict.intern_lookup(triple);
+        let triple_id = dict.intern_lookup(triple).unwrap();
         for n in 0..256 {
             dict.intern_iri(&format!("http://example.org/fill/{n}"))
                 .expect("absolute IRI");
@@ -972,7 +1001,7 @@ mod tests {
                 hash,
                 hash_stored_value(&dict.arena, &dict.terms[id.resident_index()])
             );
-            assert_eq!(dict.intern_lookup(lookup), id);
+            assert_eq!(dict.intern_lookup(lookup).unwrap(), id);
         }
         assert_eq!(dict.len(), 260);
     }
@@ -1126,7 +1155,7 @@ mod tests {
         let datatype = dict
             .intern_iri(purrdf_cdt::CDT_LIST)
             .expect("absolute datatype");
-        let literal = dict.intern_literal(&lexical, datatype, None, None);
+        let literal = dict.intern_literal(&lexical, datatype, None, None).unwrap();
         assert_eq!(
             dict.term_value(literal),
             TermValue::typed_literal(&lexical, purrdf_cdt::CDT_LIST),
@@ -1148,7 +1177,7 @@ mod tests {
                 .term_id_by_value(&value)
                 .expect("embedded identity exists");
             assert_eq!(id.index(), u64::try_from(offset + 1).expect("small index"));
-            assert_eq!(dict.intern_blank(label, scope), id);
+            assert_eq!(dict.intern_blank(label, scope).unwrap(), id);
         }
         for label in ["same", "quoted"] {
             assert_eq!(
@@ -1158,7 +1187,10 @@ mod tests {
             );
         }
         let count = dict.len();
-        assert_eq!(dict.intern_literal(&lexical, datatype, None, None), literal);
+        assert_eq!(
+            dict.intern_literal(&lexical, datatype, None, None).unwrap(),
+            literal
+        );
         assert_eq!(dict.len(), count, "repeated registration is store-once");
     }
 
@@ -1197,7 +1229,7 @@ mod tests {
         assert_eq!(dict.term_id_by_value(&TermValue::blank("quoted")), None);
         let count = dict.len();
         assert_eq!(dict.intern(&value).expect("repeated valid input"), triple);
-        assert_eq!(dict.reintern_validated(&value), triple);
+        assert_eq!(dict.try_reintern_validated(&value).unwrap(), triple);
         assert_eq!(dict.term_id_by_value(&value), Some(triple));
         assert_eq!(dict.len(), count);
     }
@@ -1230,7 +1262,7 @@ mod tests {
                 .try_reintern_validated(&value)
                 .expect("small resident fixture");
             let mut validated = GlobalDictionary::new();
-            let validated_id = validated.reintern_validated(&value);
+            let validated_id = validated.try_reintern_validated(&value).unwrap();
             for dict in [&ordinary, &checked, &validated] {
                 for (label, scope) in [
                     ("same", BlankScope::DEFAULT),
@@ -1259,14 +1291,15 @@ mod tests {
                 assert_eq!(dict.term_value(ordinary_id), value);
                 let count = dict.len();
                 assert_eq!(dict.try_reintern_validated(&value), Ok(ordinary_id));
-                assert_eq!(dict.reintern_validated(&value), ordinary_id);
+                assert_eq!(dict.try_reintern_validated(&value).unwrap(), ordinary_id);
                 assert_eq!(dict.intern(&value).expect("repeated fixture"), ordinary_id);
                 assert_eq!(dict.len(), count, "all ingress paths are store-once");
             }
             assert_eq!(checked.len(), ordinary.len());
             assert_eq!(validated.len(), ordinary.len());
             for index in 0..ordinary.len() {
-                let id = GlobalTermId::from_index(u64::try_from(index).expect("small index"));
+                let id = GlobalTermId::from_index(u64::try_from(index).expect("small index"))
+                    .expect("stored term index is representable");
                 assert_eq!(checked.term_value(id), ordinary.term_value(id));
                 assert_eq!(validated.term_value(id), ordinary.term_value(id));
             }
@@ -1279,7 +1312,9 @@ mod tests {
         let datatype = dict
             .intern_iri(purrdf_xsd::datatype::XSD_STRING)
             .expect("absolute string datatype");
-        let literal = dict.intern_literal("[_:bnode1]", datatype, None, None);
+        let literal = dict
+            .intern_literal("[_:bnode1]", datatype, None, None)
+            .unwrap();
         let next = dict
             .intern_iri("http://example.org/next")
             .expect("absolute IRI");
@@ -1391,14 +1426,14 @@ mod tests {
         let value = TermValue::iri("http://example.org/x");
         let first = intern(&mut dict, &value);
         assert_eq!(intern(&mut dict, &value), first);
-        assert_eq!(dict.reintern_validated(&value), first);
+        assert_eq!(dict.try_reintern_validated(&value).unwrap(), first);
         assert_eq!(dict.len(), 1, "all three calls resolved to one term");
     }
 
     #[test]
     fn global_term_id_index_round_trips() {
         for raw in [0_u64, 1, 42, u64::from(u32::MAX) + 1, u64::MAX - 1] {
-            let id = GlobalTermId::from_index(raw);
+            let id = GlobalTermId::from_index(raw).expect("stored term index is representable");
             assert_eq!(id.index(), raw);
             assert_eq!(id.encode(), u128::from(raw));
             assert_eq!(GlobalTermId::checked_from_index(raw), Some(id));
@@ -1407,9 +1442,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "cannot exceed u64::MAX-1 entries")]
     fn global_term_id_from_index_rejects_u64_max() {
-        let _ = GlobalTermId::from_index(u64::MAX);
+        assert_eq!(
+            GlobalTermId::from_index(u64::MAX),
+            Err(CapacityError::new(
+                CapacitySpace::GlobalTerms,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX)
+            ))
+        );
     }
 
     // ── The walks over nested triple terms ─────────────────────────────────────────
@@ -1470,7 +1511,11 @@ mod tests {
                 value == other,
                 "seed {seed}: {value:?} against {other:?}"
             );
-            assert_eq!(dict.reintern_validated(&value), id, "seed {seed}");
+            assert_eq!(
+                dict.try_reintern_validated(&value).unwrap(),
+                id,
+                "seed {seed}"
+            );
             assert_eq!(dict.term_id_by_value(&value), Some(id), "seed {seed}");
         }
         assert!(nested > 0, "some generated term nests a triple term in one");
@@ -1487,7 +1532,7 @@ mod tests {
             let value = crate::term_fixture::triple_chain(LEVELS);
             let mut dict = GlobalDictionary::new();
             let id = intern(&mut dict, &value);
-            assert_eq!(dict.reintern_validated(&value), id);
+            assert_eq!(dict.try_reintern_validated(&value).unwrap(), id);
             assert!(dict.term_matches_value(id, &value));
             assert_eq!(stored_hash(&dict, id), crate::hash::hash_of(&value));
             let resolved = dict.term_value(id);

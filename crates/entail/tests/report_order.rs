@@ -53,19 +53,19 @@ fn sorted_by_cmp() -> Vec<TermValue> {
 /// `node a <class>` for every node.
 fn typed_by(class: &str, declare_class: bool) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let ty = b.intern_iri(TYPE);
-    let class = b.intern_iri(class);
+    let ty = b.intern_iri(TYPE).unwrap();
+    let class = b.intern_iri(class).unwrap();
     if declare_class {
-        let owl_class = b.intern_iri(CLASS);
-        b.push_quad(class, ty, owl_class, None);
+        let owl_class = b.intern_iri(CLASS).unwrap();
+        b.push_quad(class, ty, owl_class, None).unwrap();
     }
     for node in nodes() {
         let id = match &node {
-            TermValue::Iri(iri) => b.intern_iri(iri),
-            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
+            TermValue::Iri(iri) => b.intern_iri(iri).unwrap(),
+            TermValue::Blank { label, scope } => b.intern_blank(label, *scope).unwrap(),
             other => unreachable!("fixture nodes are IRIs and blank nodes: {other:?}"),
         };
-        b.push_quad(id, ty, class, None);
+        b.push_quad(id, ty, class, None).unwrap();
     }
     b.freeze().expect("freeze")
 }

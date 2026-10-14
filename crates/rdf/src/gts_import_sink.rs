@@ -74,16 +74,18 @@ impl SinkImporter<'_> {
 }
 
 fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
-    let scope = u32::try_from(segment_index)
-        .ok()
-        .and_then(|index| index.checked_add(1))
-        .ok_or_else(|| {
-            RdfDiagnostic::error(
-                "gts-scope-limit",
-                "GTS segment count exceeds the blank-node scope capacity",
-            )
-            .with_location(RdfLocation::logical("gts:sink").with_gts_segment(segment_index))
-        })?;
+    use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+    let index = CapacityError::slot(
+        CapacitySpace::ImportBlankScopes,
+        segment_index,
+        u64::from(u32::MAX),
+    )
+    .map_err(|error| {
+        let mut diagnostic = RdfDiagnostic::from(StorageError::Capacity(error));
+        "gts-scope-limit".clone_into(&mut diagnostic.code);
+        diagnostic.with_location(RdfLocation::logical("gts:sink").with_gts_segment(segment_index))
+    })?;
+    let scope = u32::try_from(index + 1).map_err(|_| StorageError::SizeOverflow)?;
     Ok(BlankScope(scope))
 }
 
@@ -108,7 +110,7 @@ impl ResolvedSink for SinkImporter<'_> {
                     .with_gts_term(gts_id as u64),
             ));
         }
-        Ok(self.builder.intern_iri(iri))
+        Ok(self.builder.intern_iri(iri)?)
     }
 
     // Per-segment scope isolation (C0.2): scope = segment_index + 1 so the SAME
@@ -121,7 +123,7 @@ impl ResolvedSink for SinkImporter<'_> {
         label: &str,
     ) -> Result<TermId, RdfDiagnostic> {
         let scope = segment_scope(segment_index)?;
-        Ok(self.builder.intern_blank(label, scope))
+        Ok(self.builder.intern_blank(label, scope)?)
     }
 
     /// GTS *does* carry RDF 1.2 base direction (`purrdf-gts`'s `Term` has a
@@ -181,7 +183,7 @@ impl ResolvedSink for SinkImporter<'_> {
         p: TermId,
         o: TermId,
     ) -> Result<TermId, RdfDiagnostic> {
-        Ok(self.builder.intern_triple(s, p, o))
+        Ok(self.builder.intern_triple(s, p, o)?)
     }
 
     fn push_quad(
@@ -192,7 +194,7 @@ impl ResolvedSink for SinkImporter<'_> {
         o: TermId,
         g: Option<TermId>,
     ) -> Result<(), RdfDiagnostic> {
-        self.builder.push_quad(s, p, o, g);
+        self.builder.push_quad(s, p, o, g)?;
         Ok(())
     }
 
@@ -205,8 +207,9 @@ impl ResolvedSink for SinkImporter<'_> {
         o: TermId,
         g: Option<TermId>,
     ) -> Result<(), RdfDiagnostic> {
-        let triple_term = self.builder.intern_triple(s, p, o);
-        self.builder.push_reifier_in_graph(reifier, triple_term, g);
+        let triple_term = self.builder.intern_triple(s, p, o)?;
+        self.builder
+            .push_reifier_in_graph(reifier, triple_term, g)?;
         Ok(())
     }
 
@@ -218,7 +221,7 @@ impl ResolvedSink for SinkImporter<'_> {
         o: TermId,
         g: Option<TermId>,
     ) -> Result<(), RdfDiagnostic> {
-        self.builder.push_annotation_in_graph(reifier, p, o, g);
+        self.builder.push_annotation_in_graph(reifier, p, o, g)?;
         Ok(())
     }
 
@@ -545,17 +548,34 @@ mod tests {
 
     #[test]
     fn segment_scope_refuses_exhaustion_and_preserves_its_valid_neighbour() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        let mut sink = SinkImporter::new();
+        let last = sink
+            .intern_blank(u64::from(u32::MAX) - 1, 0, "last")
+            .unwrap();
         assert_eq!(
             segment_scope(u64::from(u32::MAX) - 1).unwrap(),
             BlankScope(u32::MAX)
         );
-        let error = segment_scope(u64::from(u32::MAX)).unwrap_err();
-        assert_eq!(error.code, "gts-scope-limit");
-        assert_eq!(
-            error.location.unwrap().gts_segment_index,
-            Some(u64::from(u32::MAX))
-        );
-        assert!(segment_scope(u64::MAX).is_err());
+        for index in [u64::from(u32::MAX), u64::MAX] {
+            let error = sink.intern_blank(index, 1, "refused").unwrap_err();
+            assert_eq!(error.code, "gts-scope-limit");
+            assert_eq!(
+                error.storage_error(),
+                Some(StorageError::Capacity(CapacityError::new(
+                    CapacitySpace::ImportBlankScopes,
+                    u128::from(index) + 1,
+                    u128::from(u32::MAX)
+                )))
+            );
+            assert_eq!(error.location.unwrap().gts_segment_index, Some(index));
+            assert_eq!(
+                sink.intern_blank(u64::from(u32::MAX) - 1, 0, "last")
+                    .unwrap(),
+                last
+            );
+        }
+        assert_eq!(sink.builder.freeze().unwrap().term_count(), 1);
     }
     use purrdf_gts::model::{Graph, Term, Term as GtsTerm, TermKind, TermKind as GtsKind};
     use purrdf_gts::reader::StreamingSink;

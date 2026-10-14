@@ -21,7 +21,6 @@
 //! and their variable positions — still compare exactly. See
 //! the private `encode_solution_set`.
 
-use std::convert::Infallible;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -440,39 +439,58 @@ fn encode_solution_set(
     literals: Literals,
 ) -> Result<String, String> {
     let mut builder = RdfDatasetBuilder::new();
-    let index_predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}index"));
+    let index_predicate = builder
+        .intern_iri(&format!("{CONFORMANCE_NS}index"))
+        .map_err(|error| error.to_string())?;
     for (i, row) in rows.iter().enumerate() {
         // A distinct solution blank per row (its label is the row ordinal, but
         // its identity is bijection-normalized away by RDFC-1.0 — only its
         // structure, i.e. the cells hanging off it, is observable).
-        let solution = builder.intern_blank(&format!("row{i}"), SOLUTION_SCOPE);
+        let solution = builder
+            .intern_blank(&format!("row{i}"), SOLUTION_SCOPE)
+            .map_err(|error| error.to_string())?;
         for (var, cell) in variables.iter().zip(row) {
             if let Some(term) = cell {
-                let predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}var:{var}"));
-                let object = intern_term_value(&mut builder, term, literals);
-                builder.push_quad(solution, predicate, object, None);
+                let predicate = builder
+                    .intern_iri(&format!("{CONFORMANCE_NS}var:{var}"))
+                    .map_err(|error| error.to_string())?;
+                let object = intern_term_value(&mut builder, term, literals)
+                    .map_err(|error| error.to_string())?;
+                builder
+                    .push_quad(solution, predicate, object, None)
+                    .map_err(|error| error.to_string())?;
             }
         }
         if !ordered && row.iter().all(Option::is_none) {
             // A wholly unbound solution still has a multiplicity. Without a
             // statement the synthetic solution node would vanish from RDF.
-            let empty = builder.intern_iri(&format!("{CONFORMANCE_NS}empty"));
-            builder.push_quad(solution, empty, empty, None);
+            let empty = builder
+                .intern_iri(&format!("{CONFORMANCE_NS}empty"))
+                .map_err(|error| error.to_string())?;
+            builder
+                .push_quad(solution, empty, empty, None)
+                .map_err(|error| error.to_string())?;
         }
         if ordered {
-            let ordinal = builder.intern_literal(RdfLiteral {
-                lexical_form: i.to_string(),
-                datatype: Some(XSD_INTEGER.to_owned()),
-                language: None,
-                direction: None,
-            });
-            builder.push_quad(solution, index_predicate, ordinal, None);
+            let ordinal = builder
+                .intern_literal(RdfLiteral {
+                    lexical_form: i.to_string(),
+                    datatype: Some(XSD_INTEGER.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .map_err(|error| error.to_string())?;
+            builder
+                .push_quad(solution, index_predicate, ordinal, None)
+                .map_err(|error| error.to_string())?;
         }
     }
     let dataset = builder
         .freeze()
         .map_err(|e| format!("encode solution set for comparison: {e}"))?;
-    Ok(purrdf_core::canonicalize(&dataset).nquads)
+    purrdf_core::try_canonicalize(&dataset)
+        .map(|canonical| canonical.nquads)
+        .map_err(|error| format!("canonicalize solution set for comparison: {error}"))
 }
 
 /// The canonical form a solution sequence is compared in: the RDFC-1.0 canonical
@@ -521,12 +539,12 @@ fn intern_term_value(
     builder: &mut RdfDatasetBuilder,
     term: &TermValue,
     literals: Literals,
-) -> TermId {
-    let interned = try_fold_nested(
+) -> Result<TermId, purrdf_lex::allocation::StorageError> {
+    try_fold_nested(
         term,
         builder,
         |builder, term| {
-            Ok::<_, Infallible>(Nested::Leaf(match term {
+            Ok(Nested::Leaf(match term {
                 TermValue::Iri(iri) => builder.intern_iri(iri),
                 TermValue::Blank { label, scope } => {
                     builder.intern_blank(&format!("{}:{label}", scope.0), VALUE_SCOPE)
@@ -546,13 +564,10 @@ fn intern_term_value(
                     direction: *direction,
                 }),
                 TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
-            }))
+            }?))
         },
-        |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
-    );
-    match interned {
-        Ok(id) => id,
-    }
+        |builder, _, s, p, o| builder.intern_triple(s, p, o),
+    )
 }
 
 /// The lexical form a literal is compared under: for a well-typed literal of an XSD
@@ -1033,23 +1048,25 @@ mod term_walk_tests {
                 let s = reference(builder, s);
                 let p = reference(builder, p);
                 let o = reference(builder, o);
-                builder.intern_triple(s, p, o)
+                builder.intern_triple(s, p, o).unwrap()
             }
             // Keep source identity directly in this independent reference. The
             // production encoder reserves its own scope with opaque labels.
-            TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
+            TermValue::Blank { label, scope } => builder.intern_blank(label, *scope).unwrap(),
             TermValue::Literal {
                 lexical_form,
                 datatype,
                 language,
                 direction,
-            } => builder.intern_literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            }),
-            TermValue::Iri(iri) => builder.intern_iri(iri),
+            } => builder
+                .intern_literal(RdfLiteral {
+                    lexical_form: lexical_form.clone(),
+                    datatype: Some(datatype.clone()),
+                    language: language.clone(),
+                    direction: *direction,
+                })
+                .unwrap(),
+            TermValue::Iri(iri) => builder.intern_iri(iri).unwrap(),
         }
     }
 
@@ -1068,14 +1085,14 @@ mod term_walk_tests {
             );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
-                intern_term_value(&mut found, &value, super::Literals::Exact),
+                intern_term_value(&mut found, &value, super::Literals::Exact).unwrap(),
                 reference(&mut expected, &value),
                 "seed {seed}"
             );
             let sentinel = "http://example.org/sentinel";
             assert_eq!(
-                found.intern_iri(sentinel),
-                expected.intern_iri(sentinel),
+                found.intern_iri(sentinel).unwrap(),
+                expected.intern_iri(sentinel).unwrap(),
                 "seed {seed}"
             );
         }
@@ -1090,7 +1107,9 @@ mod term_walk_tests {
             let value = purrdf_core::term_fixture::triple_chain(LEVELS);
             let mut builder = RdfDatasetBuilder::new();
             assert_eq!(
-                intern_term_value(&mut builder, &value, super::Literals::Exact).index(),
+                intern_term_value(&mut builder, &value, super::Literals::Exact)
+                    .unwrap()
+                    .index(),
                 LEVELS + 2
             );
         })

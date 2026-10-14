@@ -28,12 +28,16 @@ const DELTA_CURSOR_CAP: usize = 64 * size_of::<usize>();
 
 fn source(rows: usize, owner: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/o");
-    let graph = builder.intern_iri("http://example.org/g");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/o").unwrap();
+    let graph = builder.intern_iri("http://example.org/g").unwrap();
     for row in 0..rows {
-        let subject = builder.intern_iri(&format!("http://example.org/source{owner}/s{row}"));
-        builder.push_quad(subject, predicate, object, Some(graph));
+        let subject = builder
+            .intern_iri(&format!("http://example.org/source{owner}/s{row}"))
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
     }
     builder.freeze().expect("valid source")
 }
@@ -252,16 +256,24 @@ fn delta_and_nested_selection_preserve_statement_layers_and_blank_classes() {
     let sources: Vec<_> = (0..2)
         .map(|source| {
             let mut builder = RdfDatasetBuilder::new();
-            let subject = builder.intern_iri(&format!("http://example.org/s{source}"));
-            let predicate = builder.intern_iri("http://example.org/p");
-            let object = builder.intern_iri("http://example.org/o");
-            let graph = builder.intern_iri("http://example.org/g");
-            let reifier = builder.intern_blank("same", BlankScope::DEFAULT);
-            let triple = builder.intern_triple(subject, predicate, object);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/s{source}"))
+                .unwrap();
+            let predicate = builder.intern_iri("http://example.org/p").unwrap();
+            let object = builder.intern_iri("http://example.org/o").unwrap();
+            let graph = builder.intern_iri("http://example.org/g").unwrap();
+            let reifier = builder.intern_blank("same", BlankScope::DEFAULT).unwrap();
+            let triple = builder.intern_triple(subject, predicate, object).unwrap();
             for graph in [None, Some(graph)] {
-                builder.push_quad(subject, predicate, object, graph);
-                builder.push_reifier_in_graph(reifier, triple, graph);
-                builder.push_annotation_in_graph(reifier, predicate, object, graph);
+                builder
+                    .push_quad(subject, predicate, object, graph)
+                    .unwrap();
+                builder
+                    .push_reifier_in_graph(reifier, triple, graph)
+                    .unwrap();
+                builder
+                    .push_annotation_in_graph(reifier, predicate, object, graph)
+                    .unwrap();
             }
             builder.freeze().unwrap()
         })

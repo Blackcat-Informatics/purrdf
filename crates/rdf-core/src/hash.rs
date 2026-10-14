@@ -60,6 +60,23 @@ pub fn hash_table_allocation_bound<T>(capacity: usize) -> Option<usize> {
     } else {
         (capacity.checked_mul(8)? / 7).checked_next_power_of_two()?
     };
+    table_bucket_allocation_bound::<T>(buckets)
+}
+
+/// Retained physical table bound, independent of deletion tombstones.
+///
+/// `capacity()` measures insertion headroom, which can fall after `retain` and
+/// rise on reinsertion without changing the allocation. Native buffer owners
+/// must use the actual bucket count when resuming or refunding their grant.
+#[must_use]
+pub fn hash_table_retained_bound<T>(table: &hashbrown::HashTable<T>) -> Option<usize> {
+    if table.allocation_size() == 0 {
+        return Some(0);
+    }
+    table_bucket_allocation_bound::<T>(table.num_buckets())
+}
+
+fn table_bucket_allocation_bound<T>(buckets: usize) -> Option<usize> {
     let alignment = align_of::<T>().max(16);
     let controls = buckets
         .checked_mul(size_of::<T>())?
@@ -116,21 +133,58 @@ fn packed_text(first: &[u8], second: &[u8]) -> u128 {
 /// Longer labels use a byte write that already incorporates its length.
 #[inline]
 pub(crate) fn hash_blank_for_interner(label: &str, scope: u32) -> u64 {
+    if label.len() <= 16 {
+        hash_short_blank(label.as_bytes(), scope)
+    } else {
+        hash_blank_bytes_for_interner(label.len(), label.bytes(), scope)
+    }
+}
+
+#[inline]
+fn hash_short_blank(bytes: &[u8], scope: u32) -> u64 {
     use core::hash::Hasher;
     let mut hash = purrdf_hash::fixed::FixedHasher::default();
-    if label.len() <= 16 {
-        let metadata = u64::from(scope) | (1 << 32) | ((label.len() as u64) << 40);
-        let text = packed_text(label.as_bytes(), &[]);
-        if label.len() <= 8 {
-            hash.write_u128(text | (u128::from(metadata) << 64));
-        } else {
-            hash.write_u64(metadata);
-            hash.write_u128(text);
+    let metadata = u64::from(scope) | (1 << 32) | ((bytes.len() as u64) << 40);
+    let text = packed_text(bytes, &[]);
+    if bytes.len() <= 8 {
+        hash.write_u128(text | (u128::from(metadata) << 64));
+    } else {
+        hash.write_u64(metadata);
+        hash.write_u128(text);
+    }
+    hash.finish()
+}
+
+/// The same blank-key protocol for a decoded lexical view. Fixed-size blocks
+/// avoid materializing an escaped label merely to probe an existing identity.
+#[inline]
+pub(crate) fn hash_blank_bytes_for_interner(
+    len: usize,
+    mut bytes: impl Iterator<Item = u8>,
+    scope: u32,
+) -> u64 {
+    use core::hash::Hasher;
+    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    let mut block = [0_u8; 32];
+    if len <= 16 {
+        for slot in &mut block[..len] {
+            *slot = bytes.next().expect("declared blank label byte length");
         }
-        return hash.finish();
+        return hash_short_blank(&block[..len], scope);
     }
     hash.write_u64(u64::from(scope) | (1 << 32));
-    hash.write(label.as_bytes());
+    // Framing each fixed-size block through the existing hasher preserves
+    // length distinctions, including a short final block. This is an internal
+    // index protocol, never a persisted hash or an ordering key.
+    let mut remaining = len;
+    while remaining != 0 {
+        let count = remaining.min(block.len());
+        for slot in &mut block[..count] {
+            *slot = bytes.next().expect("declared blank label byte length");
+        }
+        hash.write(&block[..count]);
+        remaining -= count;
+    }
     hash.finish()
 }
 
@@ -205,14 +259,16 @@ pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Size
     if required <= table.capacity() {
         return Ok(());
     }
-    let old =
-        hash_table_allocation_bound::<T>(table.capacity()).ok_or(StorageError::SizeOverflow)?;
+    let old = hash_table_retained_bound(table).ok_or(StorageError::SizeOverflow)?;
     let next = hash_table_allocation_bound::<T>(required).ok_or(StorageError::SizeOverflow)?;
-    memory.add_bytes(next)?;
-    let mut replacement = hashbrown::HashTable::new();
-    replacement
-        .try_reserve(required, &hash)
-        .map_err(|_| StorageError::AllocationFailed)?;
+    let mut replacement = memory.scope(|memory| {
+        memory.add_bytes(next)?;
+        let mut replacement = hashbrown::HashTable::new();
+        replacement
+            .try_reserve(required, &hash)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        Ok(replacement)
+    })?;
     for value in table.drain() {
         replacement.insert_unique(hash(&value), value, &hash);
     }
@@ -238,19 +294,50 @@ pub fn reserve_map_with_memory<
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
 ) -> Result<(), purrdf_lex::allocation::StorageError> {
     use purrdf_lex::allocation::StorageError;
+    let mut retained =
+        hash_table_allocation_bound::<(K, V)>(map.capacity()).ok_or(StorageError::SizeOverflow)?;
+    reserve_map_with_retained_memory(map, &mut retained, required, memory)
+}
+
+/// Grow a deletion-capable fixed-key map using its original retained charge.
+///
+/// The owner initializes `retained` to zero with an empty map, keeps it beside
+/// that map through removals, and uses it for final buffer release. The std map
+/// exposes insertion headroom, not physical bucket count, after deletion.
+///
+/// # Errors
+/// Returns layout overflow, original admission refusal or allocator refusal.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "preserves the workspace fixed-key map"
+)]
+pub fn reserve_map_with_retained_memory<
+    K: Eq + core::hash::Hash,
+    V,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    map: &mut FastMap<K, V>,
+    retained: &mut usize,
+    required: usize,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    use purrdf_lex::allocation::StorageError;
     if required <= map.capacity() {
         return Ok(());
     }
-    let old =
-        hash_table_allocation_bound::<(K, V)>(map.capacity()).ok_or(StorageError::SizeOverflow)?;
+    let old = *retained;
     let next = hash_table_allocation_bound::<(K, V)>(required).ok_or(StorageError::SizeOverflow)?;
-    memory.add_bytes(next)?;
-    let mut replacement = FastMap::default();
-    replacement
-        .try_reserve(required)
-        .map_err(|_| StorageError::AllocationFailed)?;
+    let mut replacement = memory.scope(|memory| {
+        memory.add_bytes(next)?;
+        let mut replacement = FastMap::default();
+        replacement
+            .try_reserve(required)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        Ok(replacement)
+    })?;
     replacement.extend(map.drain());
     drop(core::mem::replace(map, replacement));
+    *retained = next;
     memory.release_bytes(old)
 }
 

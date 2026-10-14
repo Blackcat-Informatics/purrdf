@@ -132,42 +132,59 @@ pub(crate) fn encode(prepared: &PreparedShapes) -> Vec<u8> {
 /// moved around by how much violation text a particular iteration rendered.
 pub(crate) fn data() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-    let links_to = builder.intern_iri(&format!("{NS}linksTo"));
+    let rdf_type = builder
+        .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+        .unwrap();
+    let links_to = builder.intern_iri(&format!("{NS}linksTo")).unwrap();
     let properties: Vec<_> = (0..PROPERTY_COUNT)
-        .map(|property| builder.intern_iri(&format!("{NS}p{property}")))
+        .map(|property| builder.intern_iri(&format!("{NS}p{property}")).unwrap())
         .collect();
 
     for class in 0..CLASS_COUNT {
-        let class_iri = builder.intern_iri(&format!("{NS}Class{class}"));
+        let class_iri = builder.intern_iri(&format!("{NS}Class{class}")).unwrap();
         for focus in 0..FOCUS_PER_CLASS {
-            let subject = builder.intern_iri(&format!("{NS}node-{class}-{focus}"));
-            builder.push_quad(subject, rdf_type, class_iri, None);
+            let subject = builder
+                .intern_iri(&format!("{NS}node-{class}-{focus}"))
+                .unwrap();
+            builder
+                .push_quad(subject, rdf_type, class_iri, None)
+                .unwrap();
             for (property, predicate) in properties.iter().enumerate() {
-                let value = builder.intern_literal(RdfLiteral::simple(format!(
-                    "value-{class}-{focus}-{property}"
-                )));
-                builder.push_quad(subject, *predicate, value, None);
+                let value = builder
+                    .intern_literal(RdfLiteral::simple(format!(
+                        "value-{class}-{focus}-{property}"
+                    )))
+                    .unwrap();
+                builder.push_quad(subject, *predicate, value, None).unwrap();
             }
             // One link per focus node, so the subjects-of and objects-of targets
             // resolve to a real population rather than an empty one.
-            let peer = builder.intern_iri(&format!(
-                "{NS}node-{class}-{}",
-                (focus + 1) % FOCUS_PER_CLASS
-            ));
-            builder.push_quad(subject, links_to, peer, None);
+            let peer = builder
+                .intern_iri(&format!(
+                    "{NS}node-{class}-{}",
+                    (focus + 1) % FOCUS_PER_CLASS
+                ))
+                .unwrap();
+            builder.push_quad(subject, links_to, peer, None).unwrap();
         }
 
         // One focus node per class that is missing `ex:p0` and so trips that
         // property shape's `sh:minCount`. It is deliberately outside the
         // `ex:linksTo` chain, so it is targeted by its class shape only and
         // contributes exactly one result.
-        let violating = builder.intern_iri(&format!("{NS}missing-p0-{class}"));
-        builder.push_quad(violating, rdf_type, class_iri, None);
+        let violating = builder
+            .intern_iri(&format!("{NS}missing-p0-{class}"))
+            .unwrap();
+        builder
+            .push_quad(violating, rdf_type, class_iri, None)
+            .unwrap();
         for (property, predicate) in properties.iter().enumerate().skip(1) {
-            let value =
-                builder.intern_literal(RdfLiteral::simple(format!("value-{class}-bad-{property}")));
-            builder.push_quad(violating, *predicate, value, None);
+            let value = builder
+                .intern_literal(RdfLiteral::simple(format!("value-{class}-bad-{property}")))
+                .unwrap();
+            builder
+                .push_quad(violating, *predicate, value, None)
+                .unwrap();
         }
     }
     builder.freeze().expect("freeze the bench data graph")

@@ -123,7 +123,7 @@ fn skewed_term(rng: &mut SplitMix64) -> u64 {
 fn corpus() -> Arc<RdfDataset> {
     let mut generator = SplitMix64::new(SEED);
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
 
     let mut text = String::new();
     for document in 0..DOCUMENTS {
@@ -144,9 +144,11 @@ fn corpus() -> Arc<RdfDataset> {
                 ));
             }
         }
-        let subject = builder.intern_iri(&format!("https://example.org/doc/{document:04}"));
-        let literal = builder.intern_literal(RdfLiteral::simple(&text));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/doc/{document:04}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(&text)).unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
 
     builder
@@ -171,7 +173,7 @@ const LANGUAGES: [&str; 8] = ["en", "fr", "de", "es", "it", "nl", "pt", "sv"];
 fn partitioned_corpus() -> Arc<RdfDataset> {
     let mut generator = SplitMix64::new(SEED);
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
 
     let mut text = String::new();
     for document in 0..DOCUMENTS {
@@ -190,10 +192,14 @@ fn partitioned_corpus() -> Arc<RdfDataset> {
                 ));
             }
         }
-        let subject = builder.intern_iri(&format!("https://example.org/doc/{document:04}"));
+        let subject = builder
+            .intern_iri(&format!("https://example.org/doc/{document:04}"))
+            .unwrap();
         let language = LANGUAGES[document as usize % LANGUAGES.len()];
-        let literal = builder.intern_literal(RdfLiteral::language_tagged(&text, language));
-        builder.push_quad(subject, note, literal, None);
+        let literal = builder
+            .intern_literal(RdfLiteral::language_tagged(&text, language))
+            .unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
 
     builder

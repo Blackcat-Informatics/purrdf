@@ -19,15 +19,25 @@ use purrdf_rdf::{NativeRdfFormat, serialize_dataset_to_format};
 fn dataset() -> std::sync::Arc<purrdf_core::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for i in 0..8 {
-        let s = b.intern_owned_term(&RdfTerm::iri(format!("https://example.org/s{i}")));
+        let s = b
+            .intern_owned_term(&RdfTerm::iri(format!("https://example.org/s{i}")))
+            .unwrap();
         for predicate in ["zeta", "alpha", "middle", "beta"] {
-            let p = b.intern_iri(&format!("https://example.org/{predicate}"));
-            let o = b.intern_literal(RdfLiteral::simple(format!("value {i} {predicate}")));
-            b.push_quad(s, p, o, None);
+            let p = b
+                .intern_iri(&format!("https://example.org/{predicate}"))
+                .unwrap();
+            let o = b
+                .intern_literal(RdfLiteral::simple(format!("value {i} {predicate}")))
+                .unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
-        let typed = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let class = b.intern_owned_term(&RdfTerm::iri("https://example.org/Class"));
-        b.push_quad(s, typed, class, None);
+        let typed = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let class = b
+            .intern_owned_term(&RdfTerm::iri("https://example.org/Class"))
+            .unwrap();
+        b.push_quad(s, typed, class, None).unwrap();
     }
     b.freeze().expect("dataset freezes")
 }

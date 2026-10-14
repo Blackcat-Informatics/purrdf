@@ -59,20 +59,34 @@ struct Run {
 /// `ex:s{i} ex:v i` and `ex:s{i} ex:l "[i,i+1]"^^cdt:List` for every `i < rows`.
 fn dataset(rows: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let v = builder.intern_iri(&format!("{EX}v"));
-    let l = builder.intern_iri(&format!("{EX}l"));
+    let v = builder
+        .intern_iri(&format!("{EX}v"))
+        .expect("fixture capacity");
+    let l = builder
+        .intern_iri(&format!("{EX}l"))
+        .expect("fixture capacity");
     for index in 0..rows {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let value = builder.intern_literal(RdfLiteral::typed(
-            index.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let list = builder.intern_literal(RdfLiteral::typed(
-            format!("[{index},{}]", index + 1),
-            CDT_LIST,
-        ));
-        builder.push_quad(s, v, value, None);
-        builder.push_quad(s, l, list, None);
+        let s = builder
+            .intern_iri(&format!("{EX}s{index}"))
+            .expect("fixture capacity");
+        let value = builder
+            .intern_literal(RdfLiteral::typed(
+                index.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .expect("fixture capacity");
+        let list = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("[{index},{}]", index + 1),
+                CDT_LIST,
+            ))
+            .expect("fixture capacity");
+        builder
+            .push_quad(s, v, value, None)
+            .expect("fixture capacity");
+        builder
+            .push_quad(s, l, list, None)
+            .expect("fixture capacity");
     }
     builder.freeze().expect("the fixture is positionally valid")
 }
@@ -261,14 +275,22 @@ fn aggregate_accumulation_trips_at_the_same_row_under_every_fuel_budget() {
 /// `ex:s{i} ex:w w_i` with `w_i` an integer whose length grows with `i`, from 40 digits.
 fn growing_dataset(rows: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let w = builder.intern_iri(&format!("{EX}w"));
+    let w = builder
+        .intern_iri(&format!("{EX}w"))
+        .expect("fixture capacity");
     for index in 0..rows {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let value = builder.intern_literal(RdfLiteral::typed(
-            format!("1{}", "7".repeat(39 + index / 5)),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(s, w, value, None);
+        let s = builder
+            .intern_iri(&format!("{EX}s{index}"))
+            .expect("fixture capacity");
+        let value = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("1{}", "7".repeat(39 + index / 5)),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .expect("fixture capacity");
+        builder
+            .push_quad(s, w, value, None)
+            .expect("fixture capacity");
     }
     builder.freeze().expect("the fixture is positionally valid")
 }
@@ -401,14 +423,22 @@ fn a_forked_exact_filter_group_fold_and_optional_trip_where_the_direct_loops_do(
 /// `ex:s{i} ex:t t_{i mod 10}`, ten long strings repeated across the rows.
 fn repeating_dataset(rows: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let t = builder.intern_iri(&format!("{EX}t"));
+    let t = builder
+        .intern_iri(&format!("{EX}t"))
+        .expect("fixture capacity");
     for index in 0..rows {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let value = builder.intern_literal(RdfLiteral::typed(
-            format!("{}{}", index % 10, "x".repeat(200)),
-            "http://www.w3.org/2001/XMLSchema#string",
-        ));
-        builder.push_quad(s, t, value, None);
+        let s = builder
+            .intern_iri(&format!("{EX}s{index}"))
+            .expect("fixture capacity");
+        let value = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("{}{}", index % 10, "x".repeat(200)),
+                "http://www.w3.org/2001/XMLSchema#string",
+            ))
+            .expect("fixture capacity");
+        builder
+            .push_quad(s, t, value, None)
+            .expect("fixture capacity");
     }
     builder.freeze().expect("the fixture is positionally valid")
 }

@@ -1180,11 +1180,14 @@ impl TermValue {
         other: &Self,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Ordering, purrdf_lex::allocation::StorageError> {
-        memory.scope(|memory| {
+        let baseline = memory.admitted_bytes();
+        let result = memory.scope(|memory| {
             compare_pairs_with(self, other, compare_shallow, |pending, pair| {
                 pending.try_push_admitted(pair, memory)
             })
-        })
+        })?;
+        memory.release_bytes(memory.admitted_bytes() - baseline)?;
+        Ok(result)
     }
 }
 
@@ -1281,6 +1284,32 @@ impl TermValue {
         &self,
         state: &mut H,
     ) -> Result<(), std::collections::TryReserveError> {
+        self.hash_with(state, WorkList::try_push)
+    }
+
+    /// Hash through the same RDF identity encoding with admitted traversal scratch.
+    ///
+    /// # Errors
+    /// Refuses before work-list growth and releases scratch after the walk ends.
+    pub fn try_hash_with_memory<H: Hasher, S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        state: &mut H,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        let baseline = memory.admitted_bytes();
+        memory.scope(|memory| {
+            self.hash_with(state, |pending, term| {
+                pending.try_push_admitted(term, memory)
+            })
+        })?;
+        memory.release_bytes(memory.admitted_bytes() - baseline)
+    }
+
+    fn hash_with<'a, H: Hasher, E>(
+        &'a self,
+        state: &mut H,
+        mut push: impl FnMut(&mut WorkList<&'a Self, 16>, &'a Self) -> Result<(), E>,
+    ) -> Result<(), E> {
         let mut pending: WorkList<&Self, 16> = WorkList::with(self);
         while let Some(term) = pending.pop() {
             match term {
@@ -1307,9 +1336,9 @@ impl TermValue {
                 }
                 Self::Triple { s, p, o } => {
                     3u8.hash(state);
-                    pending.try_push(&**o)?;
-                    pending.try_push(&**p)?;
-                    pending.try_push(&**s)?;
+                    push(&mut pending, o)?;
+                    push(&mut pending, p)?;
+                    push(&mut pending, s)?;
                 }
             }
         }
@@ -1933,13 +1962,13 @@ mod tests {
         }
 
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        let mut o = builder.intern_iri("http://example.org/o");
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let mut o = builder.intern_iri("http://example.org/o").unwrap();
         for _ in 0..16 {
-            o = builder.intern_triple(s, p, o);
+            o = builder.intern_triple(s, p, o).unwrap();
         }
-        builder.push_quad(s, p, o, None);
+        builder.push_quad(s, p, o, None).unwrap();
         let dataset = builder
             .freeze()
             .expect("sixteen levels are within the IR's cap");

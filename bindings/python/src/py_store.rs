@@ -37,16 +37,16 @@
 //!   store never escapes into a `'static` `#[pyclass]`.
 //! * **Pure-Rust cores** — [`parse_quads`] and [`canonicalize_quads`] hold the
 //!   load-bearing logic and stay PyO3-free; the `#[pymethods]` are thin wrappers
-//!   over them. Their coverage lives in `bindings/python/tests`, because this
-//!   crate builds no Rust test target: it is a PyO3 `extension-module`, so an
-//!   ordinary test executable has no interpreter to resolve the CPython API
-//!   against and fails at link (see this crate's `Cargo.toml`).
+//!   over them. Installed interpreter coverage lives in `bindings/python/tests`.
+//!   The native load-ingress control imports its interpreter-free production
+//!   module directly; it does not link the PyO3 extension's CPython API.
 //! * **Stable object model** — the term/result classes expose the slice of the
 //!   Python API the codebase relies on (`NamedNode`, `Literal`, `Store`, …).
 
 mod canon;
 mod env;
 mod io;
+mod load;
 mod mutable;
 mod prepared;
 pub(crate) mod presentation;
@@ -77,6 +77,27 @@ use pyo3::prelude::*;
 /// wasm report for the same condition.
 pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{}: {err}", err.diagnostic_code()))
+}
+
+/// Keep physical IRI ingress refusal distinct from invalid lexical input.
+pub(crate) fn iri_read_value_error(error: &purrdf::iri::IriReadError) -> PyErr {
+    match error {
+        purrdf::iri::IriReadError::Lexical(error) => iri_value_error(error),
+        purrdf::iri::IriReadError::Storage(error) => storage_value_error(*error),
+    }
+}
+
+/// Render storage refusal through the shared diagnostic presentation boundary.
+pub(crate) fn storage_value_error(error: purrdf_lex::allocation::StorageError) -> PyErr {
+    let diagnostic = purrdf_core::RdfDiagnostic::from(error);
+    presentation::value_error(diagnostic.to_string(), &diagnostic)
+}
+
+fn load_value_error(error: load::LoadError) -> PyErr {
+    match error {
+        load::LoadError::Insert(error) => iri_read_value_error(&error),
+        load::LoadError::Declaration(error) => presentation::value_error(error.to_string(), &error),
+    }
 }
 
 /// Register the native Store / term / SPARQL surface on the `purrdf` module.

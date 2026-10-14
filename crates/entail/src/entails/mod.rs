@@ -547,7 +547,8 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
                 report.with_resolved_imports(),
             )))
         }
-        other @ (EntailError::Build(_)
+        other @ (EntailError::Storage(_)
+        | EntailError::Build(_)
         | EntailError::Parse(_)
         | EntailError::Evaluate(_)
         | EntailError::Chase(_)
@@ -625,13 +626,13 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
 /// use purrdf_entail::{ImportMap, QNode, QTriple, Regime, certain_answers};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// let tom = b.intern_iri("http://example.org/tom");
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// b.push_quad(cat, sub, animal, None);
-/// b.push_quad(tom, ty, cat, None);
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// let tom = b.intern_iri("http://example.org/tom")?;
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// b.push_quad(cat, sub, animal, None)?;
+/// b.push_quad(tom, ty, cat, None)?;
 /// let premise = b.freeze().expect("freeze");
 ///
 /// // `?c` ranges over the ENTAILED types of `tom`, not the asserted one.
@@ -644,6 +645,7 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
 ///     .expect("a consistent premise");
 /// assert_eq!(answers.vars(), ["c"]);
 /// assert!(answers.rows().iter().any(|row| row == &[TermValue::iri("http://example.org/Animal")]));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn certain_answers(
     premise: &RdfDataset,
@@ -684,7 +686,7 @@ pub fn certain_answers_with(
     // it would make an unentailed question answer `entailed` — so the filter is built after
     // this returns and there is no ordering in which it could reach a verdict.
     if names.is_empty()
-        && let Some(question) = as_graph(&pats, &names)
+        && let Some(question) = as_graph(&pats, &names)?
     {
         let Prepared {
             merged,
@@ -723,7 +725,7 @@ pub fn certain_answers_with(
         .filter(|triple| !matches!(triple[1], Pat::Var(_)))
         .cloned()
         .collect();
-    let question = as_graph(&surveyed, &names);
+    let question = as_graph(&surveyed, &names)?;
 
     // The table's own completeness conditions. `decided_by_refutation` is EMPTY here and that
     // is a claim rather than a default: the refutation lane is not run on this path, so no
@@ -876,7 +878,7 @@ struct AsGraph {
 /// the reachable case. Such a pattern has no solution in ANY graph and no [`entails`] question
 /// corresponds to it, so the ordinary match answers it with the empty relation it deserves;
 /// what a hard error here would add is a refusal the caller never asked for.
-fn as_graph(pats: &[PatTriple], names: &[String]) -> Option<AsGraph> {
+fn as_graph(pats: &[PatTriple], names: &[String]) -> Result<Option<AsGraph>, EntailError> {
     let mut fresh = FreshBlanks::avoiding_labels(&blank_labels(pats));
     // Minted in the pattern set's own first-occurrence variable order, so the substitution —
     // and therefore the frozen graph and every limit read off it — is a function of the
@@ -889,20 +891,28 @@ fn as_graph(pats: &[PatTriple], names: &[String]) -> Option<AsGraph> {
     let mut origin: BTreeMap<Triple, usize> = BTreeMap::new();
     let mut builder = RdfDatasetBuilder::new();
     for (index, pat) in pats.iter().enumerate() {
-        let triple = [
-            substituted(&pat[0], &substitution)?,
-            substituted(&pat[1], &substitution)?,
-            substituted(&pat[2], &substitution)?,
-        ];
-        let s = intern_into(&mut builder, &triple[0]);
-        let p = intern_into(&mut builder, &triple[1]);
-        let o = intern_into(&mut builder, &triple[2]);
-        builder.push_quad(s, p, o, None);
+        let [Some(s), Some(p), Some(o)] =
+            pat.each_ref().map(|part| substituted(part, &substitution))
+        else {
+            return Ok(None);
+        };
+        let triple = [s, p, o];
+        let s = intern_into(&mut builder, &triple[0])?;
+        let p = intern_into(&mut builder, &triple[1])?;
+        let o = intern_into(&mut builder, &triple[2])?;
+        builder.push_quad(s, p, o, None)?;
         // FIRST occurrence wins: two identical patterns freeze to one triple, and the earlier
         // is the one the caller would look for.
         origin.entry(triple).or_insert(index);
     }
-    let graph = builder.freeze().ok()?;
+    let graph = match builder.freeze() {
+        Ok(graph) => graph,
+        Err(error) => {
+            return error
+                .storage_error()
+                .map_or(Ok(None), |cause| Err(cause.into()));
+        }
+    };
     let triples = default_graph_triples(&graph);
     let rendered = triples
         .iter()
@@ -920,11 +930,11 @@ fn as_graph(pats: &[PatTriple], names: &[String]) -> Option<AsGraph> {
             )
         })
         .collect();
-    Some(AsGraph {
+    Ok(Some(AsGraph {
         graph,
         triples,
         rendered,
-    })
+    }))
 }
 
 /// Every blank-node label `pats` names, at any depth — what a substitution must avoid.
@@ -1050,23 +1060,23 @@ fn decide(
 /// use purrdf_entail::{EntailmentMechanism, EntailmentOutcome, ImportMap, Regime, entails};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let p = b.intern_iri("http://example.org/p");
-/// let x = b.intern_iri("http://example.org/x");
-/// let y = b.intern_iri("http://example.org/y");
-/// let z = b.intern_iri("http://example.org/z");
-/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let transitive = b.intern_iri("http://www.w3.org/2002/07/owl#TransitiveProperty");
-/// b.push_quad(p, ty, transitive, None);
-/// b.push_quad(x, p, y, None);
-/// b.push_quad(y, p, z, None);
+/// let p = b.intern_iri("http://example.org/p")?;
+/// let x = b.intern_iri("http://example.org/x")?;
+/// let y = b.intern_iri("http://example.org/y")?;
+/// let z = b.intern_iri("http://example.org/z")?;
+/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let transitive = b.intern_iri("http://www.w3.org/2002/07/owl#TransitiveProperty")?;
+/// b.push_quad(p, ty, transitive, None)?;
+/// b.push_quad(x, p, y, None)?;
+/// b.push_quad(y, p, z, None)?;
 /// let premise = b.freeze().expect("freeze");
 ///
 /// // `x p z` follows by `prp-trp` and is not asserted.
 /// let mut c = RdfDatasetBuilder::new();
-/// let x = c.intern_iri("http://example.org/x");
-/// let p = c.intern_iri("http://example.org/p");
-/// let z = c.intern_iri("http://example.org/z");
-/// c.push_quad(x, p, z, None);
+/// let x = c.intern_iri("http://example.org/x")?;
+/// let p = c.intern_iri("http://example.org/p")?;
+/// let z = c.intern_iri("http://example.org/z")?;
+/// c.push_quad(x, p, z, None)?;
 /// let conclusion = c.freeze().expect("freeze");
 ///
 /// let certificate = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
@@ -1077,6 +1087,7 @@ fn decide(
 /// assert_eq!(certificate.regime(), Regime::OwlRl);
 /// assert!(!certificate.is_budget_exhausted());
 /// assert!(certificate.report().rules_fired().iter().any(|&(rule, _)| rule.as_str() == "prp-trp"));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn entails(
     premise: &RdfDataset,
@@ -1276,10 +1287,10 @@ mod tests {
     fn graph(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
-            let s = b.intern_iri(s);
-            let p = b.intern_iri(p);
-            let o = b.intern_iri(o);
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri(s).unwrap();
+            let p = b.intern_iri(p).unwrap();
+            let o = b.intern_iri(o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -1288,21 +1299,23 @@ mod tests {
     /// 2 RL syntax, so Theorem PR1's completeness half does not apply to it.
     fn non_rl_premise() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/A");
-        let sub = b.intern_iri(SUBCLASS);
-        let restriction = b.intern_blank("r", purrdf_core::BlankScope::DEFAULT);
-        let ty = b.intern_iri(TYPE);
-        let class = b.intern_iri(RESTRICTION);
-        let on = b.intern_iri(ONPROPERTY);
-        let p = b.intern_iri("http://example.org/p");
-        let some = b.intern_iri(SOMEVALUES);
-        let bb = b.intern_iri("http://example.org/B");
-        b.push_quad(a, sub, restriction, None);
-        b.push_quad(restriction, ty, class, None);
-        b.push_quad(restriction, on, p, None);
-        b.push_quad(restriction, some, bb, None);
-        let x = b.intern_iri("http://example.org/x");
-        b.push_quad(x, ty, a, None);
+        let a = b.intern_iri("http://example.org/A").unwrap();
+        let sub = b.intern_iri(SUBCLASS).unwrap();
+        let restriction = b
+            .intern_blank("r", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        let ty = b.intern_iri(TYPE).unwrap();
+        let class = b.intern_iri(RESTRICTION).unwrap();
+        let on = b.intern_iri(ONPROPERTY).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let some = b.intern_iri(SOMEVALUES).unwrap();
+        let bb = b.intern_iri("http://example.org/B").unwrap();
+        b.push_quad(a, sub, restriction, None).unwrap();
+        b.push_quad(restriction, ty, class, None).unwrap();
+        b.push_quad(restriction, on, p, None).unwrap();
+        b.push_quad(restriction, some, bb, None).unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        b.push_quad(x, ty, a, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -1403,10 +1416,12 @@ mod tests {
     fn a_conclusion_blank_node_is_bound_and_the_binding_is_the_warrant() {
         let premise = subclass_premise();
         let mut c = RdfDatasetBuilder::new();
-        let some = c.intern_blank("who", purrdf_core::BlankScope::DEFAULT);
-        let ty = c.intern_iri(TYPE);
-        let bb = c.intern_iri("http://example.org/B");
-        c.push_quad(some, ty, bb, None);
+        let some = c
+            .intern_blank("who", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        let ty = c.intern_iri(TYPE).unwrap();
+        let bb = c.intern_iri("http://example.org/B").unwrap();
+        c.push_quad(some, ty, bb, None).unwrap();
         let conclusion = c.freeze().expect("freeze");
 
         let EntailmentOutcome::Entailed(warrant) = outcome(&premise, &conclusion, Regime::OwlRl)
@@ -1537,13 +1552,15 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
             let term = |b: &mut RdfDatasetBuilder, value: &str| match value.strip_prefix('_') {
-                Some(label) => b.intern_blank(label, purrdf_core::BlankScope::DEFAULT),
-                None => b.intern_iri(value),
+                Some(label) => b
+                    .intern_blank(label, purrdf_core::BlankScope::DEFAULT)
+                    .unwrap(),
+                None => b.intern_iri(value).unwrap(),
             };
             let s = term(&mut b, s);
             let p = term(&mut b, p);
             let o = term(&mut b, o);
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -2163,13 +2180,13 @@ mod tests {
     fn a_name_used_inside_and_outside_a_triple_term_is_one_variable() {
         let premise = |quoted_subject: &str| {
             let mut b = RdfDatasetBuilder::new();
-            let a = b.intern_iri("http://example.org/a");
-            let p = b.intern_iri("http://example.org/p");
-            let q = b.intern_iri("http://example.org/q");
-            let r = b.intern_iri("http://example.org/r");
-            let subject = b.intern_iri(quoted_subject);
-            let quoted = b.intern_triple(subject, q, r);
-            b.push_quad(a, p, quoted, None);
+            let a = b.intern_iri("http://example.org/a").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let q = b.intern_iri("http://example.org/q").unwrap();
+            let r = b.intern_iri("http://example.org/r").unwrap();
+            let subject = b.intern_iri(quoted_subject).unwrap();
+            let quoted = b.intern_triple(subject, q, r).unwrap();
+            b.push_quad(a, p, quoted, None).unwrap();
             b.freeze().expect("freeze")
         };
         // `?x <p> <<( ?x <q> <r> )>>`

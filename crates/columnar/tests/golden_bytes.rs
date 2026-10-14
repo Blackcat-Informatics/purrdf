@@ -24,51 +24,83 @@ fn fixture() -> (std::sync::Arc<RdfDataset>, ContentStore) {
     let mut state = 0x6012_u64;
     let mut builder = RdfDatasetBuilder::new();
     let predicates: Vec<_> = (0..5)
-        .map(|i| builder.intern_iri(&format!("https://example.org/p{i}")))
+        .map(|i| {
+            builder
+                .intern_iri(&format!("https://example.org/p{i}"))
+                .unwrap()
+        })
         .collect();
     let graphs: Vec<_> = (0..3)
-        .map(|i| builder.intern_iri(&format!("https://example.org/g{i}")))
+        .map(|i| {
+            builder
+                .intern_iri(&format!("https://example.org/g{i}"))
+                .unwrap()
+        })
         .collect();
-    let empty = builder.intern_iri("https://example.org/empty");
-    builder.declare_named_graph(empty);
+    let empty = builder.intern_iri("https://example.org/empty").unwrap();
+    builder.declare_named_graph(empty).unwrap();
     for row in 0..400_u32 {
         let subject = match mix(&mut state) % 3 {
-            0 => builder.intern_blank(&format!("b{row}"), BlankScope(row % 5)),
-            _ => builder.intern_iri(&format!("https://example.org/s{row}")),
+            0 => builder
+                .intern_blank(&format!("b{row}"), BlankScope(row % 5))
+                .unwrap(),
+            _ => builder
+                .intern_iri(&format!("https://example.org/s{row}"))
+                .unwrap(),
         };
         let object = match mix(&mut state) % 6 {
-            0 => builder.intern_literal(RdfLiteral::simple(format!("plain {row}"))),
-            1 => builder.intern_literal(RdfLiteral::typed(
-                row.to_string(),
-                "https://example.org/integer",
-            )),
-            2 => builder.intern_literal(RdfLiteral::language_tagged(format!("mot {row}"), "fr")),
-            3 => builder.intern_literal(RdfLiteral {
-                lexical_form: format!("كلمة {row}"),
-                datatype: None,
-                language: Some("ar".to_owned()),
-                direction: Some(if row % 2 == 0 {
-                    RdfTextDirection::Rtl
-                } else {
-                    RdfTextDirection::Ltr
-                }),
-            }),
-            4 => builder.intern_blank(&format!("o{row}"), BlankScope(row % 3)),
-            _ => builder.intern_iri(&format!("https://example.org/o{row}")),
+            0 => builder
+                .intern_literal(RdfLiteral::simple(format!("plain {row}")))
+                .unwrap(),
+            1 => builder
+                .intern_literal(RdfLiteral::typed(
+                    row.to_string(),
+                    "https://example.org/integer",
+                ))
+                .unwrap(),
+            2 => builder
+                .intern_literal(RdfLiteral::language_tagged(format!("mot {row}"), "fr"))
+                .unwrap(),
+            3 => builder
+                .intern_literal(RdfLiteral {
+                    lexical_form: format!("كلمة {row}"),
+                    datatype: None,
+                    language: Some("ar".to_owned()),
+                    direction: Some(if row % 2 == 0 {
+                        RdfTextDirection::Rtl
+                    } else {
+                        RdfTextDirection::Ltr
+                    }),
+                })
+                .unwrap(),
+            4 => builder
+                .intern_blank(&format!("o{row}"), BlankScope(row % 3))
+                .unwrap(),
+            _ => builder
+                .intern_iri(&format!("https://example.org/o{row}"))
+                .unwrap(),
         };
         let predicate = predicates[(mix(&mut state) % 5) as usize];
         let graph = match mix(&mut state) % 4 {
             0 => None,
             k => Some(graphs[(k - 1) as usize]),
         };
-        builder.push_quad(subject, predicate, object, graph);
+        builder
+            .push_quad(subject, predicate, object, graph)
+            .unwrap();
         if mix(&mut state).is_multiple_of(4) {
-            let triple = builder.intern_triple(subject, predicate, object);
-            let reifier = builder.intern_blank(&format!("r{row}"), BlankScope(row % 7));
+            let triple = builder.intern_triple(subject, predicate, object).unwrap();
+            let reifier = builder
+                .intern_blank(&format!("r{row}"), BlankScope(row % 7))
+                .unwrap();
             let graph = mix(&mut state).is_multiple_of(2).then_some(graphs[0]);
-            builder.push_reifier_in_graph(reifier, triple, graph);
+            builder
+                .push_reifier_in_graph(reifier, triple, graph)
+                .unwrap();
             let graph = mix(&mut state).is_multiple_of(3).then_some(graphs[1]);
-            builder.push_annotation_in_graph(reifier, predicates[0], object, graph);
+            builder
+                .push_annotation_in_graph(reifier, predicates[0], object, graph)
+                .unwrap();
         }
     }
     let mut blobs = ContentStore::new();

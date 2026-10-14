@@ -86,31 +86,44 @@ const PAGE_COUNT: usize = 4;
 /// term, a reifier binding, and a statement annotation.
 fn labeled_dataset(range: std::ops::Range<usize>, with_statements: bool) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let q = b.intern_iri("https://example.org/q");
-    let g = b.intern_iri("https://example.org/g");
-    let plain = b.intern_literal(RdfLiteral::simple("bare"));
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("cat", "en"));
-    let directional = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let q = b.intern_iri("https://example.org/q").unwrap();
+    let g = b.intern_iri("https://example.org/g").unwrap();
+    let plain = b.intern_literal(RdfLiteral::simple("bare")).unwrap();
+    let tagged = b
+        .intern_literal(RdfLiteral::language_tagged("cat", "en"))
+        .unwrap();
+    let directional = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
     for index in range {
-        let s = b.intern_iri(&format!("https://example.org/s{index}"));
-        let o = b.intern_iri(&format!("https://example.org/o{index}"));
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, q, plain, None);
-        b.push_quad(s, p, directional, Some(g));
-        b.push_quad(s, q, tagged, Some(g));
-        let shared = b.intern_blank(&format!("n{index}"), BlankScope::DEFAULT);
-        let scoped = b.intern_blank(&format!("n{index}"), BlankScope(4));
-        b.push_quad(shared, p, o, Some(g));
-        b.push_quad(scoped, q, o, Some(g));
+        let s = b
+            .intern_iri(&format!("https://example.org/s{index}"))
+            .unwrap();
+        let o = b
+            .intern_iri(&format!("https://example.org/o{index}"))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, q, plain, None).unwrap();
+        b.push_quad(s, p, directional, Some(g)).unwrap();
+        b.push_quad(s, q, tagged, Some(g)).unwrap();
+        let shared = b
+            .intern_blank(&format!("n{index}"), BlankScope::DEFAULT)
+            .unwrap();
+        let scoped = b.intern_blank(&format!("n{index}"), BlankScope(4)).unwrap();
+        b.push_quad(shared, p, o, Some(g)).unwrap();
+        b.push_quad(scoped, q, o, Some(g)).unwrap();
         if with_statements && index % 8 == 0 {
-            let triple = b.intern_triple(shared, p, directional);
-            let reifier = b.intern_blank(&format!("st{index}"), BlankScope(7));
-            b.push_reifier_in_graph(reifier, triple, Some(g));
-            b.push_annotation_in_graph(reifier, q, tagged, Some(g));
+            let triple = b.intern_triple(shared, p, directional).unwrap();
+            let reifier = b
+                .intern_blank(&format!("st{index}"), BlankScope(7))
+                .unwrap();
+            b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+            b.push_annotation_in_graph(reifier, q, tagged, Some(g))
+                .unwrap();
         }
     }
     b.freeze().expect("the labeled dataset freezes")

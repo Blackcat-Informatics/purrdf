@@ -51,7 +51,8 @@ use std::sync::Arc;
 
 use crate::backend::DatasetHandle;
 
-use purrdf_iri::IriError;
+use purrdf_iri::{IriError, IriReadError};
+use purrdf_lex::allocation::{CapacitySpace, StorageError};
 
 use crate::backend::TermFactory as _;
 use crate::dataset_view::{DatasetMut, GraphMatch, GraphMatchValue};
@@ -171,6 +172,7 @@ struct Reclassification {
 /// layer.
 #[derive(Default, Debug)]
 struct DeltaBuilder {
+    capacity: super::builder::LocalCapacity,
     /// The sole owner of each delta term value, in mint order.
     values: Vec<TermValue>,
     /// Reverse hash→id index: keyed by a hash of the term VALUE with
@@ -196,26 +198,64 @@ impl DeltaBuilder {
     ///
     /// [`IriError`] when the value carries a non-absolute IRI — its own, a literal's
     /// datatype, or one nested in a triple term.
-    fn intern(&mut self, value: TermValue) -> Result<DeltaTermId, IriError> {
-        let h = crate::hash::hash_of(&value);
+    fn intern(&mut self, value: &TermValue) -> Result<DeltaTermId, IriReadError> {
+        let h = crate::hash::hash_of(value);
         // Probe read-only (as `find` does): a hash miss must not mint an empty
         // bucket — least of all for a value that then fails the check below.
         if let Some(bucket) = self.index.get(&h) {
             for &did in bucket {
-                if self.values[did.index()] == value {
+                if self.values[did.index()] == *value {
                     return Ok(did);
                 }
             }
         }
         // Miss: this value is entering the delta for the first time, so it is owed the
         // check.
-        check_value_absolute(&value)?;
-        let bucket = self.index.entry(h).or_default();
-        let i = u32::try_from(self.values.len()).expect("delta term table exceeds u32::MAX");
+        check_value_absolute(value)?;
+        self.capacity
+            .required(CapacitySpace::DeltaTerms, self.values.len(), 1)?;
+        let i = u32::try_from(self.values.len()).map_err(|_| StorageError::SizeOverflow)?;
+        let value = value
+            .try_clone()
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.values
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
+        self.index
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
         let did = DeltaTermId(i);
+        let mut fresh = Vec::new();
+        let bucket = self.index.get_mut(&h).unwrap_or(&mut fresh);
+        bucket
+            .try_reserve(1)
+            .map_err(|_| StorageError::AllocationFailed)?;
         bucket.push(did);
+        if !fresh.is_empty() {
+            self.index.insert(h, fresh);
+        }
         self.values.push(value);
         Ok(did)
+    }
+
+    /// Remove only this attempted compound insertion's suffix, while each value
+    /// still owns the lexical payload needed to find its original hash bucket.
+    fn rollback(&mut self, len: usize) {
+        for index in (len..self.values.len()).rev() {
+            let hash = crate::hash::hash_of(&self.values[index]);
+            let bucket = self
+                .index
+                .get_mut(&hash)
+                .expect("minted delta term has a bucket");
+            let removed = bucket
+                .pop()
+                .expect("minted delta term is the latest bucket entry");
+            debug_assert_eq!(removed.index(), index);
+            if bucket.is_empty() {
+                self.index.remove(&hash);
+            }
+        }
+        self.values.truncate(len);
     }
 
     /// Find an already-interned [`TermValue`] WITHOUT minting; `None` if absent.
@@ -465,9 +505,9 @@ impl MutableDataset {
     /// publishing membership.
     pub fn insert_record(&mut self, record: &RecordValues) -> Result<bool, crate::RdfDiagnostic> {
         super::validate::validate_record(record)?;
-        let quad = self.key_of(&record.quad).map_err(|error| {
-            crate::RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
-        })?;
+        let quad = self
+            .key_of(&record.quad)
+            .map_err(crate::RdfDiagnostic::from)?;
         let before = self.effective_count();
         let key = RecordKey {
             kind: record.kind,
@@ -563,7 +603,8 @@ impl MutableDataset {
         mut visit: impl FnMut(&str, crate::BlankScope) -> ControlFlow<B>,
     ) -> ControlFlow<B> {
         for index in 0..self.base.term_count() {
-            let id = TermId::from_index(u32::try_from(index).expect("native index fits u32"));
+            let id = TermId::from_index(u32::try_from(index).expect("native index fits u32"))
+                .expect("stored term index is representable");
             if let TermRef::Blank { label, scope } = self.base.resolve(id) {
                 visit(label, scope)?;
             }
@@ -662,11 +703,11 @@ impl MutableDataset {
     /// A base hit needs no absoluteness check: the base is a FROZEN [`RdfDataset`],
     /// which could not have been constructed carrying a relative IRI. Only the delta
     /// mint below can introduce a new one, and it is checked there.
-    fn resolve_value(&mut self, value: &TermValue) -> Result<MutTermId, IriError> {
+    fn resolve_value(&mut self, value: &TermValue) -> Result<MutTermId, IriReadError> {
         if let Some(id) = self.base.term_id_by_value(value) {
             return Ok(MutTermId::Base(id));
         }
-        Ok(MutTermId::Delta(self.delta.intern(value.clone())?))
+        Ok(MutTermId::Delta(self.delta.intern(value)?))
     }
 
     /// Build a [`QuadKey`] from a value-quad, resolving each component to a
@@ -674,20 +715,25 @@ impl MutableDataset {
     ///
     /// # Errors
     ///
-    /// [`IriError`] if any component carries a non-absolute IRI. The delta may have
-    /// minted ids for earlier components before the failing one; that is harmless —
-    /// an unreferenced delta term is invisible to every read path and is dropped at
-    /// freeze — and no [`QuadKey`] is produced, so the quad is not inserted.
-    fn key_of(&mut self, quad: &QuadValues) -> Result<QuadKey, IriError> {
-        Ok(QuadKey {
-            s: self.resolve_value(&quad.s)?,
-            p: self.resolve_value(&quad.p)?,
-            o: self.resolve_value(&quad.o)?,
-            g: match quad.g.as_ref() {
-                Some(g) => Some(self.resolve_value(g)?),
-                None => None,
-            },
-        })
+    /// Returns the original lexical or storage cause. Terms minted for earlier
+    /// components are removed on failure; prior identities and rows remain intact.
+    fn key_of(&mut self, quad: &QuadValues) -> Result<QuadKey, IriReadError> {
+        let checkpoint = self.delta.values.len();
+        let result = (|| {
+            Ok(QuadKey {
+                s: self.resolve_value(&quad.s)?,
+                p: self.resolve_value(&quad.p)?,
+                o: self.resolve_value(&quad.o)?,
+                g: match quad.g.as_ref() {
+                    Some(g) => Some(self.resolve_value(g)?),
+                    None => None,
+                },
+            })
+        })();
+        if result.is_err() {
+            self.delta.rollback(checkpoint);
+        }
+        result
     }
 
     /// Build a [`QuadKey`] from a value-quad WITHOUT minting: every component must
@@ -1358,7 +1404,7 @@ impl MutableDataset {
     ) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
         let view = self.snapshot_view_with_limits(limits)?;
         let mut builder = self.base.rebuild_builder();
-        super::import::DatasetImporter::new(&mut builder, &view).append();
+        super::import::DatasetImporter::new(&mut builder, &view)?.append()?;
         let mut ordinal = 0;
         for (old, quad) in self.base.quads().enumerate() {
             if !view.base_quad_is_ordinary(quad) {
@@ -1528,7 +1574,7 @@ impl MutableDataset {
                 .into_iter()
                 .chain(quad.g.as_ref())
             {
-                builder.intern_value(term);
+                builder.intern_value(term)?;
                 admission.check(builder)?;
             }
         }
@@ -1537,13 +1583,18 @@ impl MutableDataset {
                 kind: key.kind,
                 quad: self.quad_values_of(&key.quad),
             };
-            builder.push_record_unchecked(&record);
-            let graph = record.quad.g.as_ref().map(|g| builder.intern_value(g));
+            builder.push_record_unchecked(&record)?;
+            let graph = record
+                .quad
+                .g
+                .as_ref()
+                .map(|g| builder.intern_value(g))
+                .transpose()?;
             admission.row(builder, graph)?;
         }
         for graph in &self.declared_graphs {
-            let id = builder.intern_value(graph);
-            builder.declare_named_graph(id);
+            let id = builder.intern_value(graph)?;
+            builder.declare_named_graph(id)?;
             admission.row(builder, Some(id))?;
         }
         Ok(())
@@ -1812,7 +1863,7 @@ impl QuadValues {
 impl DatasetMut for MutableDataset {
     type Quad = QuadValues;
 
-    fn insert(&mut self, quad: Self::Quad) -> Result<bool, IriError> {
+    fn insert(&mut self, quad: Self::Quad) -> Result<bool, IriReadError> {
         let key = self.key_of(&quad)?;
         Ok(self.insert_key(key))
     }
@@ -1925,18 +1976,88 @@ const _: fn() = || {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn delta_capacity_public_insert_rolls_back_only_attempted_terms() {
+        use super::*;
+        use crate::ir::builder::LocalCapacity;
+        use purrdf_lex::allocation::CapacityError;
+        let mut mutable = MutableDataset::new(base3());
+        mutable.delta.capacity = LocalCapacity::Reduced {
+            terms: 2,
+            text: u32::MAX,
+            rows: u32::MAX,
+        };
+        let first = q("native-new-s", "p", "native-new-o");
+        assert!(mutable.insert(first.clone()).unwrap());
+        let first_id = mutable.delta.find(&first.s).unwrap();
+        assert!(!mutable.insert(first.clone()).unwrap());
+        assert_eq!(mutable.delta.values.len(), 2);
+        mutable.delta.capacity = LocalCapacity::Reduced {
+            terms: 3,
+            text: u32::MAX,
+            rows: u32::MAX,
+        };
+        let next = q("late-new-s", "p", "late-new-o");
+        let entries = mutable.delta.index.len();
+        for _ in 0..8 {
+            let error = mutable.insert(next.clone()).unwrap_err();
+            let IriReadError::Storage(StorageError::Capacity(capacity)) = &error else {
+                panic!("expected delta capacity refusal: {error}");
+            };
+            assert_eq!(
+                *capacity,
+                CapacityError::new(CapacitySpace::DeltaTerms, 4, 3)
+            );
+            assert_eq!(mutable.delta.values.len(), 2);
+            assert_eq!(mutable.delta.index.len(), entries);
+            assert_eq!(mutable.delta.find(&first.s), Some(first_id));
+            assert_eq!(mutable.delta.find(&next.s), None);
+            assert!(!mutable.contains(&next));
+            assert!(mutable.contains(&first));
+        }
+        mutable.delta.capacity = LocalCapacity::Reduced {
+            terms: 4,
+            text: u32::MAX,
+            rows: u32::MAX,
+        };
+        assert!(mutable.insert(next.clone()).unwrap());
+        assert_eq!(mutable.delta.values.len(), 4);
+        assert_eq!(mutable.delta.find(&first.s), Some(first_id));
+        mutable.delta.capacity = LocalCapacity::Reduced {
+            terms: 6,
+            text: u32::MAX,
+            rows: u32::MAX,
+        };
+        let mut invalid = q("invalid-new-s", "p", "invalid-new-o");
+        invalid.g = Some(TermValue::iri("relative"));
+        assert!(matches!(
+            mutable.insert(invalid),
+            Err(IriReadError::Lexical(_))
+        ));
+        assert_eq!(mutable.delta.values.len(), 4);
+        assert!(mutable.contains(&next));
+        assert_eq!(mutable.added_len(), 2);
+        mutable.freeze().unwrap();
+    }
+
+    #[test]
     fn selected_records_match_physical_roles_before_owning_term_payloads() {
         use super::*;
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("https://example.org/s");
-        let predicate = builder.intern_iri("https://example.org/p");
-        let object = builder.intern_iri("https://example.org/o");
-        let graph = builder.intern_iri("https://example.org/g");
-        let other = builder.intern_iri("https://example.org/other");
-        builder.push_quad(subject, predicate, object, Some(graph));
-        builder.push_annotation_in_graph(subject, predicate, object, Some(graph));
-        builder.push_quad(subject, predicate, object, Some(other));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri("https://example.org/s").unwrap();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let object = builder.intern_iri("https://example.org/o").unwrap();
+        let graph = builder.intern_iri("https://example.org/g").unwrap();
+        let other = builder.intern_iri("https://example.org/other").unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(subject, predicate, object, Some(graph))
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(other))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         let mutable = MutableDataset::new(builder.freeze().unwrap());
         let s = TermValue::iri("https://example.org/s");
         let p = TermValue::iri("https://example.org/p");
@@ -2014,12 +2135,12 @@ mod tests {
     #[test]
     fn normalization_has_stable_order_through_conversion_and_undo() {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/r");
-        let p = builder.intern_iri("http://example.org/p");
-        let b = builder.intern_iri("http://example.org/b");
-        let a = builder.intern_iri("http://example.org/a");
-        builder.push_quad(s, p, b, None);
-        builder.push_quad(s, p, a, None);
+        let s = builder.intern_iri("http://example.org/r").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let b = builder.intern_iri("http://example.org/b").unwrap();
+        let a = builder.intern_iri("http://example.org/a").unwrap();
+        builder.push_quad(s, p, b, None).unwrap();
+        builder.push_quad(s, p, a, None).unwrap();
         let base = builder.freeze().unwrap();
         let declaration = QuadValues::triple(
             iri_val("r"),
@@ -2327,15 +2448,15 @@ mod tests {
     fn ordinary_restoration_classifies_suppressed_base_roles() {
         for original in [RecordKind::Ordinary, RecordKind::Annotation] {
             let mut builder = RdfDatasetBuilder::new();
-            let s = builder.intern_iri("http://example.org/r");
-            let p = builder.intern_iri("http://example.org/p");
-            let o = builder.intern_iri("http://example.org/o");
-            let triple = builder.intern_triple(s, p, o);
+            let s = builder.intern_iri("http://example.org/r").unwrap();
+            let p = builder.intern_iri("http://example.org/p").unwrap();
+            let o = builder.intern_iri("http://example.org/o").unwrap();
+            let triple = builder.intern_triple(s, p, o).unwrap();
             if original == RecordKind::Ordinary {
-                builder.push_quad(s, p, o, None);
+                builder.push_quad(s, p, o, None).unwrap();
             } else {
-                builder.push_annotation(s, p, o);
-                builder.push_reifier(s, triple);
+                builder.push_annotation(s, p, o).unwrap();
+                builder.push_reifier(s, triple).unwrap();
             }
             let mut mutable = MutableDataset::new(builder.freeze().unwrap());
             let record = RecordValues {
@@ -2373,11 +2494,11 @@ mod tests {
     #[test]
     fn classification_restores_only_targets_it_owned() {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/r");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_iri("http://example.org/o");
-        builder.push_quad(s, p, o, None);
-        builder.push_annotation(s, p, o);
+        let s = builder.intern_iri("http://example.org/r").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder.intern_iri("http://example.org/o").unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
+        builder.push_annotation(s, p, o).unwrap();
         let mut mutable = MutableDataset::new(builder.freeze().unwrap());
         let record = RecordValues {
             kind: RecordKind::Annotation,
@@ -2539,11 +2660,11 @@ mod tests {
     #[test]
     fn typed_snapshot_limits_price_role_masks_and_refusal_adds_no_successful_work() {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/s");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_iri("http://example.org/o");
-        builder.push_quad(s, p, o, None);
-        builder.push_annotation(s, p, o);
+        let s = builder.intern_iri("http://example.org/s").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder.intern_iri("http://example.org/o").unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
+        builder.push_annotation(s, p, o).unwrap();
         let mut mutable = MutableDataset::new(builder.freeze().unwrap());
         assert!(mutable.remove(&q("s", "p", "o")));
         let view = mutable.snapshot_view().unwrap();
@@ -2578,12 +2699,12 @@ mod tests {
             GraphExistenceMode::RememberEmpty,
         ] {
             let mut builder = RdfDatasetBuilder::new();
-            let s = builder.intern_iri("http://example.org/s");
-            let p = builder.intern_iri("http://example.org/p");
-            let o = builder.intern_iri("http://example.org/o");
-            let g = builder.intern_iri("http://example.org/g");
-            builder.push_quad(s, p, o, Some(g));
-            builder.push_annotation_in_graph(s, p, o, Some(g));
+            let s = builder.intern_iri("http://example.org/s").unwrap();
+            let p = builder.intern_iri("http://example.org/p").unwrap();
+            let o = builder.intern_iri("http://example.org/o").unwrap();
+            let g = builder.intern_iri("http://example.org/g").unwrap();
+            builder.push_quad(s, p, o, Some(g)).unwrap();
+            builder.push_annotation_in_graph(s, p, o, Some(g)).unwrap();
             let mut mutable =
                 MutableDataset::new_with_graph_existence(builder.freeze().unwrap(), mode);
             let quad = QuadValues::quad(iri_val("s"), iri_val("p"), iri_val("o"), iri_val("g"));
@@ -2619,11 +2740,11 @@ mod tests {
     #[test]
     fn classification_collision_counts_the_actual_physical_rows() {
         let mut builder = RdfDatasetBuilder::new();
-        let r = builder.intern_iri("http://example.org/r");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_iri("http://example.org/o");
-        builder.push_quad(r, p, o, None);
-        builder.push_annotation(r, p, o);
+        let r = builder.intern_iri("http://example.org/r").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder.intern_iri("http://example.org/o").unwrap();
+        builder.push_quad(r, p, o, None).unwrap();
+        builder.push_annotation(r, p, o).unwrap();
         let mut mutable = MutableDataset::new(builder.freeze().unwrap());
         assert!(
             mutable
@@ -2758,8 +2879,8 @@ mod tests {
 
         // A withdrawn base declaration is not reported, and may be declared again.
         let mut b = RdfDatasetBuilder::new();
-        let e = b.intern_iri("http://example.org/e");
-        b.declare_named_graph(e);
+        let e = b.intern_iri("http://example.org/e").unwrap();
+        b.declare_named_graph(e).unwrap();
         let mut m = MutableDataset::new(b.freeze().expect("freezes"));
         m.withdraw_graph_declaration(&iri_val("e"));
         assert_eq!(m.declared_named_graphs().count(), 0);
@@ -2781,16 +2902,16 @@ mod tests {
         let row = QuadValues::quad(iri_val("s"), iri_val("p"), iri_val("o"), iri_val("bg"));
         // A base graph declared empty, and one that held a row the mutation removed.
         let mut empty = RdfDatasetBuilder::new();
-        let bg = empty.intern_iri("http://example.org/bg");
-        empty.declare_named_graph(bg);
+        let bg = empty.intern_iri("http://example.org/bg").unwrap();
+        empty.declare_named_graph(bg).unwrap();
         let mut populated = RdfDatasetBuilder::new();
         let (s, p, o) = (
-            populated.intern_iri("http://example.org/s0"),
-            populated.intern_iri("http://example.org/p"),
-            populated.intern_iri("http://example.org/o0"),
+            populated.intern_iri("http://example.org/s0").unwrap(),
+            populated.intern_iri("http://example.org/p").unwrap(),
+            populated.intern_iri("http://example.org/o0").unwrap(),
         );
-        let bg = populated.intern_iri("http://example.org/bg");
-        populated.push_quad(s, p, o, Some(bg));
+        let bg = populated.intern_iri("http://example.org/bg").unwrap();
+        populated.push_quad(s, p, o, Some(bg)).unwrap();
         for (base, emptied) in [(empty.freeze(), false), (populated.freeze(), true)] {
             let mut m = MutableDataset::new_with_graph_existence(
                 base.expect("base freezes"),
@@ -2820,8 +2941,8 @@ mod tests {
         }
         // A base graph that was never withdrawn is already declared.
         let mut b = RdfDatasetBuilder::new();
-        let e = b.intern_iri("http://example.org/bg");
-        b.declare_named_graph(e);
+        let e = b.intern_iri("http://example.org/bg").unwrap();
+        b.declare_named_graph(e).unwrap();
         let mut m = MutableDataset::new(b.freeze().expect("freezes"));
         assert_eq!(m.declare_named_graph(iri_val("bg")), Ok(false));
         assert_eq!(listed(&m), [iri_val("bg")]);
@@ -2830,23 +2951,25 @@ mod tests {
     /// A base with three quads: (a,p,b), (a,p,c), (b,p,c) — and one reifier+annotation.
     fn base3() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/a");
-        let p = b.intern_iri("http://example.org/p");
-        let bb = b.intern_iri("http://example.org/b");
-        let c = b.intern_iri("http://example.org/c");
-        b.push_quad(a, p, bb, None);
-        b.push_quad(a, p, c, None);
-        b.push_quad(bb, p, c, None);
+        let a = b.intern_iri("http://example.org/a").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let bb = b.intern_iri("http://example.org/b").unwrap();
+        let c = b.intern_iri("http://example.org/c").unwrap();
+        b.push_quad(a, p, bb, None).unwrap();
+        b.push_quad(a, p, c, None).unwrap();
+        b.push_quad(bb, p, c, None).unwrap();
         // A reifier + annotation over the (a,p,b) triple term.
-        let triple = b.intern_triple(a, p, bb);
-        let r = b.intern_iri("http://example.org/r");
-        let conf = b.intern_iri("http://example.org/confidence");
-        let score = b.intern_literal(RdfLiteral::typed(
-            "0.9",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_reifier(r, triple);
-        b.push_annotation(r, conf, score);
+        let triple = b.intern_triple(a, p, bb).unwrap();
+        let r = b.intern_iri("http://example.org/r").unwrap();
+        let conf = b.intern_iri("http://example.org/confidence").unwrap();
+        let score = b
+            .intern_literal(RdfLiteral::typed(
+                "0.9",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, conf, score).unwrap();
         b.freeze().expect("base freezes")
     }
 
@@ -2858,12 +2981,12 @@ mod tests {
             scheme,
             Some("http://example.org/derivedFrom".into()),
         );
-        let a = b.intern_iri(CONTENT_A);
-        let bb = b.intern_iri(CONTENT_B);
-        let p = b.intern_iri("http://example.org/p");
-        let derived_from = b.intern_iri("http://example.org/derivedFrom");
-        b.push_quad(a, p, bb, None);
-        b.push_annotation(a, derived_from, bb);
+        let a = b.intern_iri(CONTENT_A).unwrap();
+        let bb = b.intern_iri(CONTENT_B).unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let derived_from = b.intern_iri("http://example.org/derivedFrom").unwrap();
+        b.push_quad(a, p, bb, None).unwrap();
+        b.push_annotation(a, derived_from, bb).unwrap();
         b.freeze().expect("base freezes")
     }
 
@@ -2943,14 +3066,14 @@ mod tests {
             let scheme = crate::ContentIdScheme::new("blake3:").expect("valid scheme");
             let mut b =
                 RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.into()));
-            let a = b.intern_iri(CONTENT_A);
-            let p = b.intern_iri("http://example.org/p");
+            let a = b.intern_iri(CONTENT_A).unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
             let object = if interned_in_base {
-                b.intern_iri(DERIVED_FROM)
+                b.intern_iri(DERIVED_FROM).unwrap()
             } else {
-                b.intern_iri("http://example.org/o")
+                b.intern_iri("http://example.org/o").unwrap()
             };
-            b.push_quad(a, p, object, None);
+            b.push_quad(a, p, object, None).unwrap();
             let base = b.freeze().expect("base freezes");
             assert_eq!(
                 base.derivation_predicate().is_some(),
@@ -3030,11 +3153,15 @@ mod tests {
     #[test]
     fn blank_identity_visit_retains_suppressed_and_removed_nested_values() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_blank("base", crate::BlankScope::DEFAULT);
-        let predicate = builder.intern_iri("http://example.org/p");
-        let object = builder.intern_iri("http://example.org/o");
-        builder.push_quad(subject, predicate, object, None);
-        builder.intern_blank("unused", crate::BlankScope(5));
+        let subject = builder
+            .intern_blank("base", crate::BlankScope::DEFAULT)
+            .unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder.intern_iri("http://example.org/o").unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        builder
+            .intern_blank("unused", crate::BlankScope(5))
+            .unwrap();
         let mut mutable = MutableDataset::new(builder.freeze().expect("base freezes"));
         assert!(mutable.remove(&QuadValues::triple(
             TermValue::blank("base"),
@@ -3098,28 +3225,35 @@ mod tests {
         use crate::model::RdfTextDirection;
 
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let plain = b.intern_literal(RdfLiteral::simple("plain"));
-        let typed = b.intern_literal(RdfLiteral::typed(
-            "1",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let lang = b.intern_literal(RdfLiteral::language_tagged("hi", "en"));
-        let directional = b.intern_literal(RdfLiteral {
-            direction: Some(RdfTextDirection::Rtl),
-            ..RdfLiteral::language_tagged("مرحبا", "ar")
-        });
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let plain = b.intern_literal(RdfLiteral::simple("plain")).unwrap();
+        let typed = b
+            .intern_literal(RdfLiteral::typed(
+                "1",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        let lang = b
+            .intern_literal(RdfLiteral::language_tagged("hi", "en"))
+            .unwrap();
+        let directional = b
+            .intern_literal(RdfLiteral {
+                direction: Some(RdfTextDirection::Rtl),
+                ..RdfLiteral::language_tagged("مرحبا", "ar")
+            })
+            .unwrap();
         // A literal nested inside a triple term resolves through the triple-term arm.
-        let nested = b.intern_triple(s, p, typed);
+        let nested = b.intern_triple(s, p, typed).unwrap();
         for o in [plain, typed, lang, directional, nested] {
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
         }
         let base = b.freeze().expect("base freezes");
 
         let mut literal_datatypes = Vec::new();
         for index in 0..base.term_count() {
-            let id = TermId::from_index(u32::try_from(index).expect("small fixture"));
+            let id = TermId::from_index(u32::try_from(index).expect("small fixture"))
+                .expect("stored term index is representable");
             let via_mutable = MutableDataset::base_value_of(&base, id);
             assert_eq!(via_mutable, base.term_value(id), "term {index}");
             if let TermValue::Literal { datatype, .. } = via_mutable {
@@ -3262,11 +3396,11 @@ mod tests {
     #[test]
     fn named_graph_quads_round_trip() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        let g = b.intern_iri("http://example.org/g");
-        b.push_quad(s, p, o, Some(g));
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let g = b.intern_iri("http://example.org/g").unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
         let base = b.freeze().unwrap();
 
         let mut m = MutableDataset::new(base);
@@ -3290,10 +3424,10 @@ mod tests {
         // base TermId), so a TermId-keyed filter could never name it; the value-based
         // GraphMatchValue::Named resolves it via the delta interner.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None); // default-graph base quad; no g2 anywhere
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap(); // default-graph base quad; no g2 anywhere
         let base = b.freeze().unwrap();
 
         let mut m = MutableDataset::new(base);
@@ -3464,15 +3598,15 @@ mod tests {
         // the surviving located quad's location (across the base-ord → new-handle →
         // frozen-sort remap) while dropping the suppressed one.
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/a");
-        let p = b.intern_iri("http://example.org/p");
-        let bb = b.intern_iri("http://example.org/b");
-        let c = b.intern_iri("http://example.org/c");
+        let a = b.intern_iri("http://example.org/a").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let bb = b.intern_iri("http://example.org/b").unwrap();
+        let c = b.intern_iri("http://example.org/c").unwrap();
 
         // (a,p,b) gets a location; (a,p,c) does not.
-        let h_ab = b.next_quad_handle();
-        b.push_quad(a, p, bb, None);
-        b.push_quad(a, p, c, None);
+        let h_ab = b.next_quad_handle().unwrap();
+        b.push_quad(a, p, bb, None).unwrap();
+        b.push_quad(a, p, c, None).unwrap();
         b.attach_location(h_ab, RdfLocation::logical("loc-a-p-b"));
         let base = b.freeze().expect("base freezes");
 
@@ -3552,22 +3686,22 @@ mod tests {
     /// whose only row is a reifier binding.
     fn graph_base() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/a");
-        let p = b.intern_iri("http://example.org/p");
-        let c = b.intern_iri("http://example.org/c");
-        let d = b.intern_iri("http://example.org/d");
-        let empty = b.intern_iri("http://example.org/empty");
-        let one = b.intern_iri("http://example.org/one");
-        let two = b.intern_iri("http://example.org/two");
-        let stmt = b.intern_iri("http://example.org/stmt");
-        let r = b.intern_iri("http://example.org/r");
-        b.push_quad(a, p, c, None);
-        b.declare_named_graph(empty);
-        b.push_quad(a, p, c, Some(one));
-        b.push_quad(a, p, c, Some(two));
-        b.push_quad(a, p, d, Some(two));
-        let triple = b.intern_triple(a, p, c);
-        b.push_reifier_in_graph(r, triple, Some(stmt));
+        let a = b.intern_iri("http://example.org/a").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let c = b.intern_iri("http://example.org/c").unwrap();
+        let d = b.intern_iri("http://example.org/d").unwrap();
+        let empty = b.intern_iri("http://example.org/empty").unwrap();
+        let one = b.intern_iri("http://example.org/one").unwrap();
+        let two = b.intern_iri("http://example.org/two").unwrap();
+        let stmt = b.intern_iri("http://example.org/stmt").unwrap();
+        let r = b.intern_iri("http://example.org/r").unwrap();
+        b.push_quad(a, p, c, None).unwrap();
+        b.declare_named_graph(empty).unwrap();
+        b.push_quad(a, p, c, Some(one)).unwrap();
+        b.push_quad(a, p, c, Some(two)).unwrap();
+        b.push_quad(a, p, d, Some(two)).unwrap();
+        let triple = b.intern_triple(a, p, c).unwrap();
+        b.push_reifier_in_graph(r, triple, Some(stmt)).unwrap();
         b.freeze().expect("graph base freezes")
     }
 
@@ -3724,15 +3858,15 @@ mod tests {
     fn a_graph_is_emptied_only_when_its_quads_reifiers_and_annotations_are_all_gone() {
         // `mix` holds a plain quad, a reifier binding and that reifier's annotation.
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/a");
-        let p = b.intern_iri("http://example.org/p");
-        let c = b.intern_iri("http://example.org/c");
-        let r = b.intern_iri("http://example.org/r");
-        let mix = b.intern_iri("http://example.org/mix");
-        b.push_quad(a, p, c, Some(mix));
-        let triple = b.intern_triple(a, p, c);
-        b.push_reifier_in_graph(r, triple, Some(mix));
-        b.push_annotation_in_graph(r, p, c, Some(mix));
+        let a = b.intern_iri("http://example.org/a").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let c = b.intern_iri("http://example.org/c").unwrap();
+        let r = b.intern_iri("http://example.org/r").unwrap();
+        let mix = b.intern_iri("http://example.org/mix").unwrap();
+        b.push_quad(a, p, c, Some(mix)).unwrap();
+        let triple = b.intern_triple(a, p, c).unwrap();
+        b.push_reifier_in_graph(r, triple, Some(mix)).unwrap();
+        b.push_annotation_in_graph(r, p, c, Some(mix)).unwrap();
         let base = b.freeze().expect("mixed base freezes");
         let annotation = in_graph("r", "c", "mix");
         let mut m = MutableDataset::new_with_graph_existence(base, GraphExistenceMode::Implicit);
@@ -3964,9 +4098,9 @@ mod term_walk_tests {
                 let s = reference_intern(builder, s);
                 let p = reference_intern(builder, p);
                 let o = reference_intern(builder, o);
-                builder.intern_triple(s, p, o)
+                builder.intern_triple(s, p, o).unwrap()
             }
-            leaf => builder.intern_value(leaf),
+            leaf => builder.intern_value(leaf).unwrap(),
         }
     }
 
@@ -4001,9 +4135,9 @@ mod term_walk_tests {
                 TermShape::WellFormed,
             );
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let base = builder.freeze().expect("a generated term freezes");
             let object = base.quads().next().expect("one quad").o;
             assert_eq!(
@@ -4022,14 +4156,14 @@ mod term_walk_tests {
             }
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
-                found.intern_value(&value),
+                found.intern_value(&value).unwrap(),
                 reference_intern(&mut expected, &value),
                 "seed {seed}"
             );
             let sentinel = "http://example.org/sentinel";
             assert_eq!(
-                found.intern_iri(sentinel),
-                expected.intern_iri(sentinel),
+                found.intern_iri(sentinel).unwrap(),
+                expected.intern_iri(sentinel).unwrap(),
                 "seed {seed}"
             );
         }
@@ -4045,7 +4179,7 @@ mod term_walk_tests {
             let value = crate::term_fixture::triple_chain(LEVELS);
             assert!(check_value_absolute(&value).is_ok());
             let mut builder = RdfDatasetBuilder::new();
-            assert_eq!(builder.intern_value(&value).index(), LEVELS + 2);
+            assert_eq!(builder.intern_value(&value).unwrap().index(), LEVELS + 2);
             let mut relative = TermValue::iri("o");
             for _ in 0..LEVELS {
                 relative = TermValue::Triple {

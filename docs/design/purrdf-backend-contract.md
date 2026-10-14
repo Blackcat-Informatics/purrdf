@@ -54,6 +54,24 @@ sibling `purrdf` adapters (the canonical Turtle serializer in particular) can
 address terms by position, is only meaningful against the single dataset whose
 table holds that index.
 
+Logical exhaustion returns `StorageError::Capacity(CapacityError)` before the
+producer publishes a new identity. `CapacityError::new(space, attempted, limit)`
+retains the named `space` and full `u128` counts; `attempted()` and `limit()`
+return those counts, including requests beyond `u64::MAX`. The counts are stored
+inline without heap allocation or a wide-alignment requirement on enclosing
+operational errors. Numeric Debug, Display and Hash semantics are preserved.
+Physical admission and allocation refusals remain separate storage errors.
+
+At diagnostic host boundaries, the original storage cause is retained in the
+`purrdf-diagnostic-v1` record. A capacity record names its `space` and carries
+`attempted` and `limit` as decimal strings, preserving counts wider than a
+JavaScript number. Python exposes the native record as `ValueError.diagnostic_json`
+alongside `code`; the WASM package exposes its parsed form as `Error.diagnostic`
+on both synchronous and asynchronous failures. Existing diagnostic presentation
+fields retain their separate message-identity meaning. C Shapes entry points
+return the additive `StorageError` status and preserve the native diagnostic
+record through the existing error-JSON accessor.
+
 #### The `Option<TermId>` niche (load-bearing P3a invariant)
 
 `TermId` wraps a `NonZeroU32` holding `dense_index + 1`, so the all-zero bit
@@ -675,6 +693,61 @@ identical ordered page carrier bytes and identical canonical global value IDs,
 independent of source IDs, page boundaries and mutation history. Locations and
 other non-RDF sidecars are outside `DatasetView` and remain consumer-owned.
 Storage, commit-log reconstruction and atomic publication remain under G5.
+
+### Sparse segmented publications
+
+`SegmentedStack` is the sparse alternative to the layered paged snapshot above.
+Each immutable `SegmentedLayer` retains its original provider, authenticated
+`SegmentedReceipt`, source-local dictionary, and frozen removal and explicit graph
+declaration carriers. `SegmentedResidentHead` adopts the current frozen batch.
+Creating these resident carriers certifies their maximum expanded term footprint
+once. A subsequent `snapshot()` copies descriptor pointers and pins the existing
+head and metadata owners; it does not traverse historical terms, rebuild a global
+dictionary, copy removals, or read encoded row blocks.
+
+Publishing a replacement descriptor list authenticates every successor header
+under one cumulative read operation before changing the current list. Opening a
+query also authenticates every source header, including empty sources, without
+loading their dictionaries or row tables. This route differs from decoding a
+whole-load pack: selective reads fetch authenticated blocks through the shared
+cache as needed. All sources share the same byte, cache, request and pin limits,
+admitted working storage, and first typed failure. Resident head and metadata
+lookups use that same operation for their touched-value work. Final readiness
+checks every original descriptor again, including skipped sources and headers
+already evicted from the cache. A failed operation cannot publish a partial answer.
+
+`SegmentedStackQuery` implements `FallibleDatasetView` using query-local IDs.
+Source-qualified handles distinguish equal local ordinals from different
+dictionaries. Only touched values acquire query IDs; equality, scoped blanks,
+composite literals and quoted terms use the original RDF value homes. Equal values
+share an ID without rebuilding historical dictionaries. Forward resolution and
+reverse lookup agree, including identities first touched through removal metadata.
+The reported term count is the current touched namespace, not a fabricated sum
+of source dictionary counts. The separate host-ID dataset interface retains the
+host's original IDs; query-local native IDs do not impose an ordering on host IDs.
+
+The effective view uses G11's chronological visibility and physical typing law
+across ordinary, reifier and annotation streams. Newer removals suppress older
+occurrences, while same-generation additions survive. Explicit empty graphs remain
+declarations; implicit graphs disappear with their last effective row. Certified
+empty physical streams are skipped before translating a bound pattern, without
+skipping descriptor validation. Raw and prepared evaluator entries consume this
+guarded view, preserving solution multiplicity and unbound cells.
+
+Operation evidence retains the original publication identity and immutable prefix
+of source-qualified requests. That identity compares original descriptor and
+resident carrier owners; it is not a portable content digest. Returned term guards,
+workspace reservations and retained evidence preserve their original ownership
+and admission lifetimes after the query is dropped. Later head replacement or
+source publication cannot mutate an old snapshot or evidence checkpoint.
+
+Purge remains consumer-owned: encode successors for the affected sources, reuse
+the untouched original layer owners, and pass the complete replacement list to
+`publish`. Header refusal or descriptor drift leaves the old publication intact.
+Old snapshots and evidence keep replaced providers alive until their final drop.
+Physical erasure therefore requires releasing those retained owners as well as
+publishing successor bytes that contain neither the removed lexical payload nor
+its now-unused dependencies; a membership-only tombstone does not erase bytes.
 
 ---
 

@@ -80,6 +80,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use purrdf_hash::sha1::Sha1;
+use purrdf_lex::allocation::StorageError;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
 use crate::id::{MetaId, NodeId};
@@ -626,15 +627,21 @@ impl Engine {
     /// Declare, into `subst`, the known sort of every free metavariable of `node`,
     /// so a subsequent [`unify::unify_sorted`] enforces the order-sorted discipline
     /// for those variables. A no-op when the program declared no sorts.
-    fn declare_known_sorts(&self, dag: &TermDag, subst: &mut Subst, node: NodeId) {
+    fn declare_known_sorts(
+        &self,
+        dag: &TermDag,
+        subst: &mut Subst,
+        node: NodeId,
+    ) -> Result<(), StorageError> {
         if self.meta_sort.is_empty() {
-            return;
+            return Ok(());
         }
         for &meta in dag.free_meta(node) {
             if let Some(&sort) = self.meta_sort.get(&meta) {
-                subst.declare_meta_sort(meta, sort);
+                subst.declare_meta_sort(meta, sort)?;
             }
         }
+        Ok(())
     }
 }
 
@@ -693,6 +700,9 @@ fn may_unify(dag: &TermDag, head: NodeId, call: NodeId) -> bool {
     true
 }
 
+/// A renamed clause and the declared sorts of its fresh metavariables.
+type FreshenedClause = (NodeId, Vec<FolLit>, Vec<(MetaId, NodeId)>);
+
 /// Freshen `clause`: mint a brand-new metavariable for every distinct
 /// metavariable its head and body mention, and return the renamed head and body,
 /// plus the fresh metavariables' declared sorts.
@@ -708,38 +718,37 @@ fn freshen_clause(
     dag: &mut TermDag,
     clause: &FolClause,
     meta_sorts: &BTreeMap<MetaId, NodeId>,
-) -> (NodeId, Vec<FolLit>, Vec<(MetaId, NodeId)>) {
+) -> Result<FreshenedClause, StorageError> {
     let mut nodes: Vec<NodeId> = vec![clause.head];
-    nodes.extend(clause.body.iter().map(|lit| lit.atom()));
+    nodes.extend(clause.body.iter().copied().map(FolLit::atom));
     let metas = distinct_metas(dag, &nodes);
-
     let mut renaming = Subst::default();
-    let mut sort_decls: Vec<(MetaId, NodeId)> = Vec::new();
+    let mut sort_decls = Vec::new();
     for old in metas {
-        let (fresh_id, fresh) = dag.fresh_meta();
-        renaming.bind_renaming(old, fresh);
+        let (fresh_id, fresh) = dag.fresh_meta()?;
+        renaming.bind_renaming(old, fresh)?;
         if let Some(&sort) = meta_sorts.get(&old) {
             sort_decls.push((fresh_id, sort));
         }
     }
-
-    let head = unify::apply(dag, &renaming, clause.head);
-    let body = clause
-        .body
-        .iter()
-        .map(|lit| match lit {
-            FolLit::Pos(atom) => FolLit::Pos(unify::apply(dag, &renaming, *atom)),
-            FolLit::Neg(atom) => FolLit::Neg(unify::apply(dag, &renaming, *atom)),
-        })
-        .collect();
-    (head, body, sort_decls)
+    let head = unify::apply(dag, &renaming, clause.head)?;
+    let mut body = Vec::new();
+    body.try_reserve_exact(clause.body.len())
+        .map_err(|_| StorageError::AllocationFailed)?;
+    for lit in &clause.body {
+        body.push(match lit {
+            FolLit::Pos(atom) => FolLit::Pos(unify::apply(dag, &renaming, *atom)?),
+            FolLit::Neg(atom) => FolLit::Neg(unify::apply(dag, &renaming, *atom)?),
+        });
+    }
+    Ok((head, body, sort_decls))
 }
 
 /// Whether `atom` is fully ground under `s` — i.e. has no remaining free
 /// (unbound) metavariable once `s` is applied.
-fn is_ground(dag: &mut TermDag, s: &Subst, atom: NodeId) -> bool {
-    let applied = unify::apply(dag, s, atom);
-    dag.free_meta(applied).is_empty()
+fn is_ground(dag: &mut TermDag, s: &Subst, atom: NodeId) -> Result<bool, StorageError> {
+    let applied = unify::apply(dag, s, atom)?;
+    Ok(dag.free_meta(applied).is_empty())
 }
 
 /// Enumerate every way `body` can be satisfied against the CURRENTLY tabled
@@ -777,25 +786,25 @@ fn solve_body(
     subst: &Subst,
     limits: SolveLimits<'_>,
     out: &mut Vec<Subst>,
-) {
+) -> Result<(), StorageError> {
     // THE SEARCH IS WHERE THE WORK IS. Charging only committed rules bounds the OUTPUT
     // and leaves the enumeration that produces it unbounded, which is how a fully-variable
     // rule head turns one round into a cross-product over every constant in the program.
     if engine.steps >= limits.cap {
         engine.exhausted = true;
-        return;
+        return Ok(());
     }
     let remaining: Vec<usize> = (0..body.len()).filter(|&i| !selected[i]).collect();
     if remaining.is_empty() {
         out.push(subst.clone());
-        return;
+        return Ok(());
     }
 
     let mut chosen = None;
     for &i in &remaining {
         let safe = match &body[i] {
             FolLit::Pos(_) => true,
-            FolLit::Neg(atom) => is_ground(dag, subst, *atom),
+            FolLit::Neg(atom) => is_ground(dag, subst, *atom)?,
         };
         if safe {
             chosen = Some(i);
@@ -804,13 +813,13 @@ fn solve_body(
     }
     let Some(i) = chosen else {
         engine.floundered = true;
-        return;
+        return Ok(());
     };
 
     selected[i] = true;
     match &body[i] {
         FolLit::Pos(atom) => {
-            let instantiated = unify::apply(dag, subst, *atom);
+            let instantiated = unify::apply(dag, subst, *atom)?;
             let call_key = engine.register_call(dag, instantiated, subst);
             let answers: Vec<NodeId> = engine
                 .tables
@@ -824,18 +833,19 @@ fn solve_body(
                 engine.steps += 1;
                 let mut candidate = subst.clone();
                 if matches!(
-                    unify::unify_sorted(dag, instantiated, answer, &mut candidate, limits.ctx),
+                    unify::unify_sorted(dag, instantiated, answer, &mut candidate, limits.ctx)?,
                     Unified::Ok
                 ) {
-                    solve_body(dag, engine, body, selected, &candidate, limits, out);
+                    solve_body(dag, engine, body, selected, &candidate, limits, out)?;
                 }
             }
         }
         FolLit::Neg(_) => {
-            solve_body(dag, engine, body, selected, subst, limits, out);
+            solve_body(dag, engine, body, selected, subst, limits, out)?;
         }
     }
     selected[i] = false;
+    Ok(())
 }
 
 /// One newly-derivable ground rule instance a single [`expand_round`] pass found.
@@ -860,7 +870,7 @@ fn expand_round(
     program: &FolProgram,
     ctx: &SortContext,
     cap: u64,
-) -> Vec<Produced> {
+) -> Result<Vec<Produced>, StorageError> {
     let mut produced = Vec::new();
     let call_keys: Vec<(String, NodeId)> = engine
         .calls
@@ -881,7 +891,7 @@ fn expand_round(
             if !may_unify(dag, clause.head, call_node) {
                 continue;
             }
-            let (head, body, sort_decls) = freshen_clause(dag, clause, &program.meta_sorts);
+            let (head, body, sort_decls) = freshen_clause(dag, clause, &program.meta_sorts)?;
             // The fresh metavariables' sorts join the run-wide registry, so a later call
             // key over one of them folds its sort in, exactly as its home firing did.
             for &(meta, sort) in &sort_decls {
@@ -891,10 +901,10 @@ fn expand_round(
             // Both the freshened clause head and the demanded call may carry sorted
             // metavariables; declaring both sides' known sorts before unifying is what lets
             // an order-sorted clash prune a firing that a sort-blind unifier would accept.
-            engine.declare_known_sorts(dag, &mut base, head);
-            engine.declare_known_sorts(dag, &mut base, call_node);
+            engine.declare_known_sorts(dag, &mut base, head)?;
+            engine.declare_known_sorts(dag, &mut base, call_node)?;
             if !matches!(
-                unify::unify_sorted(dag, head, call_node, &mut base, ctx),
+                unify::unify_sorted(dag, head, call_node, &mut base, ctx)?,
                 Unified::Ok
             ) {
                 continue;
@@ -910,10 +920,10 @@ fn expand_round(
                 &base,
                 SolveLimits { ctx, cap },
                 &mut solutions,
-            );
+            )?;
 
             for subst in &solutions {
-                let ground_head = unify::apply(dag, subst, head);
+                let ground_head = unify::apply(dag, subst, head)?;
                 if !dag.free_meta(ground_head).is_empty() {
                     continue;
                 }
@@ -921,7 +931,7 @@ fn expand_round(
                 let mut neg = Vec::new();
                 let mut all_ground = true;
                 for lit in &body {
-                    let ground_atom = unify::apply(dag, subst, lit.atom());
+                    let ground_atom = unify::apply(dag, subst, lit.atom())?;
                     if !dag.free_meta(ground_atom).is_empty() {
                         all_ground = false;
                         break;
@@ -944,7 +954,7 @@ fn expand_round(
             }
         }
     }
-    produced
+    Ok(produced)
 }
 
 /// The content key of one ground rule instance: `(head, pos atoms, neg atoms,
@@ -983,7 +993,7 @@ fn ground(
     program: &FolProgram,
     ctx: &SortContext,
     budget: FolBudget,
-) -> bool {
+) -> Result<bool, StorageError> {
     // Seed the goal's own metavariables' sorts into the run-wide registry FIRST, so the
     // goal call is both keyed (`canon_sorted`) and later unified (`declare_known_sorts`)
     // under the same sort — otherwise a sorted goal would register under one key and be
@@ -1002,11 +1012,11 @@ fn ground(
 
         if engine.steps > budget.max_steps {
             engine.exhausted = true;
-            return false;
+            return Ok(false);
         }
-        let produced = expand_round(dag, engine, program, ctx, budget.max_steps);
+        let produced = expand_round(dag, engine, program, ctx, budget.max_steps)?;
         if engine.floundered {
-            return true;
+            return Ok(true);
         }
 
         let mut newly_committed: u64 = 0;
@@ -1029,7 +1039,7 @@ fn ground(
         engine.steps += newly_committed;
         if engine.exhausted || engine.steps > budget.max_steps {
             engine.exhausted = true;
-            return false;
+            return Ok(false);
         }
 
         let calls_after = engine.calls.len();
@@ -1041,7 +1051,7 @@ fn ground(
             break;
         }
     }
-    false
+    Ok(false)
 }
 
 // ── The well-founded model ──────────────────────────────────────────────────────
@@ -1229,7 +1239,7 @@ fn project(
     ctx: &SortContext,
     w: &BTreeSet<String>,
     proofs: &BTreeMap<String, FolProof>,
-) -> Vec<FolBinding> {
+) -> Result<Vec<FolBinding>, StorageError> {
     let mut candidates: Vec<(String, NodeId)> = engine
         .atoms
         .iter()
@@ -1245,14 +1255,14 @@ fn project(
         // A goal metavariable's declared sort must gate projection too: an answer
         // whose ground value violates the goal variable's sort is not an answer to
         // THIS (sorted) goal.
-        engine.declare_known_sorts(dag, &mut subst, program.goal);
+        engine.declare_known_sorts(dag, &mut subst, program.goal)?;
         if !matches!(
-            unify::unify_sorted(dag, program.goal, atom, &mut subst, ctx),
+            unify::unify_sorted(dag, program.goal, atom, &mut subst, ctx)?,
             Unified::Ok
         ) {
             continue;
         }
-        let applied_goal = unify::apply(dag, &subst, program.goal);
+        let applied_goal = unify::apply(dag, &subst, program.goal)?;
         if !dag.free_meta(applied_goal).is_empty() {
             continue;
         }
@@ -1268,7 +1278,7 @@ fn project(
 
         let mut bindings = BTreeMap::new();
         for (var_node, name) in &program.goal_vars {
-            let value = unify::apply(dag, &subst, *var_node);
+            let value = unify::apply(dag, &subst, *var_node)?;
             bindings.insert(name.clone(), render(dag, value));
         }
         answers.push(FolBinding {
@@ -1283,7 +1293,7 @@ fn project(
             .cmp(&b.bindings)
             .then_with(|| a.atom.cmp(&b.atom))
     });
-    answers
+    Ok(answers)
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────────
@@ -1313,20 +1323,20 @@ pub fn resolve_fol(
     program: &FolProgram,
     ctx: &SortContext,
     budget: &FolBudget,
-) -> FolControl {
+) -> Result<FolControl, StorageError> {
     for (index, clause) in program.clauses.iter().enumerate() {
         if clause.body.len() > MAX_BODY_LITERALS {
-            return FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide {
+            return Ok(FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide {
                 rule: index,
                 literals: clause.body.len(),
-            });
+            }));
         }
     }
 
     let mut engine = Engine::default();
-    let floundered = ground(dag, &mut engine, program, ctx, *budget);
+    let floundered = ground(dag, &mut engine, program, ctx, *budget)?;
     if floundered || engine.floundered {
-        return FolControl::Unsupported(FolUnsupported::Floundering);
+        return Ok(FolControl::Unsupported(FolUnsupported::Floundering));
     }
 
     let (true_set, not_false) = well_founded(dag, &engine, engine.exhausted);
@@ -1336,15 +1346,17 @@ pub fn resolve_fol(
         FolStatus::Complete
     };
     let proofs = build_proofs(dag, &engine, program, &true_set, &not_false);
-    let answers = project(dag, &engine, program, ctx, &true_set, &proofs);
+    let answers = project(dag, &engine, program, ctx, &true_set, &proofs)?;
 
-    FolControl::Decided(Box::new(FolOutcome {
+    Ok(FolControl::Decided(Box::new(FolOutcome {
         answers,
         status,
         not_false,
         true_set,
-    }))
+    })))
 }
+
+purrdf_lex::variant_from!(FolProofError { Storage(StorageError) });
 
 // ── The independent checker ─────────────────────────────────────────────────────
 
@@ -1355,6 +1367,8 @@ pub fn resolve_fol(
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FolProofError {
+    /// Native refusal, distinct from rejecting an invalid proof.
+    Storage(StorageError),
     /// The proof cites a clause index the program does not have.
     UnknownRule {
         /// The cited clause index.
@@ -1480,10 +1494,10 @@ pub fn check_fol_proof(
         }
     };
 
-    let (head, body, sort_decls) = freshen_clause(dag, clause, meta_sorts);
+    let (head, body, sort_decls) = freshen_clause(dag, clause, meta_sorts)?;
     let mut subst = Subst::default();
     for &(meta, sort) in &sort_decls {
-        subst.declare_meta_sort(meta, sort);
+        subst.declare_meta_sort(meta, sort)?;
     }
     let mut premise_iter = derived_premises.into_iter();
     for (position, lit) in body.iter().enumerate() {
@@ -1492,7 +1506,7 @@ pub fn check_fol_proof(
                 .next()
                 .expect("premise count already matched the positive body arity");
             if !matches!(
-                unify::unify_sorted(dag, *atom, derived_atom, &mut subst, ctx),
+                unify::unify_sorted(dag, *atom, derived_atom, &mut subst, ctx)?,
                 Unified::Ok
             ) {
                 return Err(FolProofError::PremiseMismatch { rule, position });
@@ -1509,10 +1523,10 @@ pub fn check_fol_proof(
     // (under the premises already checked) cannot actually produce fails this
     // unification outright, which is exactly a `HeadMismatch`.
     if !matches!(
-        unify::unify_sorted(dag, head, goal, &mut subst, ctx),
+        unify::unify_sorted(dag, head, goal, &mut subst, ctx)?,
         Unified::Ok
     ) {
-        let derived_head = unify::apply(dag, &subst, head);
+        let derived_head = unify::apply(dag, &subst, head)?;
         return Err(FolProofError::HeadMismatch {
             rule,
             derived: render(dag, derived_head),
@@ -1522,7 +1536,7 @@ pub fn check_fol_proof(
 
     for (position, lit) in body.iter().enumerate() {
         if let FolLit::Neg(atom) = lit {
-            let ground_atom = unify::apply(dag, &subst, *atom);
+            let ground_atom = unify::apply(dag, &subst, *atom)?;
             if not_false(dag, ground_atom) {
                 return Err(FolProofError::NegatedPremiseNotExcluded { rule, position });
             }
@@ -1537,7 +1551,7 @@ pub fn check_fol_proof(
         return Err(FolProofError::RuleIdentityMismatch { rule });
     }
 
-    Ok(unify::apply(dag, &subst, head))
+    Ok(unify::apply(dag, &subst, head)?)
 }
 
 // ── Caller-reproducible derivation identity (the published recipe) ───────────────
@@ -1581,11 +1595,12 @@ pub fn content_key(dag: &TermDag, proof: &FolProof) -> String {
 /// use purrdf_datalog::term::TermDag;
 ///
 /// let mut dag = TermDag::default();
-/// let goal = dag.intern_leaf("fact");
+/// let goal = dag.intern_leaf("fact")?;
 /// let proof = FolProof::Assert { rule: 0, rule_identity: "rule-id".to_owned(), goal };
 /// let id = derivation_id(&dag, &proof);
 /// assert_eq!(id.len(), 40);
 /// assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
@@ -1637,6 +1652,32 @@ pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
     purrdf_hash::hex::encode(&hasher.finalize())
 }
 
+/// Refusal while lowering or executing a flat backward query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolError {
+    /// The original clause has no flat backward-resolution semantics.
+    Clause(NonDatalogClause),
+    /// Original native storage or logical capacity refusal.
+    Storage(StorageError),
+}
+impl core::fmt::Display for FolError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Clause(e) => e.fmt(f),
+            Self::Storage(e) => e.fmt(f),
+        }
+    }
+}
+impl std::error::Error for FolError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Clause(e) => Some(e),
+            Self::Storage(e) => Some(e),
+        }
+    }
+}
+purrdf_lex::variant_from!(FolError { Clause(NonDatalogClause), Storage(StorageError) });
+
 // ── The DlClause lowering adapter ───────────────────────────────────────────────
 
 /// Look up (or mint, on first use within `scope`) the [`NodeId`] a clause `term`
@@ -1648,16 +1689,20 @@ fn lower_term(
     dag: &mut TermDag,
     scope: &mut BTreeMap<String, NodeId>,
     term: &ClauseTerm,
-) -> NodeId {
+) -> Result<NodeId, StorageError> {
     match term {
-        ClauseTerm::Var(name) => *scope.entry(name.clone()).or_insert_with(|| {
-            let (_, node) = dag.fresh_meta();
-            node
-        }),
+        ClauseTerm::Var(name) => {
+            if let Some(&node) = scope.get(name) {
+                return Ok(node);
+            }
+            let (_, node) = dag.fresh_meta()?;
+            scope.insert(name.clone(), node);
+            Ok(node)
+        }
         other => {
             let surface = other
                 .surface()
-                .expect("a non-variable clause term always has a lexical surface");
+                .expect("a non-variable clause term has a lexical surface");
             dag.intern_leaf(&surface)
         }
     }
@@ -1669,12 +1714,12 @@ fn lower_atom(
     triple_op: NodeId,
     scope: &mut BTreeMap<String, NodeId>,
     atom: &ClauseAtom,
-) -> NodeId {
+) -> Result<NodeId, StorageError> {
     let args: Vec<NodeId> = atom
         .terms()
         .into_iter()
         .map(|term| lower_term(dag, scope, term))
-        .collect();
+        .collect::<Result<Vec<_>, StorageError>>()?;
     dag.intern_app(triple_op, args)
 }
 
@@ -1691,31 +1736,31 @@ fn lower_datalog_clauses(
     dag: &mut TermDag,
     triple_op: NodeId,
     clauses: &[DlClause],
-) -> Result<Vec<FolClause>, NonDatalogClause> {
+) -> Result<Vec<FolClause>, FolError> {
     let mut out = Vec::with_capacity(clauses.len());
     for (index, clause) in clauses.iter().enumerate() {
         let Some(head_atom) = clause.datalog_head() else {
-            return Err(NonDatalogClause::new(index, clause.head_form()));
+            return Err(NonDatalogClause::new(index, clause.head_form()).into());
         };
         // A guard's truth is caller code the backward resolver has no way to run, so a
         // guarded clause is refused by name rather than resolved as if the guard held.
         if clause.is_guarded() {
-            return Err(NonDatalogClause::guarded(index, clause.head_form()));
+            return Err(NonDatalogClause::guarded(index, clause.head_form()).into());
         }
         let mut scope: BTreeMap<String, NodeId> = BTreeMap::new();
-        let head = lower_atom(dag, triple_op, &mut scope, head_atom);
+        let head = lower_atom(dag, triple_op, &mut scope, head_atom)?;
         let body = clause
             .body()
             .iter()
             .map(|atom| {
-                let lowered = lower_atom(dag, triple_op, &mut scope, atom);
+                let lowered = lower_atom(dag, triple_op, &mut scope, atom)?;
                 if atom.is_negated() {
-                    FolLit::Neg(lowered)
+                    Ok(FolLit::Neg(lowered))
                 } else {
-                    FolLit::Pos(lowered)
+                    Ok(FolLit::Pos(lowered))
                 }
             })
-            .collect();
+            .collect::<Result<Vec<_>, StorageError>>()?;
         out.push(FolClause {
             head,
             body,
@@ -1732,18 +1777,17 @@ fn lower_goal(
     dag: &mut TermDag,
     triple_op: NodeId,
     goal: &ClauseAtom,
-) -> (NodeId, Vec<(NodeId, String)>) {
-    let mut scope: BTreeMap<String, NodeId> = BTreeMap::new();
-    let mut order: Vec<(NodeId, String)> = Vec::new();
-    let args: Vec<NodeId> = goal
-        .terms()
-        .into_iter()
-        .map(|term| match term {
+) -> Result<(NodeId, Vec<(NodeId, String)>), StorageError> {
+    let mut scope = BTreeMap::new();
+    let mut order = Vec::new();
+    let mut args = Vec::new();
+    for term in goal.terms() {
+        let node = match term {
             ClauseTerm::Var(name) => {
                 if let Some(&node) = scope.get(name) {
                     node
                 } else {
-                    let (_, node) = dag.fresh_meta();
+                    let (_, node) = dag.fresh_meta()?;
                     scope.insert(name.clone(), node);
                     order.push((node, name.clone()));
                     node
@@ -1752,12 +1796,13 @@ fn lower_goal(
             other => {
                 let surface = other
                     .surface()
-                    .expect("a non-variable clause term always has a lexical surface");
-                dag.intern_leaf(&surface)
+                    .expect("a non-variable clause term has a lexical surface");
+                dag.intern_leaf(&surface)?
             }
-        })
-        .collect();
-    (dag.intern_app(triple_op, args), order)
+        };
+        args.push(node);
+    }
+    Ok((dag.intern_app(triple_op, args)?, order))
 }
 
 /// Lower a flat, atomic-head-only Datalog program
@@ -1784,12 +1829,12 @@ pub fn solve_datalog_goal(
     clauses: &[DlClause],
     goal: &ClauseAtom,
     budget: &FolBudget,
-) -> Result<(TermDag, FolControl), NonDatalogClause> {
+) -> Result<(TermDag, FolControl), FolError> {
     let mut dag = TermDag::default();
-    let triple_op = dag.intern_leaf("triple");
+    let triple_op = dag.intern_leaf("triple")?;
 
     let fol_clauses = lower_datalog_clauses(&mut dag, triple_op, clauses)?;
-    let (goal_node, goal_vars) = lower_goal(&mut dag, triple_op, goal);
+    let (goal_node, goal_vars) = lower_goal(&mut dag, triple_op, goal)?;
 
     let program = FolProgram {
         clauses: fol_clauses,
@@ -1800,7 +1845,7 @@ pub fn solve_datalog_goal(
         // to the pre-order-sorted resolver over the same program.
         meta_sorts: BTreeMap::new(),
     };
-    let control = resolve_fol(&mut dag, &program, &SortContext::default(), budget);
+    let control = resolve_fol(&mut dag, &program, &SortContext::default(), budget)?;
     Ok((dag, control))
 }
 
@@ -1812,13 +1857,13 @@ mod tests {
 
     /// A leaf constant.
     fn leaf(dag: &mut TermDag, symbol: &str) -> NodeId {
-        dag.intern_leaf(symbol)
+        dag.intern_leaf(symbol).unwrap()
     }
 
     /// An application `op(args...)`.
     fn app(dag: &mut TermDag, op: &str, args: Vec<NodeId>) -> NodeId {
-        let op_node = dag.intern_leaf(op);
-        dag.intern_app(op_node, args)
+        let op_node = dag.intern_leaf(op).unwrap();
+        dag.intern_app(op_node, args).unwrap()
     }
 
     /// An always-`Ok` `not_false` adapter, for programs with no negation to
@@ -1835,12 +1880,12 @@ mod tests {
     #[test]
     fn canon_numbers_metas_in_first_visit_order_so_variants_share_a_key() {
         let mut dag = TermDag::default();
-        let (_, x) = dag.fresh_meta();
-        let (_, y) = dag.fresh_meta();
+        let (_, x) = dag.fresh_meta().unwrap();
+        let (_, y) = dag.fresh_meta().unwrap();
         let atom1 = app(&mut dag, "p", vec![x, y, x]);
 
-        let (_, a) = dag.fresh_meta();
-        let (_, b) = dag.fresh_meta();
+        let (_, a) = dag.fresh_meta().unwrap();
+        let (_, b) = dag.fresh_meta().unwrap();
         let atom2 = app(&mut dag, "p", vec![a, b, a]);
         assert_eq!(
             canon(&dag, atom1),
@@ -1848,7 +1893,7 @@ mod tests {
             "the same repeated-variable pattern must share a call-pattern key"
         );
 
-        let (_, c) = dag.fresh_meta();
+        let (_, c) = dag.fresh_meta().unwrap();
         let atom3 = app(&mut dag, "p", vec![a, b, c]);
         assert_ne!(
             canon(&dag, atom1),
@@ -1893,7 +1938,7 @@ mod tests {
         let z = leaf(&mut dag, "z");
 
         // add(z, Y, Y) :- .
-        let (_, y0) = dag.fresh_meta();
+        let (_, y0) = dag.fresh_meta().unwrap();
         let head0 = app(&mut dag, "add", vec![z, y0, y0]);
         let clause0 = FolClause {
             head: head0,
@@ -1902,9 +1947,9 @@ mod tests {
         };
 
         // add(s(X), Y, s(Z)) :- add(X, Y, Z).
-        let (_, x1) = dag.fresh_meta();
-        let (_, y1) = dag.fresh_meta();
-        let (_, z1) = dag.fresh_meta();
+        let (_, x1) = dag.fresh_meta().unwrap();
+        let (_, y1) = dag.fresh_meta().unwrap();
+        let (_, z1) = dag.fresh_meta().unwrap();
         let s_x = app(&mut dag, "s", vec![x1]);
         let s_z = app(&mut dag, "s", vec![z1]);
         let head1 = app(&mut dag, "add", vec![s_x, y1, s_z]);
@@ -1921,7 +1966,7 @@ mod tests {
         let two = peano(&mut dag, z, 2);
         let one = peano(&mut dag, z, 1);
         let three = peano(&mut dag, z, 3);
-        let (_, r_meta) = dag.fresh_meta();
+        let (_, r_meta) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "add", vec![two, one, r_meta]);
         let program = FolProgram {
             clauses: clauses.clone(),
@@ -1931,7 +1976,7 @@ mod tests {
         };
 
         let budget = FolBudget { max_steps: 10_000 };
-        let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget);
+        let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap();
         let FolControl::Decided(outcome) = control else {
             panic!("Peano addition must be decidable");
         };
@@ -1969,8 +2014,8 @@ mod tests {
         let nil = leaf(&mut dag, "nil");
 
         // member(X, cons(X, T)) :- .
-        let (_, x0) = dag.fresh_meta();
-        let (_, t0) = dag.fresh_meta(); // the wildcard tail position
+        let (_, x0) = dag.fresh_meta().unwrap();
+        let (_, t0) = dag.fresh_meta().unwrap(); // the wildcard tail position
         let cons_x_t = app(&mut dag, "cons", vec![x0, t0]);
         let head0 = app(&mut dag, "member", vec![x0, cons_x_t]);
         let clause0 = FolClause {
@@ -1980,9 +2025,9 @@ mod tests {
         };
 
         // member(X, cons(H, T)) :- member(X, T).
-        let (_, x1) = dag.fresh_meta();
-        let (_, h1) = dag.fresh_meta(); // the wildcard head position
-        let (_, t1) = dag.fresh_meta();
+        let (_, x1) = dag.fresh_meta().unwrap();
+        let (_, h1) = dag.fresh_meta().unwrap(); // the wildcard head position
+        let (_, t1) = dag.fresh_meta().unwrap();
         let cons_h_t = app(&mut dag, "cons", vec![h1, t1]);
         let head1 = app(&mut dag, "member", vec![x1, cons_h_t]);
         let premise = app(&mut dag, "member", vec![x1, t1]);
@@ -1998,7 +2043,7 @@ mod tests {
         let mid = app(&mut dag, "cons", vec![b, tail]);
         let list = app(&mut dag, "cons", vec![a, mid]);
 
-        let (_, x_goal) = dag.fresh_meta();
+        let (_, x_goal) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "member", vec![x_goal, list]);
         let program = FolProgram {
             clauses: clauses.clone(),
@@ -2008,7 +2053,7 @@ mod tests {
         };
 
         let budget = FolBudget { max_steps: 10_000 };
-        let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget);
+        let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap();
         let FolControl::Decided(outcome) = control else {
             panic!("member/2 over a finite ground list must be decidable");
         };
@@ -2042,8 +2087,8 @@ mod tests {
     #[test]
     fn well_founded_three_valued_negation_is_correct() {
         fn win_rule(dag: &mut TermDag) -> FolClause {
-            let (_, x) = dag.fresh_meta();
-            let (_, y) = dag.fresh_meta();
+            let (_, x) = dag.fresh_meta().unwrap();
+            let (_, y) = dag.fresh_meta().unwrap();
             let head = app(dag, "win", vec![x]);
             let move_xy = app(dag, "move", vec![x, y]);
             let win_y = app(dag, "win", vec![y]);
@@ -2073,7 +2118,7 @@ mod tests {
                 meta_sorts: BTreeMap::new(),
             };
             let budget = FolBudget { max_steps: 10_000 };
-            match resolve_fol(dag, &program, &SortContext::default(), &budget) {
+            match resolve_fol(dag, &program, &SortContext::default(), &budget).unwrap() {
                 FolControl::Decided(outcome) => *outcome,
                 FolControl::Unsupported(reason) => panic!("expected a decision, got {reason:?}"),
             }
@@ -2123,7 +2168,7 @@ mod tests {
         };
         let budget = FolBudget { max_steps: 10_000 };
         let FolControl::Decided(outcome) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
         else {
             panic!("a direct negative loop is decidable (as Undefined), not Unsupported");
         };
@@ -2175,7 +2220,7 @@ mod tests {
         // the goal comes back `Undefined` here, where 1 and 2 units yield `False`.
         let budget = FolBudget { max_steps: 4 };
         let FolControl::Decided(outcome) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
         else {
             panic!("a budget cut is Partial, not Unsupported");
         };
@@ -2207,12 +2252,12 @@ mod tests {
         };
         let budget = FolBudget { max_steps: 4 };
         let FolControl::Decided(first) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
         else {
             panic!("expected a decision");
         };
         let FolControl::Decided(second) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
         else {
             panic!("expected a decision");
         };
@@ -2228,7 +2273,7 @@ mod tests {
     #[test]
     fn floundering_naf_goal_is_typed_unsupported_not_a_fabricated_answer() {
         let mut dag = TermDag::default();
-        let (_, x) = dag.fresh_meta();
+        let (_, x) = dag.fresh_meta().unwrap();
         let head = app(&mut dag, "p", vec![x]);
         let q_x = app(&mut dag, "q", vec![x]);
         let clause = FolClause {
@@ -2236,7 +2281,7 @@ mod tests {
             body: vec![FolLit::Neg(q_x)],
             rule: 0,
         };
-        let (_, goal_x) = dag.fresh_meta();
+        let (_, goal_x) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "p", vec![goal_x]);
         let program = FolProgram {
             clauses: vec![clause],
@@ -2245,7 +2290,7 @@ mod tests {
             meta_sorts: BTreeMap::new(),
         };
         let budget = FolBudget { max_steps: 10_000 };
-        match resolve_fol(&mut dag, &program, &SortContext::default(), &budget) {
+        match resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap() {
             FolControl::Unsupported(FolUnsupported::Floundering) => {}
             other => panic!("expected Floundering, got {other:?}"),
         }
@@ -2273,7 +2318,7 @@ mod tests {
             meta_sorts: BTreeMap::new(),
         };
         let budget = FolBudget { max_steps: 10_000 };
-        match resolve_fol(&mut dag, &program, &SortContext::default(), &budget) {
+        match resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap() {
             FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide { rule: 0, literals }) => {
                 assert_eq!(literals, literal_count);
             }
@@ -2288,7 +2333,7 @@ mod tests {
     #[test]
     fn check_fol_proof_rejects_a_forged_head() {
         let mut dag = TermDag::default();
-        let (_, x) = dag.fresh_meta();
+        let (_, x) = dag.fresh_meta().unwrap();
         let head = app(&mut dag, "p", vec![x]);
         let clause = FolClause {
             head,
@@ -2390,8 +2435,8 @@ mod tests {
         let p_ab = app(&mut dag, "p", vec![a, b]);
         assert_eq!(canon(&dag, p_ab), "A1:2L1:pL1:aL1:b");
 
-        let (_, x) = dag.fresh_meta();
-        let (_, y) = dag.fresh_meta();
+        let (_, x) = dag.fresh_meta().unwrap();
+        let (_, y) = dag.fresh_meta().unwrap();
         let p_xyx = app(&mut dag, "p", vec![x, y, x]);
         assert_eq!(canon(&dag, p_xyx), "A1:3L1:pM1:0M1:1M1:0");
 
@@ -2405,7 +2450,7 @@ mod tests {
         let forall = leaf(&mut dag, "forall");
         let sort = leaf(&mut dag, "thing");
         let body = app(&mut dag, "q", vec![x]);
-        let binder = dag.intern_binder(forall, vec![sort], body);
+        let binder = dag.intern_binder(forall, vec![sort], body).unwrap();
         let nested = app(&mut dag, "f", vec![p_ab, binder]);
         assert_eq!(canon(&dag, nested), canon_sorted(&dag, nested, &none));
     }
@@ -2419,7 +2464,7 @@ mod tests {
         let mut dag = TermDag::default();
         let s = leaf(&mut dag, "S");
         let t = leaf(&mut dag, "T");
-        let (m_id, m) = dag.fresh_meta();
+        let (m_id, m) = dag.fresh_meta().unwrap();
 
         let as_s = |q: MetaId| (q == m_id).then_some(s);
         let as_t = |q: MetaId| (q == m_id).then_some(t);
@@ -2454,7 +2499,7 @@ mod tests {
         let ctx = SortContext::new(order, term_sorts, BTreeMap::new());
 
         // ok(X) :- has(X).   has(felix).   has(generic).   goal: ok(?R).
-        let (x_id, x) = dag.fresh_meta();
+        let (x_id, x) = dag.fresh_meta().unwrap();
         let ok_head = app(&mut dag, "ok", vec![x]);
         let has_x = app(&mut dag, "has", vec![x]);
         let ok_clause = FolClause {
@@ -2475,7 +2520,7 @@ mod tests {
             rule: 2,
         };
         let clauses = vec![ok_clause, fact_felix, fact_generic];
-        let (_, r) = dag.fresh_meta();
+        let (_, r) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "ok", vec![r]);
         let budget = FolBudget { max_steps: 10_000 };
 
@@ -2487,7 +2532,8 @@ mod tests {
             goal_vars: vec![(r, "R".to_owned())],
             meta_sorts,
         };
-        let FolControl::Decided(sorted_outcome) = resolve_fol(&mut dag, &sorted, &ctx, &budget)
+        let FolControl::Decided(sorted_outcome) =
+            resolve_fol(&mut dag, &sorted, &ctx, &budget).unwrap()
         else {
             panic!("the sorted program is decidable, and a sort clash is not floundering");
         };
@@ -2511,7 +2557,7 @@ mod tests {
             meta_sorts: BTreeMap::new(),
         };
         let FolControl::Decided(unsorted_outcome) =
-            resolve_fol(&mut dag, &unsorted, &SortContext::default(), &budget)
+            resolve_fol(&mut dag, &unsorted, &SortContext::default(), &budget).unwrap()
         else {
             panic!("the sort-blind program is decidable");
         };
@@ -2530,16 +2576,16 @@ mod tests {
     fn peano_answer_proof() -> (TermDag, Vec<FolClause>, FolProof) {
         let mut dag = TermDag::default();
         let z = leaf(&mut dag, "z");
-        let (_, y0) = dag.fresh_meta();
+        let (_, y0) = dag.fresh_meta().unwrap();
         let head0 = app(&mut dag, "add", vec![z, y0, y0]);
         let clause0 = FolClause {
             head: head0,
             body: vec![],
             rule: 0,
         };
-        let (_, x1) = dag.fresh_meta();
-        let (_, y1) = dag.fresh_meta();
-        let (_, z1) = dag.fresh_meta();
+        let (_, x1) = dag.fresh_meta().unwrap();
+        let (_, y1) = dag.fresh_meta().unwrap();
+        let (_, z1) = dag.fresh_meta().unwrap();
         let s_x = app(&mut dag, "s", vec![x1]);
         let s_z = app(&mut dag, "s", vec![z1]);
         let head1 = app(&mut dag, "add", vec![s_x, y1, s_z]);
@@ -2552,7 +2598,7 @@ mod tests {
         let clauses = vec![clause0, clause1];
         let two = peano(&mut dag, z, 2);
         let one = peano(&mut dag, z, 1);
-        let (_, r_meta) = dag.fresh_meta();
+        let (_, r_meta) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "add", vec![two, one, r_meta]);
         let program = FolProgram {
             clauses: clauses.clone(),
@@ -2562,7 +2608,7 @@ mod tests {
         };
         let budget = FolBudget { max_steps: 10_000 };
         let FolControl::Decided(outcome) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
         else {
             panic!("Peano addition is decidable");
         };
@@ -2711,7 +2757,7 @@ mod tests {
         let mut dag = TermDag::default();
         let cat = leaf(&mut dag, "Cat");
         let dog = leaf(&mut dag, "Dog");
-        let (x_id, x) = dag.fresh_meta();
+        let (x_id, x) = dag.fresh_meta().unwrap();
         let head = app(&mut dag, "p", vec![x]);
         let clause = FolClause {
             head,
@@ -2756,7 +2802,7 @@ mod tests {
         };
         let budget = FolBudget { max_steps: 10_000 };
         let FolControl::Decided(outcome) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget)
+            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
         else {
             panic!("a neg-only clause with a false negand is decidable");
         };
@@ -2829,7 +2875,7 @@ mod tests {
         let ctx = SortContext::new(order, term_sorts, BTreeMap::new());
 
         // safe(X) :- cat(X), not danger(X).   cat(felix).   (no danger facts)
-        let (x_id, x) = dag.fresh_meta();
+        let (x_id, x) = dag.fresh_meta().unwrap();
         let safe_head = app(&mut dag, "safe", vec![x]);
         let cat_x = app(&mut dag, "cat", vec![x]);
         let danger_x = app(&mut dag, "danger", vec![x]);
@@ -2845,7 +2891,7 @@ mod tests {
             rule: 1,
         };
         let clauses = vec![safe_clause, cat_fact];
-        let (_, r) = dag.fresh_meta();
+        let (_, r) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "safe", vec![r]);
         let mut meta_sorts = BTreeMap::new();
         meta_sorts.insert(x_id, cat);
@@ -2856,7 +2902,8 @@ mod tests {
             meta_sorts: meta_sorts.clone(),
         };
         let budget = FolBudget { max_steps: 10_000 };
-        let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &ctx, &budget) else {
+        let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &ctx, &budget).unwrap()
+        else {
             panic!("a sorted NAF program is decidable, not floundering");
         };
         assert_eq!(outcome.answers.len(), 1, "safe(felix) holds");
@@ -2939,13 +2986,15 @@ mod tests {
                 &surface(P),
                 &surface("b"),
                 RelationStore::DEFAULT_GRAPH,
-            );
+            )
+            .unwrap();
             edb.insert(
                 &surface("b"),
                 &surface(P),
                 &surface("c"),
                 RelationStore::DEFAULT_GRAPH,
-            );
+            )
+            .unwrap();
 
             let exe = crate::seminaive::compile(rules.clone()).expect("the chain program compiles");
             let evaluation = crate::seminaive::evaluate(&exe, edb)
@@ -2979,7 +3028,7 @@ mod tests {
                 "a fully ground goal has one answer, or none"
             );
 
-            let triple_op = dag.intern_leaf("triple");
+            let triple_op = dag.intern_leaf("triple").unwrap();
             let fol_clauses = lower_datalog_clauses(&mut dag, triple_op, &backward_rules)
                 .expect("the same Datalog-only program lowers cleanly a second time");
             let checked = check_fol_proof(
@@ -3005,6 +3054,9 @@ mod tests {
             let budget = FolBudget { max_steps: 1_000 };
             let error = solve_datalog_goal(&[existential], &goal, &budget)
                 .expect_err("an existential head has no Datalog semantics");
+            let FolError::Clause(error) = error else {
+                panic!("the original clause refusal must be preserved");
+            };
             assert_eq!(error.clause(), 0);
             assert_eq!(error.form(), crate::clause::HeadForm::Existential);
         }

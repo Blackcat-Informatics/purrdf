@@ -104,7 +104,8 @@ use crate::convert::BlankScopeMode;
 use crate::dataset::{Dataset, serialize_frozen_with_options};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
-    ClosureInputs, JobOutcome, OPTIONS_CODE, OperationInput, coded_error, diagnostic_to_js,
+    ClosureInputs, JobError, JobOutcome, OPTIONS_CODE, OperationInput, SERIALIZE_CODE, coded_error,
+    diagnostic_to_js,
 };
 use crate::term::Term;
 
@@ -1141,7 +1142,7 @@ pub(crate) enum NegotiatedValue {
 pub(crate) fn negotiated_outcome_from_value(
     value: NegotiatedValue,
     blank_scope: BlankScopeMode,
-) -> Result<NegotiatedOutcome, JsError> {
+) -> Result<NegotiatedOutcome, JsValue> {
     match value {
         NegotiatedValue::Complete {
             bytes,
@@ -1415,7 +1416,7 @@ impl QueryEngine {
         xpath_regex: Option<String>,
     ) -> Result<QueryResult, JsValue> {
         let result = self.run_query(dataset, sparql, base.as_deref(), xpath_regex.as_deref())?;
-        Ok(query_result_from_sparql(result, self.blank_scope())?)
+        query_result_from_sparql(result, self.blank_scope())
     }
 
     /// Run a SELECT query and return typed rows.
@@ -1955,7 +1956,7 @@ impl QueryEngine {
         xpath_regex: Option<&str>,
     ) -> Result<Dataset, JsValue> {
         let result = self.run_query(dataset, sparql, base, xpath_regex)?;
-        Ok(graph_result_from_sparql(result)?)
+        graph_result_from_sparql(result)
     }
 
     fn run_query(
@@ -2011,12 +2012,12 @@ fn unexpected_outcome(what: &str, outcome: &JobOutcome) -> JsValue {
 
 /// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD options — the
 /// `queryRawConfigured`/`queryRawWithContext` egress, shared by the synchronous and
-/// asynchronous lanes, with a plain `String` error.
+/// asynchronous lanes, preserving native storage diagnostics in the job error.
 pub(crate) fn serialize_configured_graph(
     result: SparqlResult,
     format: &str,
     options: &JsonLdSerializeOptions,
-) -> Result<String, String> {
+) -> Result<String, JobError> {
     match result {
         // WHICH BASE: none. The query's `base` resolves relative IRI references inside
         // the query TEXT. The trailing argument here is the *document* base a result is
@@ -2029,10 +2030,20 @@ pub(crate) fn serialize_configured_graph(
         // the seam, it is that this function has no document base to pass. Giving the
         // caller one would mean a NEW parameter on `queryRawConfigured`, not reusing the
         // query's.
-        SparqlResult::Graph(graph) => serialize_frozen_with_options(&graph, format, options, None),
-        other => Err(kind_mismatch_message(
-            "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
-            &other,
+        SparqlResult::Graph(graph) => serialize_frozen_with_options(&graph, format, options, None)
+            .map_err(|diagnostic| {
+                if diagnostic.storage_error().is_some() {
+                    JobError::diagnostic(diagnostic)
+                } else {
+                    JobError::message(SERIALIZE_CODE, diagnostic.to_string())
+                }
+            }),
+        other => Err(JobError::message(
+            SERIALIZE_CODE,
+            kind_mismatch_message(
+                "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
+                &other,
+            ),
         )),
     }
 }
@@ -2101,7 +2112,7 @@ pub(crate) fn aggregate_env_message(
 pub(crate) fn query_result_from_sparql(
     result: SparqlResult,
     blank_scope: BlankScopeMode,
-) -> Result<QueryResult, JsError> {
+) -> Result<QueryResult, JsValue> {
     Ok(match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -2138,10 +2149,10 @@ fn select_result_from_sparql(
     }
 }
 
-fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
+fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsValue> {
     match result {
         SparqlResult::Graph(graph) => Dataset::from_frozen(graph),
-        other => Err(kind_mismatch("CONSTRUCT/DESCRIBE graph", &other)),
+        other => Err(kind_mismatch("CONSTRUCT/DESCRIBE graph", &other).into()),
     }
 }
 
@@ -2152,7 +2163,7 @@ fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
 pub(crate) fn query_outcome_from_governed(
     outcome: GovernedOutcome,
     blank_scope: BlankScopeMode,
-) -> Result<QueryOutcome, JsError> {
+) -> Result<QueryOutcome, JsValue> {
     match outcome {
         GovernedOutcome::Complete {
             result, evidence, ..
@@ -2181,7 +2192,7 @@ pub(crate) fn query_outcome_from_governed(
 pub(crate) fn entailment_query_outcome_from_native(
     outcome: GovernedEntailment,
     blank_scope: BlankScopeMode,
-) -> Result<EntailmentQueryOutcome, JsError> {
+) -> Result<EntailmentQueryOutcome, JsValue> {
     match outcome {
         GovernedEntailment::Answered { outcome, report } => {
             let tripped = outcome.tripped().map(|inner| TrippedGovernor { inner });
@@ -2200,7 +2211,7 @@ pub(crate) fn entailment_query_outcome_from_native(
             complete: false,
             closure_stopped: true,
         }),
-        _ => Err(JsError::new("unsupported governed entailment outcome")),
+        _ => Err(JsError::new("unsupported governed entailment outcome").into()),
     }
 }
 
@@ -2219,7 +2230,7 @@ pub(crate) fn update_outcome_from_governed(outcome: &GovernedUpdateOutcome) -> U
 fn partial_answers_from_native(
     partial: PartialValue,
     blank_scope: BlankScopeMode,
-) -> Result<PartialAnswers, JsError> {
+) -> Result<PartialAnswers, JsValue> {
     let certainty = match partial {
         PartialValue::Certain(_) => "certain",
         PartialValue::AtMost(_) => "at-most",

@@ -153,10 +153,10 @@ fn answer(space: EmbeddingSpace, query: &str) -> Vec<(String, String)> {
     );
 
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}unrelated"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let o = builder.intern_iri(&format!("{EX}o"));
-    builder.push_quad(s, p, o, None);
+    let s = builder.intern_iri(&format!("{EX}unrelated")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let o = builder.intern_iri(&format!("{EX}o")).unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
     let dataset = builder.freeze().expect("freeze fixture");
 
     let env =

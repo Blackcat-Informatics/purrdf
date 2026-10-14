@@ -42,10 +42,10 @@ use blank_identity::blank_nodes;
 /// DEFAULT scope.
 fn blank_subject_dataset(label: &str) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank(label, BlankScope::DEFAULT);
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(s, p, o, None);
+    let s = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("dataset freezes")
 }
 
@@ -175,12 +175,12 @@ fn distinct_blank_nodes_never_conflate_on_egress() {
     let illegal = "a b";
     let image = "purrdfesc_a_000020b";
     let mut b = RdfDatasetBuilder::new();
-    let first = b.intern_blank(illegal, BlankScope::DEFAULT);
-    let second = b.intern_blank(image, BlankScope::DEFAULT);
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(first, p, o, None);
-    b.push_quad(second, p, o, None);
+    let first = b.intern_blank(illegal, BlankScope::DEFAULT).unwrap();
+    let second = b.intern_blank(image, BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(first, p, o, None).unwrap();
+    b.push_quad(second, p, o, None).unwrap();
     let ds = b.freeze().expect("dataset freezes");
     assert_eq!(blank_nodes(&ds).len(), 2, "two distinct nodes in the IR");
 
@@ -208,9 +208,9 @@ fn co_reference_survives_escaping() {
     // One illegally-labelled blank node used TWICE must stay one node after
     // the escape: `_:x p _:x` may not become two nodes.
     let mut b = RdfDatasetBuilder::new();
-    let node = b.intern_blank("a b", BlankScope::DEFAULT);
-    let p = b.intern_iri("https://example.org/p");
-    b.push_quad(node, p, node, None);
+    let node = b.intern_blank("a b", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    b.push_quad(node, p, node, None).unwrap();
     let ds = b.freeze().expect("dataset freezes");
 
     for format in NativeRdfFormat::all() {
@@ -272,11 +272,11 @@ fn the_dotted_family_stays_distinct_and_verbatim_on_the_wire() {
     // re-parses to three blank nodes — the class the old dot-doubling egress
     // silently merged into one.
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
     for label in ["a.b", "a..b", "a...b"] {
-        let s = b.intern_blank(label, BlankScope::DEFAULT);
-        b.push_quad(s, p, o, None);
+        let s = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     let ds = b.freeze().expect("dataset freezes");
     assert_eq!(blank_nodes(&ds).len(), 3, "three distinct nodes in the IR");
@@ -311,12 +311,12 @@ fn the_dotted_family_stays_distinct_and_verbatim_on_the_wire() {
 /// 2), plus one IRI object.
 fn dot_free_blank_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let alpha = b.intern_blank("alpha", BlankScope::DEFAULT);
-    let beta = b.intern_blank("beta", BlankScope(2));
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(alpha, p, beta, None);
-    b.push_quad(beta, p, o, None);
+    let alpha = b.intern_blank("alpha", BlankScope::DEFAULT).unwrap();
+    let beta = b.intern_blank("beta", BlankScope(2)).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(alpha, p, beta, None).unwrap();
+    b.push_quad(beta, p, o, None).unwrap();
     b.freeze().expect("dataset freezes")
 }
 
@@ -375,12 +375,12 @@ fn scoped_label_and_naive_qualified_twin_never_conflate() {
     // scoped pair is an envelope and the literal label passes through, so the
     // two spellings cannot meet.
     let mut b = RdfDatasetBuilder::new();
-    let scoped = b.intern_blank("a", BlankScope(1));
-    let naive_twin = b.intern_blank("a.s1", BlankScope::DEFAULT);
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(scoped, p, o, None);
-    b.push_quad(naive_twin, p, o, None);
+    let scoped = b.intern_blank("a", BlankScope(1)).unwrap();
+    let naive_twin = b.intern_blank("a.s1", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(scoped, p, o, None).unwrap();
+    b.push_quad(naive_twin, p, o, None).unwrap();
     let ds = b.freeze().expect("dataset freezes");
     assert_eq!(blank_nodes(&ds).len(), 2, "two distinct nodes in the IR");
 

@@ -91,7 +91,7 @@ fn build_page(anchors: &[&str], keep: impl Fn(usize) -> bool) -> Arc<RdfDataset>
     let mut b = RdfDatasetBuilder::new();
     let mut ids: Vec<TermId> = Vec::new();
     for name in TERM_NAMES {
-        ids.push(b.intern_iri(&format!("http://example.org/{name}")));
+        ids.push(b.intern_iri(&format!("http://example.org/{name}")).unwrap());
     }
     let id_of = |name: &str| {
         let index = TERM_NAMES
@@ -102,20 +102,22 @@ fn build_page(anchors: &[&str], keep: impl Fn(usize) -> bool) -> Arc<RdfDataset>
     };
     let (p, s1, s2, s3) = (id_of("p"), id_of("s1"), id_of("s2"), id_of("s3"));
     let triples = [
-        b.intern_triple(s1, p, s2),
-        b.intern_triple(s2, p, s3),
-        b.intern_triple(s3, p, s1),
+        b.intern_triple(s1, p, s2).unwrap(),
+        b.intern_triple(s2, p, s3).unwrap(),
+        b.intern_triple(s3, p, s1).unwrap(),
     ];
 
     for (index, (reifier, triple, graph)) in BINDINGS.iter().enumerate() {
         if !keep(index) {
             continue;
         }
-        b.push_reifier_in_graph(id_of(reifier), triples[*triple], graph.map(id_of));
+        b.push_reifier_in_graph(id_of(reifier), triples[*triple], graph.map(id_of))
+            .unwrap();
     }
     for anchor in anchors {
-        b.push_quad(id_of("not-a-reifier"), p, id_of(anchor), None);
-        b.push_annotation(id_of("rB"), p, id_of(anchor));
+        b.push_quad(id_of("not-a-reifier"), p, id_of(anchor), None)
+            .unwrap();
+        b.push_annotation(id_of("rB"), p, id_of(anchor)).unwrap();
     }
     b.freeze().expect("valid reifier fixture")
 }

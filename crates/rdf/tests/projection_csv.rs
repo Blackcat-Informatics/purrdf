@@ -14,16 +14,18 @@ const TYPE: &str = "http://example.org/type";
 #[test]
 fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/subject");
-    let target = builder.intern_iri("http://example.org/target");
-    let rdf_type = builder.intern_iri(TYPE);
-    let class = builder.intern_iri("http://example.org/Class");
-    let name = builder.intern_iri("http://example.org/name");
-    let literal = builder.intern_literal(RdfLiteral::simple("quoted, \"value\""));
-    let relates = builder.intern_iri("http://example.org/relates");
-    builder.push_quad(subject, rdf_type, class, None);
-    builder.push_quad(subject, name, literal, None);
-    builder.push_quad(subject, relates, target, None);
+    let subject = builder.intern_iri("http://example.org/subject").unwrap();
+    let target = builder.intern_iri("http://example.org/target").unwrap();
+    let rdf_type = builder.intern_iri(TYPE).unwrap();
+    let class = builder.intern_iri("http://example.org/Class").unwrap();
+    let name = builder.intern_iri("http://example.org/name").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral::simple("quoted, \"value\""))
+        .unwrap();
+    let relates = builder.intern_iri("http://example.org/relates").unwrap();
+    builder.push_quad(subject, rdf_type, class, None).unwrap();
+    builder.push_quad(subject, name, literal, None).unwrap();
+    builder.push_quad(subject, relates, target, None).unwrap();
     let dataset = builder.freeze().expect("dataset");
 
     let limits = ProjectionLimits::new(64, 1_000_000, 4_000_000, 6_000_000, 16).expect("limits");

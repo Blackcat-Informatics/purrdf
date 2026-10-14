@@ -1239,10 +1239,10 @@ mod tests {
         // (subject with exactly one predicate group, predicate with exactly one
         // object) at the smallest possible scale.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let (dict, bytes) = build_and_open(&dataset);
@@ -1309,17 +1309,17 @@ mod tests {
         // "s" has two predicates, each with two objects: exercises the Bp/Bo
         // mark-last boundary convention across a group with >1 member.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p1 = b.intern_iri("http://example.org/p1");
-        let p2 = b.intern_iri("http://example.org/p2");
-        let o1 = b.intern_iri("http://example.org/o1");
-        let o2 = b.intern_iri("http://example.org/o2");
-        let o3 = b.intern_iri("http://example.org/o3");
-        let o4 = b.intern_iri("http://example.org/o4");
-        b.push_quad(s, p1, o1, None);
-        b.push_quad(s, p1, o2, None);
-        b.push_quad(s, p2, o3, None);
-        b.push_quad(s, p2, o4, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p1 = b.intern_iri("http://example.org/p1").unwrap();
+        let p2 = b.intern_iri("http://example.org/p2").unwrap();
+        let o1 = b.intern_iri("http://example.org/o1").unwrap();
+        let o2 = b.intern_iri("http://example.org/o2").unwrap();
+        let o3 = b.intern_iri("http://example.org/o3").unwrap();
+        let o4 = b.intern_iri("http://example.org/o4").unwrap();
+        b.push_quad(s, p1, o1, None).unwrap();
+        b.push_quad(s, p1, o2, None).unwrap();
+        b.push_quad(s, p2, o3, None).unwrap();
+        b.push_quad(s, p2, o4, None).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let (dict, bytes) = build_and_open(&dataset);
@@ -1354,11 +1354,11 @@ mod tests {
         // The default-graph partition (0) must still exist and be queryable
         // (empty), while a named graph carries all the data.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        let g = b.intern_iri("http://example.org/g");
-        b.push_quad(s, p, o, Some(g));
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let g = b.intern_iri("http://example.org/g").unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let (dict, bytes) = build_and_open(&dataset);
@@ -1389,10 +1389,10 @@ mod tests {
     #[test]
     fn absent_unified_id_yields_no_rows() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let (dict, bytes) = build_and_open(&dataset);
@@ -1400,10 +1400,10 @@ mod tests {
 
         // A unified id from a SEPARATE dictionary/dataset addresses nothing here.
         let mut other = RdfDatasetBuilder::new();
-        let other_s = other.intern_iri("http://example.org/nowhere");
-        let other_p = other.intern_iri("http://example.org/p");
-        let other_o = other.intern_iri("http://example.org/o");
-        other.push_quad(other_s, other_p, other_o, None);
+        let other_s = other.intern_iri("http://example.org/nowhere").unwrap();
+        let other_p = other.intern_iri("http://example.org/p").unwrap();
+        let other_o = other.intern_iri("http://example.org/o").unwrap();
+        other.push_quad(other_s, other_p, other_o, None).unwrap();
         let other_dataset = other.freeze().expect("valid dataset");
         let other_dict =
             PackDict::open(&PackDict::encode(&other_dataset).to_bytes()).expect("opens");
@@ -1426,14 +1426,14 @@ mod tests {
     #[test]
     fn cardinality_upper_bound_never_undershoots_actual_rows() {
         let mut b = RdfDatasetBuilder::new();
-        let s1 = b.intern_iri("http://example.org/s1");
-        let s2 = b.intern_iri("http://example.org/s2");
-        let p = b.intern_iri("http://example.org/p");
-        let o1 = b.intern_iri("http://example.org/o1");
-        let o2 = b.intern_iri("http://example.org/o2");
-        b.push_quad(s1, p, o1, None);
-        b.push_quad(s1, p, o2, None);
-        b.push_quad(s2, p, o1, None);
+        let s1 = b.intern_iri("http://example.org/s1").unwrap();
+        let s2 = b.intern_iri("http://example.org/s2").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o1 = b.intern_iri("http://example.org/o1").unwrap();
+        let o2 = b.intern_iri("http://example.org/o2").unwrap();
+        b.push_quad(s1, p, o1, None).unwrap();
+        b.push_quad(s1, p, o2, None).unwrap();
+        b.push_quad(s2, p, o1, None).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let (dict, bytes) = build_and_open(&dataset);
@@ -1459,10 +1459,10 @@ mod tests {
     #[test]
     fn to_bytes_round_trips_via_from_bytes() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let dataset = b.freeze().expect("valid dataset");
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
         let encoded = Triples::encode(&dict, &dataset);
@@ -1517,10 +1517,10 @@ mod tests {
     #[test]
     fn from_bytes_rejects_truncated_input() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let dataset = b.freeze().expect("valid dataset");
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
         let bytes = Triples::encode(&dict, &dataset).to_bytes();
@@ -1568,26 +1568,26 @@ mod tests {
         // once. Every (local predicate, local object) pair of each partition is
         // compared with the merge, rows and order.
         let mut b = RdfDatasetBuilder::new();
-        let graph = b.intern_iri("http://example.org/g");
-        let dense = b.intern_iri("http://example.org/dense");
-        let hub = b.intern_iri("http://example.org/hub");
+        let graph = b.intern_iri("http://example.org/g").unwrap();
+        let dense = b.intern_iri("http://example.org/dense").unwrap();
+        let hub = b.intern_iri("http://example.org/hub").unwrap();
         let preds: Vec<_> = (0..9)
-            .map(|k| b.intern_iri(&format!("http://example.org/p{k}")))
+            .map(|k| b.intern_iri(&format!("http://example.org/p{k}")).unwrap())
             .collect();
         let objs: Vec<_> = (0..13)
-            .map(|k| b.intern_iri(&format!("http://example.org/o{k}")))
+            .map(|k| b.intern_iri(&format!("http://example.org/o{k}")).unwrap())
             .collect();
         for s in 0..300_usize {
-            let subject = b.intern_iri(&format!("http://example.org/s{s}"));
+            let subject = b.intern_iri(&format!("http://example.org/s{s}")).unwrap();
             let g = (s % 4 == 3).then_some(graph);
-            b.push_quad(subject, dense, objs[s % 13], g);
-            b.push_quad(subject, dense, hub, g);
-            b.push_quad(subject, preds[s % 9], hub, g);
+            b.push_quad(subject, dense, objs[s % 13], g).unwrap();
+            b.push_quad(subject, dense, hub, g).unwrap();
+            b.push_quad(subject, preds[s % 9], hub, g).unwrap();
             if s % 37 == 0 {
-                b.push_quad(subject, preds[s % 5], objs[s % 7], g);
+                b.push_quad(subject, preds[s % 5], objs[s % 7], g).unwrap();
             }
             if s % 101 == 0 {
-                b.push_quad(subject, preds[8], objs[12], g);
+                b.push_quad(subject, preds[8], objs[12], g).unwrap();
             }
         }
         let dataset = b.freeze().expect("valid dataset");

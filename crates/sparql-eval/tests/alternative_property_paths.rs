@@ -275,15 +275,15 @@ fn service_carriers_keep_zero_column_bags_and_distinct_star_counts() {
 #[test]
 fn named_graph_and_literal_or_quoted_endpoints_survive_service_roundtrips() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}s"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
-    let literal = builder.intern_literal(RdfLiteral::simple("value"));
-    let quoted = builder.intern_triple(s, p, literal);
-    for graph in [None, Some(builder.intern_iri(&format!("{EX}g")))] {
+    let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
+    let literal = builder.intern_literal(RdfLiteral::simple("value")).unwrap();
+    let quoted = builder.intern_triple(s, p, literal).unwrap();
+    for graph in [None, Some(builder.intern_iri(&format!("{EX}g")).unwrap())] {
         for predicate in [p, q] {
             for object in [literal, quoted] {
-                builder.push_quad(s, predicate, object, graph);
+                builder.push_quad(s, predicate, object, graph).unwrap();
             }
         }
     }

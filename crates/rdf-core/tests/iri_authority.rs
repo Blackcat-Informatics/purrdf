@@ -19,7 +19,7 @@ fn invalid_ip_literals_cannot_enter_either_rdf_dictionary() {
             "global dictionary admitted {iri}"
         );
         let mut builder = RdfDatasetBuilder::new();
-        builder.intern_iri(iri);
+        builder.intern_iri(iri).unwrap();
         assert!(
             builder.freeze().is_err(),
             "frozen dictionary admitted {iri}"
@@ -37,7 +37,7 @@ fn generic_ports_and_valid_ip_literals_remain_valid_rdf_identifiers() {
         let mut global = GlobalDictionary::new();
         global.intern_iri(iri).expect("generic authority syntax");
         let mut builder = RdfDatasetBuilder::new();
-        builder.intern_iri(iri);
+        builder.intern_iri(iri).unwrap();
         builder.freeze().expect("generic authority syntax");
     }
 }

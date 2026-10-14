@@ -155,12 +155,12 @@
 //!
 //! // 1. The data: a three-edge chain.
 //! let mut builder = RdfDatasetBuilder::new();
-//! let a = builder.intern_iri("http://example.org/a");
-//! let b = builder.intern_iri("http://example.org/b");
-//! let c = builder.intern_iri("http://example.org/c");
-//! let p = builder.intern_iri("http://example.org/p");
-//! builder.push_quad(a, p, b, None);
-//! builder.push_quad(b, p, c, None);
+//! let a = builder.intern_iri("http://example.org/a")?;
+//! let b = builder.intern_iri("http://example.org/b")?;
+//! let c = builder.intern_iri("http://example.org/c")?;
+//! let p = builder.intern_iri("http://example.org/p")?;
+//! builder.push_quad(a, p, b, None)?;
+//! builder.push_quad(b, p, c, None)?;
 //! let dataset = builder.freeze()?;
 //!
 //! // 2. The step, and the snapshot of it over THIS dataset (see the precondition above).
@@ -2342,10 +2342,16 @@ mod tests {
     fn dataset(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
-            let s = builder.intern_iri(&format!("http://example.org/{s}"));
-            let p = builder.intern_iri(&format!("http://example.org/{p}"));
-            let o = builder.intern_iri(&format!("http://example.org/{o}"));
-            builder.push_quad(s, p, o, None);
+            let s = builder
+                .intern_iri(&format!("http://example.org/{s}"))
+                .unwrap();
+            let p = builder
+                .intern_iri(&format!("http://example.org/{p}"))
+                .unwrap();
+            let o = builder
+                .intern_iri(&format!("http://example.org/{o}"))
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
         }
         builder.freeze().expect("freeze")
     }
@@ -2581,16 +2587,16 @@ mod tests {
     /// of DIRECTED predicates rather than of predicates.
     fn triple_term_graph() -> (Arc<RdfDataset>, Arc<PathGraph>, TermValue) {
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri("http://example.org/a");
-        let p = builder.intern_iri("http://example.org/p");
-        let q = builder.intern_iri("http://example.org/q");
-        let r = builder.intern_iri("http://example.org/r");
-        let x = builder.intern_iri("http://example.org/x");
-        let y = builder.intern_iri("http://example.org/y");
-        let z = builder.intern_iri("http://example.org/z");
-        let quoted = builder.intern_triple(x, r, y);
-        builder.push_quad(a, p, quoted, None);
-        builder.push_quad(z, q, quoted, None);
+        let a = builder.intern_iri("http://example.org/a").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let q = builder.intern_iri("http://example.org/q").unwrap();
+        let r = builder.intern_iri("http://example.org/r").unwrap();
+        let x = builder.intern_iri("http://example.org/x").unwrap();
+        let y = builder.intern_iri("http://example.org/y").unwrap();
+        let z = builder.intern_iri("http://example.org/z").unwrap();
+        let quoted = builder.intern_triple(x, r, y).unwrap();
+        builder.push_quad(a, p, quoted, None).unwrap();
+        builder.push_quad(z, q, quoted, None).unwrap();
         let data = builder.freeze().expect("freeze");
         let graph = snapshot(
             &data,
@@ -2812,14 +2818,14 @@ mod tests {
         // failure on which of them holds keys it on whether the IRI happens to appear
         // anywhere in the term table, which is an interning detail no host can predict.
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri("http://example.org/a");
-        let p = builder.intern_iri("http://example.org/p");
-        let q = builder.intern_iri("http://example.org/q");
-        let b = builder.intern_iri("http://example.org/b");
-        let g = builder.intern_iri("http://example.org/g");
-        builder.push_quad(a, p, b, None);
+        let a = builder.intern_iri("http://example.org/a").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let q = builder.intern_iri("http://example.org/q").unwrap();
+        let b = builder.intern_iri("http://example.org/b").unwrap();
+        let g = builder.intern_iri("http://example.org/g").unwrap();
+        builder.push_quad(a, p, b, None).unwrap();
         // `ex:q` IS interned, but only in a named graph the snapshot below does not read.
-        builder.push_quad(a, q, b, Some(g));
+        builder.push_quad(a, q, b, Some(g)).unwrap();
         let data = builder.freeze().expect("freeze");
 
         // `ex:nowhere` is not interned at all; `ex:q` is interned and out of scope.

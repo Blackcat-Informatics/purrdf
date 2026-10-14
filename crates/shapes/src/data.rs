@@ -246,8 +246,8 @@ impl ShaclData {
     /// Materialize the projected data graph at an explicit compatibility boundary.
     /// Native validation uses [`Self::core_view`] and does not require this copy.
     #[inline]
-    pub fn core(&self) -> &RdfDataset {
-        self.core.materialized()
+    pub fn core(&self) -> Result<&RdfDataset, crate::error::ShapesError> {
+        self.core.materialized().map(AsRef::as_ref)
     }
 
     /// Borrow the native validation carrier without materializing its dataset.
@@ -302,7 +302,7 @@ impl ShaclData {
     pub(crate) fn with_class_supplement(
         &self,
         supplement: &[(String, String)],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, crate::error::ShapesError> {
         let mut missing: Vec<&str> = supplement
             .iter()
             .flat_map(|(child, parent)| [child.as_str(), parent.as_str()])
@@ -315,11 +315,12 @@ impl ShaclData {
         } else {
             let mut terms = ::purrdf_rdf::RdfDatasetBuilder::new();
             for iri in missing {
-                terms.intern_iri(iri);
+                terms.intern_iri(iri)?;
             }
             let terms = terms
                 .freeze()
-                .map_err(|error| format!("the subClassOfInShapesGraph terms: {error}"))?;
+                .map_err(crate::error::ShapesError::from)
+                .map_err(|error| error.context("the subClassOfInShapesGraph terms: "))?;
             let limits = ::purrdf_rdf::ir::ViewLimits::default();
             let core = Arc::new(self.core.with_extra_terms(Arc::clone(&terms), limits)?);
             let sparql = if self.sparql_view_shares_core_ids() {
@@ -348,8 +349,8 @@ impl ShaclData {
     /// projections of the base graph and needs an owned `Arc` to seed each round's
     /// rebuilt dataset (the round driver freezes a fresh graph per round).
     #[inline]
-    pub fn core_arc(&self) -> Arc<RdfDataset> {
-        Arc::clone(self.core.materialized())
+    pub fn core_arc(&self) -> Result<Arc<RdfDataset>, crate::error::ShapesError> {
+        self.core.materialized().map(Arc::clone)
     }
 
     /// The combined dataset for native SHACL-SPARQL evaluation.
@@ -357,7 +358,7 @@ impl ShaclData {
     /// This compatibility accessor lazily materializes a view once. Native
     /// SHACL-SPARQL validation reads the retained carrier directly.
     #[inline]
-    pub fn sparql(&self) -> &Arc<RdfDataset> {
+    pub fn sparql(&self) -> Result<&Arc<RdfDataset>, crate::error::ShapesError> {
         self.sparql.materialized()
     }
 
@@ -504,10 +505,10 @@ mod tests {
     #[test]
     fn the_id_crossing_predicate_distinguishes_one_view_from_two() {
         let mut b = ::purrdf_rdf::RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let dataset = b.freeze().expect("freeze");
 
         // One dataset for both roles: the views are the same `Arc`, so a Core id
@@ -564,9 +565,9 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let stored = generated(seed);
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&stored.to_term_value());
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&stored.to_term_value()).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let dataset = builder.freeze().expect("a generated term freezes");
             for term in [stored, generated(seed + 5_000)] {
                 let id = resolve_id(&*dataset, &term);

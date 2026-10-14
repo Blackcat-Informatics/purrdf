@@ -3526,7 +3526,7 @@ mod tests {
 
     /// Parse shapes from a test dataset (shim over [`from_dataset`]).
     fn from_store(dataset: &Arc<RdfDataset>) -> Result<Shapes, String> {
-        from_dataset(dataset).map_err(String::from)
+        from_dataset(dataset).map_err(|error| error.to_string())
     }
 
     const PREFIXES: &str = r"

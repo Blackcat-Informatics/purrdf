@@ -87,7 +87,8 @@ pub(crate) fn is_fingerprint_id(id: &str) -> bool {
             && if kind == "table" {
                 rest == "hex-lower" || rest == "hex-upper"
             } else if kind == "rule" {
-                crate::rules::RULES.contains(&id)
+                id == crate::capacity::LOGICAL_CAPACITY_PANIC
+                    || crate::rules::RULES.contains(&id)
                     || crate::layout::RULES.contains(&id)
                     || crate::structure::RULES.contains(&id)
                     || crate::rules::DELEGATED_RULES.contains(&id)
@@ -107,6 +108,11 @@ fn fingerprint(kind: &str, form: &[String]) -> String {
         "{kind}:{}",
         purrdf_hash::hex::Lower(&digest.as_bytes()[..8])
     )
+}
+
+/// Literal-preserving source identity for an audited capacity invariant.
+pub(crate) fn literal_fingerprint(tokens: &TokenStream) -> String {
+    fingerprint("source", &[tokens.to_string()])
 }
 
 /// What the census learns from one body.

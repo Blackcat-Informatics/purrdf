@@ -70,10 +70,10 @@ mod tests {
     #[test]
     fn bundle_pairs_dataset_with_envelope() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let dataset = b.freeze().expect("valid");
 
         let bundle = GtsBundle::new(dataset, RdfEnvelope::default());

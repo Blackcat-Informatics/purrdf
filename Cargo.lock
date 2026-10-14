@@ -510,6 +510,7 @@ name = "purrdf-columnar"
 version = "3.0.1"
 dependencies = [
  "purrdf-core",
+ "purrdf-lex",
  "purrdf-stack",
  "purrdf-testkit",
  "structured-zstd",

@@ -72,7 +72,7 @@ fn every_report_states_the_shapes_graph_well_formed() {
         let report = report(constraint);
         assert_eq!(report.shapes_graph_well_formed, Some(true), "{constraint}");
         assert_eq!(report.conforms, conforms, "{constraint}");
-        let text = report.to_ntriples();
+        let text = report.to_ntriples().expect("report serializes");
         assert!(text.contains(WELL_FORMED_TRUE), "{constraint}: {text}");
         assert!(!text.contains(WELL_FORMED_FALSE), "{constraint}: {text}");
     }
@@ -195,7 +195,12 @@ fn lint_always_reports_an_empty_in_or_xone_list_by_rule_id() {
 fn a_report_no_validation_produced_states_nothing() {
     let report = ValidationReport::from_results(Vec::new(), ConformanceDisallows::default());
     assert_eq!(report.shapes_graph_well_formed, None);
-    assert!(!report.to_ntriples().contains("shapesGraphWellFormed"));
+    assert!(
+        !report
+            .to_ntriples()
+            .expect("report serializes")
+            .contains("shapesGraphWellFormed")
+    );
 }
 
 /// Maintainer decision, "Every run reports it": the approved W3C tests `core/node/in-002`
@@ -234,7 +239,11 @@ fn every_validation_reports_the_mandatory_diagnostic_beside_its_results() {
             let bound = prepared.bind_dataset(&data).expect("binds");
             let again = bound.validate().expect("validates");
             assert_eq!(again.diagnostics, whole.diagnostics, "{path}");
-            assert_eq!(again.to_ntriples(), whole.to_ntriples(), "{path}");
+            assert_eq!(
+                again.to_ntriples().expect("report serializes"),
+                whole.to_ntriples().expect("report serializes"),
+                "{path}"
+            );
             let focus = Term::NamedNode("http://example.com/ns#Instance".into());
             let candidate = bound
                 .validate_focus_nodes(&[focus])
@@ -272,8 +281,8 @@ fn every_validation_reports_the_mandatory_diagnostic_beside_its_results() {
         assert_eq!(flagged.results.len(), 1, "{path}");
         let without = flagged.clone().with_diagnostics(Vec::new());
         assert_eq!(
-            flagged.to_ntriples(),
-            without.to_ntriples(),
+            flagged.to_ntriples().expect("report serializes"),
+            without.to_ntriples().expect("report serializes"),
             "{path}: the report graph carries no diagnostic"
         );
 

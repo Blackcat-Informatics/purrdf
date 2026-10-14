@@ -13,13 +13,13 @@ use purrdf::{
 fn readme_quickstart_round_trips() {
     // Build a dataset in interned TermId space.
     let mut b = RdfDatasetBuilder::new();
-    let alice = b.intern_iri("https://example.org/alice");
-    let knows = b.intern_iri("http://xmlns.com/foaf/0.1/knows");
-    let bob = b.intern_iri("https://example.org/bob");
-    let name = b.intern_iri("http://xmlns.com/foaf/0.1/name");
-    let hi = b.intern_literal(RdfLiteral::simple("Alice"));
-    b.push_quad(alice, knows, bob, None);
-    b.push_quad(alice, name, hi, None);
+    let alice = b.intern_iri("https://example.org/alice").unwrap();
+    let knows = b.intern_iri("http://xmlns.com/foaf/0.1/knows").unwrap();
+    let bob = b.intern_iri("https://example.org/bob").unwrap();
+    let name = b.intern_iri("http://xmlns.com/foaf/0.1/name").unwrap();
+    let hi = b.intern_literal(RdfLiteral::simple("Alice")).unwrap();
+    b.push_quad(alice, knows, bob, None).unwrap();
+    b.push_quad(alice, name, hi, None).unwrap();
     let ds = b.freeze().expect("freeze");
 
     // Serialize to any native codec and parse back, losslessly.

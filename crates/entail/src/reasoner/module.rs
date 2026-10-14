@@ -232,14 +232,14 @@ impl ModuleExtraction {
 /// use purrdf_entail::reasoner::{ModuleMethod, extract_module};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let mammal = b.intern_iri("http://example.org/Mammal");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// let fish = b.intern_iri("http://example.org/Fish");
-/// b.push_quad(cat, sub, mammal, None);
-/// b.push_quad(mammal, sub, animal, None);
-/// b.push_quad(fish, sub, animal, None);
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let mammal = b.intern_iri("http://example.org/Mammal")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// let fish = b.intern_iri("http://example.org/Fish")?;
+/// b.push_quad(cat, sub, mammal, None)?;
+/// b.push_quad(mammal, sub, animal, None)?;
+/// b.push_quad(fish, sub, animal, None)?;
 /// let dataset = b.freeze().expect("freeze");
 ///
 /// // The ⊥-module for {Cat} follows the chain UP and leaves the sibling behind.
@@ -247,6 +247,7 @@ impl ModuleExtraction {
 /// let extracted = extract_module(&dataset, &seed, ModuleMethod::Bot).expect("extract");
 /// assert_eq!(extracted.axioms(), 2);
 /// assert!(extracted.conservative_keeps().is_empty());
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn extract_module(
     ds: &RdfDataset,
@@ -276,10 +277,10 @@ pub fn extract_module(
 /// use purrdf_entail::reasoner::{ModuleMethod, extract_module, extract_module_with_proofs};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// b.push_quad(cat, sub, animal, None);
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// b.push_quad(cat, sub, animal, None)?;
 /// let dataset = b.freeze().expect("freeze");
 /// let seed = [TermValue::iri("http://example.org/Cat")];
 ///
@@ -291,6 +292,7 @@ pub fn extract_module(
 /// let plain = extract_module(&dataset, &seed, ModuleMethod::Bot).expect("extract");
 /// assert!(plain.proof().is_none());
 /// assert_eq!(plain.axioms(), proved.axioms(), "the module is the same either way");
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn extract_module_with_proofs(
     ds: &RdfDataset,
@@ -375,14 +377,12 @@ fn extract(
     let mut b = RdfDatasetBuilder::new();
     for &index in &emitted {
         let (s, p, o) = triples[index];
-        let s = intern_into(&mut b, interner.value(s));
-        let p = intern_into(&mut b, interner.value(p));
-        let o = intern_into(&mut b, interner.value(o));
-        b.push_quad(s, p, o, None);
+        let s = intern_into(&mut b, interner.value(s))?;
+        let p = intern_into(&mut b, interner.value(p))?;
+        let o = intern_into(&mut b, interner.value(o))?;
+        b.push_quad(s, p, o, None)?;
     }
-    let module = b
-        .freeze()
-        .map_err(|e| EntailError::Build(format!("freeze locality module: {e}")))?;
+    let module = b.freeze().map_err(EntailError::from)?;
 
     let mut closed: Vec<TermValue> = state
         .sigma

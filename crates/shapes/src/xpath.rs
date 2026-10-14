@@ -345,30 +345,30 @@ pub(crate) fn query_error(error: RdfDiagnostic) -> String {
 /// An error travels with its root through the indexed chunk reduction.
 #[derive(Debug)]
 pub(crate) struct RootError {
-    message: String,
+    error: ShapesError,
     cause: Option<Box<Cause>>,
 }
 
-pub(crate) fn root_result<T>(result: Result<T, String>) -> Result<T, RootError> {
+pub(crate) fn root_result<T>(result: Result<T, ShapesError>) -> Result<T, RootError> {
     let cause = take_cause();
     match (result, cause) {
         (Ok(value), None) => Ok(value),
-        (Err(message), cause) => Err(RootError {
-            message,
+        (Err(error), cause) => Err(RootError {
+            error,
             cause: cause.map(Box::new),
         }),
         (Ok(_), Some(cause)) => Err(RootError {
-            message: cause.clone().into_public().to_string(),
+            error: cause.clone().into_public().to_string().into(),
             cause: Some(Box::new(cause)),
         }),
     }
 }
 
-pub(crate) fn restore_root_error(error: RootError) -> String {
+pub(crate) fn restore_root_error(error: RootError) -> ShapesError {
     if let Some(cause) = error.cause {
         capture(*cause);
     }
-    error.message
+    error.error
 }
 
 pub(crate) type LegacyCell = OnceLock<
@@ -866,9 +866,7 @@ pub fn run_rules(
     };
     Configuration::detached(profile, pattern_limits, owner)
         .run(|| crate::rules::run_rules(source, data, limits, knobs))
-        .map_err(|error| {
-            error.into_public(|message| XPathValidationError::Shapes(ShapesError::from(message)))
-        })
+        .map_err(|error| error.into_public(XPathValidationError::Shapes))
 }
 
 /// Evaluate one node expression under an explicit dated XPath law and finite limits.

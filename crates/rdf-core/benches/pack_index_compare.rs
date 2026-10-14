@@ -42,15 +42,15 @@ fn build_dataset(triples: &[(u64, u64, u64)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let subject_ids: Vec<_> = subjects
         .iter()
-        .map(|&value| builder.intern_iri(&numeric_iri('s', value)))
+        .map(|&value| builder.intern_iri(&numeric_iri('s', value)).unwrap())
         .collect();
     let predicate_ids: Vec<_> = predicates
         .iter()
-        .map(|&value| builder.intern_iri(&numeric_iri('p', value)))
+        .map(|&value| builder.intern_iri(&numeric_iri('p', value)).unwrap())
         .collect();
     let object_ids: Vec<_> = objects
         .iter()
-        .map(|&value| builder.intern_iri(&numeric_iri('o', value)))
+        .map(|&value| builder.intern_iri(&numeric_iri('o', value)).unwrap())
         .collect();
 
     for &(subject, predicate, object) in triples {
@@ -59,7 +59,7 @@ fn build_dataset(triples: &[(u64, u64, u64)]) -> Arc<RdfDataset> {
             .binary_search(&predicate)
             .expect("predicate present")];
         let object = object_ids[objects.binary_search(&object).expect("object present")];
-        builder.push_quad(subject, predicate, object, None);
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     builder.freeze().expect("reference dataset is valid")
 }

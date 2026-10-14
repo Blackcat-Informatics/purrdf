@@ -211,7 +211,9 @@ fn product_of(body: &str) -> Vec<u8> {
 /// The report's RDF form is the comparison surface, not a field-by-field walk: two
 /// restores are equal exactly when the graphs they produce are the same bytes.
 fn report_nt(prepared: &PreparedShapes, data: &Arc<RdfDataset>) -> String {
-    validate(prepared, data).to_ntriples()
+    validate(prepared, data)
+        .to_ntriples()
+        .expect("authored report emits")
 }
 
 /// Validate `data` with `prepared`.

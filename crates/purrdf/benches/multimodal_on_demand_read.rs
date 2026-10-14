@@ -175,11 +175,13 @@ fn profile_over(strata: &[String]) -> FusionProfile {
 /// The dataset built from `(subject, text)` rows, all under one predicate.
 fn build_dataset(rows: &[(String, String)], predicate: &str) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate_id = builder.intern_iri(predicate);
+    let predicate_id = builder.intern_iri(predicate).unwrap();
     for (subject, text) in rows {
-        let subject_id = builder.intern_iri(subject);
-        let object_id = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject_id, predicate_id, object_id, None);
+        let subject_id = builder.intern_iri(subject).unwrap();
+        let object_id = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder
+            .push_quad(subject_id, predicate_id, object_id, None)
+            .unwrap();
     }
     builder.freeze().expect("the fixture dataset is valid")
 }
@@ -368,17 +370,21 @@ fn text_pair(shape: Shape, rows: usize) -> TextPair {
 
 fn text_pair_dataset(pair: &TextPair) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let left_id = builder.intern_iri(&left_predicate());
+    let left_id = builder.intern_iri(&left_predicate()).unwrap();
     for (subject, text) in &pair.left_rows {
-        let subject_id = builder.intern_iri(subject);
-        let object_id = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject_id, left_id, object_id, None);
+        let subject_id = builder.intern_iri(subject).unwrap();
+        let object_id = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder
+            .push_quad(subject_id, left_id, object_id, None)
+            .unwrap();
     }
-    let right_id = builder.intern_iri(&right_predicate());
+    let right_id = builder.intern_iri(&right_predicate()).unwrap();
     for (subject, text) in &pair.right_rows {
-        let subject_id = builder.intern_iri(subject);
-        let object_id = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject_id, right_id, object_id, None);
+        let subject_id = builder.intern_iri(subject).unwrap();
+        let object_id = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder
+            .push_quad(subject_id, right_id, object_id, None)
+            .unwrap();
     }
     builder.freeze().expect("the fixture dataset is valid")
 }

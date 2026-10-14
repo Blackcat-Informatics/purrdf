@@ -278,7 +278,11 @@ pub(crate) fn matches(job: &Job, workspace: &Workspace, home_package: &str) -> V
     {
         found.extend(home_literal_matches(job, workspace, &variants));
     }
-    for hit in &workspace.rule_hits {
+    let (capacity_proved, _) = crate::capacity::proofs(&job.capacity_proofs, workspace);
+    for (index, hit) in workspace.rule_hits.iter().enumerate() {
+        if capacity_proved.contains(&index) {
+            continue;
+        }
         if job.forbidden.fingerprints.iter().any(|id| id == hit.rule) {
             found.push(Match {
                 symbol: hit.symbol.clone(),
@@ -710,22 +714,53 @@ pub(crate) fn index(workspace: &Workspace, ledger: &Ledger) -> Json {
             .with("jobs", jobs)
             .with("groups", groups)
             .with(
+                "capacity_sources",
+                workspace
+                    .capacity_sources
+                    .iter()
+                    .map(|(file, identity)| {
+                        Object::new().with("file", file).with("identity", identity)
+                    })
+                    .collect::<Json>(),
+            )
+            .with(
+                "capacity_constructor_identity",
+                crate::capacity::constructor_identity(workspace),
+            )
+            .with(
+                "capacity_constructor_sources",
+                workspace
+                    .capacity_constructors
+                    .iter()
+                    .filter(|file| file.starts_with("crates/rdf-core/"))
+                    .collect::<Json>(),
+            )
+            .with(
                 "grouped_variants",
                 variants
                     .iter()
                     .filter(|symbol| grouped.contains(symbol.as_str()))
                     .collect::<Json>(),
             )
-            .with("errors", workspace.errors.as_slice()),
+            .with("errors", source_errors(workspace, ledger)),
     );
     // Members by name, at every level: the document's published layout.
     document.sort_keys();
     document
 }
 
+/// Source and audited-proof failures shared by the JSON gate and native check.
+fn source_errors(workspace: &Workspace, ledger: &Ledger) -> Vec<String> {
+    let mut findings: Vec<String> = workspace.errors.clone();
+    for job in &ledger.jobs {
+        findings.extend(crate::capacity::proofs(&job.capacity_proofs, workspace).1);
+    }
+    findings
+}
+
 /// Every `--check` finding, one line each.
 pub(crate) fn check_findings(workspace: &Workspace, ledger: &Ledger) -> Vec<String> {
-    let mut findings: Vec<String> = workspace.errors.clone();
+    let mut findings = source_errors(workspace, ledger);
     let variants = variant_symbols(ledger, workspace, "isomorphic");
     let mut matched = vec![false; ledger.distinct.len()];
     for (kind, label, groups) in every_group(workspace) {

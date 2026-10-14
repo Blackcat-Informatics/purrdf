@@ -106,18 +106,22 @@ impl Image {
     fn freeze(&self) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         for name in &self.slots {
-            let graph = builder.intern_iri(&format!("{EX}{name}"));
-            builder.declare_named_graph(graph);
+            let graph = builder.intern_iri(&format!("{EX}{name}")).unwrap();
+            builder.declare_named_graph(graph).unwrap();
         }
         for row in &self.rows {
-            let subject = builder.intern_iri(&format!("{EX}{}", row.subject));
-            let predicate = builder.intern_iri(&format!("{EX}{}", row.predicate));
-            let object = builder.intern_iri(&format!("{EX}{}", row.object));
+            let subject = builder.intern_iri(&format!("{EX}{}", row.subject)).unwrap();
+            let predicate = builder
+                .intern_iri(&format!("{EX}{}", row.predicate))
+                .unwrap();
+            let object = builder.intern_iri(&format!("{EX}{}", row.object)).unwrap();
             let graph = row
                 .graph
                 .as_ref()
-                .map(|name| builder.intern_iri(&format!("{EX}{name}")));
-            builder.push_quad(subject, predicate, object, graph);
+                .map(|name| builder.intern_iri(&format!("{EX}{name}")).unwrap());
+            builder
+                .push_quad(subject, predicate, object, graph)
+                .unwrap();
         }
         builder.freeze().expect("fixture freezes")
     }
@@ -524,32 +528,38 @@ fn role_fixture(role: usize, state: State, default_row: bool, blank: bool) -> Ar
     assert!(!state.is_default(), "named role state");
     let named_rows = state == State::Populated;
     let mut builder = RdfDatasetBuilder::new();
-    let graph = builder.intern_iri(&format!("{EX}source"));
-    let subject = builder.intern_iri(&format!("{EX}subject"));
-    let predicate = builder.intern_iri(&format!("{EX}p"));
-    let object = builder.intern_iri(&format!("{EX}value"));
-    let reifier = builder.intern_iri(&format!("{EX}reifier"));
-    let triple = builder.intern_triple(subject, predicate, object);
+    let graph = builder.intern_iri(&format!("{EX}source")).unwrap();
+    let subject = builder.intern_iri(&format!("{EX}subject")).unwrap();
+    let predicate = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let object = builder.intern_iri(&format!("{EX}value")).unwrap();
+    let reifier = builder.intern_iri(&format!("{EX}reifier")).unwrap();
+    let triple = builder.intern_triple(subject, predicate, object).unwrap();
     if state == State::Empty {
-        builder.declare_named_graph(graph);
+        builder.declare_named_graph(graph).unwrap();
     }
     if blank {
-        let graph = builder.intern_blank("empty", BlankScope::DEFAULT);
-        builder.declare_named_graph(graph);
+        let graph = builder.intern_blank("empty", BlankScope::DEFAULT).unwrap();
+        builder.declare_named_graph(graph).unwrap();
     }
     match role {
         0 if named_rows => {
-            builder.push_quad(subject, predicate, object, Some(graph));
+            builder
+                .push_quad(subject, predicate, object, Some(graph))
+                .unwrap();
         }
         1 if named_rows => {
-            builder.push_reifier_in_graph(reifier, triple, Some(graph));
+            builder
+                .push_reifier_in_graph(reifier, triple, Some(graph))
+                .unwrap();
         }
         2 => {
             if default_row {
-                builder.push_reifier(reifier, triple);
+                builder.push_reifier(reifier, triple).unwrap();
             }
             if named_rows {
-                builder.push_annotation_in_graph(reifier, predicate, object, Some(graph));
+                builder
+                    .push_annotation_in_graph(reifier, predicate, object, Some(graph))
+                    .unwrap();
             }
         }
         0 | 1 => {}

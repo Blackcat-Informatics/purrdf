@@ -833,17 +833,19 @@ mod tests {
     #[test]
     fn independent_factors_are_priced_once_before_the_product() {
         let mut builder = RdfDatasetBuilder::new();
-        let p = builder.intern_iri("http://example.org/p");
-        let q = builder.intern_iri("http://example.org/q");
-        let r = builder.intern_iri("http://example.org/r");
-        let subject = builder.intern_iri("http://example.org/subject");
-        let object = builder.intern_iri("http://example.org/object");
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let q = builder.intern_iri("http://example.org/q").unwrap();
+        let r = builder.intern_iri("http://example.org/r").unwrap();
+        let subject = builder.intern_iri("http://example.org/subject").unwrap();
+        let object = builder.intern_iri("http://example.org/object").unwrap();
         for predicate in [q, r] {
-            builder.push_quad(subject, predicate, object, None);
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         for index in 0..2 {
-            let value = builder.intern_iri(&format!("http://example.org/value{index}"));
-            builder.push_quad(subject, p, value, None);
+            let value = builder
+                .intern_iri(&format!("http://example.org/value{index}"))
+                .unwrap();
+            builder.push_quad(subject, p, value, None).unwrap();
         }
         let dataset = builder.freeze().expect("independent fixture");
         let Query::Select { pattern: GraphPattern::ProjectStar { inner, .. }, .. } = SparqlParser::new().parse_query(
@@ -875,14 +877,14 @@ mod tests {
     #[test]
     fn canonical_hidden_match_keys_keep_positive_children_connected() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/subject");
-        let middle = builder.intern_iri("http://example.org/middle");
-        let object = builder.intern_iri("http://example.org/object");
-        let p = builder.intern_iri("http://example.org/p");
-        let q = builder.intern_iri("http://example.org/q");
-        builder.intern_iri("http://example.org/r");
-        builder.push_quad(subject, p, middle, None);
-        builder.push_quad(middle, q, object, None);
+        let subject = builder.intern_iri("http://example.org/subject").unwrap();
+        let middle = builder.intern_iri("http://example.org/middle").unwrap();
+        let object = builder.intern_iri("http://example.org/object").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let q = builder.intern_iri("http://example.org/q").unwrap();
+        builder.intern_iri("http://example.org/r").unwrap();
+        builder.push_quad(subject, p, middle, None).unwrap();
+        builder.push_quad(middle, q, object, None).unwrap();
         let dataset = builder.freeze().expect("hidden-key fixture");
         let Query::Select {
             pattern: GraphPattern::Project { inner, .. },
@@ -909,18 +911,20 @@ mod tests {
     #[test]
     fn retained_unit_orders_preserve_native_survey_provenance() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/subject");
-        let target = builder.intern_iri("http://example.org/target");
-        let p = builder.intern_iri("http://example.org/p");
-        let q = builder.intern_iri("http://example.org/q");
-        let r = builder.intern_iri("http://example.org/r");
-        let t = builder.intern_iri("http://example.org/t");
+        let subject = builder.intern_iri("http://example.org/subject").unwrap();
+        let target = builder.intern_iri("http://example.org/target").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let q = builder.intern_iri("http://example.org/q").unwrap();
+        let r = builder.intern_iri("http://example.org/r").unwrap();
+        let t = builder.intern_iri("http://example.org/t").unwrap();
         for predicate in [q, r, t] {
-            builder.push_quad(subject, predicate, target, None);
+            builder.push_quad(subject, predicate, target, None).unwrap();
         }
         for index in 0..16 {
-            let value = builder.intern_iri(&format!("http://example.org/value{index}"));
-            builder.push_quad(subject, p, value, None);
+            let value = builder
+                .intern_iri(&format!("http://example.org/value{index}"))
+                .unwrap();
+            builder.push_quad(subject, p, value, None).unwrap();
         }
         let dataset = builder.freeze().expect("unit-order fixture");
         let Query::Select { pattern: GraphPattern::ProjectStar { inner, .. }, .. } = SparqlParser::new().parse_query(
@@ -1028,16 +1032,18 @@ mod tests {
     #[test]
     fn seeded_union_prices_the_full_combined_header() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("http://example.org/a");
-        let object = builder.intern_iri("http://example.org/b");
-        let p = builder.intern_iri("http://example.org/p");
-        let q = builder.intern_iri("http://example.org/q");
-        let r = builder.intern_iri("http://example.org/r");
-        builder.push_quad(subject, p, object, None);
+        let subject = builder.intern_iri("http://example.org/a").unwrap();
+        let object = builder.intern_iri("http://example.org/b").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let q = builder.intern_iri("http://example.org/q").unwrap();
+        let r = builder.intern_iri("http://example.org/r").unwrap();
+        builder.push_quad(subject, p, object, None).unwrap();
         for index in 0..100 {
-            let value = builder.intern_iri(&format!("http://example.org/value{index}"));
-            builder.push_quad(subject, q, value, None);
-            builder.push_quad(object, r, value, None);
+            let value = builder
+                .intern_iri(&format!("http://example.org/value{index}"))
+                .unwrap();
+            builder.push_quad(subject, q, value, None).unwrap();
+            builder.push_quad(object, r, value, None).unwrap();
         }
         let dataset = builder.freeze().expect("the fixture is valid");
         let Query::Select { pattern: GraphPattern::ProjectStar { inner, .. }, .. } = SparqlParser::new().parse_query(

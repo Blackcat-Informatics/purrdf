@@ -1449,7 +1449,9 @@ mod tests {
     }
 
     fn term(i: u32) -> Option<SolutionTerm> {
-        Some(SolutionTerm::Existing(TermId::from_index(i)))
+        Some(SolutionTerm::Existing(
+            TermId::from_index(i).expect("stored term index is representable"),
+        ))
     }
 
     /// **The two lookup representations answer identically, on both sides of the
