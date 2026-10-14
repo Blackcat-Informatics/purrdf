@@ -316,11 +316,15 @@ mod tests {
             let pages = (0..count)
                 .map(|i| {
                     let mut builder = RdfDatasetBuilder::new();
-                    let s = builder.intern_iri(&format!("http://example.org/r{i}"));
-                    let o = builder.intern_value(&crate::term_fixture::triple_chain(1));
-                    let g = builder.intern_iri("http://example.org/g");
-                    builder.push_reifier(s, o);
-                    builder.push_reifier_in_graph(s, o, Some(g));
+                    let s = builder
+                        .intern_iri(&format!("http://example.org/r{i}"))
+                        .unwrap();
+                    let o = builder
+                        .intern_value(&crate::term_fixture::triple_chain(1))
+                        .unwrap();
+                    let g = builder.intern_iri("http://example.org/g").unwrap();
+                    builder.push_reifier(s, o).unwrap();
+                    builder.push_reifier_in_graph(s, o, Some(g)).unwrap();
                     builder.freeze().unwrap()
                 })
                 .collect();
@@ -406,13 +410,13 @@ mod tests {
     #[test]
     fn subject_bound_skips_when_term_never_a_subject_and_admits_when_it_is() {
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri("http://example.org/a");
-        let p = builder.intern_iri("http://example.org/p");
-        let b = builder.intern_iri("http://example.org/b");
-        builder.push_quad(a, p, b, None);
+        let a = builder.intern_iri("http://example.org/a").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let b = builder.intern_iri("http://example.org/b").unwrap();
+        builder.push_quad(a, p, b, None).unwrap();
         let page = builder.freeze().expect("page freezes");
         let mut dict = GlobalDictionary::new();
-        let translation = PageTranslation::build(&page, &mut dict);
+        let translation = PageTranslation::build(&page, &mut dict).unwrap();
 
         let global_b = translation.to_global(b);
         let global_a = translation.to_global(a);
@@ -436,13 +440,13 @@ mod tests {
     #[test]
     fn predicate_bound_skips_when_term_never_a_predicate_and_admits_when_it_is() {
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri("http://example.org/a");
-        let p = builder.intern_iri("http://example.org/p");
-        let b = builder.intern_iri("http://example.org/b");
-        builder.push_quad(a, p, b, None);
+        let a = builder.intern_iri("http://example.org/a").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let b = builder.intern_iri("http://example.org/b").unwrap();
+        builder.push_quad(a, p, b, None).unwrap();
         let page = builder.freeze().expect("page freezes");
         let mut dict = GlobalDictionary::new();
-        let translation = PageTranslation::build(&page, &mut dict);
+        let translation = PageTranslation::build(&page, &mut dict).unwrap();
 
         let global_a = translation.to_global(a);
         let global_p = translation.to_global(p);
@@ -465,13 +469,13 @@ mod tests {
     #[test]
     fn object_bound_skips_when_term_never_an_object_and_admits_when_it_is() {
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri("http://example.org/a");
-        let p = builder.intern_iri("http://example.org/p");
-        let b = builder.intern_iri("http://example.org/b");
-        builder.push_quad(a, p, b, None);
+        let a = builder.intern_iri("http://example.org/a").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let b = builder.intern_iri("http://example.org/b").unwrap();
+        builder.push_quad(a, p, b, None).unwrap();
         let page = builder.freeze().expect("page freezes");
         let mut dict = GlobalDictionary::new();
-        let translation = PageTranslation::build(&page, &mut dict);
+        let translation = PageTranslation::build(&page, &mut dict).unwrap();
 
         let global_p = translation.to_global(p);
         let global_b = translation.to_global(b);
@@ -501,14 +505,14 @@ mod tests {
         // name — so a role-agnostic term-table presence check (`to_local` alone)
         // would wrongly pass it. The page owns no row IN graph `g` itself.
         let mut builder = RdfDatasetBuilder::new();
-        let g = builder.intern_iri("http://example.org/g");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_iri("http://example.org/o");
-        let g1 = builder.intern_iri("http://example.org/g1");
-        builder.push_quad(g, p, o, Some(g1));
+        let g = builder.intern_iri("http://example.org/g").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder.intern_iri("http://example.org/o").unwrap();
+        let g1 = builder.intern_iri("http://example.org/g1").unwrap();
+        builder.push_quad(g, p, o, Some(g1)).unwrap();
         let page = builder.freeze().expect("page freezes");
         let mut dict = GlobalDictionary::new();
-        let translation = PageTranslation::build(&page, &mut dict);
+        let translation = PageTranslation::build(&page, &mut dict).unwrap();
 
         let global_g = translation.to_global(g);
         let global_g1 = translation.to_global(g1);
@@ -531,18 +535,18 @@ mod tests {
     #[test]
     fn named_graph_bound_skips_when_page_owns_no_rows_in_it_and_admits_when_it_does() {
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri("http://example.org/a");
-        let p = builder.intern_iri("http://example.org/p");
-        let c = builder.intern_iri("http://example.org/c");
-        let g1 = builder.intern_iri("http://example.org/g1");
-        let g2 = builder.intern_iri("http://example.org/g2");
-        builder.push_quad(a, p, c, Some(g1));
+        let a = builder.intern_iri("http://example.org/a").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let c = builder.intern_iri("http://example.org/c").unwrap();
+        let g1 = builder.intern_iri("http://example.org/g1").unwrap();
+        let g2 = builder.intern_iri("http://example.org/g2").unwrap();
+        builder.push_quad(a, p, c, Some(g1)).unwrap();
         // `g2` is declared (so it is present in the page's term table, and
         // `to_local` succeeds for it) but owns no rows at all.
-        builder.declare_named_graph(g2);
+        builder.declare_named_graph(g2).unwrap();
         let page = builder.freeze().expect("page freezes");
         let mut dict = GlobalDictionary::new();
-        let translation = PageTranslation::build(&page, &mut dict);
+        let translation = PageTranslation::build(&page, &mut dict).unwrap();
 
         let global_g1 = translation.to_global(g1);
         let global_g2 = translation.to_global(g2);
@@ -568,14 +572,14 @@ mod tests {
     fn default_graph_bound_skips_when_page_has_no_default_rows_and_admits_when_it_does() {
         // Page with only a named-graph row: no default-graph rows at all.
         let mut builder = RdfDatasetBuilder::new();
-        let x = builder.intern_iri("http://example.org/x");
-        let p = builder.intern_iri("http://example.org/p");
-        let y = builder.intern_iri("http://example.org/y");
-        let g = builder.intern_iri("http://example.org/g");
-        builder.push_quad(x, p, y, Some(g));
+        let x = builder.intern_iri("http://example.org/x").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let y = builder.intern_iri("http://example.org/y").unwrap();
+        let g = builder.intern_iri("http://example.org/g").unwrap();
+        builder.push_quad(x, p, y, Some(g)).unwrap();
         let page = builder.freeze().expect("page freezes");
         let mut dict = GlobalDictionary::new();
-        let translation = PageTranslation::build(&page, &mut dict);
+        let translation = PageTranslation::build(&page, &mut dict).unwrap();
 
         assert_eq!(
             admit_pattern(&translation, None, None, None, GraphMatch::Default),
@@ -584,13 +588,13 @@ mod tests {
 
         // Neighbouring valid case: a page with a genuine default-graph row admits.
         let mut builder2 = RdfDatasetBuilder::new();
-        let a = builder2.intern_iri("http://example.org/a");
-        let p2 = builder2.intern_iri("http://example.org/p");
-        let b = builder2.intern_iri("http://example.org/b");
-        builder2.push_quad(a, p2, b, None);
+        let a = builder2.intern_iri("http://example.org/a").unwrap();
+        let p2 = builder2.intern_iri("http://example.org/p").unwrap();
+        let b = builder2.intern_iri("http://example.org/b").unwrap();
+        builder2.push_quad(a, p2, b, None).unwrap();
         let page2 = builder2.freeze().expect("page freezes");
         let mut dict2 = GlobalDictionary::new();
-        let translation2 = PageTranslation::build(&page2, &mut dict2);
+        let translation2 = PageTranslation::build(&page2, &mut dict2).unwrap();
         assert!(matches!(
             admit_pattern(&translation2, None, None, None, GraphMatch::Default),
             PageAdmission::Admit(_)
@@ -605,14 +609,14 @@ mod tests {
         // A page with only a named-graph row and no default rows: on the graph
         // axis alone, `Any` must still admit — only the s/p/o axes may skip it.
         let mut builder = RdfDatasetBuilder::new();
-        let x = builder.intern_iri("http://example.org/x");
-        let p = builder.intern_iri("http://example.org/p");
-        let y = builder.intern_iri("http://example.org/y");
-        let g = builder.intern_iri("http://example.org/g");
-        builder.push_quad(x, p, y, Some(g));
+        let x = builder.intern_iri("http://example.org/x").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let y = builder.intern_iri("http://example.org/y").unwrap();
+        let g = builder.intern_iri("http://example.org/g").unwrap();
+        builder.push_quad(x, p, y, Some(g)).unwrap();
         let page = builder.freeze().expect("page freezes");
         let mut dict = GlobalDictionary::new();
-        let translation = PageTranslation::build(&page, &mut dict);
+        let translation = PageTranslation::build(&page, &mut dict).unwrap();
 
         assert!(matches!(
             admit_pattern(&translation, None, None, None, GraphMatch::Any),

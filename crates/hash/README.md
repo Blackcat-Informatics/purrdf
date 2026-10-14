@@ -613,7 +613,7 @@ source on every run.
 | `b"purrdf-retrieval/scoped-fused-row/v1"` | `(inline)` | `crates/retrieval/src/scope.rs` |
 | `b"purrdf-segmented-block-v1\0"` | `SEGMENTED_BLOCK_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-node-v1\0"` | `SEGMENTED_NODE_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
-| `b"purrdf-segmented-requests-v1\0"` | `SEGMENTED_REQUESTS_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
+| `b"purrdf-segmented-requests-v2\0"` | `SEGMENTED_REQUESTS_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-snapshot-v1\0"` | `SEGMENTED_SNAPSHOT_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-shapes/product/class-catalog"` | `CLASS_CATALOG_DOMAIN` | `crates/shapes/src/product/identity.rs` |
 | `b"purrdf-shapes/schema-compilation-key/v1"` | `SCHEMA_KEY_SALT` | `crates/shapes/src/json_schema.rs` |
@@ -625,7 +625,7 @@ source on every run.
 | `b"purrdf-sparql-eval/user-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/user_fn.rs` |
 | `b"purrdf-text-analysis-profile-v2\0"` | `PROFILE_DOMAIN` | `crates/text/src/profile.rs` |
 | `b"purrdf-text/dictionary-lattice/v2"` | `DICTIONARY_DOMAIN` | `crates/text/src/segment.rs` |
-| `b"purrdf-text/index/v3"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/index/v4"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
 | `b"purrdf-text/resolved-analyzer/v4\0"` | `ANALYZER_DOMAIN` | `crates/text/src/analysis.rs` |
 | `b"purrdf-text/source/v1"` | `SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
 | `b"purrdf-text/surface-generation/v1\0"` | `GENERATION_DOMAIN` | `crates/text/src/surface.rs` |

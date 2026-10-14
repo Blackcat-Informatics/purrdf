@@ -22,15 +22,17 @@ fn directional_constants_datatype_and_substitutions_agree_with_the_store() {
     ] {
         for explicit in [None, Some("http://example.org/overridden".to_owned())] {
             let mut builder = RdfDatasetBuilder::new();
-            let s = builder.intern_iri("http://example.org/s");
-            let p = builder.intern_iri("http://example.org/p");
-            let o = builder.intern_literal(RdfLiteral {
-                lexical_form: "claim".into(),
-                language: Some("AR".into()),
-                direction,
-                datatype: explicit,
-            });
-            builder.push_quad(s, p, o, None);
+            let s = builder.intern_iri("http://example.org/s").unwrap();
+            let p = builder.intern_iri("http://example.org/p").unwrap();
+            let o = builder
+                .intern_literal(RdfLiteral {
+                    lexical_form: "claim".into(),
+                    language: Some("AR".into()),
+                    direction,
+                    datatype: explicit,
+                })
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
             let dataset = builder.freeze().unwrap();
             let query = format!(
                 "ASK {{ <http://example.org/s> <http://example.org/p> \"claim\"@ar{suffix} . \

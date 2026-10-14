@@ -15,7 +15,7 @@ mod boxed;
 #[allow(unsafe_code)]
 pub mod shared;
 pub use boxed::{try_boxed, try_boxed_one};
-pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText};
+pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText, SharedView};
 mod text;
 pub use text::OwnedText;
 mod ordered;
@@ -29,6 +29,8 @@ use std::vec::Vec;
 /// A physical failure, separate from any native lexical language.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StorageError {
+    /// A logical address space refused the requested count before mutation.
+    Capacity(CapacityError),
     /// A concrete allocation layout or live-byte sum cannot be represented.
     SizeOverflow,
     /// A fallible allocation refused its already admitted destination.
@@ -41,16 +43,207 @@ pub enum StorageError {
 
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::SizeOverflow => "native allocation layout overflow",
-            Self::AllocationFailed => "native destination allocation failed",
-            Self::AdmissionFailed => "native workspace admission refused",
-            Self::FormattingFailed => "native diagnostic formatting failed",
-        })
+        match self {
+            Self::Capacity(error) => error.fmt(f),
+            Self::SizeOverflow => f.write_str("native allocation layout overflow"),
+            Self::AllocationFailed => f.write_str("native destination allocation failed"),
+            Self::AdmissionFailed => f.write_str("native workspace admission refused"),
+            Self::FormattingFailed => f.write_str("native diagnostic formatting failed"),
+        }
     }
 }
 
 impl std::error::Error for StorageError {}
+
+/// Exhaustion of one named logical space, distinct from physical allocation.
+/// Counts use u128 so even an attempted count beyond a u64 space is reported
+/// exactly, without wrapping or replacing the first failure with a layout error.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CapacityError {
+    /// The table or address space whose limit was reached.
+    pub space: CapacitySpace,
+    // Inline bytes preserve the full counts without imposing u128 alignment on
+    // every enclosing operational error. No allocation is needed on refusal.
+    attempted: [u8; 16],
+    limit: [u8; 16],
+}
+
+impl CapacityError {
+    /// Retain the exact requested count and limit of one logical address space.
+    #[must_use]
+    pub const fn new(space: CapacitySpace, attempted: u128, limit: u128) -> Self {
+        Self {
+            space,
+            attempted: attempted.to_le_bytes(),
+            limit: limit.to_le_bytes(),
+        }
+    }
+
+    /// The requested total count, including the attempted addition.
+    #[must_use]
+    pub const fn attempted(self) -> u128 {
+        u128::from_le_bytes(self.attempted)
+    }
+
+    /// The largest representable count in that space.
+    #[must_use]
+    pub const fn limit(self) -> u128 {
+        u128::from_le_bytes(self.limit)
+    }
+
+    /// Check the original producer's next count before it mutates storage.
+    ///
+    /// # Errors
+    /// Returns the named space, exact attempted count and actual address limit.
+    pub fn check(space: CapacitySpace, attempted: u128, limit: u128) -> Result<(), Self> {
+        if attempted > limit {
+            Err(Self::new(space, attempted, limit))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Mint one logical slot after checking its exclusive table count.
+    /// The requested count is computed in u128, even at a u64 boundary.
+    ///
+    /// # Errors
+    /// Returns the exact next count and the producer's actual representation limit.
+    pub fn slot(space: CapacitySpace, index: u64, limit: u64) -> Result<u64, Self> {
+        Self::check(space, u128::from(index) + 1, u128::from(limit))?;
+        Ok(index)
+    }
+}
+
+impl fmt::Debug for CapacityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CapacityError")
+            .field("space", &self.space)
+            .field("attempted", &self.attempted())
+            .field("limit", &self.limit())
+            .finish()
+    }
+}
+
+impl core::hash::Hash for CapacityError {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.space.hash(state);
+        self.attempted().hash(state);
+        self.limit().hash(state);
+    }
+}
+
+/// The native logical spaces whose producers report exact capacity failures.
+/// The closed identity is retained through certificates and language boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CapacitySpace {
+    /// Resident RDF terms.
+    LocalTerms,
+    /// Resident RDF text arena.
+    LocalTermBytes,
+    /// Global RDF terms.
+    GlobalTerms,
+    /// Global RDF text arena.
+    GlobalTermBytes,
+    /// Resident statement rows.
+    Quads,
+    /// Resident RDF reifier bindings.
+    Reifiers,
+    /// Resident RDF annotation rows.
+    Annotations,
+    /// Lazy statement permutation addresses.
+    Permutation,
+    /// Mutable delta terms.
+    DeltaTerms,
+    /// Dataset merge blank scopes.
+    BlankScopes,
+    /// Streaming import blank scopes.
+    ImportBlankScopes,
+    /// Provenance units.
+    ProvenanceUnits,
+    /// Provenance artifacts.
+    Artifacts,
+    /// Provenance origin sets.
+    OriginSets,
+    /// Datalog atomic terms.
+    DatalogTerms,
+    /// Datalog materialized rows.
+    DatalogRows,
+    /// Datalog relation partitions.
+    DatalogPartitions,
+    /// Datalog rules.
+    DatalogRules,
+    /// Datalog proof terms.
+    DatalogProofs,
+    /// Datalog compound nodes.
+    DatalogNodes,
+    /// Datalog metavariables.
+    DatalogMetas,
+    /// Datalog atomic symbols.
+    DatalogSymbols,
+}
+
+impl CapacitySpace {
+    const NAMES: [(Self, &'static str); 22] = [
+        (Self::LocalTerms, "rdf-local-terms"),
+        (Self::LocalTermBytes, "rdf-local-text"),
+        (Self::GlobalTerms, "rdf-global-terms"),
+        (Self::GlobalTermBytes, "rdf-global-text"),
+        (Self::Quads, "rdf-quads"),
+        (Self::Reifiers, "rdf-reifiers"),
+        (Self::Annotations, "rdf-annotations"),
+        (Self::Permutation, "rdf-permutation"),
+        (Self::DeltaTerms, "rdf-delta-terms"),
+        (Self::BlankScopes, "rdf-merge-blank-scopes"),
+        (Self::ImportBlankScopes, "rdf-import-blank-scopes"),
+        (Self::ProvenanceUnits, "rdf-provenance-units"),
+        (Self::Artifacts, "rdf-provenance-artifacts"),
+        (Self::OriginSets, "rdf-origin-sets"),
+        (Self::DatalogTerms, "datalog-terms"),
+        (Self::DatalogRows, "datalog-rows"),
+        (Self::DatalogPartitions, "datalog-partitions"),
+        (Self::DatalogRules, "datalog-rules"),
+        (Self::DatalogProofs, "datalog-proofs"),
+        (Self::DatalogNodes, "datalog-nodes"),
+        (Self::DatalogMetas, "datalog-metavariables"),
+        (Self::DatalogSymbols, "datalog-symbols"),
+    ];
+
+    /// Stable allocation-free identity for error publication.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        Self::NAMES[self as usize].1
+    }
+
+    /// Decode the same closed identity without allocating or leaking strings.
+    #[must_use]
+    pub fn of_name(name: &str) -> Option<Self> {
+        Self::NAMES
+            .iter()
+            .find_map(|&(space, spelling)| (spelling == name).then_some(space))
+    }
+}
+
+impl fmt::Display for CapacitySpace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for CapacityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} capacity exhausted: attempted {}, limit {}",
+            self.space,
+            self.attempted(),
+            self.limit()
+        )
+    }
+}
+
+impl std::error::Error for CapacityError {}
+
+crate::variant_from!(StorageError { Capacity(CapacityError) });
 
 /// A borrowed caller's live-capacity admission for one native computation.
 pub trait Admission {
@@ -727,6 +920,55 @@ impl<S: Admission + ?Sized> crate::text_out::TextOut for FormatSink<'_, '_, S> {
 #[cfg(test)]
 mod resumed_memory_regressions {
     use super::{Admission, Memory, StorageError};
+
+    #[test]
+    fn capacity_counts_preserve_full_width_numeric_identity_without_wide_alignment() {
+        use super::{CapacityError, CapacitySpace};
+        use core::hash::{Hash, Hasher};
+        use purrdf_hash::fixed::FixedHasher;
+
+        const MAXIMUM: CapacityError =
+            CapacityError::new(CapacitySpace::GlobalTerms, u128::MAX, u128::MAX);
+        const COUNT: u128 = MAXIMUM.attempted();
+        const LIMIT: u128 = MAXIMUM.limit();
+        assert_eq!((COUNT, LIMIT), (u128::MAX, u128::MAX));
+        assert!(align_of::<CapacityError>() <= align_of::<u64>());
+        for attempted in [0, u128::from(u64::MAX) + 1, u128::MAX] {
+            for limit in [0, u128::from(u64::MAX), u128::MAX] {
+                let error = CapacityError::new(CapacitySpace::GlobalTerms, attempted, limit);
+                assert_eq!(error.attempted(), attempted);
+                assert_eq!(error.limit(), limit);
+                assert_eq!(
+                    format!("{error:?}"),
+                    format!(
+                        "CapacityError {{ space: GlobalTerms, attempted: {attempted}, limit: {limit} }}"
+                    )
+                );
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "{} capacity exhausted: attempted {attempted}, limit {limit}",
+                        error.space
+                    )
+                );
+                let mut observed = FixedHasher::default();
+                error.hash(&mut observed);
+                let mut original = FixedHasher::default();
+                error.space.hash(&mut original);
+                attempted.hash(&mut original);
+                limit.hash(&mut original);
+                assert_eq!(observed.finish(), original.finish());
+                assert_eq!(
+                    CapacityError::check(error.space, attempted, limit),
+                    if attempted > limit {
+                        Err(error)
+                    } else {
+                        Ok(())
+                    }
+                );
+            }
+        }
+    }
 
     #[derive(Default)]
     struct OriginalGrant {

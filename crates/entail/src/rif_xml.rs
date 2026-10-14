@@ -679,10 +679,10 @@ mod tests {
     #[test]
     fn resolves_imports_and_merges_default_graph_facts() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("https://example.org/imported");
-        let predicate = builder.intern_iri("https://example.org/p");
-        let object = builder.intern_iri("https://example.org/o");
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri("https://example.org/imported").unwrap();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let object = builder.intern_iri("https://example.org/o").unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         let imported = builder.freeze().unwrap();
 
         let parsed = parse_rif_xml(RIF, None).unwrap();

@@ -10,7 +10,7 @@ use super::{BlankScope, RdfDataset, RdfDatasetBuilder};
 /// Distinct IRI anchors make every blank structurally unique without branching.
 pub(super) fn anchored_blanks(count: usize, reverse: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
     for ordinal in 0..count {
         let index = if reverse {
             count - ordinal - 1
@@ -18,16 +18,20 @@ pub(super) fn anchored_blanks(count: usize, reverse: bool) -> Arc<RdfDataset> {
             ordinal
         };
         let label = if reverse { count - index } else { index };
-        let blank = builder.intern_blank(
-            &format!("b{label}"),
-            if reverse {
-                BlankScope(19)
-            } else {
-                BlankScope::DEFAULT
-            },
-        );
-        let anchor = builder.intern_iri(&format!("http://example.org/anchor/{index:08}"));
-        builder.push_quad(blank, predicate, anchor, None);
+        let blank = builder
+            .intern_blank(
+                &format!("b{label}"),
+                if reverse {
+                    BlankScope(19)
+                } else {
+                    BlankScope::DEFAULT
+                },
+            )
+            .unwrap();
+        let anchor = builder
+            .intern_iri(&format!("http://example.org/anchor/{index:08}"))
+            .unwrap();
+        builder.push_quad(blank, predicate, anchor, None).unwrap();
     }
     builder.freeze().unwrap()
 }
@@ -35,19 +39,21 @@ pub(super) fn anchored_blanks(count: usize, reverse: bool) -> Arc<RdfDataset> {
 /// Identical leaf rows put every blank in one interchangeable refinement cell.
 pub(super) fn interchangeable_leaves(count: usize, reverse: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/leaf");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/leaf").unwrap();
     for ordinal in 0..count {
         let label = if reverse { count - ordinal } else { ordinal };
-        let blank = builder.intern_blank(
-            &format!("leaf{label}"),
-            if reverse {
-                BlankScope(19)
-            } else {
-                BlankScope::DEFAULT
-            },
-        );
-        builder.push_quad(blank, predicate, object, None);
+        let blank = builder
+            .intern_blank(
+                &format!("leaf{label}"),
+                if reverse {
+                    BlankScope(19)
+                } else {
+                    BlankScope::DEFAULT
+                },
+            )
+            .unwrap();
+        builder.push_quad(blank, predicate, object, None).unwrap();
     }
     builder.freeze().unwrap()
 }
@@ -55,13 +61,17 @@ pub(super) fn interchangeable_leaves(count: usize, reverse: bool) -> Arc<RdfData
 /// Disjoint directed triangles have component permutations without blank transpositions.
 pub(super) fn triangle_components(count: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/p");
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
     for component in 0..count {
         let blanks = [0, 1, 2].map(|index| {
-            builder.intern_blank(&format!("c{component}b{index}"), BlankScope::DEFAULT)
+            builder
+                .intern_blank(&format!("c{component}b{index}"), BlankScope::DEFAULT)
+                .unwrap()
         });
         for index in 0..3 {
-            builder.push_quad(blanks[index], predicate, blanks[(index + 1) % 3], None);
+            builder
+                .push_quad(blanks[index], predicate, blanks[(index + 1) % 3], None)
+                .unwrap();
         }
     }
     builder.freeze().unwrap()

@@ -165,7 +165,8 @@ export interface SparqlEndpointOptions {
  *   written (`detail` is the engine's message): `"native-sparql-query-parse"`,
  *   `"native-sparql-update-parse"`, `"native-sparql-unsupported"`,
  *   `"native-sparql-custom-function"`, `"native-sparql-quoted-triple-term-variable"`,
- *   `"native-sparql-host-stack-exhausted"`;
+ *   `"native-sparql-host-stack-exhausted"`,
+ *   `"native-sparql-evaluation-stack-exhausted"`;
  * - `403`, the host refused to contact a `SERVICE` endpoint or `LOAD` source the request
  *   named: `"native-sparql-service-denied"` and `"native-sparql-load-denied"` (the catalog
  *   withheld a capability), `"native-sparql-service-host-denied"` and
@@ -179,8 +180,7 @@ export interface SparqlEndpointOptions {
  *   `"native-sparql-service-unconfigured"` and `"native-sparql-load-no-resolver"` (no
  *   resolver reaches the named endpoint or source);
  * - `500`, the query's own evaluation failed (`detail` is the engine's message): any other
- *   engine code, such as `"native-sparql-query-eval"` or
- *   `"native-sparql-evaluation-stack-exhausted"`.
+ *   engine code, such as `"native-sparql-query-eval"`.
  *
  * A `403`, `502` or `500`-with-`correlationId` `detail` is a fixed description of its
  * code, never the engine's message, which would echo the catalog's policy or a

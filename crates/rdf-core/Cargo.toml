@@ -99,6 +99,10 @@ purrdf-alloc-probe = { workspace = true }
 purrdf-testkit = { workspace = true }
 
 [[test]]
+name = "segmented_stack"
+harness = false
+
+[[test]]
 name = "segmented"
 harness = false
 

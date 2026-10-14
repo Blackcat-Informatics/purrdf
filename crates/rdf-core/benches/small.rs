@@ -22,7 +22,7 @@ const LENGTHS: [(&str, usize); 2] = [("inline", 3), ("spilled", 32)];
 /// A deterministic id sequence of length `n`.
 fn ids(n: usize) -> Vec<TermId> {
     (0..n as u32)
-        .map(|i| TermId::from_index(i * 7 + 1))
+        .map(|i| TermId::from_index(i * 7 + 1).expect("stored term index is representable"))
         .collect()
 }
 

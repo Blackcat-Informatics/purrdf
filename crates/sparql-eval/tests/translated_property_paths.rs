@@ -31,18 +31,18 @@ const CELL_CEILING: u64 = 4_096;
 /// Independent typed endpoints, each linked through its own two-predicate chain.
 fn typed_pairs() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(TYPE);
-    let class = builder.intern_iri(&format!("{EX}Node"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
+    let rdf_type = builder.intern_iri(TYPE).unwrap();
+    let class = builder.intern_iri(&format!("{EX}Node")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
     for index in 0..PAIRS {
-        let x = builder.intern_iri(&format!("{EX}x{index}"));
-        let middle = builder.intern_iri(&format!("{EX}middle{index}"));
-        let y = builder.intern_iri(&format!("{EX}y{index}"));
-        builder.push_quad(x, rdf_type, class, None);
-        builder.push_quad(y, rdf_type, class, None);
-        builder.push_quad(x, p, middle, None);
-        builder.push_quad(middle, q, y, None);
+        let x = builder.intern_iri(&format!("{EX}x{index}")).unwrap();
+        let middle = builder.intern_iri(&format!("{EX}middle{index}")).unwrap();
+        let y = builder.intern_iri(&format!("{EX}y{index}")).unwrap();
+        builder.push_quad(x, rdf_type, class, None).unwrap();
+        builder.push_quad(y, rdf_type, class, None).unwrap();
+        builder.push_quad(x, p, middle, None).unwrap();
+        builder.push_quad(middle, q, y, None).unwrap();
     }
     builder.freeze().expect("typed pairs freeze")
 }
@@ -239,13 +239,15 @@ fn inverse_groups_reverse_both_step_order_and_directions() {
 #[test]
 fn an_inverse_join_witness_can_be_a_literal() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}s"));
-    let o = builder.intern_iri(&format!("{EX}o"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
-    let witness = builder.intern_literal(RdfLiteral::simple("shared value"));
-    builder.push_quad(s, p, witness, None);
-    builder.push_quad(o, q, witness, None);
+    let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let o = builder.intern_iri(&format!("{EX}o")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
+    let witness = builder
+        .intern_literal(RdfLiteral::simple("shared value"))
+        .unwrap();
+    builder.push_quad(s, p, witness, None).unwrap();
+    builder.push_quad(o, q, witness, None).unwrap();
     let dataset = builder.freeze().expect("literal witness fixture");
     let result = run_prefixed(&dataset, PREFIX, "SELECT * WHERE { ?s ex:p/^ex:q ?o }");
     let (variables, rows) = solutions(result);
@@ -258,21 +260,30 @@ fn an_inverse_join_witness_can_be_a_literal() {
 #[test]
 fn an_inverse_join_witness_can_be_an_rdf12_triple_term() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}s"));
-    let o = builder.intern_iri(&format!("{EX}o"));
-    let unrelated = builder.intern_iri(&format!("{EX}unrelated"));
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
-    let quoted_subject = builder.intern_iri(&format!("{EX}quotedSubject"));
-    let quoted_predicate = builder.intern_iri(&format!("{EX}quotedPredicate"));
-    let quoted_object = builder.intern_literal(RdfLiteral::simple("shared value"));
-    let witness = builder.intern_triple(quoted_subject, quoted_predicate, quoted_object);
-    let different_object = builder.intern_literal(RdfLiteral::simple("different value"));
-    let different_witness =
-        builder.intern_triple(quoted_subject, quoted_predicate, different_object);
-    builder.push_quad(s, p, witness, None);
-    builder.push_quad(o, q, witness, None);
-    builder.push_quad(unrelated, q, different_witness, None);
+    let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+    let o = builder.intern_iri(&format!("{EX}o")).unwrap();
+    let unrelated = builder.intern_iri(&format!("{EX}unrelated")).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
+    let quoted_subject = builder.intern_iri(&format!("{EX}quotedSubject")).unwrap();
+    let quoted_predicate = builder.intern_iri(&format!("{EX}quotedPredicate")).unwrap();
+    let quoted_object = builder
+        .intern_literal(RdfLiteral::simple("shared value"))
+        .unwrap();
+    let witness = builder
+        .intern_triple(quoted_subject, quoted_predicate, quoted_object)
+        .unwrap();
+    let different_object = builder
+        .intern_literal(RdfLiteral::simple("different value"))
+        .unwrap();
+    let different_witness = builder
+        .intern_triple(quoted_subject, quoted_predicate, different_object)
+        .unwrap();
+    builder.push_quad(s, p, witness, None).unwrap();
+    builder.push_quad(o, q, witness, None).unwrap();
+    builder
+        .push_quad(unrelated, q, different_witness, None)
+        .unwrap();
     let dataset = builder.freeze().expect("RDF 1.2 witness fixture");
 
     let result = run_prefixed(&dataset, PREFIX, "SELECT * WHERE { ?s ex:p/^ex:q ?o }");
@@ -347,12 +358,12 @@ fn graph_scope_and_service_forwarding_keep_the_same_solution_bags() {
         (Some("g1"), "first"),
         (Some("g2"), "second"),
     ] {
-        let graph = graph.map(|name| builder.intern_iri(&format!("{EX}{name}")));
+        let graph = graph.map(|name| builder.intern_iri(&format!("{EX}{name}")).unwrap());
         for (s, p, o) in [("s", "p", "middle"), ("middle", "q", end)] {
-            let s = builder.intern_iri(&format!("{EX}{s}"));
-            let p = builder.intern_iri(&format!("{EX}{p}"));
-            let o = builder.intern_iri(&format!("{EX}{o}"));
-            builder.push_quad(s, p, o, graph);
+            let s = builder.intern_iri(&format!("{EX}{s}")).unwrap();
+            let p = builder.intern_iri(&format!("{EX}{p}")).unwrap();
+            let o = builder.intern_iri(&format!("{EX}{o}")).unwrap();
+            builder.push_quad(s, p, o, graph).unwrap();
         }
     }
     let dataset = builder.freeze().expect("scoped chains freeze");

@@ -575,6 +575,7 @@ fn triple_is_ground_native<S: purrdf_lex::allocation::Admission + ?Sized>(
 
 fn call_storage(error: purrdf_lex::allocation::StorageError) -> EvalError {
     match error {
+        purrdf_lex::allocation::StorageError::Capacity(error) => EvalError::Capacity(error),
         purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
         purrdf_lex::allocation::StorageError::AllocationFailed => EvalError::AllocationFailed {
             construct: "property-function producer",
@@ -2180,7 +2181,7 @@ impl<'q> CallReadShape<'q> {
                 if read
                     .operators
                     .iter()
-                    .any(|operator| matches!(operator, GraphPattern::Project { .. }))
+                    .any(|operator| operator.projected_names().is_some())
                 {
                     Ok(read)
                 } else {
@@ -2763,7 +2764,8 @@ impl<'q> ShapeWalk<'q> {
                     }),
                 ));
             }
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 // A sub-`SELECT` is its own scope: the frames around it inject into it
                 // only the variables it projects, which is how the planner reads it
                 // too. Those it carries in from the scope around, which a call inside
@@ -3215,7 +3217,7 @@ enum WalkFrame<'q> {
 enum Resume<'q> {
     Project {
         pattern: &'q GraphPattern,
-        variables: &'q [Variable],
+        variables: purrdf_sparql_algebra::ProjectionNames<'q>,
         outer: CallContext<'q>,
         outer_frame: usize,
         outer_graphs: Vec<NamedNodePattern>,
@@ -3774,9 +3776,10 @@ pub(crate) fn open_call_cursor(
                 let slot = lookup(&visible, source);
                 call_push(&mut visible, (variable, slot), &mut memory)?;
             }
-            GraphPattern::Project { variables, .. } => {
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                let variables = operator.projected_names().expect("projection names");
                 projection.clear();
-                for variable in variables {
+                for variable in variables.iter() {
                     call_push(
                         &mut projection,
                         (variable, lookup(&visible, variable)),
@@ -3969,7 +3972,7 @@ impl CallCursor {
     }
 
     /// The work the relation has reported so far, summed over every pull
-    /// ([`PfCursor::take_work`]).
+    /// ([`crate::property_fn::PfCursor::take_work`]).
     #[must_use]
     pub const fn work(&self) -> u64 {
         self.work
@@ -4191,7 +4194,7 @@ impl CallCursor {
                             )?);
                         }
                         let linked = link.as_mut().expect("the admitted link was initialized");
-                        if linked.ebv(&row, schema, ctx)? != Some(true) {
+                        if linked.ebv(None, &row, schema, ctx)? != Some(true) {
                             continue 'pull;
                         }
                     }
@@ -4491,16 +4494,18 @@ mod tests {
     /// `ex:d1 ex:kind "report"`.
     fn documents() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let section = b.intern_iri(&format!("{EX}section"));
-        let kind = b.intern_iri(&format!("{EX}kind"));
-        let d1 = b.intern_iri(&format!("{EX}d1"));
-        let d2 = b.intern_iri(&format!("{EX}d2"));
-        let intro = b.intern_iri(&format!("{EX}intro"));
-        let appendix = b.intern_iri(&format!("{EX}appendix"));
-        b.push_quad(d1, section, intro, None);
-        b.push_quad(d2, section, appendix, None);
-        let report = b.intern_literal(RdfLiteral::simple("report".to_owned()));
-        b.push_quad(d1, kind, report, None);
+        let section = b.intern_iri(&format!("{EX}section")).unwrap();
+        let kind = b.intern_iri(&format!("{EX}kind")).unwrap();
+        let d1 = b.intern_iri(&format!("{EX}d1")).unwrap();
+        let d2 = b.intern_iri(&format!("{EX}d2")).unwrap();
+        let intro = b.intern_iri(&format!("{EX}intro")).unwrap();
+        let appendix = b.intern_iri(&format!("{EX}appendix")).unwrap();
+        b.push_quad(d1, section, intro, None).unwrap();
+        b.push_quad(d2, section, appendix, None).unwrap();
+        let report = b
+            .intern_literal(RdfLiteral::simple("report".to_owned()))
+            .unwrap();
+        b.push_quad(d1, kind, report, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -6761,7 +6766,8 @@ mod walk_tests {
                         }),
                     )
                 }
-                GraphPattern::Project { inner, variables } => {
+                GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                    let variables = pattern.projected_names().expect("projection names");
                     let mut carried: Vec<Variable> = Vec::new();
                     for name in self
                         .context

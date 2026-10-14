@@ -645,27 +645,33 @@ fn build_dataset(conforming: usize, violating: usize) -> Arc<RdfDataset> {
 /// that measures all four surfaces rather than three.
 fn build_dataset_with_types(conforming: usize, violating: usize, types: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let focus_class = builder.intern_iri(&format!("{NS}Focus"));
-    let name = builder.intern_iri(&format!("{NS}name"));
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let focus_class = builder.intern_iri(&format!("{NS}Focus")).unwrap();
+    let name = builder.intern_iri(&format!("{NS}name")).unwrap();
 
     for index in 0..conforming {
-        let focus = builder.intern_iri(&format!("{NS}c{index}"));
+        let focus = builder.intern_iri(&format!("{NS}c{index}")).unwrap();
         if types {
-            builder.push_quad(focus, rdf_type, focus_class, None);
+            builder
+                .push_quad(focus, rdf_type, focus_class, None)
+                .unwrap();
         }
         for label in [format!("item-{index}"), format!("item-alt-{index}")] {
-            let literal = builder.intern_literal(RdfLiteral::simple(label));
-            builder.push_quad(focus, name, literal, None);
+            let literal = builder.intern_literal(RdfLiteral::simple(label)).unwrap();
+            builder.push_quad(focus, name, literal, None).unwrap();
         }
     }
     for index in 0..violating {
-        let focus = builder.intern_iri(&format!("{NS}v{index}"));
+        let focus = builder.intern_iri(&format!("{NS}v{index}")).unwrap();
         if types {
-            builder.push_quad(focus, rdf_type, focus_class, None);
+            builder
+                .push_quad(focus, rdf_type, focus_class, None)
+                .unwrap();
         }
-        let iri_value = builder.intern_iri(&format!("{NS}notALiteral{index}"));
-        builder.push_quad(focus, name, iri_value, None);
+        let iri_value = builder
+            .intern_iri(&format!("{NS}notALiteral{index}"))
+            .unwrap();
+        builder.push_quad(focus, name, iri_value, None).unwrap();
     }
     builder
         .freeze()

@@ -150,7 +150,7 @@ impl RowBounds {
 ///
 /// # Emission order is `(?so1, ?so2)` ascending, and that is the contract
 ///
-/// Rows are sorted lexicographically on the pair, in [`TermValue`]'s own total
+/// Rows are sorted lexicographically on the pair, in [`purrdf_core::TermValue`]'s own total
 /// order, and deduplicated. The engine preserves that order verbatim into the
 /// query's answer, so it is part of this relation's public behaviour rather than
 /// an implementation detail.
@@ -734,17 +734,21 @@ mod tests {
     /// Build a dataset from `rows`, placing every quad in `graph`.
     fn dataset_in(rows: &[Row], graph: Option<&str>) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let graph = graph.map(|name| builder.intern_iri(name));
+        let graph = graph.map(|name| builder.intern_iri(name).unwrap());
         for entry in rows {
-            let s = builder.intern_iri(&format!("http://example.org/{}", entry.subject));
-            let p = builder.intern_iri(&entry.predicate);
+            let s = builder
+                .intern_iri(&format!("http://example.org/{}", entry.subject))
+                .unwrap();
+            let p = builder.intern_iri(&entry.predicate).unwrap();
             let o = match &entry.object {
-                Obj::Node(local) => builder.intern_iri(&format!("http://example.org/{local}")),
-                Obj::Lit(lexical, datatype) => {
-                    builder.intern_literal(RdfLiteral::typed(lexical, datatype))
-                }
+                Obj::Node(local) => builder
+                    .intern_iri(&format!("http://example.org/{local}"))
+                    .unwrap(),
+                Obj::Lit(lexical, datatype) => builder
+                    .intern_literal(RdfLiteral::typed(lexical, datatype))
+                    .unwrap(),
             };
-            builder.push_quad(s, p, o, graph);
+            builder.push_quad(s, p, o, graph).unwrap();
         }
         builder.freeze().expect("a well-formed fixture")
     }

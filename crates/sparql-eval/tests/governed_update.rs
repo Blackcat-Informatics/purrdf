@@ -44,16 +44,20 @@ const PREFIX: &str = "PREFIX ex: <http://example.org/>\n";
 /// something to move around.
 fn fixture() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri("http://example.org/p");
+    let p = builder.intern_iri("http://example.org/p").unwrap();
     for index in 0..EDGES {
-        let s = builder.intern_iri(&format!("http://example.org/s{index}"));
-        let o = builder.intern_iri(&format!("http://example.org/o{index}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        let o = builder
+            .intern_iri(&format!("http://example.org/o{index}"))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
-    let g = builder.intern_iri("http://example.org/g");
-    let gs = builder.intern_iri("http://example.org/gs");
-    let go = builder.intern_iri("http://example.org/go");
-    builder.push_quad(gs, p, go, Some(g));
+    let g = builder.intern_iri("http://example.org/g").unwrap();
+    let gs = builder.intern_iri("http://example.org/gs").unwrap();
+    let go = builder.intern_iri("http://example.org/go").unwrap();
+    builder.push_quad(gs, p, go, Some(g)).unwrap();
     builder.freeze().expect("freeze fixture")
 }
 
@@ -86,8 +90,10 @@ fn complete_store_image(dataset: &Arc<RdfDataset>) -> (String, Vec<String>) {
 fn empty_graph_fixture() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for index in 0..EDGES {
-        let graph = builder.intern_iri(&format!("http://example.org/empty{index}"));
-        builder.declare_named_graph(graph);
+        let graph = builder
+            .intern_iri(&format!("http://example.org/empty{index}"))
+            .unwrap();
+        builder.declare_named_graph(graph).unwrap();
     }
     let dataset = builder.freeze().expect("empty graph declarations");
     assert_eq!(dataset.named_graphs().count(), EDGES);
@@ -383,10 +389,10 @@ struct CountingResolver {
 impl CountingResolver {
     fn new() -> Arc<Self> {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri("http://example.org/loaded");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_iri("http://example.org/value");
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri("http://example.org/loaded").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder.intern_iri("http://example.org/value").unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
         Arc::new(Self {
             calls: AtomicUsize::new(0),
             document: builder.freeze().expect("freeze the loadable document"),

@@ -1517,38 +1517,56 @@ mod tests {
         let mut builder = RdfDatasetBuilder::new();
         // Descending IRIs, so id order is the reverse of canonical order.
         for local in ["z", "y", "x", "c", "b", "a"] {
-            builder.intern_iri(&format!("http://example.org/{local}"));
+            builder
+                .intern_iri(&format!("http://example.org/{local}"))
+                .unwrap();
         }
         // Blank nodes, also descending, including a NON-DEFAULT scope whose
         // rendered label is the `purrdfesc` envelope rather than the raw label.
-        builder.intern_blank("zeta", BlankScope::DEFAULT);
-        builder.intern_blank("alpha", BlankScope::DEFAULT);
-        builder.intern_blank("scoped", BlankScope(7));
-        builder.intern_blank("purrdfesc_looks_like_an_envelope", BlankScope::DEFAULT);
-        builder.intern_blank("needs. escaping/é", BlankScope(2));
+        builder.intern_blank("zeta", BlankScope::DEFAULT).unwrap();
+        builder.intern_blank("alpha", BlankScope::DEFAULT).unwrap();
+        builder.intern_blank("scoped", BlankScope(7)).unwrap();
+        builder
+            .intern_blank("purrdfesc_looks_like_an_envelope", BlankScope::DEFAULT)
+            .unwrap();
+        builder
+            .intern_blank("needs. escaping/é", BlankScope(2))
+            .unwrap();
         // Literals of every rendered shape.
-        builder.intern_literal(RdfLiteral::simple("zzz"));
-        builder.intern_literal(RdfLiteral::simple(""));
-        builder.intern_literal(RdfLiteral::simple("a\"b\\c\n\r\t\u{0000}\u{001f}"));
-        builder.intern_literal(RdfLiteral::simple("é🐈"));
-        builder.intern_literal(RdfLiteral::simple("\u{8}\u{c}\u{7f}\u{85}"));
-        builder.intern_literal(RdfLiteral::typed(
-            "42",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.intern_literal(RdfLiteral::language_tagged("bonjour", "fr"));
-        builder.intern_literal(RdfLiteral::language_tagged("hello", "en"));
+        builder.intern_literal(RdfLiteral::simple("zzz")).unwrap();
+        builder.intern_literal(RdfLiteral::simple("")).unwrap();
+        builder
+            .intern_literal(RdfLiteral::simple("a\"b\\c\n\r\t\u{0000}\u{001f}"))
+            .unwrap();
+        builder.intern_literal(RdfLiteral::simple("é🐈")).unwrap();
+        builder
+            .intern_literal(RdfLiteral::simple("\u{8}\u{c}\u{7f}\u{85}"))
+            .unwrap();
+        builder
+            .intern_literal(RdfLiteral::typed(
+                "42",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        builder
+            .intern_literal(RdfLiteral::language_tagged("bonjour", "fr"))
+            .unwrap();
+        builder
+            .intern_literal(RdfLiteral::language_tagged("hello", "en"))
+            .unwrap();
         // A quoted triple, and a triple nesting it.
-        let s = builder.intern_iri("http://example.org/a");
-        let p = builder.intern_iri("http://example.org/p");
-        let o = builder.intern_literal(RdfLiteral::simple("quoted\nvalue"));
-        let inner = builder.intern_triple(s, p, o);
+        let s = builder.intern_iri("http://example.org/a").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::simple("quoted\nvalue"))
+            .unwrap();
+        let inner = builder.intern_triple(s, p, o).unwrap();
         // RDF 1.2 nests a triple term only in the OBJECT position, so the outer
         // triple wraps the inner one there.
-        let p2 = builder.intern_iri("http://example.org/p2");
-        let nested_subject = builder.intern_blank("nested", BlankScope(3));
-        builder.intern_triple(nested_subject, p2, inner);
-        builder.push_quad(s, p, o, None);
+        let p2 = builder.intern_iri("http://example.org/p2").unwrap();
+        let nested_subject = builder.intern_blank("nested", BlankScope(3)).unwrap();
+        builder.intern_triple(nested_subject, p2, inner).unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
         builder.freeze().expect("the fixture dataset freezes")
     }
 
@@ -1568,7 +1586,8 @@ mod tests {
         let resolver: &dyn TermResolve = dataset.as_ref();
         let mut kinds = [false; 4];
         for index in 0..dataset.term_count() {
-            let id = TermId::from_index(u32::try_from(index).expect("fixture fits in u32"));
+            let id = TermId::from_index(u32::try_from(index).expect("fixture fits in u32"))
+                .expect("stored term index is representable");
             kinds[match dataset.as_ref().resolve(id) {
                 TermRef::Iri(_) => 0,
                 TermRef::Blank { .. } => 1,
@@ -1601,7 +1620,10 @@ mod tests {
 
         let dataset = anti_canonical_dataset();
         let ids: Vec<TermId> = (0..dataset.term_count())
-            .map(|index| TermId::from_index(u32::try_from(index).expect("fixture fits in u32")))
+            .map(|index| {
+                TermId::from_index(u32::try_from(index).expect("fixture fits in u32"))
+                    .expect("stored term index is representable")
+            })
             .collect();
         for &left in &ids {
             for &right in &ids {
@@ -1818,9 +1840,9 @@ pub(crate) mod term_walk_tests {
             assert_eq!(visited, expected, "seed {seed}");
 
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let dataset = builder.freeze().expect("a generated term freezes");
             let object = dataset.quads().next().expect("one quad").o;
             assert_eq!(

@@ -137,6 +137,7 @@ enum Mapping<I> {
 /// A local handle from a position the admission check bounded.
 fn local_handle(index: usize) -> TermId {
     TermId::from_index(u32::try_from(index).expect("admitted mapping fits"))
+        .expect("stored term index is representable")
 }
 
 impl<D> Dense<D>
@@ -316,7 +317,7 @@ pub struct ShaclDatasetView {
     /// therefore whether a probe has to dedup at all. Decided once, here, from
     /// facts about the carrier; see [`Self::source_can_duplicate`].
     source_can_duplicate: bool,
-    materialized: OnceLock<Arc<RdfDataset>>,
+    materialized: OnceLock<Result<Arc<RdfDataset>, crate::error::ShapesError>>,
     materializations: AtomicUsize,
     /// The mutation snapshot this view reads THROUGH a composite that added terms to
     /// it ([`Self::with_extra_terms`]), as source 0 of that composite; `None` for
@@ -547,24 +548,24 @@ impl ShaclDatasetView {
     /// Return an immutable owned dataset at an explicit compatibility boundary.
     /// Repeated requests share one materialization; ordinary validation never
     /// calls this method. Native unprojected views return their original `Arc`.
-    #[must_use]
-    pub fn materialized(&self) -> &Arc<RdfDataset> {
+    pub fn materialized(&self) -> Result<&Arc<RdfDataset>, crate::error::ShapesError> {
         if let Source::Native(source) = &self.source
             && !self.projected
             && self.selected_graph.is_none()
             && !self.statements_projected
         {
-            return source;
+            return Ok(source);
         }
-        self.materialized.get_or_init(|| {
-            let mut builder = RdfDatasetBuilder::new();
-            DatasetImporter::new(&mut builder, self).append();
-            let dataset = builder
-                .freeze()
-                .expect("known valid immutable carrier projection remains valid");
-            self.materializations.fetch_add(1, Ordering::Relaxed);
-            dataset
-        })
+        self.materialized
+            .get_or_init(|| {
+                let mut builder = RdfDatasetBuilder::new();
+                DatasetImporter::new(&mut builder, self)?.append()?;
+                let dataset = builder.freeze()?;
+                self.materializations.fetch_add(1, Ordering::Relaxed);
+                Ok(dataset)
+            })
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// The mutation snapshot this view reads, when it reads one.

@@ -96,9 +96,7 @@ pub struct EntailOutcome {
 /// Everything [`entail_to_ntriples_string_with_shapes_graph`] refuses, and
 /// [`ShapesError::Invalid`] naming the host's knob for a passed rule-evaluation limit.
 pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, ShapesError> {
-    entail_with(request, |source, data, limits, knobs| {
-        run_rules(source, data, limits, knobs).map_err(ShapesError::from)
-    })
+    entail_with(request, run_rules)
 }
 
 /// [`entail_to_ntriples`] under the dated XPath law `xpath_regex` selects, with the

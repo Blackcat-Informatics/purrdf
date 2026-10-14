@@ -24,8 +24,8 @@ use purrdf_core::{DatasetView, TermId, ViewTermId};
 use purrdf_sparql_algebra::{Expression, GraphPattern, Variable};
 
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated};
-use crate::governor::lift::{Evaluated, Lift, Truncation};
+use crate::eval::{EvalCtx, ResidentAbort, ResidentPending, eval_evaluated};
+use crate::governor::lift::{DetachedLift, Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema, compatible};
 
@@ -456,24 +456,146 @@ fn eval_substituted_with<D: DatasetView + Sync, const DECLARED: bool, const FIRS
     eval_substituted_delivered::<D, DECLARED, FIRST, _>(pattern, row, source, (), ctx)
 }
 
-fn eval_substituted_delivered<
+struct SubstitutedFrame {
+    body: crate::expr::PreparedPattern,
+    restore: Option<crate::eval::ScopeRestore>,
+    previous_copied_pattern: Option<crate::expr::PreparedPattern>,
+}
+
+/// One admitted copied-scope stack. The explicit driver can own these frames
+/// without borrowing the evaluation context; the recursive adapter below uses
+/// the same stack and restores it on unwind.
+pub(crate) struct SubstitutionFrames {
+    frames: crate::AdmittedVec<SubstitutedFrame>,
+}
+
+impl SubstitutionFrames {
+    pub(crate) fn enter<D: DatasetView + Sync>(
+        body: crate::expr::CorrelatedPattern,
+        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+        placeholders: Option<
+            crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
+        >,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        // The copied owner and frame slot are admitted before scope installation.
+        let body = crate::expr::PreparedPattern::new(body, &ctx.growth)?;
+        let frames = crate::AdmittedVec::with_capacity(1, &ctx.growth)?;
+        let mut stack = Self { frames };
+        stack.push_prepared(body, ledger_map, placeholders, ctx)?;
+        Ok(stack)
+    }
+
+    pub(crate) fn push_prepared<D: DatasetView + Sync>(
+        &mut self,
+        body: crate::expr::PreparedPattern,
+        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+        placeholders: Option<
+            crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
+        >,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        self.frames.reserve_next()?;
+        let restore = ctx.begin_substituted_exists(ledger_map, placeholders)?;
+        let previous_copied_pattern = ctx.active_copied_pattern.replace(body.clone());
+        self.frames.push_reserved(SubstitutedFrame {
+            body,
+            restore: Some(restore),
+            previous_copied_pattern,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn body(&self) -> &GraphPattern {
+        &self
+            .frames
+            .last()
+            .expect("installed substituted frame")
+            .body
+    }
+
+    pub(crate) fn owner(&self) -> crate::expr::PreparedPattern {
+        self.frames
+            .last()
+            .expect("installed substituted frame")
+            .body
+            .clone()
+    }
+
+    pub(crate) fn unwind<D: DatasetView + Sync>(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        while let Some(mut frame) = self.frames.pop() {
+            if let Some(restore) = frame.restore.take() {
+                restore.restore(ctx);
+            }
+            ctx.active_copied_pattern = frame.previous_copied_pattern.take();
+            // A copied AST may contain addresses named by the restored maps.
+            drop(frame);
+        }
+    }
+}
+
+/// The current recursive caller holds the context only through this adapter.
+/// The continuation runner will own `SubstitutionFrames` alongside its context.
+struct SubstitutionRunner<'ctx, 'd, D: DatasetView + Sync> {
+    ctx: &'ctx mut EvalCtx<'d, D>,
+    stack: SubstitutionFrames,
+}
+
+impl<'ctx, 'd, D: DatasetView + Sync> SubstitutionRunner<'ctx, 'd, D> {
+    fn enter(
+        body: crate::expr::CorrelatedPattern,
+        ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+        placeholders: Option<
+            crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
+        >,
+        ctx: &'ctx mut EvalCtx<'d, D>,
+    ) -> Result<Self, EvalError> {
+        let stack = SubstitutionFrames::enter(body, ledger_map, placeholders, ctx)?;
+        Ok(Self { ctx, stack })
+    }
+
+    fn run<R>(&mut self, run: impl FnOnce(&GraphPattern, &mut EvalCtx<'d, D>) -> R) -> R {
+        run(self.stack.body(), self.ctx)
+    }
+}
+
+impl<D: DatasetView + Sync> Drop for SubstitutionRunner<'_, '_, D> {
+    fn drop(&mut self) {
+        self.stack.unwind(self.ctx);
+    }
+}
+
+/// The one substitution walk prepares a copied child before either the current
+/// recursive caller or an admitted continuation installs its lexical scope.
+pub(crate) struct SubstitutedPreparation {
+    pub(crate) body: crate::expr::CorrelatedPattern,
+    pub(crate) ledger_map: Option<crate::expr::SubstitutionSourceMap>,
+    pub(crate) placeholders:
+        Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
+    pub(crate) first_pushdown:
+        Option<crate::workspace::SharedWorkspace<crate::governor::soundness::CapPushdown>>,
+    forced_eager: bool,
+}
+
+pub(crate) fn prepare_substituted<
     D: DatasetView + Sync,
     const DECLARED: bool,
     const FIRST: bool,
-    M: crate::eval::RowDelivery<D>,
 >(
     pattern: &GraphPattern,
     row: &crate::expr::SubstitutionRow,
     source: crate::deferred_exists::CorrelatedSource<'_>,
-    mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+) -> Result<SubstitutedPreparation, EvalError> {
     #[cfg(test)]
     if !DECLARED && crate::deferred_exists::eager_forced() {
-        let substituted = crate::expr::substitute_pattern_admitted(pattern, row, &ctx.growth)?;
-        let mut guard = ctx.enter_substituted_exists(None, None)?;
-        return eval_evaluated(&substituted, &mut guard);
+        return Ok(SubstitutedPreparation {
+            body: crate::expr::substitute_pattern_admitted(pattern, row, &ctx.growth)?,
+            ledger_map: None,
+            placeholders: None,
+            first_pushdown: None,
+            forced_eager: true,
+        });
     }
     let sites;
     let enclosing_placeholders;
@@ -546,19 +668,54 @@ fn eval_substituted_delivered<
     } else {
         None
     };
-    let mut guard = ctx.enter_substituted_exists(ledger_map, placeholders)?;
+    Ok(SubstitutedPreparation {
+        body: substituted,
+        ledger_map,
+        placeholders,
+        first_pushdown,
+        forced_eager: false,
+    })
+}
+
+fn eval_substituted_delivered<
+    D: DatasetView + Sync,
+    const DECLARED: bool,
+    const FIRST: bool,
+    M: crate::eval::RowDelivery<D>,
+>(
+    pattern: &GraphPattern,
+    row: &crate::expr::SubstitutionRow,
+    source: crate::deferred_exists::CorrelatedSource<'_>,
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+    let preparation = prepare_substituted::<D, DECLARED, FIRST>(pattern, row, source, ctx)?;
+    let forced_eager = preparation.forced_eager;
+    let first_pushdown = preparation.first_pushdown;
+    let mut runner = SubstitutionRunner::enter(
+        preparation.body,
+        preparation.ledger_map,
+        preparation.placeholders,
+        ctx,
+    )?;
+    if forced_eager {
+        return runner.run(eval_evaluated);
+    }
     if DECLARED {
         // Contextual mappings share labelled BNODE identities across the query.
         // The ordinary specialization retains its per-solution row identity.
-        guard.current_row = 0;
+        runner.ctx.current_row = 0;
     }
     if FIRST {
-        let previous = std::mem::replace(&mut guard.cap_pushdown, first_pushdown);
-        let cursor = guard.cap_at;
-        let evaluated = eval_evaluated(&substituted, &mut guard);
-        guard.cap_pushdown = previous;
-        guard.cap_at = cursor;
-        evaluated
+        runner.run(|body, ctx| {
+            let previous = std::mem::replace(&mut ctx.cap_pushdown, first_pushdown);
+            let cursor = ctx.cap_at;
+            let evaluated = eval_evaluated(body, ctx);
+            ctx.cap_pushdown = previous;
+            ctx.cap_at = cursor;
+            evaluated
+        })
     } else if M::ACTIVE {
         let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
             delivery.deliver(rows, ctx)?;
@@ -568,13 +725,11 @@ fn eval_substituted_delivered<
                 std::ops::ControlFlow::Continue(())
             })
         };
-        crate::eval::eval_yielding(
-            &substituted,
-            &mut crate::eval::RowConsumer::new(&mut consume),
-            &mut guard,
-        )
+        runner.run(|body, ctx| {
+            crate::eval::eval_yielding(body, &mut crate::eval::RowConsumer::new(&mut consume), ctx)
+        })
     } else {
-        eval_evaluated(&substituted, &mut guard)
+        runner.run(eval_evaluated)
     }
 }
 
@@ -593,71 +748,6 @@ fn eval_substituted_delivered<
 /// # Errors
 ///
 /// As [`eval_correlated`].
-fn eval_deferred_lateral<D: DatasetView + Sync>(
-    slot: &crate::deferred_exists::DeferredLateral,
-    mu: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
-    let site = &slot.site;
-    let current = crate::expr::outer_bindings_for_substitution(mu, schema, ctx)?;
-    let source = crate::deferred_exists::CorrelatedSource {
-        sites: crate::deferred_exists::SiteSlot::Lateral(site),
-        plan_map: Some(&site.plan_map),
-    };
-    let merged = match slot.env.state() {
-        crate::deferred_exists::EnvState::Empty => crate::deferred_exists::with_row(
-            &crate::expr::SubstitutionRow::default(),
-            &current,
-            &site.vars,
-            &ctx.growth,
-        )?,
-        crate::deferred_exists::EnvState::Merged(env) => {
-            crate::deferred_exists::with_row(env, &current, &site.vars, &ctx.growth)?
-        }
-        crate::deferred_exists::EnvState::Layered => None,
-    };
-    if let Some(row) = merged {
-        // The site's map, pushed as the window the substitution resolves through, exactly
-        // as a deferred `EXISTS` pushes its site's.
-        let track_ledger = ctx.ledger.is_some() && !site.plan_map.is_empty();
-        if track_ledger {
-            ctx.correlated_node_maps
-                .push(site.plan_map.clone(), &ctx.growth)?;
-        }
-        let evaluated = eval_substituted(&site.body, &row, source, ctx);
-        if track_ledger {
-            ctx.correlated_node_maps.pop();
-        }
-        return evaluated;
-    }
-    // Layers that disagree: each is substituted in turn, the row last, every nested
-    // placeholder carried from one copy to the next.
-    let sites = crate::deferred_exists::nested_sites(&site.body, source, ctx)?;
-    let mut copy: Option<crate::expr::CorrelatedPattern> = None;
-    let mut placeholders: Option<
-        crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
-    > = None;
-    let layered = slot.env.then(&current, &site.vars, &ctx.growth)?;
-    for layer in layered.layers(&ctx.growth)? {
-        let from: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
-        let mut deferral = crate::expr::Deferral::new(placeholders.as_deref(), &sites);
-        let next = crate::expr::substitute_pattern_deferring_admitted::<false>(
-            from,
-            layer,
-            &mut deferral,
-            &ctx.growth,
-        )?;
-        let next_placeholders = deferral.into_placeholders(&ctx.growth)?;
-        placeholders = next_placeholders;
-        copy = Some(next);
-    }
-    let body: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
-    let mut guard = ctx.enter_substituted_exists(None, placeholders)?;
-    eval_evaluated(body, &mut guard)
-}
-
 /// Evaluate `LATERAL` (a correlated join): for each left solution μ, evaluate
 /// `right` with μ's bindings substituted in as ground constants, then merge each
 /// right solution ν with μ over the ordered-union schema.
@@ -1046,6 +1136,331 @@ impl ApplicationMode for &purrdf_sparql_algebra::algebra::ApplicationPolicy {
     }
 }
 
+/// A copied right operand retained until its substitution and ledger scopes
+/// have been restored. The worklist and the resident caller share this entry.
+pub(crate) struct LateralPending {
+    owner: crate::expr::PreparedPattern,
+    substitution: Option<SubstitutionFrames>,
+    scope: Option<crate::eval::ScopeRestore>,
+    ledger: Option<crate::eval::ScopeRestore>,
+    _deferred: Option<crate::deferred_exists::DeferredLateral>,
+}
+
+impl LateralPending {
+    pub(crate) fn owner(&self) -> crate::expr::PreparedPattern {
+        self.owner.clone()
+    }
+
+    pub(crate) fn finish<D: DatasetView + Sync>(
+        mut self,
+        evaluated: Result<Evaluated<D::Id>, EvalError>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Evaluated<D::Id>, EvalError> {
+        self.abort(ctx);
+        evaluated
+    }
+}
+
+impl<D: DatasetView + Sync> ResidentAbort<D> for LateralPending {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        if let Some(frames) = &mut self.substitution {
+            frames.unwind(ctx);
+        }
+        self.substitution = None;
+        if let Some(scope) = self.scope.take() {
+            scope.restore(ctx);
+        }
+        if let Some(ledger) = self.ledger.take() {
+            ledger.restore(ctx);
+        }
+    }
+}
+
+fn enter_lateral_child<D: DatasetView + Sync>(
+    right: &GraphPattern,
+    mu: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    deferred: Option<&crate::deferred_exists::DeferredLateral>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<LateralPending, EvalError> {
+    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+    let current = crate::expr::outer_bindings_for_substitution(mu, schema, ctx)?;
+    let Some(slot) = deferred else {
+        let sites = if ctx.in_substituted_exists {
+            crate::deferred_exists::SiteSlot::Transient
+        } else {
+            crate::deferred_exists::SiteSlot::Plan
+        };
+        let source = crate::deferred_exists::CorrelatedSource {
+            sites,
+            plan_map: None,
+        };
+        let prepared = prepare_substituted::<D, false, false>(right, &current, source, ctx)?;
+        let frames = SubstitutionFrames::enter(
+            prepared.body,
+            prepared.ledger_map,
+            prepared.placeholders,
+            ctx,
+        )?;
+        return Ok(LateralPending {
+            owner: frames.owner(),
+            substitution: Some(frames),
+            scope: None,
+            ledger: None,
+            _deferred: None,
+        });
+    };
+    let site = &slot.site;
+    let source = crate::deferred_exists::CorrelatedSource {
+        sites: crate::deferred_exists::SiteSlot::Lateral(site),
+        plan_map: Some(&site.plan_map),
+    };
+    let merged = match slot.env.state() {
+        crate::deferred_exists::EnvState::Empty => crate::deferred_exists::with_row(
+            &crate::expr::SubstitutionRow::default(),
+            &current,
+            &site.vars,
+            &ctx.growth,
+        )?,
+        crate::deferred_exists::EnvState::Merged(env) => {
+            crate::deferred_exists::with_row(env, &current, &site.vars, &ctx.growth)?
+        }
+        crate::deferred_exists::EnvState::Layered => None,
+    };
+    if let Some(row) = merged {
+        let track_ledger = ctx.ledger.is_some() && !site.plan_map.is_empty();
+        if track_ledger {
+            let mut guard = ctx.enter_correlated_map_scope(&site.plan_map)?;
+            let prepared =
+                prepare_substituted::<D, false, false>(&site.body, &row, source, &mut guard)?;
+            let frames = SubstitutionFrames::enter(
+                prepared.body,
+                prepared.ledger_map,
+                prepared.placeholders,
+                &mut guard,
+            )?;
+            return Ok(LateralPending {
+                owner: frames.owner(),
+                substitution: Some(frames),
+                scope: None,
+                ledger: guard.into_restore(),
+                _deferred: Some(slot.clone()),
+            });
+        }
+        let prepared = prepare_substituted::<D, false, false>(&site.body, &row, source, ctx)?;
+        let frames = SubstitutionFrames::enter(
+            prepared.body,
+            prepared.ledger_map,
+            prepared.placeholders,
+            ctx,
+        )?;
+        return Ok(LateralPending {
+            owner: frames.owner(),
+            substitution: Some(frames),
+            scope: None,
+            ledger: None,
+            _deferred: Some(slot.clone()),
+        });
+    }
+    let sites = crate::deferred_exists::nested_sites(&site.body, source, ctx)?;
+    let mut copy: Option<crate::expr::CorrelatedPattern> = None;
+    let mut placeholders = None;
+    let layered = slot.env.then(&current, &site.vars, &ctx.growth)?;
+    for layer in layered.layers(&ctx.growth)? {
+        let from: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
+        let mut deferral = crate::expr::Deferral::new(placeholders.as_deref(), &sites);
+        let next = crate::expr::substitute_pattern_deferring_admitted::<false>(
+            from,
+            layer,
+            &mut deferral,
+            &ctx.growth,
+        )?;
+        placeholders = deferral.into_placeholders(&ctx.growth)?;
+        copy = Some(next);
+    }
+    let body = copy.ok_or_else(|| EvalError::internal("layered LATERAL has no copied body"))?;
+    let owner = crate::expr::PreparedPattern::new(body, &ctx.growth)?;
+    let guard = ctx.enter_substituted_exists(None, placeholders)?;
+    Ok(LateralPending {
+        owner,
+        substitution: None,
+        scope: guard.into_restore(),
+        ledger: None,
+        _deferred: Some(slot.clone()),
+    })
+}
+
+pub(crate) enum LateralStart<I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(LateralSequence<I>),
+}
+
+pub(crate) struct LateralSequence<I: ViewTermId> {
+    left: SolutionSeq<I>,
+    lift: DetachedLift,
+    deferred: Option<crate::deferred_exists::DeferredLateral>,
+    right_schema: VarSchema,
+    per_row: crate::AdmittedVec<(RetainedRow<I>, SolutionSeq<I>)>,
+    ordinal: usize,
+}
+
+// The suspended child is admitted once at the caller's existing workspace box.
+// Boxing this transfer enum would allocate again on every ordinary row.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the caller already admits the suspended LATERAL owner"
+)]
+pub(crate) enum LateralStep<I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Child(LateralSequence<I>, LateralPending),
+}
+
+pub(crate) fn begin_lateral<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    right: &GraphPattern,
+    lift: DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<LateralStart<D::Id>, EvalError> {
+    let mut lift = lift.attach(node);
+    let Some(left) = lift.absorb(0, child) else {
+        return Ok(LateralStart::Complete(lift.withheld()));
+    };
+    if lift.is_truncated() {
+        return Ok(LateralStart::Complete(
+            lift.finish(SolutionSeq::empty(left.schema)),
+        ));
+    }
+    if let GraphPattern::PropertyFunction(call) = right {
+        let ceiling = ctx.row_ceiling();
+        let restore = ctx.enter_node(right);
+        let evaluated = match ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
+            Err(tripped) => Ok(Evaluated::Truncated(Truncation::origin(
+                SolutionSeq::empty(crate::eval::syntactic_schema_admitted(right, &ctx.growth)?),
+                tripped,
+            ))),
+            Ok(()) => {
+                crate::property_fn_eval::eval_lateral_property_function(call, &left, ceiling, ctx)
+            }
+        };
+        ctx.leave_node(restore);
+        let absorbed = lift.absorb(1, evaluated?);
+        return Ok(LateralStart::Complete(match absorbed {
+            Some(seq) => lift.finish(seq),
+            None => lift.withheld(),
+        }));
+    }
+    crate::service_endpoints::admit_lateral_endpoints(&left, right, ctx)?;
+    let deferred = ctx
+        .deferred_exists
+        .as_ref()
+        .and_then(|placeholders| placeholders.get(&(std::ptr::from_ref(right) as usize)))
+        .and_then(crate::deferred_exists::Deferred::lateral)
+        .cloned();
+    if deferred.is_none() && crate::deferred_exists::is_lateral_placeholder(right) {
+        return Err(EvalError::internal(
+            "a nested LATERAL placeholder was evaluated outside the substituted copy that left it",
+        ));
+    }
+    let per_row = crate::AdmittedVec::with_capacity(left.rows.len(), &ctx.growth)?;
+    Ok(LateralStart::Sequence(LateralSequence {
+        left,
+        lift: lift.detach(),
+        deferred,
+        right_schema: VarSchema::default(),
+        per_row,
+        ordinal: 0,
+    }))
+}
+
+impl<I: ViewTermId> LateralSequence<I> {
+    pub(crate) fn has_row(&self) -> bool {
+        self.ordinal < self.left.rows.len()
+    }
+
+    pub(crate) fn step<D: DatasetView<Id = I> + Sync>(
+        self,
+        node: &GraphPattern,
+        right: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<LateralStep<I>, EvalError> {
+        if let Some(mu) = self.left.rows.get(self.ordinal) {
+            let child =
+                enter_lateral_child(right, mu, &self.left.schema, self.deferred.as_ref(), ctx)?;
+            return Ok(LateralStep::Child(self, child));
+        }
+        let lift = self.lift.attach(node);
+        Ok(LateralStep::Complete(finish_application_rows(
+            &self.left.schema,
+            &self.right_schema,
+            &self.per_row,
+            lift,
+            false,
+            ctx,
+        )?))
+    }
+
+    pub(crate) fn resume<D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        evaluated: Evaluated<I>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        let right = match evaluated {
+            Evaluated::Complete(seq) => seq,
+            truncated @ Evaluated::Truncated(_) => {
+                let mut lift = self.lift.attach(node);
+                drop(lift.absorb(1, truncated));
+                self.lift = lift.detach();
+                self.ordinal = self.left.rows.len();
+                return Ok(self);
+            }
+        };
+        for variable in right.schema.vars() {
+            self.right_schema
+                .push_admitted(variable.clone(), &ctx.growth)?;
+        }
+        let mu = self
+            .left
+            .rows
+            .get(self.ordinal)
+            .expect("one current LATERAL row");
+        self.per_row
+            .push((mu.clone_admitted(&ctx.growth)?, right))?;
+        self.ordinal += 1;
+        Ok(self)
+    }
+
+    pub(crate) fn run_recursive<D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        right: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Evaluated<I>, EvalError> {
+        loop {
+            match self.step(node, right, ctx)? {
+                LateralStep::Complete(done) => return Ok(done),
+                LateralStep::Child(sequence, child) => {
+                    let mut guard = ResidentPending {
+                        child: Some(child),
+                        ctx,
+                    };
+                    let evaluated = eval_evaluated(
+                        &guard.child.as_ref().expect("one LATERAL child").owner,
+                        guard.ctx,
+                    );
+                    let evaluated = guard
+                        .child
+                        .take()
+                        .expect("one LATERAL child")
+                        .finish(evaluated, guard.ctx)?;
+                    self = sequence.resume(node, evaluated, guard.ctx)?;
+                }
+            }
+        }
+    }
+}
+
 #[inline(never)]
 fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
     node: &GraphPattern,
@@ -1054,77 +1469,25 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
     mode: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
+    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
+    let child = eval_evaluated(left, ctx)?;
+    if !M::DECLARED {
+        return match begin_lateral(node, right, lift, child, ctx)? {
+            LateralStart::Complete(done) => Ok(done),
+            LateralStart::Sequence(sequence) => sequence.run_recursive(node, right, ctx),
+        };
+    }
+    let mut lift = lift.attach(node);
+    let Some(l) = lift.absorb(0, child) else {
         return Ok(lift.withheld());
     };
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
-    // A property-function call is driven PER LEFT ROW with the row in hand, rather than
-    // substituted into and re-evaluated like an ordinary right operand. The generic path
-    // below would also invoke the relation with every binding bound — correlated
-    // substitution writes an IRI or a literal into the call's arguments, and drives a
-    // blank node or a quoted triple into it through a one-row `VALUES` that lands the
-    // call right back in THIS position (`crate::substitute::bind_call_arguments`) — but
-    // it would build and evaluate a substituted copy of the call per left row to do so.
-    // Reading each left row directly is the one route, and the one every bound argument
-    // is delivered through in the end. See `crate::property_fn_eval`.
-    if !M::DECLARED
-        && let GraphPattern::PropertyFunction(call) = right
-    {
-        // The answer-cap / `LIMIT` ceiling the plan licensed for THIS node, read while
-        // the cursor is still on it. The interception FUSES `Lateral(left, call)` into
-        // one driven operator: the dispatch reads each left row itself and emits rows
-        // that are already joined, so what it produces is this node's OUTPUT bag — one
-        // row for one row, in order — and the ceiling that bounds it is the one recorded
-        // here rather than one pushed to the call node, which carries none (see
-        // `crate::governor::soundness::child_row_ceiling`). No new licence is minted:
-        // the operator consumes its own node's ceiling, which is what every operator
-        // that stops early does.
-        let ceiling = ctx.row_ceiling();
-        let restore = ctx.enter_node(right);
-        // The node-entry charge the generic path pays on each of this node's
-        // evaluations, kept here so the call is metered exactly as an ordinary right
-        // operand is.
-        let evaluated = match ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
-            Err(tripped) => Ok(Evaluated::Truncated(Truncation::origin(
-                SolutionSeq::empty(crate::eval::syntactic_schema_admitted(right, &ctx.growth)?),
-                tripped,
-            ))),
-            Ok(()) => {
-                crate::property_fn_eval::eval_lateral_property_function(call, &l, ceiling, ctx)
-            }
-        };
-        ctx.leave_node(restore);
-        let absorbed = lift.absorb(1, evaluated?);
-        return Ok(match absorbed {
-            Some(seq) => lift.finish(seq),
-            None => lift.withheld(),
-        });
-    }
-
     // A variable-endpoint `SERVICE` some left row names no endpoint for is refused before
     // any row's evaluation sends a request, so a refused query never contacts a remote
     // first, whatever order its left rows come in.
     crate::service_endpoints::admit_lateral_endpoints(&l, right, ctx)?;
-
-    // Inside a substituted copy, `right` may be the placeholder the substitution walk left
-    // for this operand: its site is substituted per left row with the substitution the
-    // walk carried and the row together — see `crate::deferred_exists`.
-    let deferred = match &ctx.deferred_exists {
-        Some(placeholders) => placeholders
-            .get(&(std::ptr::from_ref(right) as usize))
-            .and_then(crate::deferred_exists::Deferred::lateral)
-            .cloned(),
-        None => None,
-    };
-    if deferred.is_none() && crate::deferred_exists::is_lateral_placeholder(right) {
-        return Err(EvalError::internal(
-            "a nested LATERAL placeholder was evaluated outside the substituted copy that \
-             left it",
-        ));
-    }
 
     let left_schema = l.schema.clone();
 
@@ -1136,27 +1499,10 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
     let mut per_row = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
     let mut emitted = 0usize;
     for mu in &l.rows {
-        let evaluated = if M::DECLARED {
-            let policy = mode
-                .policy()
-                .expect("declared application carries its policy");
-            evaluate_application_row(right, mu, &left_schema, policy, ctx)?
-        } else if let Some(slot) = &deferred {
-            eval_deferred_lateral(slot, mu, &left_schema, ctx)?
-        } else {
-            // `right` is a plan node unless this `LATERAL` is itself part of a substituted
-            // copy; only a plan node's nested sites may be kept by its address.
-            let sites = if ctx.in_substituted_exists {
-                crate::deferred_exists::SiteSlot::Transient
-            } else {
-                crate::deferred_exists::SiteSlot::Plan
-            };
-            let source = crate::deferred_exists::CorrelatedSource {
-                sites,
-                plan_map: None,
-            };
-            eval_correlated(right, mu, &left_schema, source, ctx)?
-        };
+        let policy = mode
+            .policy()
+            .expect("declared application carries its policy");
+        let evaluated = evaluate_application_row(right, mu, &left_schema, policy, ctx)?;
         let r = match evaluated {
             Evaluated::Complete(seq) => seq,
             truncated @ Evaluated::Truncated(_) => {
@@ -1180,14 +1526,36 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
         }
     }
 
+    finish_application_rows(
+        &left_schema,
+        &right_schema,
+        &per_row,
+        lift,
+        M::DECLARED,
+        ctx,
+    )
+}
+
+/// The one ordered schema/compatibility merge after all per-row right children
+/// have completed. A suspended LATERAL and a declared application share it.
+type LateralRows<I> = crate::AdmittedVec<(RetainedRow<I>, SolutionSeq<I>)>;
+
+fn finish_application_rows<D: DatasetView + Sync>(
+    left_schema: &VarSchema,
+    right_schema: &VarSchema,
+    per_row: &LateralRows<D::Id>,
+    lift: Lift<'_>,
+    declared: bool,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     let out = left_schema
-        .union_admitted(&right_schema, &ctx.growth)?
+        .union_admitted(right_schema, &ctx.growth)?
         .shared_admitted(&ctx.growth)?;
     let left_len = left_schema.len();
     let out_len = out.len();
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let mut rows = RowsBuilder::new(&ctx.growth);
-    'left: for (mu, r) in &per_row {
+    'left: for (mu, r) in per_row {
         let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
         for nu in &r.rows {
             // Test compatibility before allocating the joined row. The cell ceiling is
@@ -1197,7 +1565,7 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
                 let oi = right_to_out[j];
                 !matches!((cell, mu.get(oi).copied().flatten()), (Some(t), Some(existing)) if *t != existing)
             });
-            if !M::DECLARED && !compatible_row {
+            if !declared && !compatible_row {
                 continue;
             }
             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
@@ -3227,6 +3595,58 @@ mod tests {
     };
     use purrdf_sparql_algebra::{Chain, Child};
 
+    #[test]
+    fn copied_pattern_runner_restores_scope_on_unwind_before_reuse() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let mut ctx = EvalCtx::new(&*dataset);
+        let body = GraphPattern::empty_bgp();
+        let copied =
+            crate::expr::CorrelatedPattern::copy(&body, &ctx.growth).expect("copied body admitted");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut runner = SubstitutionRunner::enter(
+                copied,
+                Some(crate::expr::SubstitutionSourceMap::default()),
+                None,
+                &mut ctx,
+            )
+            .expect("frame admitted before scope");
+            runner.run(|_, _| panic!("unwind inside copied evaluation"));
+        }));
+        assert!(panicked.is_err());
+        assert!(!ctx.in_substituted_exists);
+        assert!(ctx.active_copied_pattern.is_none());
+        assert!(ctx.deferred_exists.is_none());
+        assert_eq!(ctx.correlated_node_maps.iter().count(), 0);
+        assert_eq!(
+            eval(&body, &mut ctx)
+                .expect("context remains reusable")
+                .rows
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn copied_filter_exists_uses_the_runner_owned_tree() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let mut ctx = EvalCtx::new(&*dataset);
+        let body = GraphPattern::Filter {
+            expr: Expression::Exists(Child::new(GraphPattern::Values {
+                variables: Vec::new(),
+                bindings: vec![Vec::new()],
+            })),
+            inner: Child::new(GraphPattern::Values {
+                variables: Vec::new(),
+                bindings: vec![Vec::new()],
+            }),
+        };
+        let copied = crate::expr::CorrelatedPattern::copy(&body, &ctx.growth).unwrap();
+        let mut runner = SubstitutionRunner::enter(copied, None, None, &mut ctx).unwrap();
+        assert_eq!(runner.run(eval_evaluated).unwrap().rows().len(), 1);
+        drop(runner);
+        assert!(ctx.active_copied_pattern.is_none());
+    }
+
     // The operators take the algebra node itself (it names the barrier and supplies the
     // child edge classification), so these tests build the node and drive the ordinary
     // dispatch — which is also what keeps them testing the wiring rather than a private
@@ -3295,15 +3715,15 @@ mod tests {
         // :a :knows :b ; :likes :cake .
         // :b :likes :tea .
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let likes = b.intern_iri("http://ex/likes");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let cake = b.intern_iri("http://ex/cake");
-        let tea = b.intern_iri("http://ex/tea");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(a, likes, cake, None);
-        b.push_quad(bb, likes, tea, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let likes = b.intern_iri("http://ex/likes").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let cake = b.intern_iri("http://ex/cake").unwrap();
+        let tea = b.intern_iri("http://ex/tea").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(a, likes, cake, None).unwrap();
+        b.push_quad(bb, likes, tea, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3481,16 +3901,24 @@ mod tests {
             rows: (start..end)
                 .map(|key| {
                     purrdf_core::smallvec![
-                        Some(SolutionTerm::Existing(TermId::from_index(key))),
-                        Some(SolutionTerm::Existing(TermId::from_index(0))),
+                        Some(SolutionTerm::Existing(
+                            TermId::from_index(key).expect("stored term index is representable")
+                        )),
+                        Some(SolutionTerm::Existing(
+                            TermId::from_index(0).expect("stored term index is representable")
+                        )),
                     ]
                 })
                 .collect(),
         };
         let mut left = make(ROWS, ROWS * 2, "left");
         left.rows.push_resident_fixture(purrdf_core::smallvec![
-            Some(SolutionTerm::Existing(TermId::from_index(0))),
-            Some(SolutionTerm::Existing(TermId::from_index(0))),
+            Some(SolutionTerm::Existing(
+                TermId::from_index(0).expect("stored term index is representable")
+            )),
+            Some(SolutionTerm::Existing(
+                TermId::from_index(0).expect("stored term index is representable")
+            )),
         ]);
         (left, make(0, ROWS, "right"))
     }
@@ -3676,7 +4104,11 @@ mod tests {
     fn probe_has_match_hits_index_then_scans_wild() {
         use crate::scratch::SolutionTerm;
         use purrdf_core::TermId;
-        let t = |i: u32| Some(SolutionTerm::Existing(TermId::from_index(i)));
+        let t = |i: u32| {
+            Some(SolutionTerm::Existing(
+                TermId::from_index(i).expect("stored term index is representable"),
+            ))
+        };
 
         // Inner over schema [x]: x=1, x=2, and one wild row (x unbound).
         let inner = SolutionSeq {
@@ -3801,21 +4233,23 @@ mod tests {
             direction: None,
         };
         let mut b = RdfDatasetBuilder::new();
-        let v = b.intern_iri("http://example.org/v");
-        let flag = b.intern_iri("http://example.org/flag");
-        let x = b.intern_iri("http://example.org/x");
-        let y = b.intern_iri("http://example.org/y");
-        let i5 = b.intern_literal(int("5"));
-        let i7 = b.intern_literal(int("7"));
-        let tru = b.intern_literal(RdfLiteral {
-            lexical_form: "true".to_owned(),
-            datatype: Some(XBOOL.to_owned()),
-            language: None,
-            direction: None,
-        });
-        b.push_quad(x, v, i5, None);
-        b.push_quad(y, v, i7, None);
-        b.push_quad(x, flag, tru, None);
+        let v = b.intern_iri("http://example.org/v").unwrap();
+        let flag = b.intern_iri("http://example.org/flag").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let y = b.intern_iri("http://example.org/y").unwrap();
+        let i5 = b.intern_literal(int("5")).unwrap();
+        let i7 = b.intern_literal(int("7")).unwrap();
+        let tru = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "true".to_owned(),
+                datatype: Some(XBOOL.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        b.push_quad(x, v, i5, None).unwrap();
+        b.push_quad(y, v, i7, None).unwrap();
+        b.push_quad(x, flag, tru, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3937,28 +4371,32 @@ mod tests {
         use purrdf_sparql_algebra::Variable;
 
         let mut b = RdfDatasetBuilder::new();
-        let p1 = b.intern_iri("http://ex/p1");
-        let p2 = b.intern_iri("http://ex/p2");
-        let p3 = b.intern_iri("http://ex/p3");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
+        let p1 = b.intern_iri("http://ex/p1").unwrap();
+        let p2 = b.intern_iri("http://ex/p2").unwrap();
+        let p3 = b.intern_iri("http://ex/p3").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
         use purrdf_xsd::datatype::XSD_INTEGER as XINT;
-        let ten = b.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: "10".to_owned(),
-            datatype: Some(XINT.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let twenty = b.intern_literal(purrdf_core::RdfLiteral {
-            lexical_form: "20".to_owned(),
-            datatype: Some(XINT.to_owned()),
-            language: None,
-            direction: None,
-        });
-        b.push_quad(a, p1, ten, None);
-        b.push_quad(bb, p2, twenty, None);
-        b.push_quad(c, p3, ten, None);
+        let ten = b
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: "10".to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let twenty = b
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: "20".to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        b.push_quad(a, p1, ten, None).unwrap();
+        b.push_quad(bb, p2, twenty, None).unwrap();
+        b.push_quad(c, p3, ten, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let one = || Expression::Literal(Literal::new_typed("1", NamedNode::new_unchecked(XINT)));
@@ -4262,20 +4700,20 @@ mod tests {
     /// several per-input-row commit boundaries to be stopped between.
     fn wide_graph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("https://example.org/knows");
-        let likes = b.intern_iri("https://example.org/likes");
-        let a = b.intern_iri("https://example.org/a");
-        let bb = b.intern_iri("https://example.org/b");
-        let c = b.intern_iri("https://example.org/c");
-        let d = b.intern_iri("https://example.org/d");
-        let tea = b.intern_iri("https://example.org/tea");
-        let cake = b.intern_iri("https://example.org/cake");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(bb, knows, c, None);
-        b.push_quad(c, knows, d, None);
-        b.push_quad(bb, likes, tea, None);
-        b.push_quad(c, likes, cake, None);
-        b.push_quad(d, likes, tea, None);
+        let knows = b.intern_iri("https://example.org/knows").unwrap();
+        let likes = b.intern_iri("https://example.org/likes").unwrap();
+        let a = b.intern_iri("https://example.org/a").unwrap();
+        let bb = b.intern_iri("https://example.org/b").unwrap();
+        let c = b.intern_iri("https://example.org/c").unwrap();
+        let d = b.intern_iri("https://example.org/d").unwrap();
+        let tea = b.intern_iri("https://example.org/tea").unwrap();
+        let cake = b.intern_iri("https://example.org/cake").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(bb, knows, c, None).unwrap();
+        b.push_quad(c, knows, d, None).unwrap();
+        b.push_quad(bb, likes, tea, None).unwrap();
+        b.push_quad(c, likes, cake, None).unwrap();
+        b.push_quad(d, likes, tea, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -4608,17 +5046,25 @@ mod tests {
     /// graph `:g1`); `:g2` is never used as a graph name.
     fn graph_variable_lateral_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("https://example.org/lateral-graph#p");
-        let q = b.intern_iri("https://example.org/lateral-graph#q");
-        let s1 = b.intern_iri("https://example.org/lateral-graph#s1");
-        let s2 = b.intern_iri("https://example.org/lateral-graph#s2");
-        let g1 = b.intern_iri("https://example.org/lateral-graph#g1");
-        let g2 = b.intern_iri("https://example.org/lateral-graph#g2");
-        let x = b.intern_iri("https://example.org/lateral-graph#x");
-        let y = b.intern_iri("https://example.org/lateral-graph#y");
-        b.push_quad(s1, p, g1, None);
-        b.push_quad(s2, p, g2, None);
-        b.push_quad(x, q, y, Some(g1));
+        let p = b.intern_iri("https://example.org/lateral-graph#p").unwrap();
+        let q = b.intern_iri("https://example.org/lateral-graph#q").unwrap();
+        let s1 = b
+            .intern_iri("https://example.org/lateral-graph#s1")
+            .unwrap();
+        let s2 = b
+            .intern_iri("https://example.org/lateral-graph#s2")
+            .unwrap();
+        let g1 = b
+            .intern_iri("https://example.org/lateral-graph#g1")
+            .unwrap();
+        let g2 = b
+            .intern_iri("https://example.org/lateral-graph#g2")
+            .unwrap();
+        let x = b.intern_iri("https://example.org/lateral-graph#x").unwrap();
+        let y = b.intern_iri("https://example.org/lateral-graph#y").unwrap();
+        b.push_quad(s1, p, g1, None).unwrap();
+        b.push_quad(s2, p, g2, None).unwrap();
+        b.push_quad(x, q, y, Some(g1)).unwrap();
         b.freeze().expect("freeze")
     }
 

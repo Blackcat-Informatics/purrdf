@@ -69,18 +69,22 @@ fn fanout_store(width: usize) -> RelationStore {
     let mut store = RelationStore::new();
     for i in 0..width {
         for j in 0..width {
-            store.insert(
-                &surface(&format!("s{i}")),
-                &surface("p"),
-                &surface(&format!("m{j}")),
-                RelationStore::DEFAULT_GRAPH,
-            );
-            store.insert(
-                &surface(&format!("m{i}")),
-                &surface("q"),
-                &surface(&format!("o{j}")),
-                RelationStore::DEFAULT_GRAPH,
-            );
+            store
+                .insert(
+                    &surface(&format!("s{i}")),
+                    &surface("p"),
+                    &surface(&format!("m{j}")),
+                    RelationStore::DEFAULT_GRAPH,
+                )
+                .unwrap();
+            store
+                .insert(
+                    &surface(&format!("m{i}")),
+                    &surface("q"),
+                    &surface(&format!("o{j}")),
+                    RelationStore::DEFAULT_GRAPH,
+                )
+                .unwrap();
         }
     }
     store
@@ -116,12 +120,14 @@ fn frame_rules(pairs: usize) -> Vec<DlClause> {
 fn chain_store(n: usize) -> RelationStore {
     let mut store = RelationStore::new();
     for i in 0..n {
-        store.insert(
-            &surface(&format!("n{i}")),
-            &surface("p"),
-            &surface(&format!("n{}", i + 1)),
-            RelationStore::DEFAULT_GRAPH,
-        );
+        store
+            .insert(
+                &surface(&format!("n{i}")),
+                &surface("p"),
+                &surface(&format!("n{}", i + 1)),
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
     }
     store
 }

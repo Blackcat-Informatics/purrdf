@@ -686,8 +686,11 @@ export class DataFactory {
 }
 
 export class Dataset implements Iterable<Quad> {
-  constructor();
-  static parse(input: string, format: string, base?: string | null): Dataset;
+  /** Omitted or true remembers empty named graphs; false selects row-driven existence. */
+  constructor(rememberEmptyGraphs?: boolean);
+  static parse(input: string, format: string, base?: string | null, rememberEmptyGraphs?: boolean): Dataset;
+  /** The policy retained by snapshots, matches and applied synchronous/asynchronous UPDATEs. */
+  readonly rememberEmptyGraphs: boolean;
   static from(quads?: Iterable<Quad> | null): Dataset;
   readonly size: number;
   add(quad: Quad): this;
@@ -1400,6 +1403,22 @@ export class ServiceCatalog {
  */
 export interface PurrdfError extends Error {
   readonly code: string;
+  /**
+   * Original `purrdf-diagnostic-v1` record for native storage refusal. Its optional
+   * `capacity` record carries `space`, `attempted` and `limit`; both counts are exact
+   * decimal strings. Present on synchronous and asynchronous storage failures alike.
+   */
+  readonly diagnostic?: {
+    readonly schema: "purrdf-diagnostic-v1";
+    readonly severity: string;
+    readonly code: string;
+    readonly message: string;
+    readonly capacity?: {
+      readonly space: string;
+      readonly attempted: string;
+      readonly limit: string;
+    };
+  };
   /**
    * The failure's typed condition, when it carries one. A SPARQL parse failure
    * (`code` `native-sparql-query-parse` or `native-sparql-update-parse`) carries its

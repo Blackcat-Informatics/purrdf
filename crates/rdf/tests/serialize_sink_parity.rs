@@ -57,10 +57,14 @@ const fn all_formats() -> [NativeRdfFormat; 9] {
 fn simple() -> Arc<purrdf_core::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for i in 0..64 {
-        let s = b.intern_owned_term(&RdfTerm::iri(format!("https://example.org/s{i}")));
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_literal(RdfLiteral::simple(format!("value {i}")));
-        b.push_quad(s, p, o, None);
+        let s = b
+            .intern_owned_term(&RdfTerm::iri(format!("https://example.org/s{i}")))
+            .unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b
+            .intern_literal(RdfLiteral::simple(format!("value {i}")))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("dataset freezes")
 }
@@ -68,16 +72,22 @@ fn simple() -> Arc<purrdf_core::RdfDataset> {
 /// Large enough that the streamed path crosses its drain window many times.
 fn large() -> Arc<purrdf_core::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/predicate-with-a-long-name-for-bulk");
+    let p = b
+        .intern_iri("https://example.org/predicate-with-a-long-name-for-bulk")
+        .unwrap();
     for i in 0..4_000 {
-        let s = b.intern_owned_term(&RdfTerm::iri(format!(
-            "https://example.org/subject/{i}/with/a/deliberately/long/path"
-        )));
-        let o = b.intern_literal(RdfLiteral::simple(format!(
-            "a deliberately long literal value for row {i}, padded so the document \
+        let s = b
+            .intern_owned_term(&RdfTerm::iri(format!(
+                "https://example.org/subject/{i}/with/a/deliberately/long/path"
+            )))
+            .unwrap();
+        let o = b
+            .intern_literal(RdfLiteral::simple(format!(
+                "a deliberately long literal value for row {i}, padded so the document \
              crosses the sink's staging window many times over"
-        )));
-        b.push_quad(s, p, o, None);
+            )))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     b.freeze().expect("dataset freezes")
 }
@@ -90,13 +100,17 @@ fn empty() -> Arc<purrdf_core::RdfDataset> {
 /// A directional literal, which several formats cannot express and must count.
 fn directional() -> Arc<purrdf_core::RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_owned_term(&RdfTerm::iri("https://example.org/s"));
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    b.push_quad(s, p, o, None);
+    let s = b
+        .intern_owned_term(&RdfTerm::iri("https://example.org/s"))
+        .unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("dataset freezes")
 }
 

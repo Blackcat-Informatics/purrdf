@@ -62,11 +62,11 @@ pub fn text_rows() -> Vec<(String, String)> {
 
 pub fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri(NOTE);
+    let predicate = builder.intern_iri(NOTE).unwrap();
     for (subject, text) in text_rows() {
-        let subject = builder.intern_iri(&subject);
-        let object = builder.intern_literal(RdfLiteral::simple(&text));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri(&subject).unwrap();
+        let object = builder.intern_literal(RdfLiteral::simple(&text)).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     builder.freeze().expect("the fixture dataset is valid")
 }

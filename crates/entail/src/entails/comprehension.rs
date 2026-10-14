@@ -974,13 +974,13 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         for (s, p, o) in triples {
             let term = |b: &mut RdfDatasetBuilder, value: &str| match value.strip_prefix('_') {
-                Some(label) => b.intern_blank(label, BlankScope::DEFAULT),
-                None => b.intern_iri(value),
+                Some(label) => b.intern_blank(label, BlankScope::DEFAULT).unwrap(),
+                None => b.intern_iri(value).unwrap(),
             };
             let s = term(&mut b, s);
             let p = term(&mut b, p);
             let o = term(&mut b, o);
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -1000,21 +1000,22 @@ mod tests {
     /// W3C `webont-i5-26-010`'s conclusion: an anonymous `minCardinality 1` on `p`.
     fn restriction_conclusion() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let ontology = b.intern_blank("o", BlankScope::DEFAULT);
-        let ty = b.intern_iri(RDF_TYPE);
-        let ontology_class = b.intern_iri(OWL_ONTOLOGY);
-        b.push_quad(ontology, ty, ontology_class, None);
-        let node = b.intern_blank("n", BlankScope::DEFAULT);
-        let restriction = b.intern_iri(OWL_RESTRICTION);
-        b.push_quad(node, ty, restriction, None);
-        let on_property = b.intern_iri(OWL_ONPROPERTY);
-        let p = b.intern_iri(P);
-        b.push_quad(node, on_property, p, None);
-        let object_property = b.intern_iri(OWL_OBJECTPROPERTY);
-        b.push_quad(p, ty, object_property, None);
-        let min_cardinality = b.intern_iri(OWL_MINCARDINALITY);
-        let one = crate::interner::intern_into(&mut b, &TermValue::typed_literal("1", XSD_INT));
-        b.push_quad(node, min_cardinality, one, None);
+        let ontology = b.intern_blank("o", BlankScope::DEFAULT).unwrap();
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let ontology_class = b.intern_iri(OWL_ONTOLOGY).unwrap();
+        b.push_quad(ontology, ty, ontology_class, None).unwrap();
+        let node = b.intern_blank("n", BlankScope::DEFAULT).unwrap();
+        let restriction = b.intern_iri(OWL_RESTRICTION).unwrap();
+        b.push_quad(node, ty, restriction, None).unwrap();
+        let on_property = b.intern_iri(OWL_ONPROPERTY).unwrap();
+        let p = b.intern_iri(P).unwrap();
+        b.push_quad(node, on_property, p, None).unwrap();
+        let object_property = b.intern_iri(OWL_OBJECTPROPERTY).unwrap();
+        b.push_quad(p, ty, object_property, None).unwrap();
+        let min_cardinality = b.intern_iri(OWL_MINCARDINALITY).unwrap();
+        let one =
+            crate::interner::intern_into(&mut b, &TermValue::typed_literal("1", XSD_INT)).unwrap();
+        b.push_quad(node, min_cardinality, one, None).unwrap();
         b.freeze().expect("freeze")
     }
 

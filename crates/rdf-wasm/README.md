@@ -56,7 +56,8 @@ const reparsed = Dataset.parse(nq, "nquads");
 - **`DataFactory`** — `namedNode`, `blankNode`, `literal(value, languageOrDatatype?)`,
   `typedLiteral`, `directionalLiteral`, `variable`, `defaultGraph`, `quad`,
   `quotedTriple`, `fromTerm`, `fromQuad`.
-- **`Dataset`** (RDF/JS `DatasetCore`) — `Dataset.parse(input, format, base?)`,
+- **`Dataset`** (RDF/JS `DatasetCore`) — `new Dataset(rememberEmptyGraphs?)`,
+  `Dataset.parse(input, format, base?, rememberEmptyGraphs?)`,
   `serialize(format)`, `serializeWithLoss(format)`,
   `add`/`delete`/`has`/`match`/`quads`/`size`, and iteration
   (`for (const quad of dataset)`). Formats, for both `parse` and `serialize`:
@@ -65,6 +66,13 @@ const reparsed = Dataset.parse(nq, "nquads");
   of producing it — the statement-layer rows, base directions, and named-graph rows
   the target could not carry — the JS twin of the C ABI's `purrdf_serialize` count
   out-params.
+- **Named graph lifetime** — omitted or `true` remembers empty named graphs:
+  removing the last quad or `CLEAR` keeps the graph; `DROP` removes it.
+  `new Dataset(false)` or `Dataset.parse(input, format, base, false)` opts out
+  to row-driven existence. `rememberEmptyGraphs` reports the selected policy;
+  `snapshot()`, `match()` and applied synchronous/asynchronous UPDATEs preserve it.
+  Missing remembered graph targets are errors unless `SILENT`; use `DROP` when
+  removing the graph itself is intended. Policy is not serialized into RDF.
 - **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical, flat
   N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph equality under
   blank-node relabeling (an exact oracle backed by full RDFC-1.0 canonicalization).

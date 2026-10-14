@@ -171,20 +171,22 @@ fn every_seeded_optional_fuel_cut_is_a_subbag_without_fabricated_padding() {
 #[test]
 fn graph_boundaries_preserve_outer_compatibility_and_restore_the_active_graph() {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
     for index in 1..=2 {
-        let graph = builder.intern_iri(&format!("{EX}g{index}"));
-        let subject = builder.intern_iri(&format!("{EX}s{index}"));
-        let value = builder.intern_iri(&format!("{EX}v{index}"));
-        builder.push_quad(subject, p, value, Some(graph));
-        let pick = builder.intern_iri(&format!("{EX}pick{index}"));
-        builder.push_quad(
-            subject,
-            q,
-            pick,
-            if index == 1 { Some(graph) } else { None },
-        );
+        let graph = builder.intern_iri(&format!("{EX}g{index}")).unwrap();
+        let subject = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let value = builder.intern_iri(&format!("{EX}v{index}")).unwrap();
+        builder.push_quad(subject, p, value, Some(graph)).unwrap();
+        let pick = builder.intern_iri(&format!("{EX}pick{index}")).unwrap();
+        builder
+            .push_quad(
+                subject,
+                q,
+                pick,
+                if index == 1 { Some(graph) } else { None },
+            )
+            .unwrap();
     }
     let dataset = builder.freeze().expect("graph boundary fixture freezes");
     let [g2, s2, v2, pick2, missing] =

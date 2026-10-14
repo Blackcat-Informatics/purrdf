@@ -2173,12 +2173,11 @@ test("refusal pair: an operation this endpoint misconfigured is a 500 InternalEr
   assert.equal(errors.length, 1);
 });
 
-// The first stack guard reached determines the status: evaluator exhaustion is 500,
-// host admission is 400. Smaller evaluator frames can reach host admission first.
+// Both typed stack guards are request refusals: evaluator and host exhaustion are 400.
 // Both keep the job's typed code and exact statement, and the endpoint stays usable.
 // The prepared-query 192 KiB test separately exercises physical evaluator exhaustion
 // on actual scalar and SIMD wasm stacks.
-test("refusal pair: the first stack guard keeps its status, code and words; the shallow neighbour answers 200", async () => {
+test("refusal pair: the first stack guard keeps its code and words under 400; the shallow neighbour answers 200", async () => {
   const data = [1, 2, 3, 4]
     .map((n) => `<${EX}s${n}> <${EX}p> <${EX}o${n}> .`)
     .concat([`<${EX}s1> <${EX}q> <${EX}o1> .`])
@@ -2192,7 +2191,7 @@ test("refusal pair: the first stack guard keeps its status, code and words; the 
   };
   const status = async (depth) => (await handleSparqlRequest(httpRequest({ query: q(nested(depth)) }), options)).status;
   // Between 63 levels (which answer) and 2 000 (past the host-stack admission of the
-  // query algebra's height, which is the request's own fault: a 400, not this 500).
+  // query algebra's height, which is also a request refusal).
   let [deepest, refused] = [63, 2_000];
   assert.equal(await status(deepest), 200);
   assert.equal(await status(refused), 400);
@@ -2213,7 +2212,7 @@ test("refusal pair: the first stack guard keeps its status, code and words; the 
     return true;
   });
   const exhausted = await handleSparqlRequest(httpRequest({ query: q(nested(refused)) }), options);
-  assert.equal(exhausted.status, jobCode === "native-sparql-evaluation-stack-exhausted" ? 500 : 400, `${refused} levels reach ${jobCode}`);
+  assert.equal(exhausted.status, 400, `${refused} levels reach ${jobCode}`);
   const body = await problemOf(exhausted);
   assert.equal(body.code, jobCode);
   assert.equal(body.detail, jobRefusal, "the endpoint's detail is the job lane's refusal");

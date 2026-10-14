@@ -180,8 +180,8 @@ impl ClassicTerm {
         alphabet: LabelAlphabet,
     ) -> Result<TermId, RdfDiagnostic> {
         Ok(match self {
-            Self::Iri(iri) => builder.intern_iri(iri),
-            Self::Blank(label) => builder.intern_text_blank(label, alphabet),
+            Self::Iri(iri) => builder.intern_iri(iri)?,
+            Self::Blank(label) => builder.intern_text_blank(label, alphabet)?,
             Self::Literal(literal) => {
                 builder.intern_literal_bound(literal.clone(), BlankBinding::Decoded(alphabet))?
             }
@@ -218,7 +218,7 @@ pub(super) fn freeze_classic_rows_declaring(
     for (subject, predicate, object, graph) in rows {
         let subject = subject.intern(&mut builder, alphabet)?;
         let is_reifies = predicate == RDF_REIFIES;
-        let predicate = builder.intern_iri(&predicate);
+        let predicate = builder.intern_iri(&predicate)?;
         let object = FoldNode::Term(object.intern(&mut builder, alphabet)?);
         let graph = graph
             .map(|graph| graph.intern(&mut builder, alphabet))
@@ -234,7 +234,7 @@ pub(super) fn freeze_classic_rows_declaring(
     fold_statement_layer(&mut builder, fold_rows)?;
     for name in declared_graphs {
         let id = name.intern(&mut builder, alphabet)?;
-        builder.declare_named_graph(id);
+        builder.declare_named_graph(id)?;
     }
     builder.freeze()
 }

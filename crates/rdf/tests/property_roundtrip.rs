@@ -77,7 +77,7 @@ fn flat(dataset: &RdfDataset) -> std::sync::Arc<RdfDataset> {
     let quads = flat_rdf_quads_from_dataset(dataset);
     let mut b = RdfDatasetBuilder::new();
     for quad in &quads {
-        b.push_owned_quad(quad);
+        b.push_owned_quad(quad).unwrap();
     }
     b.freeze().expect("flat dataset must freeze")
 }
@@ -88,7 +88,7 @@ fn flat(dataset: &RdfDataset) -> std::sync::Arc<RdfDataset> {
 fn dataset_from_quads(quads: Vec<RdfQuad>) -> std::sync::Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     for quad in quads {
-        b.push_owned_quad(&quad);
+        b.push_owned_quad(&quad).unwrap();
     }
     b.freeze()
         .expect("generated quads must freeze into a valid dataset")

@@ -22,10 +22,10 @@ const CLASS: &str = "http://a.example/C";
 fn data() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let mut arc = |s: &str, p: &str, o: &str| {
-        let s = b.intern_iri(s);
-        let p = b.intern_iri(p);
-        let o = b.intern_iri(o);
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri(s).unwrap();
+        let p = b.intern_iri(p).unwrap();
+        let o = b.intern_iri(o).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     };
     arc("http://a.example/s1", P1, "http://a.example/o1");
     arc("http://a.example/s2", P1, "http://a.example/o2");

@@ -142,8 +142,12 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     let base_a = seal(eager(first.clone(), &[]));
     let base_b = seal(eager(second.clone(), &[iri("empty")]));
     assert_ne!(
-        base_a.dictionary().term_value(GlobalTermId::from_index(0)),
-        base_b.dictionary().term_value(GlobalTermId::from_index(0)),
+        base_a
+            .dictionary()
+            .term_value(GlobalTermId::from_index(0).expect("stored term index is representable")),
+        base_b
+            .dictionary()
+            .term_value(GlobalTermId::from_index(0).expect("stored term index is representable")),
         "colliding local/global ordinal zero names different values"
     );
     let mut stack = PagedStack::new(vec![base_a, base_b]).unwrap();
@@ -353,18 +357,21 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
         },
     ];
     let mut typed = RdfDatasetBuilder::new();
-    let r = typed.intern_value(&declaration.s);
-    let t = typed.intern_value(&declaration.o);
-    let g = typed.intern_value(declaration.g.as_ref().unwrap());
-    typed.push_reifier_in_graph(r, t, Some(g));
-    let p = typed.intern_value(&note.p);
-    let o = typed.intern_value(&note.o);
-    typed.push_annotation_in_graph(r, p, o, Some(g));
+    let r = typed.intern_value(&declaration.s).unwrap();
+    let t = typed.intern_value(&declaration.o).unwrap();
+    let g = typed.intern_value(declaration.g.as_ref().unwrap()).unwrap();
+    typed.push_reifier_in_graph(r, t, Some(g)).unwrap();
+    let p = typed.intern_value(&note.p).unwrap();
+    let o = typed.intern_value(&note.o).unwrap();
+    typed.push_annotation_in_graph(r, p, o, Some(g)).unwrap();
     let typed = typed.freeze().unwrap();
     let ordinary_page = eager(ordinary.clone(), &[]);
     let mut expected = RdfDatasetBuilder::new();
     for page in [&typed, &ordinary_page] {
-        purrdf_core::ir::import::DatasetImporter::new(&mut expected, page.as_ref()).append();
+        purrdf_core::ir::import::DatasetImporter::new(&mut expected, page.as_ref())
+            .unwrap()
+            .append()
+            .unwrap();
     }
     let expected = expected.freeze().unwrap();
     let mut stack = PagedStack::new(vec![seal(typed), seal(ordinary_page)]).unwrap();
@@ -412,14 +419,22 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
         &mut promoted_builder,
         ordinary_expected.as_ref(),
     )
-    .append();
-    let r = promoted_builder.intern_value(&new_declaration.s);
-    let triple = promoted_builder.intern_value(&new_declaration.o);
-    let graph = promoted_builder.intern_value(new_declaration.g.as_ref().unwrap());
-    promoted_builder.push_reifier_in_graph(r, triple, Some(graph));
-    let p = promoted_builder.intern_value(&note.p);
-    let o = promoted_builder.intern_value(&note.o);
-    promoted_builder.push_annotation_in_graph(r, p, o, Some(graph));
+    .unwrap()
+    .append()
+    .unwrap();
+    let r = promoted_builder.intern_value(&new_declaration.s).unwrap();
+    let triple = promoted_builder.intern_value(&new_declaration.o).unwrap();
+    let graph = promoted_builder
+        .intern_value(new_declaration.g.as_ref().unwrap())
+        .unwrap();
+    promoted_builder
+        .push_reifier_in_graph(r, triple, Some(graph))
+        .unwrap();
+    let p = promoted_builder.intern_value(&note.p).unwrap();
+    let o = promoted_builder.intern_value(&note.o).unwrap();
+    promoted_builder
+        .push_annotation_in_graph(r, p, o, Some(graph))
+        .unwrap();
     let promoted_oracle = promoted_builder.freeze().unwrap();
     let promoted_head = stack.snapshot().unwrap();
     stack.seal_head(bound(1)).unwrap();
@@ -463,11 +478,15 @@ struct ControlledProvider {
 #[test]
 fn native_primary_and_virtual_reifier_overlap_reaches_the_same_consumer_bag() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_value(&iri("r"));
-    let p = builder.intern_value(&TermValue::iri(purrdf_core::vocab::rdf::REIFIES));
-    let o = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
-    builder.push_quad(s, p, o, None);
-    builder.push_reifier(s, o);
+    let s = builder.intern_value(&iri("r")).unwrap();
+    let p = builder
+        .intern_value(&TermValue::iri(purrdf_core::vocab::rdf::REIFIES))
+        .unwrap();
+    let o = builder
+        .intern_value(&purrdf_core::term_fixture::triple_chain(1))
+        .unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
+    builder.push_reifier(s, o).unwrap();
     let oracle = builder.freeze().unwrap();
     let snapshot = PagedStack::new(vec![seal(Arc::clone(&oracle))])
         .unwrap()

@@ -53,57 +53,61 @@ struct Fixture {
 fn build_fixture() -> Fixture {
     let mut b = RdfDatasetBuilder::new();
 
-    let s1 = b.intern_iri("http://example.org/s1");
-    let s2 = b.intern_iri("http://example.org/s2");
-    let s3 = b.intern_iri("http://example.org/s3");
-    let p1 = b.intern_iri("http://example.org/p1");
-    let p2 = b.intern_iri("http://example.org/p2");
-    let o1 = b.intern_iri("http://example.org/o1");
-    let lit1 = b.intern_literal(purrdf_core::RdfLiteral {
-        lexical_form: "hello".to_string(),
-        datatype: None,
-        language: None,
-        direction: None,
-    });
-    let lit2 = b.intern_literal(purrdf_core::RdfLiteral {
-        lexical_form: "bonjour".to_string(),
-        datatype: None,
-        language: Some("fr".to_string()),
-        direction: None,
-    });
-    let blank1 = b.intern_blank("b0", BlankScope::DEFAULT);
+    let s1 = b.intern_iri("http://example.org/s1").unwrap();
+    let s2 = b.intern_iri("http://example.org/s2").unwrap();
+    let s3 = b.intern_iri("http://example.org/s3").unwrap();
+    let p1 = b.intern_iri("http://example.org/p1").unwrap();
+    let p2 = b.intern_iri("http://example.org/p2").unwrap();
+    let o1 = b.intern_iri("http://example.org/o1").unwrap();
+    let lit1 = b
+        .intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "hello".to_string(),
+            datatype: None,
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    let lit2 = b
+        .intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: "bonjour".to_string(),
+            datatype: None,
+            language: Some("fr".to_string()),
+            direction: None,
+        })
+        .unwrap();
+    let blank1 = b.intern_blank("b0", BlankScope::DEFAULT).unwrap();
     // "only_subject" plays a subject role and NOTHING else anywhere in the
     // fixture — the dedicated "never an object" absent-probe term.
-    let only_subject = b.intern_iri("http://example.org/only_subject");
+    let only_subject = b.intern_iri("http://example.org/only_subject").unwrap();
     // The RDF 1.2 triple term `<<( s1 p1 o1 )>>`. RDF 1.2 nests a triple term in
     // exactly ONE position — the OBJECT of another triple term — and forbids it
     // in every subject position, asserted or nested (`rdf-ir-triple-subject`).
     // So `inner_triple` earns its two roles the only way the term model allows:
     // the structural OBJECT slot of an OUTER triple term (`outer_triple`,
     // below), and directly as the object of an asserted quad (G1b).
-    let inner_triple = b.intern_triple(s1, p1, o1);
-    let outer_triple = b.intern_triple(s3, p2, inner_triple);
-    let g1 = b.intern_iri("http://example.org/g1");
-    let g2 = b.intern_iri("http://example.org/g2");
+    let inner_triple = b.intern_triple(s1, p1, o1).unwrap();
+    let outer_triple = b.intern_triple(s3, p2, inner_triple).unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    let g2 = b.intern_iri("http://example.org/g2").unwrap();
 
     // -- Default graph ------------------------------------------------------
-    b.push_quad(s1, p1, o1, None);
-    b.push_quad(s1, p1, lit1, None); // repeated (s1, p1): >1-member So group
-    b.push_quad(s1, p2, o1, None); // repeated subject s1, different predicate
-    b.push_quad(s2, p1, o1, None); // repeated predicate p1, different subject
-    b.push_quad(s3, p2, p1, None); // predicate p1 ALSO used as an object here
-    b.push_quad(blank1, p1, o1, None); // blank-node subject
-    b.push_quad(only_subject, p1, o1, None);
+    b.push_quad(s1, p1, o1, None).unwrap();
+    b.push_quad(s1, p1, lit1, None).unwrap(); // repeated (s1, p1): >1-member So group
+    b.push_quad(s1, p2, o1, None).unwrap(); // repeated subject s1, different predicate
+    b.push_quad(s2, p1, o1, None).unwrap(); // repeated predicate p1, different subject
+    b.push_quad(s3, p2, p1, None).unwrap(); // predicate p1 ALSO used as an object here
+    b.push_quad(blank1, p1, o1, None).unwrap(); // blank-node subject
+    b.push_quad(only_subject, p1, o1, None).unwrap();
 
     // -- Named graph g1 -------------------------------------------------------
-    b.push_quad(s3, p2, outer_triple, Some(g1)); // outer triple as OBJECT
+    b.push_quad(s3, p2, outer_triple, Some(g1)).unwrap(); // outer triple as OBJECT
     // (`inner_triple` sits in `outer_triple`'s structural OBJECT slot).
-    b.push_quad(s2, p1, inner_triple, Some(g1)); // inner triple as OBJECT too
+    b.push_quad(s2, p1, inner_triple, Some(g1)).unwrap(); // inner triple as OBJECT too
 
     // -- Named graph g2 ---------------------------------------------------
-    b.push_quad(s1, p1, o1, Some(g2)); // same (s,p,o) as the first default-graph
+    b.push_quad(s1, p1, o1, Some(g2)).unwrap(); // same (s,p,o) as the first default-graph
     // quad, but in a different graph — partition separation.
-    b.push_quad(s3, p1, lit2, Some(g2));
+    b.push_quad(s3, p1, lit2, Some(g2)).unwrap();
 
     let dataset = b.freeze().expect("valid dataset");
 
@@ -439,12 +443,12 @@ fn named_graph_ids_match_dataset_named_graphs() {
 #[test]
 fn from_bytes_rejects_a_triples_index_whose_counts_overflow() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/overflow_s");
-    let p1 = b.intern_iri("http://example.org/overflow_p1");
-    let p2 = b.intern_iri("http://example.org/overflow_p2");
-    let o = b.intern_iri("http://example.org/overflow_o");
-    b.push_quad(s, p1, o, None);
-    b.push_quad(s, p2, o, None);
+    let s = b.intern_iri("http://example.org/overflow_s").unwrap();
+    let p1 = b.intern_iri("http://example.org/overflow_p1").unwrap();
+    let p2 = b.intern_iri("http://example.org/overflow_p2").unwrap();
+    let o = b.intern_iri("http://example.org/overflow_o").unwrap();
+    b.push_quad(s, p1, o, None).unwrap();
+    b.push_quad(s, p2, o, None).unwrap();
     let dataset = b.freeze().expect("valid dataset");
 
     let dict_bytes = PackDict::encode(&dataset).to_bytes();

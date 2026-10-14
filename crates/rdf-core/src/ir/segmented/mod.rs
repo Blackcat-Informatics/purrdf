@@ -10,12 +10,21 @@
 
 mod build;
 mod format;
+mod query;
 mod session;
+mod stack;
 
 pub use build::{SegmentedBuildLimits, SegmentedBuilder, SegmentedImage};
+pub use query::{
+    SegmentedStackQuery, SegmentedStackSource, SegmentedStackTerm, SegmentedStackTermGuard,
+};
 pub use session::{
     SegmentedEvidence, SegmentedReadLimits, SegmentedRequest, SegmentedReservation,
     SegmentedSession, SegmentedTermGuard,
+};
+pub use stack::{
+    SegmentedLayer, SegmentedLayerMetadata, SegmentedResidentHead, SegmentedStack,
+    SegmentedStackSnapshot,
 };
 
 use std::sync::Arc;
@@ -32,7 +41,7 @@ pub const SEGMENTED_BLOCK_DOMAIN: Domain = Domain::new(b"purrdf-segmented-block-
 pub const SEGMENTED_NODE_DOMAIN: Domain = Domain::new(b"purrdf-segmented-node-v1\0");
 
 /// The exact ordered provider-request evidence law.
-pub const SEGMENTED_REQUESTS_DOMAIN: Domain = Domain::new(b"purrdf-segmented-requests-v1\0");
+pub const SEGMENTED_REQUESTS_DOMAIN: Domain = Domain::new(b"purrdf-segmented-requests-v2\0");
 
 /// Exact identity of one immutable persisted representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -120,6 +129,8 @@ impl SegmentedHandle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SegmentedError {
+    /// Original logical capacity or physical storage refusal during construction.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The host could not complete a requested read.
     Provider {
         /// Fixed host operation label; retaining an error never allocates text.
@@ -135,6 +146,8 @@ pub enum SegmentedError {
     AddressExhausted,
     /// An admitted local buffer was refused by the host allocator.
     AllocationFailed(&'static str),
+    /// Checked shared request-identity ownership could not be retained.
+    SharedOwnership(purrdf_lex::allocation::shared::SharedCloneError),
     /// The requested live residency exceeds the caller's ceiling.
     Residency {
         /// Proposed live/cumulative charge at the admission boundary.
@@ -159,9 +172,20 @@ pub enum SegmentedError {
     Stopped(StopCause),
 }
 
+impl SegmentedError {
+    fn from_rdf(error: crate::RdfDiagnostic, invalid: &'static str) -> Self {
+        let result = error
+            .storage_error()
+            .map_or(Self::Corrupt(invalid), Self::Storage);
+        drop(error);
+        result
+    }
+}
+
 impl std::fmt::Display for SegmentedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::Provider {
                 operation,
                 host_code,
@@ -178,6 +202,7 @@ impl std::fmt::Display for SegmentedError {
             Self::AllocationFailed(construct) => {
                 write!(f, "segmented allocation failed for {construct}")
             }
+            Self::SharedOwnership(error) => error.fmt(f),
             Self::Residency { requested, limit } => {
                 write!(f, "segmented live residency {requested} exceeds {limit}")
             }
@@ -193,7 +218,12 @@ impl std::fmt::Display for SegmentedError {
         }
     }
 }
-impl std::error::Error for SegmentedError {}
+purrdf_lex::error_source!(SegmentedError {
+    Storage,
+    SharedOwnership
+});
+
+purrdf_lex::variant_from!(SegmentedError { Storage(purrdf_lex::allocation::StorageError) });
 
 /// A streamed RDF line export distinguishes source completeness from sink failure.
 #[derive(Debug)]

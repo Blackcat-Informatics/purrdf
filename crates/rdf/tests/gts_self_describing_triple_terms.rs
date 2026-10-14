@@ -133,12 +133,12 @@ fn nested_tt_only_triple_terms_survive_to_their_leaves() {
 #[test]
 fn a_quoted_triple_round_trips_through_gts_bytes() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let p = builder.intern_iri(P);
-    let o = builder.intern_iri(O);
-    let says = builder.intern_iri(SAYS);
-    let quoted = builder.intern_triple(s, p, o);
-    builder.push_quad(s, says, quoted, None);
+    let s = builder.intern_iri(S).unwrap();
+    let p = builder.intern_iri(P).unwrap();
+    let o = builder.intern_iri(O).unwrap();
+    let says = builder.intern_iri(SAYS).unwrap();
+    let quoted = builder.intern_triple(s, p, o).unwrap();
+    builder.push_quad(s, says, quoted, None).unwrap();
     let source: Arc<RdfDataset> = builder.freeze().expect("a valid source dataset");
 
     let bytes = to_gts(&source, &RdfLookaside::default(), "rdf12").expect("write GTS bytes");

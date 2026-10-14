@@ -168,7 +168,7 @@ impl Sink {
     /// `finish()` — run the protocol's forward-reference resolution and return the
     /// resulting dataset. The sink is consumed; further `push`/`finish` is an error.
     #[wasm_bindgen(js_name = finish)]
-    pub fn finish(&mut self) -> Result<Dataset, JsError> {
+    pub fn finish(&mut self) -> Result<Dataset, JsValue> {
         let mut sink = self
             .inner
             .take()

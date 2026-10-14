@@ -426,43 +426,71 @@ fn bench_jsonld_carrier_stress(c: &mut Bench) {
 /// rows, so the interner's id memo answers most term occurrences.
 fn star_fixture(rows: usize, star: bool) -> std::sync::Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let knows = builder.intern_iri("https://example.org/knows");
-    let count = builder.intern_iri("https://example.org/count");
-    let seen = builder.intern_iri("https://example.org/seen");
-    let label = builder.intern_iri("https://example.org/label");
-    let asserts = builder.intern_iri("https://example.org/asserts");
-    let confidence = builder.intern_iri("https://example.org/confidence");
-    let graph = builder.intern_iri("https://example.org/graph");
+    let knows = builder.intern_iri("https://example.org/knows").unwrap();
+    let count = builder.intern_iri("https://example.org/count").unwrap();
+    let seen = builder.intern_iri("https://example.org/seen").unwrap();
+    let label = builder.intern_iri("https://example.org/label").unwrap();
+    let asserts = builder.intern_iri("https://example.org/asserts").unwrap();
+    let confidence = builder
+        .intern_iri("https://example.org/confidence")
+        .unwrap();
+    let graph = builder.intern_iri("https://example.org/graph").unwrap();
     for index in 0..rows {
-        let subject = builder.intern_iri(&format!("https://example.org/s{index}"));
-        let object = builder.intern_iri(&format!("https://example.org/o{}", index % 64));
-        let integer = builder.intern_literal(RdfLiteral::typed(
-            index.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let stamp = builder.intern_literal(RdfLiteral::typed(
-            format!("2026-01-01T00:00:{:02}Z", index % 60),
-            "http://www.w3.org/2001/XMLSchema#dateTime",
-        ));
-        let tagged = builder.intern_literal(RdfLiteral::language_tagged(
-            format!("label {index}"),
-            if index % 2 == 0 { "en" } else { "de" },
-        ));
+        let subject = builder
+            .intern_iri(&format!("https://example.org/s{index}"))
+            .unwrap();
+        let object = builder
+            .intern_iri(&format!("https://example.org/o{}", index % 64))
+            .unwrap();
+        let integer = builder
+            .intern_literal(RdfLiteral::typed(
+                index.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        let stamp = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("2026-01-01T00:00:{:02}Z", index % 60),
+                "http://www.w3.org/2001/XMLSchema#dateTime",
+            ))
+            .unwrap();
+        let tagged = builder
+            .intern_literal(RdfLiteral::language_tagged(
+                format!("label {index}"),
+                if index % 2 == 0 { "en" } else { "de" },
+            ))
+            .unwrap();
         let graph_name = (index % 4 == 0).then_some(graph);
-        builder.push_quad(subject, knows, object, graph_name);
-        builder.push_quad(subject, count, integer, graph_name);
-        builder.push_quad(subject, seen, stamp, graph_name);
-        builder.push_quad(subject, label, tagged, graph_name);
+        builder
+            .push_quad(subject, knows, object, graph_name)
+            .unwrap();
+        builder
+            .push_quad(subject, count, integer, graph_name)
+            .unwrap();
+        builder.push_quad(subject, seen, stamp, graph_name).unwrap();
+        builder
+            .push_quad(subject, label, tagged, graph_name)
+            .unwrap();
         if star && index % 8 == 0 {
-            let proposition = builder.intern_triple(subject, knows, object);
-            let reifier = builder.intern_iri(&format!("https://example.org/r{index}"));
-            let score = builder.intern_literal(RdfLiteral::typed(
-                format!("0.{}", index % 10),
-                "http://www.w3.org/2001/XMLSchema#decimal",
-            ));
-            builder.push_reifier_in_graph(reifier, proposition, graph_name);
-            builder.push_annotation_in_graph(reifier, confidence, score, graph_name);
-            builder.push_quad(subject, asserts, proposition, graph_name);
+            let proposition = builder.intern_triple(subject, knows, object).unwrap();
+            let reifier = builder
+                .intern_iri(&format!("https://example.org/r{index}"))
+                .unwrap();
+            let score = builder
+                .intern_literal(RdfLiteral::typed(
+                    format!("0.{}", index % 10),
+                    "http://www.w3.org/2001/XMLSchema#decimal",
+                ))
+                .unwrap();
+            builder
+                .push_reifier_in_graph(reifier, proposition, graph_name)
+                .unwrap();
+            builder
+                .push_annotation_in_graph(reifier, confidence, score, graph_name)
+                .unwrap();
+            builder
+                .push_quad(subject, asserts, proposition, graph_name)
+                .unwrap();
         }
     }
     builder.freeze().expect("star serializer fixture")
@@ -556,19 +584,31 @@ fn bench_parse_turtle_collections(c: &mut Bench) {
 fn repeated_predicates_fixture(rows: usize) -> std::sync::Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let predicates: Vec<_> = (0..5)
-        .map(|i| builder.intern_iri(&format!("https://example.org/p{i}")))
+        .map(|i| {
+            builder
+                .intern_iri(&format!("https://example.org/p{i}"))
+                .unwrap()
+        })
         .collect();
     let objects: Vec<_> = (0..8)
-        .map(|i| builder.intern_iri(&format!("https://example.org/o{i}")))
+        .map(|i| {
+            builder
+                .intern_iri(&format!("https://example.org/o{i}"))
+                .unwrap()
+        })
         .collect();
     for index in 0..rows {
-        let subject = builder.intern_iri(&format!("https://example.org/s{}", index / 5));
-        builder.push_quad(
-            subject,
-            predicates[index % predicates.len()],
-            objects[index % objects.len()],
-            None,
-        );
+        let subject = builder
+            .intern_iri(&format!("https://example.org/s{}", index / 5))
+            .unwrap();
+        builder
+            .push_quad(
+                subject,
+                predicates[index % predicates.len()],
+                objects[index % objects.len()],
+                None,
+            )
+            .unwrap();
     }
     builder.freeze().expect("repeated-predicate fixture")
 }

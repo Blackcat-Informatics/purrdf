@@ -70,6 +70,8 @@ pub struct PagedStackEvidence {
 /// A construction or mutable membership failure; absence never substitutes for error.
 #[derive(Debug)]
 pub enum PagedStackError {
+    /// Original logical capacity or physical storage refusal.
+    Storage(purrdf_lex::allocation::StorageError),
     /// Invalid RDF row or head declaration.
     Invalid(RdfDiagnostic),
     /// Sealed metadata construction failed.
@@ -88,6 +90,7 @@ pub enum PagedStackError {
 impl std::fmt::Display for PagedStackError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::Invalid(e) => write!(f, "invalid stack head: {e}"),
             Self::Freeze(e) => write!(f, "stack metadata construction: {e}"),
             Self::Read(e) => write!(f, "stack membership: {e}"),
@@ -101,6 +104,7 @@ impl std::fmt::Display for PagedStackError {
 impl std::error::Error for PagedStackError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(error) => Some(error),
             Self::Invalid(error) => Some(error),
             Self::Freeze(error) => Some(error),
             Self::Read(error) => Some(error),
@@ -109,6 +113,8 @@ impl std::error::Error for PagedStackError {
         }
     }
 }
+
+purrdf_lex::variant_from!(PagedStackError { Storage(purrdf_lex::allocation::StorageError) });
 
 #[derive(Debug)]
 struct Layer {
@@ -295,8 +301,8 @@ impl PagedStack {
     pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, PagedStackError> {
         self.check_sources()?;
         let mut builder = RdfDatasetBuilder::new();
-        let id = builder.intern_value(&graph);
-        builder.declare_named_graph(id);
+        let id = builder.intern_value(&graph)?;
+        builder.declare_named_graph(id)?;
         let frozen = builder.freeze().map_err(PagedStackError::Invalid)?;
         Ok(self.graphs.insert(frozen.as_ref().term_value(id)))
     }
@@ -320,10 +326,13 @@ impl PagedStack {
             return Ok(head);
         }
         let mut builder = RdfDatasetBuilder::new();
-        crate::ir::import::DatasetImporter::new(&mut builder, head.as_ref()).append();
+        crate::ir::import::DatasetImporter::new(&mut builder, head.as_ref())
+            .map_err(|error| PagedStackError::Invalid(error.into()))?
+            .append()
+            .map_err(|error| PagedStackError::Invalid(error.into()))?;
         for graph in &self.graphs {
-            let id = builder.intern_value(graph);
-            builder.declare_named_graph(id);
+            let id = builder.intern_value(graph)?;
+            builder.declare_named_graph(id)?;
         }
         builder.freeze().map_err(PagedStackError::Invalid)
     }
@@ -379,13 +388,13 @@ impl PagedStack {
                 .try_reserve(source.dictionary.len())
                 .map_err(|_| PagedStackError::Capacity)?;
             for i in 0..source.dictionary.len() {
-                let value = source
-                    .dictionary
-                    .term_value(GlobalTermId::from_index(i as u64));
+                let value = source.dictionary.term_value(
+                    GlobalTermId::from_index(i as u64).expect("stored term index is representable"),
+                );
                 remap.push(
                     dictionary
                         .try_reintern_validated(&value)
-                        .map_err(|()| PagedStackError::Capacity)?,
+                        .map_err(PagedStackError::Storage)?,
                 );
             }
             for slot in &source.pages {
@@ -444,7 +453,7 @@ impl PagedStack {
             empty_graphs.insert(
                 dictionary
                     .try_reintern_validated(graph)
-                    .map_err(|()| PagedStackError::Capacity)?,
+                    .map_err(PagedStackError::Storage)?,
             );
         }
         let head_removals = if include_head {
@@ -467,20 +476,20 @@ impl PagedStack {
                         Ok(QuadIds {
                             s: dictionary
                                 .try_reintern_validated(&row.s)
-                                .map_err(|()| PagedStackError::Capacity)?,
+                                .map_err(PagedStackError::Storage)?,
                             p: dictionary
                                 .try_reintern_validated(&row.p)
-                                .map_err(|()| PagedStackError::Capacity)?,
+                                .map_err(PagedStackError::Storage)?,
                             o: dictionary
                                 .try_reintern_validated(&row.o)
-                                .map_err(|()| PagedStackError::Capacity)?,
+                                .map_err(PagedStackError::Storage)?,
                             g: row
                                 .g
                                 .as_ref()
                                 .map(|g| {
                                     dictionary
                                         .try_reintern_validated(g)
-                                        .map_err(|()| PagedStackError::Capacity)
+                                        .map_err(PagedStackError::Storage)
                                 })
                                 .transpose()?,
                         })
@@ -563,11 +572,15 @@ impl PagedStack {
 
 fn normalize_row(row: &QuadValues) -> Result<QuadValues, PagedStackError> {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_value(&row.s);
-    let p = builder.intern_value(&row.p);
-    let o = builder.intern_value(&row.o);
-    let g = row.g.as_ref().map(|g| builder.intern_value(g));
-    builder.push_quad(s, p, o, g);
+    let s = builder.intern_value(&row.s)?;
+    let p = builder.intern_value(&row.p)?;
+    let o = builder.intern_value(&row.o)?;
+    let g = row
+        .g
+        .as_ref()
+        .map(|g| builder.intern_value(g))
+        .transpose()?;
+    builder.push_quad(s, p, o, g)?;
     let frozen = builder.freeze().map_err(PagedStackError::Invalid)?;
     Ok(QuadValues {
         s: frozen.as_ref().term_value(s),
@@ -1008,6 +1021,8 @@ impl FallibleDatasetView for PagedStackQueryView<'_> {
 /// Failure of canonical eager sealing or a guarded fold; no partial base is returned.
 #[derive(Debug)]
 pub enum CanonicalPagedError<E> {
+    /// Original logical capacity or physical storage refusal.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The source operation failed, retaining its original typed cause.
     Read(E),
     /// A typed recursive term lookup failure (including source read errors).
@@ -1026,6 +1041,7 @@ pub enum CanonicalPagedError<E> {
 impl<E: std::fmt::Display> std::fmt::Display for CanonicalPagedError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::Read(e) => write!(f, "canonical source read: {e}"),
             Self::Term(e) => write!(f, "canonical term lookup: {e}"),
             Self::Invalid(e) => write!(f, "canonical RDF row: {e}"),
@@ -1039,6 +1055,7 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonicalPagedError<E> {
 impl<E: std::error::Error + 'static> std::error::Error for CanonicalPagedError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(error) => Some(error),
             Self::Read(error) => Some(error),
             Self::Term(error) => Some(error),
             Self::Invalid(error) => Some(error),
@@ -1050,6 +1067,8 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonicalPagedError<E
     }
 }
 
+purrdf_lex::variant_from!(impl<E> CanonicalPagedError<E> { Storage(purrdf_lex::allocation::StorageError) });
+
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum CanonicalRecord {
     Ordinary(QuadValues),
@@ -1059,11 +1078,14 @@ enum CanonicalRecord {
 }
 
 impl CanonicalRecord {
-    fn replay(self, builder: &mut RdfDatasetBuilder) {
+    fn replay(
+        self,
+        builder: &mut RdfDatasetBuilder,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
         match self {
             Self::Graph(graph) => {
-                let g = builder.intern_value(&graph);
-                builder.declare_named_graph(g);
+                let g = builder.intern_value(&graph)?;
+                builder.declare_named_graph(g)?;
             }
             row => {
                 let (kind, row) = match row {
@@ -1072,17 +1094,22 @@ impl CanonicalRecord {
                     Self::Annotation(row) => (2, row),
                     Self::Graph(_) => unreachable!(),
                 };
-                let s = builder.intern_value(&row.s);
-                let p = builder.intern_value(&row.p);
-                let o = builder.intern_value(&row.o);
-                let g = row.g.as_ref().map(|g| builder.intern_value(g));
+                let s = builder.intern_value(&row.s)?;
+                let p = builder.intern_value(&row.p)?;
+                let o = builder.intern_value(&row.o)?;
+                let g = row
+                    .g
+                    .as_ref()
+                    .map(|g| builder.intern_value(g))
+                    .transpose()?;
                 match kind {
                     0 => builder.push_quad(s, p, o, g),
                     1 => builder.push_reifier_in_graph(s, o, g),
                     _ => builder.push_annotation_in_graph(s, p, o, g),
-                }
+                }?;
             }
         }
+        Ok(())
     }
 }
 
@@ -1148,7 +1175,7 @@ pub fn canonical_paged_seal<D: FallibleDatasetView>(
     while records.peek().is_some() {
         let mut builder = RdfDatasetBuilder::new();
         for record in records.by_ref().take(page_rows.get()) {
-            record.replay(&mut builder);
+            record.replay(&mut builder)?;
         }
         let page = builder.freeze().map_err(CanonicalPagedError::Invalid)?;
         let bytes = PackBuilder::build_bytes(&page).map_err(CanonicalPagedError::Pack)?;
@@ -1164,7 +1191,7 @@ pub fn canonical_paged_seal<D: FallibleDatasetView>(
     )))
     .map_err(CanonicalPagedError::Freeze)?;
     checkpoint(view)?;
-    Ok(sealed.compact())
+    Ok(sealed.compact()?)
 }
 fn checkpoint<D: FallibleDatasetView>(view: &D) -> Result<(), CanonicalPagedError<D::Error>> {
     match view.operation_status() {

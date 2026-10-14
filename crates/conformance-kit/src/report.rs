@@ -163,10 +163,8 @@ pub fn compare_graphs(expected: &RdfDataset, actual: &RdfDataset) -> Result<(), 
             "dataset",
             "dataset",
             dataset,
-        );
-        builder
-            .freeze()
-            .map_err(|error| GradeError::Malformed(error.to_string()))
+        )?;
+        builder.freeze().map_err(GradeError::from)
     };
     let expected = encode(expected)?;
     let actual = encode(actual)?;
@@ -176,9 +174,9 @@ pub fn compare_graphs(expected: &RdfDataset, actual: &RdfDataset) -> Result<(), 
 fn canonical_equality(expected: &RdfDataset, actual: &RdfDataset) -> Result<(), GradeError> {
     let expected =
         purrdf_core::try_canonicalize_flat_view(expected, purrdf_core::CanonHash::Sha256)
-            .map_err(|error| GradeError::Canonicalization(error.to_string()))?;
+            .map_err(GradeError::from)?;
     let actual = purrdf_core::try_canonicalize_flat_view(actual, purrdf_core::CanonHash::Sha256)
-        .map_err(|error| GradeError::Canonicalization(error.to_string()))?;
+        .map_err(GradeError::from)?;
     if expected.nquads == actual.nquads {
         Ok(())
     } else {
@@ -306,15 +304,15 @@ fn encode_context(context: ReportContext<'_>) -> Result<std::sync::Arc<RdfDatase
         "report",
         "report",
         context.report,
-    );
+    )?;
     for source in context.sources {
-        let declaration = builder.intern_iri("urn:purrdf:conformance:context:source");
+        let declaration = builder.intern_iri("urn:purrdf:conformance:context:source")?;
         let role = builder.intern_iri(match source.role {
             SourceRole::DataGraph => "urn:purrdf:conformance:context:data",
             SourceRole::ShapesGraph => "urn:purrdf:conformance:context:shapes",
-        });
-        let present = builder.intern_iri("urn:purrdf:conformance:context:present");
-        builder.push_quad(declaration, present, role, None);
+        })?;
+        let present = builder.intern_iri("urn:purrdf:conformance:context:present")?;
+        builder.push_quad(declaration, present, role, None)?;
         encode_dataset(
             &mut builder,
             &mut identities,
@@ -324,18 +322,16 @@ fn encode_context(context: ReportContext<'_>) -> Result<std::sync::Arc<RdfDatase
                 SourceRole::ShapesGraph => "shapes",
             },
             source.dataset,
-        );
+        )?;
     }
     if let Some(root) = context.root {
-        let subject = builder.intern_iri("urn:purrdf:conformance:context:root");
-        let predicate = builder.intern_iri("urn:purrdf:conformance:context:report");
+        let subject = builder.intern_iri("urn:purrdf:conformance:context:root")?;
+        let predicate = builder.intern_iri("urn:purrdf:conformance:context:report")?;
         let mapped = identities.map("report", &context.report.term_value(root));
-        let object = builder.intern_value(&mapped);
-        builder.push_quad(subject, predicate, object, None);
+        let object = builder.intern_value(&mapped)?;
+        builder.push_quad(subject, predicate, object, None)?;
     }
-    builder
-        .freeze()
-        .map_err(|error| GradeError::Malformed(error.to_string()))
+    builder.freeze().map_err(GradeError::from)
 }
 
 fn encode_dataset(
@@ -344,19 +340,19 @@ fn encode_dataset(
     domain: &str,
     role: &str,
     dataset: &RdfDataset,
-) {
+) -> Result<(), GradeError> {
     let default_graph =
-        builder.intern_iri(&format!("urn:purrdf:conformance:context:{role}:default"));
+        builder.intern_iri(&format!("urn:purrdf:conformance:context:{role}:default"))?;
     let mut graph_names = std::collections::BTreeMap::new();
     for g in dataset.named_graphs() {
         let graph =
-            builder.intern_blank(&format!("graph{role}{}", graph_names.len()), BlankScope(1));
-        let role_node = builder.intern_iri(&format!("urn:purrdf:conformance:context:{role}"));
-        let graph_relation = builder.intern_iri("urn:purrdf:conformance:context:graph");
-        builder.push_quad(role_node, graph_relation, graph, None);
-        let original_relation = builder.intern_iri("urn:purrdf:conformance:context:sourceGraph");
-        let original = builder.intern_value(&identities.map(domain, &dataset.term_value(g)));
-        builder.push_quad(graph, original_relation, original, None);
+            builder.intern_blank(&format!("graph{role}{}", graph_names.len()), BlankScope(1))?;
+        let role_node = builder.intern_iri(&format!("urn:purrdf:conformance:context:{role}"))?;
+        let graph_relation = builder.intern_iri("urn:purrdf:conformance:context:graph")?;
+        builder.push_quad(role_node, graph_relation, graph, None)?;
+        let original_relation = builder.intern_iri("urn:purrdf:conformance:context:sourceGraph")?;
+        let original = builder.intern_value(&identities.map(domain, &dataset.term_value(g)))?;
+        builder.push_quad(graph, original_relation, original, None)?;
         graph_names.insert(g, graph);
     }
     let quads: BTreeSet<_> = dataset
@@ -367,9 +363,10 @@ fn encode_dataset(
         .collect();
     for (s, p, o, g) in quads {
         let graph = g.map_or(default_graph, |g| graph_names[&g]);
-        let s = builder.intern_value(&identities.map(domain, &dataset.term_value(s)));
-        let p = builder.intern_value(&identities.map(domain, &dataset.term_value(p)));
-        let o = builder.intern_value(&identities.map(domain, &dataset.term_value(o)));
-        builder.push_quad(s, p, o, Some(graph));
+        let s = builder.intern_value(&identities.map(domain, &dataset.term_value(s)))?;
+        let p = builder.intern_value(&identities.map(domain, &dataset.term_value(p)))?;
+        let o = builder.intern_value(&identities.map(domain, &dataset.term_value(o)))?;
+        builder.push_quad(s, p, o, Some(graph))?;
     }
+    Ok(())
 }

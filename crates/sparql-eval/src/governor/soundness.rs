@@ -590,7 +590,10 @@ where
         GraphPattern::Project {
             inner,
             variables: _,
-        } => visit(PatternPart::Child(inner, ChildEdge::MONOTONE)),
+        }
+        | GraphPattern::ProjectStar { inner, .. } => {
+            visit(PatternPart::Child(inner, ChildEdge::MONOTONE))
+        }
         // `S ⊑ T ⇒ dedup S ⊑ dedup T`: de-duplication keeps each value's first
         // occurrence, and a prefix's first occurrences are the true bag's first
         // occurrences. Classifying `DISTINCT` non-monotone would void every
@@ -1088,6 +1091,10 @@ pub(crate) const fn child_row_ceiling(
         | GraphPattern::Project {
             inner: _,
             variables: _,
+        }
+        | GraphPattern::ProjectStar {
+            inner: _,
+            variables: _,
         } => {
             if ordinal == 0 {
                 Some(ceiling)
@@ -1485,7 +1492,8 @@ pub(crate) const fn pattern_label_index(pattern: &GraphPattern) -> usize {
         GraphPattern::Project {
             inner: _,
             variables: _,
-        } => 13,
+        }
+        | GraphPattern::ProjectStar { .. } => 13,
         GraphPattern::Distinct { inner: _ } => 14,
         GraphPattern::Reduced { inner: _ } => 15,
         GraphPattern::Slice {
@@ -2073,6 +2081,7 @@ fn push_pattern_parts<'a>(
         GraphPattern::Graph { inner, .. }
         | GraphPattern::Service { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. } => steps.push(AnalysisStep::EnterPattern(inner))?,
@@ -2456,6 +2465,20 @@ fn assemble_pattern(
             }
         }
         GraphPattern::Project { variables, .. } => {
+            let inner = values.pattern();
+            let projected = VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
+            NodeAnalysis {
+                free_vars: inner
+                    .free_vars
+                    .intersection_admitted(&projected, workspace)?,
+                certainly_bound: inner
+                    .certainly_bound
+                    .intersection_admitted(&projected, workspace)?,
+                has_stateful_builtin: inner.has_stateful_builtin,
+                can_hard_error: inner.can_hard_error,
+            }
+        }
+        GraphPattern::ProjectStar { variables, .. } => {
             let inner = values.pattern();
             let projected = VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
             NodeAnalysis {
@@ -2940,6 +2963,7 @@ fn pattern_probe_step<'p, 't>(
         }
         GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner } => {
             pending.push(ProbeStep::Pattern(inner))?;
@@ -3125,6 +3149,18 @@ pub(crate) fn exists_row_collision_admitted<'a>(
                             ))?;
                         }
                     }
+                    GraphPattern::ProjectStar { inner, variables } => {
+                        let projected =
+                            VarSchema::from_vars_admitted(variables.iter().cloned(), workspace)?;
+                        let inner_scope = in_scope.intersection_admitted(&projected, workspace)?;
+                        if !inner_scope.is_empty() {
+                            narrowed.push(inner_scope)?;
+                            pending.push(CollisionStep::Row(
+                                inner,
+                                CollisionScope::Narrowed(narrowed.len() - 1),
+                            ))?;
+                        }
+                    }
                     GraphPattern::Group {
                         inner,
                         variables,
@@ -3189,6 +3225,7 @@ pub(crate) fn exists_row_collision_admitted<'a>(
                     | GraphPattern::PropertyFunction(_)
                     | GraphPattern::Values { .. }
                     | GraphPattern::Project { .. }
+                    | GraphPattern::ProjectStar { .. }
                     | GraphPattern::Group { .. } => {}
                 }
             }
@@ -3363,6 +3400,74 @@ mod tests {
 
     use super::*;
     use purrdf_sparql_algebra::Child;
+
+    #[test]
+    fn wide_star_analysis_preserves_the_callers_workspace_bound_and_recovery() {
+        use crate::workspace::owned_row_regressions::{Refusal, account};
+        use std::sync::atomic::Ordering;
+
+        let names = (0..512)
+            .map(|index| format!("?v{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&format!("SELECT * WHERE {{ VALUES ({names}) {{}} }}"))
+            .expect("valid wide star projection");
+        let GraphPattern::ProjectStar { inner, .. } = query.pattern() else {
+            panic!("star query retains its shared projection");
+        };
+        let (source_workspace, source_ledger, source_base) = account(1 << 20);
+        let mut table = NodeAnalysisTable::default();
+        let child = analyze_pattern_admitted(inner, &mut table, &source_workspace.capability())
+            .expect("the existing child cache has its original source grant");
+        assert_eq!(child.free_vars.len(), 512);
+        drop(child);
+        let base = crate::workspace::QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let limit = base + 4096;
+        let (workspace, ledger, _) = account(limit);
+        let error = analyze_pattern_admitted(query.pattern(), &mut table, &workspace.capability())
+            .expect_err("wide analysis must admit its schemas before materializing them");
+        assert!(matches!(error, EvalError::WorkspaceStopped));
+        assert!(ledger.live.load(Ordering::Relaxed) <= limit);
+        assert_eq!(workspace.take_failure().unwrap().identity, 7);
+        assert_eq!(node_analysis(inner, &table).unwrap().free_vars.len(), 512);
+        drop(table);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(source_ledger.live.load(Ordering::Relaxed), source_base);
+        drop(source_workspace);
+        assert_eq!(source_ledger.live.load(Ordering::Relaxed), 0);
+
+        let mut table = NodeAnalysisTable::default();
+        assert!(matches!(
+            analyze_pattern_admitted(
+                &GraphPattern::empty_bgp(),
+                &mut table,
+                &workspace.capability(),
+            ),
+            Err(EvalError::WorkspaceStopped)
+        ));
+        drop(table);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+
+        // A failed query account remains stopped. A subsequent caller operation
+        // receives a new account after every old grant has been released.
+        let (workspace, ledger, base) = account(limit);
+        let mut table = NodeAnalysisTable::default();
+        let healthy = analyze_pattern_admitted(
+            &GraphPattern::empty_bgp(),
+            &mut table,
+            &workspace.capability(),
+        )
+        .expect("the caller can retry a smaller analysis after refusal");
+        assert!(healthy.free_vars.is_empty());
+        assert!(healthy.certainly_bound.is_empty());
+        drop(healthy);
+        drop(table);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
 
     // ---- fixtures ---------------------------------------------------------
 
@@ -4812,7 +4917,8 @@ mod iterative_walks {
                     can_hard_error: hard_error,
                 }
             }
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 let i = reference_analyze_pattern(inner, table);
                 let proj: DetHashSet<Variable> = variables.iter().cloned().collect();
                 ReferenceAnalysis {
@@ -5083,6 +5189,7 @@ mod iterative_walks {
             }
             GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner } => {
                 reference_admissible(inner, current_row_vars, table)
@@ -5196,7 +5303,8 @@ mod iterative_walks {
                 .iter()
                 .find(|v| row_scope.contains(v))
                 .map(|v| (v, RowCollisionIntro::Values)),
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 let narrowed: DetHashSet<Variable> = row_scope
                     .iter()
                     .filter(|v| variables.contains(v))
@@ -5268,6 +5376,7 @@ mod iterative_walks {
             | GraphPattern::PropertyFunction(_)
             | GraphPattern::Values { .. }
             | GraphPattern::Project { .. }
+            | GraphPattern::ProjectStar { .. }
             | GraphPattern::Group { .. } => None,
         }
     }

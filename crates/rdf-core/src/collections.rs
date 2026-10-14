@@ -670,11 +670,11 @@ mod tests {
     use purrdf_iri::vocab::rdf::NS as RDF_NS;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     fn rdf(b: &mut RdfDatasetBuilder, local: &str) -> TermId {
-        b.intern_iri(&format!("{RDF_NS}{local}"))
+        b.intern_iri(&format!("{RDF_NS}{local}")).unwrap()
     }
 
     #[test]
@@ -719,9 +719,11 @@ mod tests {
         // Fold from the tail so each cell's rest is already built.
         let mut tail = nil;
         for (i, &m) in members.iter().enumerate().rev() {
-            let cell = b.intern_blank(&format!("{tag}_cell{i}"), BlankScope::DEFAULT);
-            b.push_quad(cell, first, m, graph);
-            b.push_quad(cell, rest, tail, graph);
+            let cell = b
+                .intern_blank(&format!("{tag}_cell{i}"), BlankScope::DEFAULT)
+                .unwrap();
+            b.push_quad(cell, first, m, graph).unwrap();
+            b.push_quad(cell, rest, tail, graph).unwrap();
             tail = cell;
         }
         tail
@@ -750,7 +752,7 @@ mod tests {
     fn nested_and_blank_members_walk() {
         let mut b = RdfDatasetBuilder::new();
         let x = iri(&mut b, "x");
-        let blank = b.intern_blank("member", BlankScope::DEFAULT);
+        let blank = b.intern_blank("member", BlankScope::DEFAULT).unwrap();
         // Inner list ( x ), then outer ( _:member ( x ) ). Distinct tags keep the
         // two lists' cons cells disjoint.
         let inner = build_list_tagged(&mut b, "inner", &[x], None);
@@ -772,13 +774,13 @@ mod tests {
         let rest = rdf(&mut b, "rest");
         let a = iri(&mut b, "a");
         let bb = iri(&mut b, "b");
-        let c0 = b.intern_blank("c0", BlankScope::DEFAULT);
-        let c1 = b.intern_blank("c1", BlankScope::DEFAULT);
+        let c0 = b.intern_blank("c0", BlankScope::DEFAULT).unwrap();
+        let c1 = b.intern_blank("c1", BlankScope::DEFAULT).unwrap();
         // c0 -> a -> c1 -> b -> back to c0 (a rest cycle).
-        b.push_quad(c0, first, a, None);
-        b.push_quad(c0, rest, c1, None);
-        b.push_quad(c1, first, bb, None);
-        b.push_quad(c1, rest, c0, None);
+        b.push_quad(c0, first, a, None).unwrap();
+        b.push_quad(c0, rest, c1, None).unwrap();
+        b.push_quad(c1, first, bb, None).unwrap();
+        b.push_quad(c1, rest, c0, None).unwrap();
         let ds = b.freeze().expect("freeze");
         // Terminates (no infinite loop), truncated at the revisited cell.
         assert_eq!(
@@ -793,9 +795,9 @@ mod tests {
         let first = rdf(&mut b, "first");
         let rest = rdf(&mut b, "rest");
         let a = iri(&mut b, "a");
-        let head = b.intern_blank("head", BlankScope::DEFAULT);
-        b.push_quad(head, first, a, None);
-        b.push_quad(head, rest, head, None); // rest points at itself
+        let head = b.intern_blank("head", BlankScope::DEFAULT).unwrap();
+        b.push_quad(head, first, a, None).unwrap();
+        b.push_quad(head, rest, head, None).unwrap(); // rest points at itself
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             ds.rdf_list(head, GraphMatch::Any).expect("graceful"),
@@ -811,12 +813,12 @@ mod tests {
         let nil = rdf(&mut b, "nil");
         let a = iri(&mut b, "a");
         // A well-formed cell (so the rdf:first vocabulary is present in the dataset)…
-        let good = b.intern_blank("good", BlankScope::DEFAULT);
-        b.push_quad(good, first, a, None);
-        b.push_quad(good, rest, nil, None);
+        let good = b.intern_blank("good", BlankScope::DEFAULT).unwrap();
+        b.push_quad(good, first, a, None).unwrap();
+        b.push_quad(good, rest, nil, None).unwrap();
         // …and the cell under test: an rdf:rest but no rdf:first.
-        let head = b.intern_blank("head", BlankScope::DEFAULT);
-        b.push_quad(head, rest, nil, None);
+        let head = b.intern_blank("head", BlankScope::DEFAULT).unwrap();
+        b.push_quad(head, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             ds.rdf_list(head, GraphMatch::Any),
@@ -832,10 +834,10 @@ mod tests {
         let nil = rdf(&mut b, "nil");
         let a = iri(&mut b, "a");
         let bb = iri(&mut b, "b");
-        let head = b.intern_blank("head", BlankScope::DEFAULT);
-        b.push_quad(head, first, a, None);
-        b.push_quad(head, first, bb, None); // two rdf:first — ambiguous
-        b.push_quad(head, rest, nil, None);
+        let head = b.intern_blank("head", BlankScope::DEFAULT).unwrap();
+        b.push_quad(head, first, a, None).unwrap();
+        b.push_quad(head, first, bb, None).unwrap(); // two rdf:first — ambiguous
+        b.push_quad(head, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             ds.rdf_list(head, GraphMatch::Any),
@@ -850,9 +852,9 @@ mod tests {
         let rest = rdf(&mut b, "rest");
         let a = iri(&mut b, "a");
         let dangling = iri(&mut b, "dangling"); // a plain IRI, not nil, not a cell
-        let head = b.intern_blank("head", BlankScope::DEFAULT);
-        b.push_quad(head, first, a, None);
-        b.push_quad(head, rest, dangling, None);
+        let head = b.intern_blank("head", BlankScope::DEFAULT).unwrap();
+        b.push_quad(head, first, a, None).unwrap();
+        b.push_quad(head, rest, dangling, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             ds.rdf_list(head, GraphMatch::Any),
@@ -865,11 +867,11 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let nil = rdf(&mut b, "nil");
         let plain = iri(&mut b, "plain"); // an IRI with no list structure
-        let lit = b.intern_literal(RdfLiteral::simple("hello"));
+        let lit = b.intern_literal(RdfLiteral::simple("hello")).unwrap();
         // Give the dataset the list vocabulary so the walker's IRIs resolve.
         let first = rdf(&mut b, "first");
-        let some_cell = b.intern_blank("c", BlankScope::DEFAULT);
-        b.push_quad(some_cell, first, plain, None);
+        let some_cell = b.intern_blank("c", BlankScope::DEFAULT).unwrap();
+        b.push_quad(some_cell, first, plain, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             ds.rdf_list(nil, GraphMatch::Any).expect("nil"),
@@ -896,12 +898,12 @@ mod tests {
         let x = iri(&mut b, "x");
         let y = iri(&mut b, "y");
         let z = iri(&mut b, "z");
-        let bag = b.intern_blank("container", BlankScope::DEFAULT);
-        b.push_quad(bag, type_p, seq, None);
+        let bag = b.intern_blank("container", BlankScope::DEFAULT).unwrap();
+        b.push_quad(bag, type_p, seq, None).unwrap();
         // Insert out of order and with a gap in the ordinals.
-        b.push_quad(bag, m1, x, None);
-        b.push_quad(bag, m3, z, None);
-        b.push_quad(bag, m2, y, None);
+        b.push_quad(bag, m1, x, None).unwrap();
+        b.push_quad(bag, m3, z, None).unwrap();
+        b.push_quad(bag, m2, y, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             ds.rdf_container_members(bag, GraphMatch::Any),
@@ -920,9 +922,9 @@ mod tests {
         let bag_class = rdf(&mut b, "Bag");
         let m1 = rdf(&mut b, "_1");
         let x = iri(&mut b, "x");
-        let container = b.intern_blank("container", BlankScope::DEFAULT);
-        b.push_quad(container, type_p, bag_class, None);
-        b.push_quad(container, m1, x, None);
+        let container = b.intern_blank("container", BlankScope::DEFAULT).unwrap();
+        b.push_quad(container, type_p, bag_class, None).unwrap();
+        b.push_quad(container, m1, x, None).unwrap();
 
         // A term that is neither a list nor a container.
         let plain = iri(&mut b, "plain");
@@ -976,13 +978,13 @@ mod tests {
             rdf(&mut b, "nil"),
         );
         let a = iri(&mut b, "a");
-        let head = b.intern_blank("head", BlankScope::DEFAULT);
-        let other = b.intern_blank("other", BlankScope::DEFAULT);
-        b.push_quad(head, first, a, None);
-        b.push_quad(head, rest, nil, None);
-        b.push_quad(head, rest, other, None);
-        b.push_quad(other, first, a, None);
-        b.push_quad(other, rest, nil, None);
+        let head = b.intern_blank("head", BlankScope::DEFAULT).unwrap();
+        let other = b.intern_blank("other", BlankScope::DEFAULT).unwrap();
+        b.push_quad(head, first, a, None).unwrap();
+        b.push_quad(head, rest, nil, None).unwrap();
+        b.push_quad(head, rest, other, None).unwrap();
+        b.push_quad(other, first, a, None).unwrap();
+        b.push_quad(other, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             strict(&ds, head),
@@ -1028,12 +1030,14 @@ mod tests {
         );
         let note = iri(&mut b, "note");
         let reifier = iri(&mut b, "reifier");
-        let text = b.intern_literal(RdfLiteral::simple("the first member"));
-        b.push_quad(head, ty, list, None);
-        b.push_quad(head, note, text, None);
-        let statement = b.intern_triple(head, first, a);
-        b.push_reifier(reifier, statement);
-        b.push_annotation(reifier, note, text);
+        let text = b
+            .intern_literal(RdfLiteral::simple("the first member"))
+            .unwrap();
+        b.push_quad(head, ty, list, None).unwrap();
+        b.push_quad(head, note, text, None).unwrap();
+        let statement = b.intern_triple(head, first, a).unwrap();
+        b.push_reifier(reifier, statement).unwrap();
+        b.push_annotation(reifier, note, text).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(strict(&ds, head), Ok(vec![a, bb]));
     }
@@ -1048,10 +1052,10 @@ mod tests {
         );
         let (a, bb) = (iri(&mut b, "a"), iri(&mut b, "b"));
         let (c0, c1) = (iri(&mut b, "cell0"), iri(&mut b, "cell1"));
-        b.push_quad(c0, first, a, None);
-        b.push_quad(c0, rest, c1, None);
-        b.push_quad(c1, first, bb, None);
-        b.push_quad(c1, rest, nil, None);
+        b.push_quad(c0, first, a, None).unwrap();
+        b.push_quad(c0, rest, c1, None).unwrap();
+        b.push_quad(c1, first, bb, None).unwrap();
+        b.push_quad(c1, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(strict(&ds, c0), Ok(vec![a, bb]));
     }
@@ -1059,9 +1063,9 @@ mod tests {
     #[test]
     fn literal_and_triple_term_members_walk() {
         let mut b = RdfDatasetBuilder::new();
-        let literal = b.intern_literal(RdfLiteral::simple("x"));
+        let literal = b.intern_literal(RdfLiteral::simple("x")).unwrap();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let triple = b.intern_triple(s, p, o);
+        let triple = b.intern_triple(s, p, o).unwrap();
         let head = build_list(&mut b, &[literal, triple], None);
         let ds = b.freeze().expect("freeze");
         assert_eq!(strict(&ds, head), Ok(vec![literal, triple]));
@@ -1077,10 +1081,10 @@ mod tests {
         );
         let a = iri(&mut b, "a");
         let (g1, g2) = (iri(&mut b, "g1"), iri(&mut b, "g2"));
-        let head = b.intern_blank("head", BlankScope::DEFAULT);
+        let head = b.intern_blank("head", BlankScope::DEFAULT).unwrap();
         for g in [g1, g2] {
-            b.push_quad(head, first, a, Some(g));
-            b.push_quad(head, rest, nil, Some(g));
+            b.push_quad(head, first, a, Some(g)).unwrap();
+            b.push_quad(head, rest, nil, Some(g)).unwrap();
         }
         let ds = b.freeze().expect("freeze");
         assert_eq!(strict(&ds, head), Ok(vec![a]));
@@ -1095,13 +1099,16 @@ mod tests {
         let (first, rest) = (rdf(&mut b, "first"), rdf(&mut b, "rest"));
         let members: Vec<TermId> = (0..7).map(|i| iri(&mut b, &format!("m{i}"))).collect();
         let cells: Vec<TermId> = (0..7)
-            .map(|i| b.intern_blank(&format!("c{i}"), BlankScope::DEFAULT))
+            .map(|i| {
+                b.intern_blank(&format!("c{i}"), BlankScope::DEFAULT)
+                    .unwrap()
+            })
             .collect();
         // c0 → … → c6 → c2: a prefix of two cells and a cycle of five.
         for i in 0..7 {
-            b.push_quad(cells[i], first, members[i], None);
+            b.push_quad(cells[i], first, members[i], None).unwrap();
             let next = if i == 6 { cells[2] } else { cells[i + 1] };
-            b.push_quad(cells[i], rest, next, None);
+            b.push_quad(cells[i], rest, next, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
         assert_eq!(
@@ -1119,17 +1126,20 @@ mod tests {
                 let (first, rest) = (rdf(&mut b, "first"), rdf(&mut b, "rest"));
                 let total = prefix + cycle;
                 let cells: Vec<TermId> = (0..total)
-                    .map(|i| b.intern_blank(&format!("c{i}"), BlankScope::DEFAULT))
+                    .map(|i| {
+                        b.intern_blank(&format!("c{i}"), BlankScope::DEFAULT)
+                            .unwrap()
+                    })
                     .collect();
                 let m = iri(&mut b, "m");
                 for i in 0..total {
-                    b.push_quad(cells[i], first, m, None);
+                    b.push_quad(cells[i], first, m, None).unwrap();
                     let next = if i + 1 == total {
                         cells[prefix]
                     } else {
                         cells[i + 1]
                     };
-                    b.push_quad(cells[i], rest, next, None);
+                    b.push_quad(cells[i], rest, next, None).unwrap();
                 }
                 let ds = b.freeze().expect("freeze");
                 let error = strict(&ds, cells[0]).expect_err("a cycle");
@@ -1145,12 +1155,12 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (first, rest) = (rdf(&mut b, "first"), rdf(&mut b, "rest"));
         let a = iri(&mut b, "a");
-        let no_rest = b.intern_blank("no_rest", BlankScope::DEFAULT);
-        b.push_quad(no_rest, first, a, None);
+        let no_rest = b.intern_blank("no_rest", BlankScope::DEFAULT).unwrap();
+        b.push_quad(no_rest, first, a, None).unwrap();
         let plain = iri(&mut b, "plain");
-        let to_plain = b.intern_blank("to_plain", BlankScope::DEFAULT);
-        b.push_quad(to_plain, first, a, None);
-        b.push_quad(to_plain, rest, plain, None);
+        let to_plain = b.intern_blank("to_plain", BlankScope::DEFAULT).unwrap();
+        b.push_quad(to_plain, first, a, None).unwrap();
+        b.push_quad(to_plain, rest, plain, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             strict(&ds, no_rest),
@@ -1188,7 +1198,7 @@ mod tests {
         let (first, nil) = (rdf(&mut b, "first"), rdf(&mut b, "nil"));
         let a = iri(&mut b, "a");
         let head = build_list(&mut b, &[a], None);
-        b.push_quad(nil, first, a, None);
+        b.push_quad(nil, first, a, None).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             strict(&ds, head),
@@ -1215,7 +1225,10 @@ mod tests {
         };
         let members: Vec<TermId> = (0..4).map(|i| iri(&mut b, &format!("m{i}"))).collect();
         let cells: Vec<TermId> = (0..4)
-            .map(|i| b.intern_blank(&format!("cell{i}"), BlankScope::DEFAULT))
+            .map(|i| {
+                b.intern_blank(&format!("cell{i}"), BlankScope::DEFAULT)
+                    .unwrap()
+            })
             .collect();
         let mut quads = Vec::new();
         let head = build_rdf_list(
@@ -1229,7 +1242,7 @@ mod tests {
         assert_eq!(head, cells[0]);
         assert_eq!(quads.len(), 8);
         for (s, p, o) in quads {
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
         }
         let empty = build_rdf_list(
             Vec::new(),

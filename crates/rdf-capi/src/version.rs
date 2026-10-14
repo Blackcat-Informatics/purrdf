@@ -197,7 +197,7 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
 /// answer `purrdf_abi_version` the way `0.8.0` does.
 ///
-/// # `0.9.0` → `0.10.0`: added symbols and one appended status
+/// # `0.9.0` → `0.10.0`: added symbols and appended statuses
 ///
 /// `0.9.0` shipped as the ABI of the `3.0.1` libraries. This bump adds
 /// `purrdf_xsd_canonical_lexical` — the XSD canonical lexical form of a typed value —
@@ -242,7 +242,23 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// every existing prototype is unchanged. `PurrdfStatus::GeoError = 14` is appended
 /// for their typed geographic refusals, without renumbering any existing status.
 /// The wildcard-free status test pins that deliberate addition.
-pub const PURRDF_ABI_MINOR: u32 = 10;
+///
+/// # `0.10.0` → `0.11.0`: explicit named-graph lifetime
+///
+/// Four prototypes gain a mandatory `int32_t graph_existence` selector:
+/// `purrdf_graph_from_dataset` before `out_graph`, and `purrdf_update_governed`
+/// plus `purrdf_update_governed_xpath_regex` and `purrdf_update_governed_with_geo`
+/// before `governors`. Recompile callers
+/// with `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` to retain empty named slots or
+/// `PURRDF_GRAPH_EXISTENCE_IMPLICIT` for row-driven lifetime. Invalid values are
+/// refused before publication. No existing status value or struct layout changes.
+///
+/// This unshipped minor also appends `PurrdfStatus::StorageError = 15` for Shapes
+/// storage refusal. It distinguishes logical capacity or physical allocation and
+/// admission refusal from a malformed shapes graph; error accessors retain the
+/// diagnostic. No earlier status is renumbered, and the wildcard-free status test
+/// pins the appended value.
+pub const PURRDF_ABI_MINOR: u32 = 11;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

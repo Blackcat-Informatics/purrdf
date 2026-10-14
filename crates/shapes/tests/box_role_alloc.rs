@@ -246,22 +246,30 @@ struct FocusSets {
 /// feature with no work to do.
 fn build_dataset(conforming: usize, violating: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(RDF_TYPE);
-    let focus_class = builder.intern_iri(&format!("{NS}Focus"));
-    let name = builder.intern_iri(&format!("{NS}name"));
-    let graph_box_role = builder.intern_iri(&meta("graphBoxRole"));
-    let box_rbox = builder.intern_iri(&meta("boxRBox"));
-    builder.push_quad(name, graph_box_role, box_rbox, None);
+    let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+    let focus_class = builder.intern_iri(&format!("{NS}Focus")).unwrap();
+    let name = builder.intern_iri(&format!("{NS}name")).unwrap();
+    let graph_box_role = builder.intern_iri(&meta("graphBoxRole")).unwrap();
+    let box_rbox = builder.intern_iri(&meta("boxRBox")).unwrap();
+    builder
+        .push_quad(name, graph_box_role, box_rbox, None)
+        .unwrap();
 
     for index in 0..conforming {
-        let focus = builder.intern_iri(&format!("{NS}c{index}"));
-        builder.push_quad(focus, rdf_type, focus_class, None);
-        let label = builder.intern_literal(RdfLiteral::simple(format!("item-{index}")));
-        builder.push_quad(focus, name, label, None);
+        let focus = builder.intern_iri(&format!("{NS}c{index}")).unwrap();
+        builder
+            .push_quad(focus, rdf_type, focus_class, None)
+            .unwrap();
+        let label = builder
+            .intern_literal(RdfLiteral::simple(format!("item-{index}")))
+            .unwrap();
+        builder.push_quad(focus, name, label, None).unwrap();
     }
     for index in 0..violating {
-        let focus = builder.intern_iri(&format!("{NS}v{index}"));
-        builder.push_quad(focus, rdf_type, focus_class, None);
+        let focus = builder.intern_iri(&format!("{NS}v{index}")).unwrap();
+        builder
+            .push_quad(focus, rdf_type, focus_class, None)
+            .unwrap();
     }
     builder.freeze().expect("the box-role fixture must freeze")
 }

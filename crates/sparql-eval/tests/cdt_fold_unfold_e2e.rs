@@ -60,16 +60,22 @@ fn empty() -> Arc<RdfDataset> {
 fn graphed() -> Arc<RdfDataset> {
     const CDT_LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("{EX}s"));
-    let t = b.intern_iri(&format!("{EX}t"));
-    let list = b.intern_iri(&format!("{EX}list"));
-    let g1 = b.intern_iri(&format!("{EX}g1"));
-    let default_value = b.intern_literal(RdfLiteral::typed("[1,2]", CDT_LIST));
-    let g1_value = b.intern_literal(RdfLiteral::typed("[3]", CDT_LIST));
-    let not_a_list = b.intern_literal(RdfLiteral::simple("not a composite"));
-    b.push_quad(s, list, default_value, None);
-    b.push_quad(t, list, not_a_list, None);
-    b.push_quad(s, list, g1_value, Some(g1));
+    let s = b.intern_iri(&format!("{EX}s")).unwrap();
+    let t = b.intern_iri(&format!("{EX}t")).unwrap();
+    let list = b.intern_iri(&format!("{EX}list")).unwrap();
+    let g1 = b.intern_iri(&format!("{EX}g1")).unwrap();
+    let default_value = b
+        .intern_literal(RdfLiteral::typed("[1,2]", CDT_LIST))
+        .unwrap();
+    let g1_value = b
+        .intern_literal(RdfLiteral::typed("[3]", CDT_LIST))
+        .unwrap();
+    let not_a_list = b
+        .intern_literal(RdfLiteral::simple("not a composite"))
+        .unwrap();
+    b.push_quad(s, list, default_value, None).unwrap();
+    b.push_quad(t, list, not_a_list, None).unwrap();
+    b.push_quad(s, list, g1_value, Some(g1)).unwrap();
     b.freeze().expect("freeze")
 }
 

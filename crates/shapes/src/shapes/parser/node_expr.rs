@@ -2233,8 +2233,9 @@ fn single_projected_variable(query: &Query) -> Result<String, String> {
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::OrderBy { inner, .. } => node = inner,
-            GraphPattern::Project { variables, .. } => {
-                let [only] = variables.as_slice() else {
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                let variables = node.projected_names().expect("projection names");
+                let Some(only) = variables.iter().next().filter(|_| variables.len() == 1) else {
                     return Err(format!(
                         "the SELECT query must project exactly one variable, it projects {}",
                         variables.len()

@@ -23,20 +23,20 @@ const S: &str = "http://example.org/s";
 /// `ex:s ex:p "<lexical>"^^cdt:List .`
 fn list_object(lexical: &str) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(S);
-    let p = b.intern_iri(P);
-    let o = b.intern_literal(RdfLiteral::typed(lexical, LIST));
-    b.push_quad(s, p, o, None);
+    let s = b.intern_iri(S).unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_literal(RdfLiteral::typed(lexical, LIST)).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("a structurally valid one-quad dataset")
 }
 
 /// `_:{subject} ex:p "<lexical>"^^cdt:List .`
 fn blank_subject_list(subject: &str, lexical: &str) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank(subject, BlankScope::DEFAULT);
-    let p = b.intern_iri(P);
-    let o = b.intern_literal(RdfLiteral::typed(lexical, LIST));
-    b.push_quad(s, p, o, None);
+    let s = b.intern_blank(subject, BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_literal(RdfLiteral::typed(lexical, LIST)).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("a structurally valid one-quad dataset")
 }
 

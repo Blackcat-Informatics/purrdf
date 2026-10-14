@@ -31,14 +31,16 @@ const PAST_I128: &str = "170141183460469231731687303715884105728";
 /// A dataset of `ex:s{i} ex:v "{value}"^^xsd:{datatype}` for each value.
 fn values(values: &[(&str, &str)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}v"));
+    let p = builder.intern_iri(&format!("{EX}v")).unwrap();
     for (index, (lexical, datatype)) in values.iter().enumerate() {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let o = builder.intern_literal(RdfLiteral::typed(
-            (*lexical).to_owned(),
-            format!("{XSD}{datatype}"),
-        ));
-        builder.push_quad(s, p, o, None);
+        let s = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::typed(
+                (*lexical).to_owned(),
+                format!("{XSD}{datatype}"),
+            ))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("a values dataset")
 }

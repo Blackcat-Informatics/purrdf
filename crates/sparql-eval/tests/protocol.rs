@@ -633,12 +633,12 @@ fn every_negotiated_format_has_its_media_type() {
 /// and `FROM ex:g2` ({b}) are all different.
 fn fixture() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     let quad = |builder: &mut RdfDatasetBuilder, s: &str, o: &str, g: Option<&str>| {
-        let s = builder.intern_iri(&format!("{EX}{s}"));
-        let o = builder.intern_iri(&format!("{EX}{o}"));
-        let g = g.map(|g| builder.intern_iri(&format!("{EX}{g}")));
-        builder.push_quad(s, p, o, g);
+        let s = builder.intern_iri(&format!("{EX}{s}")).unwrap();
+        let o = builder.intern_iri(&format!("{EX}{o}")).unwrap();
+        let g = g.map(|g| builder.intern_iri(&format!("{EX}{g}")).unwrap());
+        builder.push_quad(s, p, o, g).unwrap();
     };
     quad(&mut builder, "a", "x1", None);
     quad(&mut builder, "c", "x0", None);
@@ -1091,6 +1091,14 @@ fn a_parse_refusal_is_a_400_and_an_evaluation_failure_is_a_500() {
     assert_eq!(unknown, FailureCode::Evaluation);
     assert_eq!(problem_for(unknown).status, 500);
     assert_eq!(problem_for(unknown).detail, ProblemDetail::Message);
+
+    let stack = FailureCode::from(&EvalError::StackExhausted {
+        construct: "query evaluation",
+    });
+    assert_eq!(stack, FailureCode::EvaluationStackExhausted);
+    assert_eq!(problem_for(stack).status, 400);
+    assert_eq!(problem_for(stack).detail, ProblemDetail::Message);
+    assert_eq!(problem_for(stack).code, EvalError::STACK_EXHAUSTED_CODE);
 
     // The valid neighbour answers.
     assert!(

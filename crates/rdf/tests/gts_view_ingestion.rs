@@ -74,10 +74,10 @@ const EMPTY_A: &str = "https://example.org/empty-a";
 /// merge scope and the ingest scope is the only thing keeping them apart.
 fn with_declarations(parsed: &RdfDataset, declare: &[&str]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    builder.push_dataset(parsed);
+    builder.push_dataset(parsed).unwrap();
     for iri in declare {
-        let graph = builder.intern_iri(iri);
-        builder.declare_named_graph(graph);
+        let graph = builder.intern_iri(iri).unwrap();
+        builder.declare_named_graph(graph).unwrap();
     }
     builder.freeze().expect("the declared dataset freezes")
 }
@@ -551,16 +551,18 @@ fn colliding_blank_wire_values_are_refused_and_neighbouring_ones_are_not() {
 fn quoted_triple_in_a_plain_slot() -> Arc<RdfDataset> {
     use purrdf_rdf::{RdfDatasetBuilder, TermFactory, TermValue as Value};
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri("https://example.org/s");
-    let p = builder.intern_iri("https://example.org/p");
-    let o = builder.intern_iri("https://example.org/o");
-    let quoted = builder.intern_value(&Value::Triple {
-        s: TermBox::new(Value::iri("https://example.org/qs")),
-        p: TermBox::new(Value::iri("https://example.org/qp")),
-        o: TermBox::new(Value::iri("https://example.org/qo")),
-    });
-    builder.push_quad(s, p, quoted, None);
-    builder.push_quad(s, p, o, None);
+    let s = builder.intern_iri("https://example.org/s").unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
+    let o = builder.intern_iri("https://example.org/o").unwrap();
+    let quoted = builder
+        .intern_value(&Value::Triple {
+            s: TermBox::new(Value::iri("https://example.org/qs")),
+            p: TermBox::new(Value::iri("https://example.org/qp")),
+            o: TermBox::new(Value::iri("https://example.org/qo")),
+        })
+        .unwrap();
+    builder.push_quad(s, p, quoted, None).unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
     builder.freeze().expect("the dataset freezes")
 }
 
@@ -662,16 +664,24 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
 
     // A source that ingests a great many rows and THEN hits the plain-slot guard.
     let mut poisoning = RdfDatasetBuilder::new();
-    let s = poisoning.intern_iri("https://example.org/poison/s");
-    let p = poisoning.intern_iri("https://example.org/poison/p");
+    let s = poisoning
+        .intern_iri("https://example.org/poison/s")
+        .unwrap();
+    let p = poisoning
+        .intern_iri("https://example.org/poison/p")
+        .unwrap();
     for index in 0..64 {
-        let o = poisoning.intern_iri(&format!("https://example.org/poison/o{index}"));
-        let blank = poisoning.intern_blank(&format!("p{index}"), BlankScope(9));
-        poisoning.push_quad(s, p, o, None);
-        poisoning.push_quad(blank, p, o, None);
+        let o = poisoning
+            .intern_iri(&format!("https://example.org/poison/o{index}"))
+            .unwrap();
+        let blank = poisoning
+            .intern_blank(&format!("p{index}"), BlankScope(9))
+            .unwrap();
+        poisoning.push_quad(s, p, o, None).unwrap();
+        poisoning.push_quad(blank, p, o, None).unwrap();
     }
-    let quoted = poisoning.intern_triple(s, p, s);
-    poisoning.push_quad(s, p, quoted, None);
+    let quoted = poisoning.intern_triple(s, p, s).unwrap();
+    poisoning.push_quad(s, p, quoted, None).unwrap();
     let poisoning = poisoning.freeze().expect("the poisoning source freezes");
 
     let err = builder
@@ -702,11 +712,17 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
     // any of it been kept. The same rows, minus the one unrepresentable term,
     // ingest into a fresh builder and mint something different.
     let mut without_the_trap = RdfDatasetBuilder::new();
-    let s = without_the_trap.intern_iri("https://example.org/poison/s");
-    let p = without_the_trap.intern_iri("https://example.org/poison/p");
+    let s = without_the_trap
+        .intern_iri("https://example.org/poison/s")
+        .unwrap();
+    let p = without_the_trap
+        .intern_iri("https://example.org/poison/p")
+        .unwrap();
     for index in 0..64 {
-        let o = without_the_trap.intern_iri(&format!("https://example.org/poison/o{index}"));
-        without_the_trap.push_quad(s, p, o, None);
+        let o = without_the_trap
+            .intern_iri(&format!("https://example.org/poison/o{index}"))
+            .unwrap();
+        without_the_trap.push_quad(s, p, o, None).unwrap();
     }
     let without_the_trap = without_the_trap.freeze().expect("the control freezes");
     let mut control = SnapshotBuilder::new();
@@ -750,16 +766,20 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
 #[test]
 fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("https://example.org/quoted-subject");
-    let p = b.intern_iri("https://example.org/quoted-predicate");
-    let o = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    let quoted = b.intern_triple(s, p, o);
-    let plain_s = b.intern_iri("https://example.org/s");
-    let plain_p = b.intern_iri("https://example.org/p");
-    b.push_quad(plain_s, plain_p, quoted, None);
+    let s = b.intern_iri("https://example.org/quoted-subject").unwrap();
+    let p = b
+        .intern_iri("https://example.org/quoted-predicate")
+        .unwrap();
+    let o = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    let quoted = b.intern_triple(s, p, o).unwrap();
+    let plain_s = b.intern_iri("https://example.org/s").unwrap();
+    let plain_p = b.intern_iri("https://example.org/p").unwrap();
+    b.push_quad(plain_s, plain_p, quoted, None).unwrap();
     let source = b.freeze().expect("the plain-slot trap freezes");
 
     let mut builder = SnapshotBuilder::new();
@@ -1079,13 +1099,13 @@ fn a_capability_claim_never_moves_a_byte_of_the_snapshot() {
 #[test]
 fn a_delta_that_removes_the_bases_only_reifier_still_ingests() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("https://example.org/s");
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    let claim = b.intern_iri("https://example.org/claim");
-    let quoted = b.intern_triple(s, p, o);
-    b.push_quad(s, p, o, None);
-    b.push_reifier_in_graph(claim, quoted, None);
+    let s = b.intern_iri("https://example.org/s").unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    let claim = b.intern_iri("https://example.org/claim").unwrap();
+    let quoted = b.intern_triple(s, p, o).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    b.push_reifier_in_graph(claim, quoted, None).unwrap();
     let base = b.freeze().expect("the base freezes");
     assert!(
         base.capabilities().reifiers,

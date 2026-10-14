@@ -61,22 +61,29 @@ const DENSE_LEVELS: usize = 16;
 /// person, and `ex:email` for even `i` only, so the `OPTIONAL` both extends and pads.
 fn dataset(people: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p_name = b.intern_iri(&format!("{EX}name"));
-    let p_age = b.intern_iri(&format!("{EX}age"));
-    let p_knows = b.intern_iri(&format!("{EX}knows"));
-    let p_email = b.intern_iri(&format!("{EX}email"));
+    let p_name = b.intern_iri(&format!("{EX}name")).unwrap();
+    let p_age = b.intern_iri(&format!("{EX}age")).unwrap();
+    let p_knows = b.intern_iri(&format!("{EX}knows")).unwrap();
+    let p_email = b.intern_iri(&format!("{EX}email")).unwrap();
     let people: Vec<_> = (0..people)
-        .map(|i| b.intern_iri(&format!("{EX}person{i}")))
+        .map(|i| b.intern_iri(&format!("{EX}person{i}")).unwrap())
         .collect();
     for (i, &person) in people.iter().enumerate() {
-        let name = b.intern_literal(RdfLiteral::simple(format!("Name{i}")));
-        b.push_quad(person, p_name, name, None);
-        let age = b.intern_literal(RdfLiteral::typed((18 + 3 * i).to_string(), XSD_INTEGER));
-        b.push_quad(person, p_age, age, None);
-        b.push_quad(person, p_knows, people[(i + 1) % people.len()], None);
+        let name = b
+            .intern_literal(RdfLiteral::simple(format!("Name{i}")))
+            .unwrap();
+        b.push_quad(person, p_name, name, None).unwrap();
+        let age = b
+            .intern_literal(RdfLiteral::typed((18 + 3 * i).to_string(), XSD_INTEGER))
+            .unwrap();
+        b.push_quad(person, p_age, age, None).unwrap();
+        b.push_quad(person, p_knows, people[(i + 1) % people.len()], None)
+            .unwrap();
         if i % 2 == 0 {
-            let email = b.intern_literal(RdfLiteral::simple(format!("p{i}@example.org")));
-            b.push_quad(person, p_email, email, None);
+            let email = b
+                .intern_literal(RdfLiteral::simple(format!("p{i}@example.org")))
+                .unwrap();
+            b.push_quad(person, p_email, email, None).unwrap();
         }
     }
     b.freeze().expect("freeze the dispatch dataset")

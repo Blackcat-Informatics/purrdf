@@ -605,17 +605,19 @@ pub fn lint(
         .collect();
     let dataset = &resolved.dataset;
     let diagnostics = mandatory_diagnostics(dataset);
-    let loaded = from_resolved_dataset_with_unexecuted(
+    let loaded = match from_resolved_dataset_with_unexecuted(
         dataset,
         None,
         &resolved.prefixes,
         box_role_vocab,
         shapes_graph,
-    )
-    .map_err(String::from);
+    ) {
+        Err(error @ ShapesError::Storage(_)) => return Err(error),
+        result => result.map_err(|error| error.to_string()),
+    };
     let oracle = shacl_shacl()?;
     let report = validate_dataset_as_document(dataset, &oracle)
-        .map_err(|e| format!("shacl-shacl.ttl failed to validate the shapes graph: {e}"))?;
+        .map_err(|error| error.context("shacl-shacl.ttl failed to validate the shapes graph: "))?;
     let accepted = loaded.is_ok();
     let mut shacl_shacl: Vec<ShaclShaclResult> = report
         .results

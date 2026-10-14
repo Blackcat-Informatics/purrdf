@@ -161,7 +161,7 @@ pub(crate) fn data() -> Arc<RdfDataset> {
 /// bytes, and a restore that dropped a constraint shows up as a missing result
 /// rather than as a field nobody thought to compare.
 pub(crate) fn report_nt(prepared: &PreparedShapes) -> String {
-    report(prepared).to_ntriples()
+    report(prepared).to_ntriples().expect("report serializes")
 }
 
 /// Validate [`DATA`] with `prepared`.

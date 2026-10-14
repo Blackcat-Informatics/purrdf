@@ -1285,7 +1285,14 @@ unsafe fn query_entailment_governed_entry(
     }
 }
 
-/// Apply one SPARQL UPDATE request under caller-supplied governors.
+/// Apply one SPARQL UPDATE request under caller-supplied governors and an explicit
+/// named-graph lifetime. `graph_existence` is
+/// [`PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY`](crate::graph::PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY)
+/// or [`PURRDF_GRAPH_EXISTENCE_IMPLICIT`](crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT).
+/// The former preserves empty slots through CLEAR and last-row deletion until DROP;
+/// the latter opts out and ties graph lifetime to physical rows. Any other value
+/// is `PURRDF_STATUS_INVALID_ARGUMENT` before reading the request or publishing
+/// a dataset, outcome or evidence.
 ///
 /// `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
 /// owns the new frozen snapshot. On `BUDGET_EXHAUSTED`, the handle retains the exact same
@@ -1308,6 +1315,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
     request: *const c_char,
     base_iri: *const c_char,
     aggregate_namespace: *const c_char,
+    graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
@@ -1323,6 +1331,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
                 base_iri,
                 aggregate_namespace,
                 std::ptr::null(),
+                graph_existence,
                 governors,
                 out_outcome,
                 out_evidence,
@@ -1351,6 +1360,7 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
     base_iri: *const c_char,
     aggregate_namespace: *const c_char,
     regex_profile: *const c_char,
+    graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
@@ -1366,6 +1376,7 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
                 base_iri,
                 aggregate_namespace,
                 regex_profile,
+                graph_existence,
                 governors,
                 out_outcome,
                 out_evidence,
@@ -1374,7 +1385,7 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
     }
 }
 
-/// The one body of [`purrdf_update_governed`] and [`purrdf_update_governed_xpath_regex`].
+/// The shared body of the governed UPDATE entry points, including geographic selection.
 #[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
@@ -1387,6 +1398,7 @@ unsafe fn update_governed_entry(
     base_iri: *const c_char,
     aggregate_namespace: *const c_char,
     regex_profile: *const c_char,
+    graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
@@ -1403,6 +1415,7 @@ unsafe fn update_governed_entry(
                 format!("null required pointer argument to {entry}"),
             ));
         }
+        let graph_existence = crate::graph::decode_graph_existence(graph_existence, entry)?;
         let governors = decode_update_governors(governors)?;
         let request = cstr_to_str(request)?;
         let base_iri = opt_cstr_to_str(base_iri)?;
@@ -1422,7 +1435,8 @@ unsafe fn update_governed_entry(
                     QueryOptions::new()
                         .with_geo(geo)
                         .with_env(&env)
-                        .with_division(division),
+                        .with_division(division)
+                        .with_graph_existence(graph_existence),
                     regex,
                 ),
                 &governors,
@@ -1672,6 +1686,7 @@ pub unsafe extern "C" fn purrdf_update_governed_with_geo(
     base_iri: *const c_char,
     aggregate_namespace: *const c_char,
     regex_profile: *const c_char,
+    graph_existence: i32,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
     out_evidence: *mut PurrdfGovernorEvidence,
@@ -1687,6 +1702,7 @@ pub unsafe extern "C" fn purrdf_update_governed_with_geo(
                 base_iri,
                 aggregate_namespace,
                 regex_profile,
+                graph_existence,
                 governors,
                 out_outcome,
                 out_evidence,
@@ -1755,24 +1771,32 @@ mod tests {
 
     fn query_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let predicate = builder.intern_iri("http://example.org/p");
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
         for index in 0..3 {
-            let subject = builder.intern_iri(&format!("http://example.org/s{index}"));
-            let object = builder.intern_iri(&format!("http://example.org/o{index}"));
-            builder.push_quad(subject, predicate, object, None);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/s{index}"))
+                .unwrap();
+            let object = builder
+                .intern_iri(&format!("http://example.org/o{index}"))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
     fn entailment_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let subclass = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-        let cat = builder.intern_iri("http://example.org/Cat");
-        let animal = builder.intern_iri("http://example.org/Animal");
-        let tom = builder.intern_iri("http://example.org/tom");
-        builder.push_quad(cat, subclass, animal, None);
-        builder.push_quad(tom, rdf_type, cat, None);
+        let rdf_type = builder
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let subclass = builder
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+            .unwrap();
+        let cat = builder.intern_iri("http://example.org/Cat").unwrap();
+        let animal = builder.intern_iri("http://example.org/Animal").unwrap();
+        let tom = builder.intern_iri("http://example.org/tom").unwrap();
+        builder.push_quad(cat, subclass, animal, None).unwrap();
+        builder.push_quad(tom, rdf_type, cat, None).unwrap();
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
@@ -1922,16 +1946,24 @@ mod tests {
     /// An importing dataset: `ex:o a owl:Ontology ; owl:imports ex:schema . ex:tom a ex:Cat .`
     fn importing_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let ontology = builder.intern_iri("http://example.org/o");
-        let owl_ontology = builder.intern_iri("http://www.w3.org/2002/07/owl#Ontology");
-        let imports = builder.intern_iri("http://www.w3.org/2002/07/owl#imports");
-        let schema = builder.intern_iri("http://example.org/schema");
-        let cat = builder.intern_iri("http://example.org/Cat");
-        let tom = builder.intern_iri("http://example.org/tom");
-        builder.push_quad(ontology, rdf_type, owl_ontology, None);
-        builder.push_quad(ontology, imports, schema, None);
-        builder.push_quad(tom, rdf_type, cat, None);
+        let rdf_type = builder
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let ontology = builder.intern_iri("http://example.org/o").unwrap();
+        let owl_ontology = builder
+            .intern_iri("http://www.w3.org/2002/07/owl#Ontology")
+            .unwrap();
+        let imports = builder
+            .intern_iri("http://www.w3.org/2002/07/owl#imports")
+            .unwrap();
+        let schema = builder.intern_iri("http://example.org/schema").unwrap();
+        let cat = builder.intern_iri("http://example.org/Cat").unwrap();
+        let tom = builder.intern_iri("http://example.org/tom").unwrap();
+        builder
+            .push_quad(ontology, rdf_type, owl_ontology, None)
+            .unwrap();
+        builder.push_quad(ontology, imports, schema, None).unwrap();
+        builder.push_quad(tom, rdf_type, cat, None).unwrap();
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
@@ -2163,20 +2195,28 @@ mod tests {
     /// folds to `2`.
     fn entailed_median_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let subclass = builder.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-        let weight = builder.intern_iri("http://example.org/weight");
-        let cat = builder.intern_iri("http://example.org/Cat");
-        let animal = builder.intern_iri("http://example.org/Animal");
-        builder.push_quad(cat, subclass, animal, None);
+        let rdf_type = builder
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let subclass = builder
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+            .unwrap();
+        let weight = builder.intern_iri("http://example.org/weight").unwrap();
+        let cat = builder.intern_iri("http://example.org/Cat").unwrap();
+        let animal = builder.intern_iri("http://example.org/Animal").unwrap();
+        builder.push_quad(cat, subclass, animal, None).unwrap();
         for (name, value) in [("tom", 1_i64), ("felix", 2), ("garfield", 3)] {
-            let subject = builder.intern_iri(&format!("http://example.org/{name}"));
-            builder.push_quad(subject, rdf_type, cat, None);
-            let literal = builder.intern_literal(RdfLiteral::typed(
-                value.to_string(),
-                "http://www.w3.org/2001/XMLSchema#integer",
-            ));
-            builder.push_quad(subject, weight, literal, None);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/{name}"))
+                .unwrap();
+            builder.push_quad(subject, rdf_type, cat, None).unwrap();
+            let literal = builder
+                .intern_literal(RdfLiteral::typed(
+                    value.to_string(),
+                    "http://www.w3.org/2001/XMLSchema#integer",
+                ))
+                .unwrap();
+            builder.push_quad(subject, weight, literal, None).unwrap();
         }
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
@@ -2285,6 +2325,7 @@ mod tests {
                 request.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
+                crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
                 &raw mut outcome,
                 evidence.as_mut_ptr(),
@@ -2357,14 +2398,18 @@ mod tests {
     /// the fixture `MEDIAN` folds to the value `2`.
     fn median_dataset() -> *mut PurrdfDataset {
         let mut builder = RdfDatasetBuilder::new();
-        let predicate = builder.intern_iri("http://example.org/value");
+        let predicate = builder.intern_iri("http://example.org/value").unwrap();
         for value in [1_i64, 2, 3] {
-            let subject = builder.intern_iri(&format!("http://example.org/s{value}"));
-            let object = builder.intern_literal(RdfLiteral::typed(
-                value.to_string(),
-                "http://www.w3.org/2001/XMLSchema#integer",
-            ));
-            builder.push_quad(subject, predicate, object, None);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/s{value}"))
+                .unwrap();
+            let object = builder
+                .intern_literal(RdfLiteral::typed(
+                    value.to_string(),
+                    "http://www.w3.org/2001/XMLSchema#integer",
+                ))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
@@ -2518,6 +2563,7 @@ mod tests {
                 update.as_ptr(),
                 std::ptr::null(),
                 namespace.as_ptr(),
+                crate::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
                 &raw mut outcome,
                 evidence.as_mut_ptr(),

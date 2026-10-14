@@ -36,6 +36,22 @@ use super::builder::RdfDatasetBuilder;
 use super::dataset::{RdfDataset, TermRef};
 use super::term::{BlankScope, TermId};
 use crate::{FastMap, FastSet, RdfLiteral};
+use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+
+/// Preserve native failure fields across the dependency-free event protocol.
+fn event_storage_error(error: StorageError) -> EventError {
+    match error {
+        StorageError::Capacity(error) => EventError::Capacity {
+            space: error.space.as_str(),
+            attempted: error.attempted(),
+            limit: error.limit(),
+        },
+        StorageError::SizeOverflow => EventError::StorageSizeOverflow,
+        StorageError::AllocationFailed => EventError::StorageAllocationFailed,
+        StorageError::AdmissionFailed => EventError::StorageAdmissionFailed,
+        StorageError::FormattingFailed => EventError::StorageFormattingFailed,
+    }
+}
 
 /// A buffered term declaration, owned so it survives until phase-2 resolution. The
 /// borrowed [`EventTerm`] strings are copied into owned form on receipt, because the
@@ -263,7 +279,7 @@ impl DatasetSink {
                 self.builder_mut().intern_triple(s, p, o)
             }
         };
-        Ok(our_id)
+        our_id.map_err(event_storage_error)
     }
 
     /// Mutably borrow the phase-2 builder, which is present for the whole of
@@ -347,9 +363,16 @@ impl RdfEventSink for DatasetSink {
 
     fn open_scope(&mut self) -> Result<ScopeId, EventError> {
         // Hard-fail on ordinal exhaustion rather than wrapping (no degraded fallback).
-        let next = self.next_scope.checked_add(1).ok_or_else(|| {
-            EventError::message("scope ordinal space exhausted (u32::MAX scopes opened)")
-        })?;
+        CapacityError::check(
+            CapacitySpace::ImportBlankScopes,
+            u128::from(self.next_scope) + 1,
+            u128::from(u32::MAX),
+        )
+        .map_err(|error| event_storage_error(error.into()))?;
+        let next = self.next_scope + 1;
+        self.open_scopes
+            .try_reserve(1)
+            .map_err(|_| EventError::StorageAllocationFailed)?;
         self.next_scope = next;
         let scope = ScopeId(next);
         self.open_scopes.push(scope);
@@ -402,7 +425,8 @@ impl RdfEventSink for DatasetSink {
             self.builder
                 .as_mut()
                 .expect("builder present")
-                .push_quad(s, p, o, g);
+                .push_quad(s, p, o, g)
+                .map_err(event_storage_error)?;
         }
 
         // Reifier bindings: bind the reifier resource to the interned triple term,
@@ -418,8 +442,12 @@ impl RdfEventSink for DatasetSink {
                 None => None,
             };
             let builder = self.builder.as_mut().expect("builder present");
-            let triple_term = builder.intern_triple(s, p, o);
-            builder.push_reifier_in_graph(reifier_id, triple_term, g);
+            let triple_term = builder
+                .intern_triple(s, p, o)
+                .map_err(event_storage_error)?;
+            builder
+                .push_reifier_in_graph(reifier_id, triple_term, g)
+                .map_err(event_storage_error)?;
         }
 
         // Annotations `(reifier, predicate, object, graph)`.
@@ -435,7 +463,8 @@ impl RdfEventSink for DatasetSink {
             self.builder
                 .as_mut()
                 .expect("builder present")
-                .push_annotation_in_graph(r, p, v, g);
+                .push_annotation_in_graph(r, p, v, g)
+                .map_err(event_storage_error)?;
         }
 
         // Named-graph declarations, after every row so a drive that declares nothing
@@ -446,13 +475,17 @@ impl RdfEventSink for DatasetSink {
             self.builder
                 .as_mut()
                 .expect("builder present")
-                .declare_named_graph(g);
+                .declare_named_graph(g)
+                .map_err(event_storage_error)?;
         }
 
         let builder = self.builder.take().expect("builder present");
         let dataset = builder
             .freeze()
-            .map_err(|diagnostic| EventError::message(format!("freeze failed: {diagnostic}")))?;
+            .map_err(|diagnostic| match diagnostic.storage_error() {
+                Some(error) => event_storage_error(error),
+                None => EventError::message(format!("freeze failed: {diagnostic}")),
+            })?;
         self.frozen = Some(dataset);
         Ok(())
     }
@@ -548,12 +581,14 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
         // matching the blank ordinals carried by value. ScopeId::DEFAULT (0) is open
         // from the start and is never minted here.
         let max_scope = (0..self.dataset.term_count())
-            .filter_map(
-                |i| match self.dataset.resolve(TermId::from_index(i as u32)) {
+            .filter_map(|i| {
+                match self.dataset.resolve(
+                    TermId::from_index(i as u32).expect("stored term index is representable"),
+                ) {
                     TermRef::Blank { scope, .. } => Some(scope.ordinal()),
                     _ => None,
-                },
-            )
+                }
+            })
             .max()
             .unwrap_or(0);
         for _ in 0..max_scope {
@@ -563,7 +598,7 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
         // Terms first, in ascending id order — a triple term's components (lower ids)
         // and a literal's datatype are declared before the term referencing them.
         for i in 0..self.dataset.term_count() {
-            let id = TermId::from_index(i as u32);
+            let id = TermId::from_index(i as u32).expect("stored term index is representable");
             if self.emit_term(sink, id)? == ControlFlow::Break(()) {
                 return Ok(());
             }
@@ -639,8 +674,27 @@ mod tests {
     use crate::RdfLiteral;
     use crate::ir::compare::datasets_isomorphic;
 
+    #[test]
+    fn event_scope_capacity_preserves_original_count_and_prior_state() {
+        let mut sink = DatasetSink::new();
+        sink.next_scope = u32::MAX - 1;
+        let final_scope = sink.open_scope().expect("last representable scope");
+        assert_eq!(final_scope, ScopeId(u32::MAX));
+        let prior = sink.open_scopes.clone();
+        let expected = EventError::Capacity {
+            space: CapacitySpace::ImportBlankScopes.as_str(),
+            attempted: u128::from(u32::MAX) + 1,
+            limit: u128::from(u32::MAX),
+        };
+        assert_eq!(sink.open_scope(), Err(expected.clone()));
+        assert_eq!(sink.open_scope(), Err(expected));
+        assert_eq!(sink.next_scope, u32::MAX);
+        assert_eq!(sink.open_scopes, prior);
+        assert!(sink.dataset().is_none());
+    }
+
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     /// A graph declared with no row — IRI- or blank-named — survives a replay into a
@@ -651,18 +705,18 @@ mod tests {
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
         let plain = b.freeze().expect("freezes");
 
         let mut b = RdfDatasetBuilder::new();
         let s = iri(&mut b, "s");
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None).unwrap();
         let g = iri(&mut b, "g");
-        b.declare_named_graph(g);
-        let bg = b.intern_blank("bg", BlankScope::DEFAULT);
-        b.declare_named_graph(bg);
+        b.declare_named_graph(g).unwrap();
+        let bg = b.intern_blank("bg", BlankScope::DEFAULT).unwrap();
+        b.declare_named_graph(bg).unwrap();
         let declared = b.freeze().expect("freezes");
 
         for (source, graphs) in [(&plain, 0), (&declared, 2)] {
@@ -697,28 +751,32 @@ mod tests {
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
         let g = iri(&mut b, "g");
-        let b0 = b.intern_blank("x", BlankScope(0));
-        let b1 = b.intern_blank("x", BlankScope(1));
-        let typed = b.intern_literal(RdfLiteral::typed(
-            "42",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let lang = b.intern_literal(RdfLiteral::language_tagged("hi", "EN"));
+        let b0 = b.intern_blank("x", BlankScope(0)).unwrap();
+        let b1 = b.intern_blank("x", BlankScope(1)).unwrap();
+        let typed = b
+            .intern_literal(RdfLiteral::typed(
+                "42",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        let lang = b
+            .intern_literal(RdfLiteral::language_tagged("hi", "EN"))
+            .unwrap();
         // Inner triple term <<s p o>> and outer <<s asserts <<s p o>>>>.
-        let inner = b.intern_triple(s, p, o);
+        let inner = b.intern_triple(s, p, o).unwrap();
         let asserts = iri(&mut b, "asserts");
-        let outer = b.intern_triple(s, asserts, inner);
+        let outer = b.intern_triple(s, asserts, inner).unwrap();
         let r = iri(&mut b, "r");
         let ann_p = iri(&mut b, "annp");
 
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, p, b0, None);
-        b.push_quad(s, p, b1, Some(g));
-        b.push_quad(s, p, typed, None);
-        b.push_quad(s, p, lang, None);
-        b.push_quad(s, asserts, outer, None);
-        b.push_reifier(r, inner);
-        b.push_annotation(r, ann_p, o);
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, p, b0, None).unwrap();
+        b.push_quad(s, p, b1, Some(g)).unwrap();
+        b.push_quad(s, p, typed, None).unwrap();
+        b.push_quad(s, p, lang, None).unwrap();
+        b.push_quad(s, asserts, outer, None).unwrap();
+        b.push_reifier(r, inner).unwrap();
+        b.push_annotation(r, ann_p, o).unwrap();
 
         b.freeze().expect("fixture freezes")
     }
@@ -772,12 +830,12 @@ mod tests {
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
         let g = iri(&mut b, "g");
-        let triple = b.intern_triple(s, p, o);
+        let triple = b.intern_triple(s, p, o).unwrap();
         let r = iri(&mut b, "r");
         let ann_p = iri(&mut b, "annp");
-        b.push_quad(s, p, o, Some(g));
-        b.push_reifier_in_graph(r, triple, Some(g));
-        b.push_annotation_in_graph(r, ann_p, o, Some(g));
+        b.push_quad(s, p, o, Some(g)).unwrap();
+        b.push_reifier_in_graph(r, triple, Some(g)).unwrap();
+        b.push_annotation_in_graph(r, ann_p, o, Some(g)).unwrap();
         let original = b.freeze().expect("fixture freezes");
 
         let source = FrozenDatasetSource::new(&original);

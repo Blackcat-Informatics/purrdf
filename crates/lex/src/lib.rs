@@ -103,7 +103,8 @@
 //!   replace-in-place-or-append insert of a `[(K, V)]` list whose order is part
 //!   of its value (a JSON object's members, a GTS graph's metadata).
 //! * **Message errors** — [`message_error!`], the one declaration of an error
-//!   type whose whole content is a human-readable message.
+//!   type whose whole content is a human-readable message; [`error_source!`]
+//!   declares the borrowed typed causes of an enum's wrapper variants.
 //! * **Diagnostic presentations** — [`diagnostic`], a diagnostic's stable
 //!   message identity and exact typed arguments
 //!   ([`diagnostic::DiagnosticPresentation`]), checked against its English

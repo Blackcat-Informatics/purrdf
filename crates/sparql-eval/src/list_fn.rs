@@ -476,24 +476,24 @@ mod tests {
     /// `ex:q ex:list ex:l0` so a BGP can bind the head.
     fn list_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST);
-        let rest = b.intern_iri(super::RDF_REST);
-        let nil = b.intern_iri(super::RDF_NIL);
-        let l0 = b.intern_iri("http://ex/l0");
-        let l1 = b.intern_iri("http://ex/l1");
-        let l2 = b.intern_iri("http://ex/l2");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
-        let z = b.intern_iri("http://ex/z");
-        let q = b.intern_iri("http://ex/q");
-        let list = b.intern_iri("http://ex/list");
-        b.push_quad(l0, first, x, None);
-        b.push_quad(l0, rest, l1, None);
-        b.push_quad(l1, first, y, None);
-        b.push_quad(l1, rest, l2, None);
-        b.push_quad(l2, first, z, None);
-        b.push_quad(l2, rest, nil, None);
-        b.push_quad(q, list, l0, None);
+        let first = b.intern_iri(super::RDF_FIRST).unwrap();
+        let rest = b.intern_iri(super::RDF_REST).unwrap();
+        let nil = b.intern_iri(super::RDF_NIL).unwrap();
+        let l0 = b.intern_iri("http://ex/l0").unwrap();
+        let l1 = b.intern_iri("http://ex/l1").unwrap();
+        let l2 = b.intern_iri("http://ex/l2").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        let y = b.intern_iri("http://ex/y").unwrap();
+        let z = b.intern_iri("http://ex/z").unwrap();
+        let q = b.intern_iri("http://ex/q").unwrap();
+        let list = b.intern_iri("http://ex/list").unwrap();
+        b.push_quad(l0, first, x, None).unwrap();
+        b.push_quad(l0, rest, l1, None).unwrap();
+        b.push_quad(l1, first, y, None).unwrap();
+        b.push_quad(l1, rest, l2, None).unwrap();
+        b.push_quad(l2, first, z, None).unwrap();
+        b.push_quad(l2, rest, nil, None).unwrap();
+        b.push_quad(q, list, l0, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -569,22 +569,22 @@ mod tests {
     fn a_list_read_through_a_from_merge_counts_each_edge_once() {
         let build = |second_rest: bool| {
             let mut b = RdfDatasetBuilder::new();
-            let first = b.intern_iri(super::RDF_FIRST);
-            let rest = b.intern_iri(super::RDF_REST);
-            let nil = b.intern_iri(super::RDF_NIL);
-            let l0 = b.intern_iri("http://ex/l0");
-            let l1 = b.intern_iri("http://ex/l1");
-            let x = b.intern_iri("http://ex/x");
-            let y = b.intern_iri("http://ex/y");
-            let g1 = b.intern_iri("http://ex/g1");
-            let g2 = b.intern_iri("http://ex/g2");
-            b.push_quad(l0, first, x, Some(g1));
-            b.push_quad(l0, rest, l1, Some(g1));
-            b.push_quad(l0, first, x, Some(g2));
-            b.push_quad(l1, first, y, Some(g2));
-            b.push_quad(l1, rest, nil, Some(g2));
+            let first = b.intern_iri(super::RDF_FIRST).unwrap();
+            let rest = b.intern_iri(super::RDF_REST).unwrap();
+            let nil = b.intern_iri(super::RDF_NIL).unwrap();
+            let l0 = b.intern_iri("http://ex/l0").unwrap();
+            let l1 = b.intern_iri("http://ex/l1").unwrap();
+            let x = b.intern_iri("http://ex/x").unwrap();
+            let y = b.intern_iri("http://ex/y").unwrap();
+            let g1 = b.intern_iri("http://ex/g1").unwrap();
+            let g2 = b.intern_iri("http://ex/g2").unwrap();
+            b.push_quad(l0, first, x, Some(g1)).unwrap();
+            b.push_quad(l0, rest, l1, Some(g1)).unwrap();
+            b.push_quad(l0, first, x, Some(g2)).unwrap();
+            b.push_quad(l1, first, y, Some(g2)).unwrap();
+            b.push_quad(l1, rest, nil, Some(g2)).unwrap();
             if second_rest {
-                b.push_quad(l1, rest, l0, Some(g1));
+                b.push_quad(l1, rest, l0, Some(g1)).unwrap();
             }
             b.freeze().expect("freeze")
         };
@@ -695,20 +695,20 @@ mod tests {
     fn cyclic_list_is_a_hard_data_error() {
         // l0 -> first x, rest l1 ; l1 -> first y, rest l0  (a cycle, no rdf:nil).
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST);
-        let rest = b.intern_iri(super::RDF_REST);
-        let nil = b.intern_iri(super::RDF_NIL); // present so the walk starts
-        let l0 = b.intern_iri("http://ex/l0");
-        let l1 = b.intern_iri("http://ex/l1");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
-        let z = b.intern_iri("http://ex/z");
-        b.push_quad(l0, first, x, None);
-        b.push_quad(l0, rest, l1, None);
-        b.push_quad(l1, first, y, None);
-        b.push_quad(l1, rest, l0, None);
+        let first = b.intern_iri(super::RDF_FIRST).unwrap();
+        let rest = b.intern_iri(super::RDF_REST).unwrap();
+        let nil = b.intern_iri(super::RDF_NIL).unwrap(); // present so the walk starts
+        let l0 = b.intern_iri("http://ex/l0").unwrap();
+        let l1 = b.intern_iri("http://ex/l1").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        let y = b.intern_iri("http://ex/y").unwrap();
+        let z = b.intern_iri("http://ex/z").unwrap();
+        b.push_quad(l0, first, x, None).unwrap();
+        b.push_quad(l0, rest, l1, None).unwrap();
+        b.push_quad(l1, first, y, None).unwrap();
+        b.push_quad(l1, rest, l0, None).unwrap();
         // A well-formed terminator elsewhere so rdf:nil is interned.
-        b.push_quad(z, rest, nil, None);
+        b.push_quad(z, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
@@ -731,13 +731,15 @@ mod tests {
         use purrdf_xsd::datatype::XSD_DECIMAL;
         use purrdf_xsd::datatype::XSD_INTEGER;
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST);
-        let rest = b.intern_iri(super::RDF_REST);
-        let nil = b.intern_iri(super::RDF_NIL);
-        let l0 = b.intern_iri("http://ex/l0");
-        let one_int = b.intern_literal(RdfLiteral::typed("1", XSD_INTEGER));
-        b.push_quad(l0, first, one_int, None);
-        b.push_quad(l0, rest, nil, None);
+        let first = b.intern_iri(super::RDF_FIRST).unwrap();
+        let rest = b.intern_iri(super::RDF_REST).unwrap();
+        let nil = b.intern_iri(super::RDF_NIL).unwrap();
+        let l0 = b.intern_iri("http://ex/l0").unwrap();
+        let one_int = b
+            .intern_literal(RdfLiteral::typed("1", XSD_INTEGER))
+            .unwrap();
+        b.push_quad(l0, first, one_int, None).unwrap();
+        b.push_quad(l0, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         // The exact term is a member at index 0.
@@ -768,19 +770,19 @@ mod tests {
     fn torn_list_missing_rest_is_a_hard_data_error() {
         // l0 -> first x, rest l1 ; l1 -> first y  (no rdf:rest on the 2nd cell).
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST);
-        let rest = b.intern_iri(super::RDF_REST);
-        let nil = b.intern_iri(super::RDF_NIL);
-        let l0 = b.intern_iri("http://ex/l0");
-        let l1 = b.intern_iri("http://ex/l1");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
-        let z = b.intern_iri("http://ex/z");
-        b.push_quad(l0, first, x, None);
-        b.push_quad(l0, rest, l1, None);
-        b.push_quad(l1, first, y, None);
+        let first = b.intern_iri(super::RDF_FIRST).unwrap();
+        let rest = b.intern_iri(super::RDF_REST).unwrap();
+        let nil = b.intern_iri(super::RDF_NIL).unwrap();
+        let l0 = b.intern_iri("http://ex/l0").unwrap();
+        let l1 = b.intern_iri("http://ex/l1").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        let y = b.intern_iri("http://ex/y").unwrap();
+        let z = b.intern_iri("http://ex/z").unwrap();
+        b.push_quad(l0, first, x, None).unwrap();
+        b.push_quad(l0, rest, l1, None).unwrap();
+        b.push_quad(l1, first, y, None).unwrap();
         // l1 has no rdf:rest — a torn list. Intern rdf:nil elsewhere so the walk starts.
-        b.push_quad(z, rest, nil, None);
+        b.push_quad(z, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
@@ -796,17 +798,17 @@ mod tests {
     fn torn_list_interior_missing_first_is_a_hard_data_error() {
         // l0 -> first x, rest l1 ; l1 -> rest nil  (no rdf:first on the interior cell).
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST);
-        let rest = b.intern_iri(super::RDF_REST);
-        let nil = b.intern_iri(super::RDF_NIL);
-        let l0 = b.intern_iri("http://ex/l0");
-        let l1 = b.intern_iri("http://ex/l1");
-        let x = b.intern_iri("http://ex/x");
-        b.push_quad(l0, first, x, None);
-        b.push_quad(l0, rest, l1, None);
+        let first = b.intern_iri(super::RDF_FIRST).unwrap();
+        let rest = b.intern_iri(super::RDF_REST).unwrap();
+        let nil = b.intern_iri(super::RDF_NIL).unwrap();
+        let l0 = b.intern_iri("http://ex/l0").unwrap();
+        let l1 = b.intern_iri("http://ex/l1").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        b.push_quad(l0, first, x, None).unwrap();
+        b.push_quad(l0, rest, l1, None).unwrap();
         // l1 has rdf:rest but no rdf:first — torn, and `members` is already non-empty
         // (so this is a torn interior cell, not a non-list head).
-        b.push_quad(l1, rest, nil, None);
+        b.push_quad(l1, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
@@ -823,15 +825,15 @@ mod tests {
         // A cell carrying two rdf:first quads is ambiguous — hard-fail rather than
         // pick an iteration-order-dependent branch.
         let mut b = RdfDatasetBuilder::new();
-        let first = b.intern_iri(super::RDF_FIRST);
-        let rest = b.intern_iri(super::RDF_REST);
-        let nil = b.intern_iri(super::RDF_NIL);
-        let l0 = b.intern_iri("http://ex/l0");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
-        b.push_quad(l0, first, x, None);
-        b.push_quad(l0, first, y, None); // a second rdf:first — malformed
-        b.push_quad(l0, rest, nil, None);
+        let first = b.intern_iri(super::RDF_FIRST).unwrap();
+        let rest = b.intern_iri(super::RDF_REST).unwrap();
+        let nil = b.intern_iri(super::RDF_NIL).unwrap();
+        let l0 = b.intern_iri("http://ex/l0").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        let y = b.intern_iri("http://ex/y").unwrap();
+        b.push_quad(l0, first, x, None).unwrap();
+        b.push_quad(l0, first, y, None).unwrap(); // a second rdf:first — malformed
+        b.push_quad(l0, rest, nil, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");

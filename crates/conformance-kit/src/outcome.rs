@@ -136,18 +136,18 @@ pub fn to_earl(
     subject: &str,
 ) -> Result<std::sync::Arc<RdfDataset>, GradeError> {
     let mut builder = RdfDatasetBuilder::new();
-    let rdf_type = builder.intern_iri(rdf::TYPE);
-    let assertion_class = builder.intern_iri(earl::ASSERTION);
-    let result_class = builder.intern_iri(earl::TEST_RESULT);
-    let by_predicate = builder.intern_iri(earl::ASSERTED_BY);
-    let subject_predicate = builder.intern_iri(earl::SUBJECT);
-    let test_predicate = builder.intern_iri(earl::TEST);
-    let result_predicate = builder.intern_iri(earl::RESULT);
-    let outcome_predicate = builder.intern_iri(earl::OUTCOME);
-    let mode_predicate = builder.intern_iri(earl::MODE);
-    let automatic = builder.intern_iri(earl::AUTOMATIC);
-    let by = builder.intern_iri(asserted_by);
-    let subject = builder.intern_iri(subject);
+    let rdf_type = builder.intern_iri(rdf::TYPE)?;
+    let assertion_class = builder.intern_iri(earl::ASSERTION)?;
+    let result_class = builder.intern_iri(earl::TEST_RESULT)?;
+    let by_predicate = builder.intern_iri(earl::ASSERTED_BY)?;
+    let subject_predicate = builder.intern_iri(earl::SUBJECT)?;
+    let test_predicate = builder.intern_iri(earl::TEST)?;
+    let result_predicate = builder.intern_iri(earl::RESULT)?;
+    let outcome_predicate = builder.intern_iri(earl::OUTCOME)?;
+    let mode_predicate = builder.intern_iri(earl::MODE)?;
+    let automatic = builder.intern_iri(earl::AUTOMATIC)?;
+    let by = builder.intern_iri(asserted_by)?;
+    let subject = builder.intern_iri(subject)?;
     for (index, record) in records.iter().enumerate() {
         let graded = grade(&record.expected, &record.observed);
         if let Err(GradeError::Malformed(message)) = &graded {
@@ -158,9 +158,9 @@ pub fn to_earl(
                 "record verdict contradicts its observation".to_owned(),
             ));
         }
-        let assertion = builder.intern_blank(&format!("assertion{index}"), BlankScope::DEFAULT);
-        let result = builder.intern_blank(&format!("result{index}"), BlankScope::DEFAULT);
-        let test = builder.intern_iri(&record.case);
+        let assertion = builder.intern_blank(&format!("assertion{index}"), BlankScope::DEFAULT)?;
+        let result = builder.intern_blank(&format!("result{index}"), BlankScope::DEFAULT)?;
+        let test = builder.intern_iri(&record.case)?;
         let outcome = builder.intern_iri(if record.passed {
             earl::PASSED
         } else {
@@ -172,7 +172,7 @@ pub fn to_earl(
                 }
                 _ => earl::FAILED,
             }
-        });
+        })?;
         for (s, p, o) in [
             (assertion, rdf_type, assertion_class),
             (assertion, by_predicate, by),
@@ -183,10 +183,8 @@ pub fn to_earl(
             (result, rdf_type, result_class),
             (result, outcome_predicate, outcome),
         ] {
-            builder.push_quad(s, p, o, None);
+            builder.push_quad(s, p, o, None)?;
         }
     }
-    builder
-        .freeze()
-        .map_err(|error| GradeError::Malformed(error.to_string()))
+    builder.freeze().map_err(GradeError::from)
 }

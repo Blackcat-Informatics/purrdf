@@ -343,11 +343,12 @@ pub(crate) fn push_iri_triple(
     subject: &str,
     predicate: &str,
     object: &str,
-) {
-    let subject = builder.intern_iri(subject);
-    let predicate = builder.intern_iri(predicate);
-    let object = builder.intern_iri(object);
-    builder.push_quad(subject, predicate, object, None);
+) -> Result<(), ProjectionError> {
+    let subject = builder.intern_iri(subject)?;
+    let predicate = builder.intern_iri(predicate)?;
+    let object = builder.intern_iri(object)?;
+    builder.push_quad(subject, predicate, object, None)?;
+    Ok(())
 }
 
 /// The entries of a path- or IRI-keyed byte map, borrowed, in key order.

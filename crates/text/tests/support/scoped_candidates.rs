@@ -72,7 +72,7 @@ impl CandidateConstraint for Scope {
 
 fn relation() -> TextSearchRelation {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri("https://example.org/note");
+    let note = builder.intern_iri("https://example.org/note").unwrap();
     for (name, text) in [
         ("d1", "quick quick quick brown"),
         ("d2", "quick quick brown fox"),
@@ -81,9 +81,11 @@ fn relation() -> TextSearchRelation {
         ("d5", "lazy dog sleeps late"),
         ("d6", "brown bear sleeps late"),
     ] {
-        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
-        let value = builder.intern_literal(RdfLiteral::simple(text));
-        builder.push_quad(subject, note, value, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{name}"))
+            .unwrap();
+        let value = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, note, value, None).unwrap();
     }
     let dataset = builder.freeze().unwrap();
     let config = TextIndexConfig::new(

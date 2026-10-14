@@ -24,10 +24,10 @@ const FX: Identities = Identities::at("https://example.org/source/");
 
 fn fixture(extra_targets: Vec<EmbeddingTarget>) -> Fixture {
     let mut dataset = RdfDatasetBuilder::new();
-    let subject = dataset.intern_iri("https://example.org/source/s");
-    let predicate = dataset.intern_iri("https://example.org/source/p");
-    let object = dataset.intern_iri("https://example.org/source/o");
-    dataset.push_quad(subject, predicate, object, None);
+    let subject = dataset.intern_iri("https://example.org/source/s").unwrap();
+    let predicate = dataset.intern_iri("https://example.org/source/p").unwrap();
+    let object = dataset.intern_iri("https://example.org/source/o").unwrap();
+    dataset.push_quad(subject, predicate, object, None).unwrap();
     let dataset = dataset.freeze().expect("dataset");
     let (source, source_bytes) =
         CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");

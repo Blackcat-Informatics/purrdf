@@ -338,29 +338,37 @@ mod tests {
     /// A dataset with a schema, an instance, and a quad outside the default graph.
     fn fixture() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri("http://example.org/Cat");
-        let animal = b.intern_iri("http://example.org/Animal");
-        let tom = b.intern_iri("http://example.org/tom");
-        let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        let g = b.intern_iri("http://example.org/g");
-        b.push_quad(cat, sub, animal, None);
-        b.push_quad(tom, ty, cat, None);
-        b.push_quad(tom, ty, animal, Some(g));
+        let cat = b.intern_iri("http://example.org/Cat").unwrap();
+        let animal = b.intern_iri("http://example.org/Animal").unwrap();
+        let tom = b.intern_iri("http://example.org/tom").unwrap();
+        let sub = b
+            .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
+            .unwrap();
+        let ty = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        let g = b.intern_iri("http://example.org/g").unwrap();
+        b.push_quad(cat, sub, animal, None).unwrap();
+        b.push_quad(tom, ty, cat, None).unwrap();
+        b.push_quad(tom, ty, animal, Some(g)).unwrap();
         b.freeze().expect("freeze")
     }
 
     /// A dataset OWL 2 RL's `cax-dw` refuses: two disjoint classes, one shared instance.
     fn inconsistent() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/A");
-        let c = b.intern_iri("http://example.org/B");
-        let x = b.intern_iri("http://example.org/x");
-        let disjoint = b.intern_iri("http://www.w3.org/2002/07/owl#disjointWith");
-        let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-        b.push_quad(a, disjoint, c, None);
-        b.push_quad(x, ty, a, None);
-        b.push_quad(x, ty, c, None);
+        let a = b.intern_iri("http://example.org/A").unwrap();
+        let c = b.intern_iri("http://example.org/B").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let disjoint = b
+            .intern_iri("http://www.w3.org/2002/07/owl#disjointWith")
+            .unwrap();
+        let ty = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            .unwrap();
+        b.push_quad(a, disjoint, c, None).unwrap();
+        b.push_quad(x, ty, a, None).unwrap();
+        b.push_quad(x, ty, c, None).unwrap();
         b.freeze().expect("freeze")
     }
 

@@ -15,30 +15,34 @@ fn contextual_graph_selection_deduplicates_statement_roles_without_resurrection(
 
     for has_named in [false, true] {
         let mut builder = RdfDatasetBuilder::new();
-        let a = builder.intern_iri("http://example.org/a");
-        let b = builder.intern_iri("http://example.org/b");
-        let p = builder.intern_iri("http://example.org/p");
-        let r = builder.intern_iri("http://example.org/r");
-        let annotation = builder.intern_iri("http://example.org/annotation");
-        let selected = builder.intern_iri("http://example.org/selected");
-        let other = builder.intern_iri("http://example.org/other");
-        let empty = builder.intern_iri("http://example.org/empty");
-        let excluded = builder.intern_iri("http://example.org/excluded");
-        let reifies = builder.intern_iri(REIFIES);
-        let triple = builder.intern_triple(a, p, b);
-        let blank = builder.intern_blank("scoped", purrdf_core::BlankScope(37));
-        builder.push_quad(r, reifies, triple, None);
-        builder.push_reifier(r, triple);
-        builder.push_quad(r, annotation, b, None);
-        builder.push_annotation(r, annotation, b);
-        builder.push_quad(excluded, p, b, None);
+        let a = builder.intern_iri("http://example.org/a").unwrap();
+        let b = builder.intern_iri("http://example.org/b").unwrap();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let r = builder.intern_iri("http://example.org/r").unwrap();
+        let annotation = builder.intern_iri("http://example.org/annotation").unwrap();
+        let selected = builder.intern_iri("http://example.org/selected").unwrap();
+        let other = builder.intern_iri("http://example.org/other").unwrap();
+        let empty = builder.intern_iri("http://example.org/empty").unwrap();
+        let excluded = builder.intern_iri("http://example.org/excluded").unwrap();
+        let reifies = builder.intern_iri(REIFIES).unwrap();
+        let triple = builder.intern_triple(a, p, b).unwrap();
+        let blank = builder
+            .intern_blank("scoped", purrdf_core::BlankScope(37))
+            .unwrap();
+        builder.push_quad(r, reifies, triple, None).unwrap();
+        builder.push_reifier(r, triple).unwrap();
+        builder.push_quad(r, annotation, b, None).unwrap();
+        builder.push_annotation(r, annotation, b).unwrap();
+        builder.push_quad(excluded, p, b, None).unwrap();
         if has_named {
-            builder.push_quad(r, reifies, triple, Some(selected));
-            builder.push_quad(r, annotation, b, Some(selected));
-            builder.push_quad(a, p, b, Some(selected));
-            builder.push_quad(blank, p, triple, Some(selected));
-            builder.push_quad(other, p, b, Some(other));
-            builder.declare_named_graph(empty);
+            builder
+                .push_quad(r, reifies, triple, Some(selected))
+                .unwrap();
+            builder.push_quad(r, annotation, b, Some(selected)).unwrap();
+            builder.push_quad(a, p, b, Some(selected)).unwrap();
+            builder.push_quad(blank, p, triple, Some(selected)).unwrap();
+            builder.push_quad(other, p, b, Some(other)).unwrap();
+            builder.declare_named_graph(empty).unwrap();
         }
         let source = builder.freeze().expect("cross-role source");
         let before = QuadValues::surface_of(&source);
@@ -174,13 +178,23 @@ fn contextual_graph_selection_preserves_configured_content_and_derivation_recogn
     let scheme = ContentIdScheme::new("blake3:").unwrap();
     let derivation = "http://example.org/derivedFrom";
     let mut builder = RdfDatasetBuilder::with_content_addressing(scheme, Some(derivation.into()));
-    let successor = builder.intern_iri(&format!("blake3:{}", "a".repeat(64)));
-    let predecessor = builder.intern_iri(&format!("blake3:{}", "b".repeat(64)));
-    let predicate = builder.intern_iri(derivation);
-    let graph = builder.intern_iri("http://example.org/selected");
-    let triple = builder.intern_triple(successor, predicate, predecessor);
-    builder.push_reifier_in_graph(successor, triple, Some(graph));
-    builder.push_annotation_in_graph(successor, predicate, predecessor, Some(graph));
+    let successor = builder
+        .intern_iri(&format!("blake3:{}", "a".repeat(64)))
+        .unwrap();
+    let predecessor = builder
+        .intern_iri(&format!("blake3:{}", "b".repeat(64)))
+        .unwrap();
+    let predicate = builder.intern_iri(derivation).unwrap();
+    let graph = builder.intern_iri("http://example.org/selected").unwrap();
+    let triple = builder
+        .intern_triple(successor, predicate, predecessor)
+        .unwrap();
+    builder
+        .push_reifier_in_graph(successor, triple, Some(graph))
+        .unwrap();
+    builder
+        .push_annotation_in_graph(successor, predicate, predecessor, Some(graph))
+        .unwrap();
     let source = builder.freeze().unwrap();
     let successor = source.term_value(successor);
     let predecessor = source.term_value(predecessor);
@@ -622,10 +636,16 @@ fn contextual_nested_exists_retains_enclosing_names() {
             ["z", "r", "b"],
             [if matching { "z" } else { "other" }, "r", "c"],
         ] {
-            let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
-            let predicate = builder.intern_iri(&format!("http://example.org/{predicate}"));
-            let object = builder.intern_iri(&format!("http://example.org/{object}"));
-            builder.push_quad(subject, predicate, object, None);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/{subject}"))
+                .unwrap();
+            let predicate = builder
+                .intern_iri(&format!("http://example.org/{predicate}"))
+                .unwrap();
+            let object = builder
+                .intern_iri(&format!("http://example.org/{object}"))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         let data = builder.freeze().unwrap();
         let engine = NativeSparqlEngine::new();
@@ -732,10 +752,10 @@ fn contextual_group_filters_preserve_callback_order_and_errors() {
 #[test]
 fn contextual_exists_through_local_projection() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("http://example.org/a");
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri("http://example.org/v");
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri("http://example.org/a").unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri("http://example.org/v").unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
     let data = builder.freeze().unwrap();
     for (projected, negated) in [
         ("local", false),
@@ -863,19 +883,25 @@ fn contextual_matrix() {
         let mut builder = RdfDatasetBuilder::new();
         for triple in fixture["triples"].as_array().unwrap() {
             let triple = triple.as_array().unwrap();
-            let s = builder.intern_iri(&format!(
-                "http://example.org/{}",
-                triple[0].as_str().unwrap()
-            ));
-            let p = builder.intern_iri(&format!(
-                "http://example.org/{}",
-                triple[1].as_str().unwrap()
-            ));
-            let o = builder.intern_iri(&format!(
-                "http://example.org/{}",
-                triple[2].as_str().unwrap()
-            ));
-            builder.push_quad(s, p, o, None);
+            let s = builder
+                .intern_iri(&format!(
+                    "http://example.org/{}",
+                    triple[0].as_str().unwrap()
+                ))
+                .unwrap();
+            let p = builder
+                .intern_iri(&format!(
+                    "http://example.org/{}",
+                    triple[1].as_str().unwrap()
+                ))
+                .unwrap();
+            let o = builder
+                .intern_iri(&format!(
+                    "http://example.org/{}",
+                    triple[2].as_str().unwrap()
+                ))
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
         }
         if let Some(quads) = fixture["quads"].as_array() {
             for quad in quads {
@@ -885,9 +911,12 @@ fn contextual_matrix() {
                     .map(|term| {
                         builder
                             .intern_iri(&format!("http://example.org/{}", term.as_str().unwrap()))
+                            .unwrap()
                     })
                     .collect();
-                builder.push_quad(terms[0], terms[1], terms[2], Some(terms[3]));
+                builder
+                    .push_quad(terms[0], terms[1], terms[2], Some(terms[3]))
+                    .unwrap();
             }
         }
         let data = builder.freeze().unwrap();
@@ -1131,13 +1160,13 @@ fn successful_optional_rhs_is_invoked_once_per_duplicate_driver() {
 fn contextual_service_uses_serializable_protocol_algebra_and_shared_source() {
     use purrdf_sparql_eval::InProcessServiceResolver;
     let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri("http://example.org/a");
-    let b = builder.intern_iri("http://example.org/b");
-    let p = builder.intern_iri("http://example.org/p");
-    let one = builder.intern_iri("http://example.org/one");
-    let two = builder.intern_iri("http://example.org/two");
-    builder.push_quad(a, p, one, None);
-    builder.push_quad(b, p, two, None);
+    let a = builder.intern_iri("http://example.org/a").unwrap();
+    let b = builder.intern_iri("http://example.org/b").unwrap();
+    let p = builder.intern_iri("http://example.org/p").unwrap();
+    let one = builder.intern_iri("http://example.org/one").unwrap();
+    let two = builder.intern_iri("http://example.org/two").unwrap();
+    builder.push_quad(a, p, one, None).unwrap();
+    builder.push_quad(b, p, two, None).unwrap();
     let remote = builder.freeze().unwrap();
     let resolver =
         InProcessServiceResolver::new().with_endpoint("http://example.org/service", remote);

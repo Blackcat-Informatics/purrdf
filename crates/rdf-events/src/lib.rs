@@ -407,6 +407,23 @@ impl SourceSpan {
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[non_exhaustive]
 pub enum EventError {
+    /// A sink refused a logical address before mutating its tables.
+    Capacity {
+        /// Stable identity supplied by the original storage space.
+        space: &'static str,
+        /// Exact requested count, including the refused addition.
+        attempted: u128,
+        /// Inclusive representable count in that space.
+        limit: u128,
+    },
+    /// A concrete allocation layout cannot be represented by the host.
+    StorageSizeOverflow,
+    /// An admitted physical allocation was refused.
+    StorageAllocationFailed,
+    /// The sink's original storage admission refused the operation.
+    StorageAdmissionFailed,
+    /// A native diagnostic could not be formatted.
+    StorageFormattingFailed,
     /// An [`EventTermId`] was declared more than once in one drive. Ids are
     /// drive-global, so a redeclaration anywhere — in any scope — is an error.
     RedeclaredId {
@@ -468,6 +485,18 @@ impl EventError {
 impl core::fmt::Display for EventError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Capacity {
+                space,
+                attempted,
+                limit,
+            } => write!(
+                f,
+                "event sink {space} capacity exhausted: attempted {attempted}, limit {limit}"
+            ),
+            Self::StorageSizeOverflow => f.write_str("event sink allocation layout overflow"),
+            Self::StorageAllocationFailed => f.write_str("event sink allocation failed"),
+            Self::StorageAdmissionFailed => f.write_str("event sink storage admission refused"),
+            Self::StorageFormattingFailed => f.write_str("event sink diagnostic formatting failed"),
             Self::RedeclaredId { id, scope } => {
                 write!(f, "event term id {} redeclared in scope {}", id.0, scope.0)
             }

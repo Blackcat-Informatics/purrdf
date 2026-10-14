@@ -3792,8 +3792,9 @@ mod observed {
     /// an order pattern on its lexical form, as validation compares it on the
     /// XSD timeline: a timezone makes the value an instant, a value and a
     /// bound of which one has a timezone compare only beyond ±14:00 of each
-    /// other (incomparable, so a violation, within it), `24:00:00` is the next
-    /// day's midnight, and every other value — another datatype's, a string,
+    /// other (incomparable, so a violation, within it), `24:00:00` carries the
+    /// next day for dateTime and aliases midnight for time, and every other value
+    /// — another datatype's, a string,
     /// a number, an IRI, an ill-typed date — violates.
     #[test]
     fn json_schema_temporal_bounds_agree_with_validation() {
@@ -3851,7 +3852,9 @@ mod observed {
                 (r#""15:00:00-12:00"^^xsd:time"#, false),
                 (r#""23:00:00+14:00"^^xsd:time"#, false),
                 (r#""01:59:59+14:00"^^xsd:time"#, true),
-                (r#""24:00:00"^^xsd:time"#, false),
+                (r#""00:00:00"^^xsd:time"#, true),
+                (r#""24:00:00"^^xsd:time"#, true),
+                (r#""24:00:00.000000000000000000000"^^xsd:time"#, true),
             ],
         );
         // An ill-typed bound compares with nothing.

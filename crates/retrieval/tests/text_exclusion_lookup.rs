@@ -219,20 +219,24 @@ fn dataset_of(subjects: Subjects) -> Arc<RdfDataset> {
 fn dataset_with(subjects: Subjects, added: Option<Side>) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     if let Some(side) = added {
-        let subject = builder.intern_iri(&ex("added-by-the-rebuild"));
-        let predicate = builder.intern_iri(&side.predicate());
-        let object = builder.intern_literal(RdfLiteral::simple("zulu yankee"));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri(&ex("added-by-the-rebuild")).unwrap();
+        let predicate = builder.intern_iri(&side.predicate()).unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::simple("zulu yankee"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     for side in SIDES {
-        let predicate = builder.intern_iri(&side.predicate());
+        let predicate = builder.intern_iri(&side.predicate()).unwrap();
         for (subject, text) in rows(side) {
             let subject = match subjects {
-                Subjects::Iri => builder.intern_iri(&subject),
-                Subjects::Blank => builder.intern_blank(local(&subject), BlankScope::DEFAULT),
+                Subjects::Iri => builder.intern_iri(&subject).unwrap(),
+                Subjects::Blank => builder
+                    .intern_blank(local(&subject), BlankScope::DEFAULT)
+                    .unwrap(),
             };
-            let object = builder.intern_literal(RdfLiteral::simple(&text));
-            builder.push_quad(subject, predicate, object, None);
+            let object = builder.intern_literal(RdfLiteral::simple(&text)).unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
     }
     builder.freeze().expect("the fixture dataset is valid")

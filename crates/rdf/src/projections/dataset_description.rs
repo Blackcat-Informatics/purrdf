@@ -476,6 +476,7 @@ fn pattern_cause<'a>(
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
         | GraphPattern::Project { inner, .. } => pending.push(Reach::Pattern(inner)),
+        GraphPattern::ProjectStar { inner, .. } => pending.push(Reach::Pattern(inner)),
         GraphPattern::Filter { expr, inner } => {
             pending.extend([Reach::Expr(expr), Reach::Pattern(inner)]);
         }
@@ -929,22 +930,32 @@ mod tests {
 
     fn default_graph() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("https://example.org/subject");
-        let predicate = builder.intern_iri("https://example.org/predicate");
-        let object = builder.intern_iri("https://example.org/object");
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri("https://example.org/subject").unwrap();
+        let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+        let object = builder.intern_iri("https://example.org/object").unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         builder.freeze().expect("dataset")
     }
 
     fn construct_source(reverse: bool) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let graph = builder.intern_iri("https://example.org/source-graph");
-        let predicate = builder.intern_iri("https://example.org/source-predicate");
+        let graph = builder
+            .intern_iri("https://example.org/source-graph")
+            .unwrap();
+        let predicate = builder
+            .intern_iri("https://example.org/source-predicate")
+            .unwrap();
         let rows = if reverse { [2, 1] } else { [1, 2] };
         for row in rows {
-            let subject = builder.intern_iri(&format!("https://example.org/subject-{row}"));
-            let object = builder.intern_iri(&format!("https://example.org/object-{row}"));
-            builder.push_quad(subject, predicate, object, Some(graph));
+            let subject = builder
+                .intern_iri(&format!("https://example.org/subject-{row}"))
+                .unwrap();
+            let object = builder
+                .intern_iri(&format!("https://example.org/object-{row}"))
+                .unwrap();
+            builder
+                .push_quad(subject, predicate, object, Some(graph))
+                .unwrap();
         }
         builder.freeze().expect("CONSTRUCT source")
     }
@@ -1081,11 +1092,13 @@ mod tests {
     #[test]
     fn named_graphs_and_unsafe_stems_fail_closed() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("https://example.org/subject");
-        let predicate = builder.intern_iri("https://example.org/predicate");
-        let object = builder.intern_iri("https://example.org/object");
-        let graph = builder.intern_iri("https://example.org/graph");
-        builder.push_quad(subject, predicate, object, Some(graph));
+        let subject = builder.intern_iri("https://example.org/subject").unwrap();
+        let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+        let object = builder.intern_iri("https://example.org/object").unwrap();
+        let graph = builder.intern_iri("https://example.org/graph").unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
         let dataset = builder.freeze().expect("dataset");
         assert!(
             serialize_description(
@@ -1114,15 +1127,21 @@ mod tests {
     #[test]
     fn serializers_reject_rdf12_content_the_selected_syntax_would_drop() {
         let mut directional = RdfDatasetBuilder::new();
-        let subject = directional.intern_iri("https://example.org/subject");
-        let predicate = directional.intern_iri("https://example.org/label");
-        let object = directional.intern_literal(RdfLiteral {
-            lexical_form: "مرحبا".to_owned(),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        directional.push_quad(subject, predicate, object, None);
+        let subject = directional
+            .intern_iri("https://example.org/subject")
+            .unwrap();
+        let predicate = directional.intern_iri("https://example.org/label").unwrap();
+        let object = directional
+            .intern_literal(RdfLiteral {
+                lexical_form: "مرحبا".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        directional
+            .push_quad(subject, predicate, object, None)
+            .unwrap();
         let directional = directional.freeze().expect("directional dataset");
         assert!(
             serialize_rdf_description(
@@ -1146,13 +1165,19 @@ mod tests {
         );
 
         let mut statement = RdfDatasetBuilder::new();
-        let subject = statement.intern_iri("https://example.org/subject");
-        let predicate = statement.intern_iri("https://example.org/predicate");
-        let object = statement.intern_iri("https://example.org/object");
-        let reifier = statement.intern_iri("https://example.org/assertion");
-        let triple = statement.intern_triple(subject, predicate, object);
-        statement.push_quad(subject, predicate, object, None);
-        statement.push_reifier(reifier, triple);
+        let subject = statement.intern_iri("https://example.org/subject").unwrap();
+        let predicate = statement
+            .intern_iri("https://example.org/predicate")
+            .unwrap();
+        let object = statement.intern_iri("https://example.org/object").unwrap();
+        let reifier = statement
+            .intern_iri("https://example.org/assertion")
+            .unwrap();
+        let triple = statement.intern_triple(subject, predicate, object).unwrap();
+        statement
+            .push_quad(subject, predicate, object, None)
+            .unwrap();
+        statement.push_reifier(reifier, triple).unwrap();
         let statement = statement.freeze().expect("statement-layer dataset");
         assert!(
             serialize_rdf_description(
@@ -1179,13 +1204,13 @@ mod tests {
     #[test]
     fn allocation_free_blank_scan_preserves_the_term_depth_bound() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri("https://example.org/subject");
-        let predicate = builder.intern_iri("https://example.org/predicate");
-        let object = builder.intern_iri("https://example.org/object");
-        let inner = builder.intern_triple(subject, predicate, object);
-        let middle = builder.intern_triple(subject, predicate, inner);
-        let outer = builder.intern_triple(subject, predicate, middle);
-        builder.push_quad(subject, predicate, outer, None);
+        let subject = builder.intern_iri("https://example.org/subject").unwrap();
+        let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+        let object = builder.intern_iri("https://example.org/object").unwrap();
+        let inner = builder.intern_triple(subject, predicate, object).unwrap();
+        let middle = builder.intern_triple(subject, predicate, inner).unwrap();
+        let outer = builder.intern_triple(subject, predicate, middle).unwrap();
+        builder.push_quad(subject, predicate, outer, None).unwrap();
         let dataset = builder.freeze().expect("deep triple-term dataset");
         let shallow_limits =
             ProjectionLimits::new(1, 1_000_000, 1_000_000, 1_002_000, 1).expect("limits");
@@ -1578,10 +1603,12 @@ mod tests {
     #[test]
     fn construct_rejects_blank_nodes_copied_from_source_data() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_blank("source", BlankScope::DEFAULT);
-        let predicate = builder.intern_iri("https://example.org/source-predicate");
-        let object = builder.intern_iri("https://example.org/object");
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_blank("source", BlankScope::DEFAULT).unwrap();
+        let predicate = builder
+            .intern_iri("https://example.org/source-predicate")
+            .unwrap();
+        let object = builder.intern_iri("https://example.org/object").unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
         let source = builder.freeze().expect("blank source");
         let config = ConstructViewConfig::new(
             "CONSTRUCT { ?s <https://example.org/copied> ?o } WHERE { ?s <https://example.org/source-predicate> ?o }",

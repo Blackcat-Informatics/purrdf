@@ -61,7 +61,8 @@
 use std::fmt;
 
 use crate::clause::ClauseAtom;
-use crate::store::RelationStore;
+use crate::dictionary::TermDictionary;
+use crate::store::{RelationStore, TermInterner};
 
 /// What a [`Guard`] reads besides its declared inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -228,8 +229,8 @@ pub enum GuardSite {
 }
 
 /// One guard evaluation request.
-#[derive(Debug, Clone, Copy)]
-pub struct GuardCall<'a> {
+#[derive(Debug)]
+pub struct GuardCall<'a, D: TermDictionary = TermInterner> {
     /// The rule's index in authored program order.
     pub rule: usize,
     /// Which of the rule's guards this is.
@@ -239,7 +240,15 @@ pub struct GuardCall<'a> {
     /// The lexical surfaces bound to [`Guard::inputs`], in the same order.
     pub inputs: &'a [&'a str],
     /// The evaluation model at the point the rule runs.
-    pub model: &'a RelationStore,
+    pub model: &'a RelationStore<D>,
+}
+
+impl<D: TermDictionary> Copy for GuardCall<'_, D> {}
+
+impl<D: TermDictionary> Clone for GuardCall<'_, D> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 /// The caller's implementation of its guards.
@@ -248,27 +257,85 @@ pub struct GuardCall<'a> {
 /// what an empty answer, an empty row and several rows mean — or `Err` with a message,
 /// which aborts the evaluation as [`EvalError::Guard`](crate::seminaive::EvalError::Guard):
 /// a guard that could not decide is never read as a guard that said no.
-pub trait GuardEvaluator {
+pub trait GuardEvaluator<D: TermDictionary = TermInterner> {
     /// Evaluate one guard call.
     ///
     /// # Errors
     ///
-    /// A message naming why the guard could not be evaluated.
-    fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String>;
+    /// A typed source or storage refusal, or a message naming why evaluation failed.
+    fn evaluate(
+        &self,
+        call: &GuardCall<'_, D>,
+    ) -> Result<Vec<Vec<String>>, CallbackError<D::Error>>;
 }
+
+/// A refusal from caller-supplied guard or layer-boundary evaluation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallbackError<E = core::convert::Infallible> {
+    /// The original failure of the dictionary read by a model-dependent guard.
+    Source(E),
+    /// Logical capacity or physical allocation refused the operation.
+    Storage(purrdf_lex::allocation::StorageError),
+    /// The guard's own evaluation diagnostic.
+    Evaluation(String),
+}
+
+impl<E> CallbackError<E> {
+    /// Preserve source and storage identity; contextualize only the textual diagnostic.
+    pub(crate) fn into_eval_error(
+        self,
+        describe: impl FnOnce(String) -> crate::seminaive::EvalError<E>,
+    ) -> crate::seminaive::EvalError<E> {
+        match self {
+            Self::Source(error) => crate::seminaive::EvalError::Source(error),
+            Self::Storage(error) => crate::seminaive::EvalError::Storage(error),
+            Self::Evaluation(message) => describe(message),
+        }
+    }
+}
+
+impl<E: fmt::Display> fmt::Display for CallbackError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
+            Self::Evaluation(message) => f.write_str(message),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for CallbackError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Source(error) => Some(error),
+            Self::Storage(error) => Some(error),
+            Self::Evaluation(_) => None,
+        }
+    }
+}
+
+purrdf_lex::variant_from!(impl<E> CallbackError<E> {
+    Storage(purrdf_lex::allocation::StorageError),
+    Evaluation(String),
+});
+purrdf_lex::variant_from!(impl<E> CallbackError<E> { Evaluation(&str) as ToString::to_string });
 
 /// The evaluator for a program that has no guards: any call is an error, because a
 /// guarded program evaluated without its guards' meaning has no answer.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoGuards;
 
-impl GuardEvaluator for NoGuards {
-    fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+impl<D: TermDictionary> GuardEvaluator<D> for NoGuards {
+    fn evaluate(
+        &self,
+        call: &GuardCall<'_, D>,
+    ) -> Result<Vec<Vec<String>>, CallbackError<D::Error>> {
         Err(format!(
             "rule {} carries guard {:?}, but the evaluation was given no guard evaluator",
             call.rule,
             call.guard.name()
-        ))
+        )
+        .into())
     }
 }
 
@@ -348,7 +415,7 @@ mod tests {
             model: &store,
         };
         let refusal = NoGuards.evaluate(&call).expect_err("no evaluator");
-        assert!(refusal.contains("rule 3"), "{refusal}");
+        assert!(refusal.to_string().contains("rule 3"), "{refusal}");
         assert_eq!(GuardSite::Body(2).to_string(), "body guard 2");
     }
 }

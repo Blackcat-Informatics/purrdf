@@ -329,7 +329,7 @@ struct EndpointUse {
 #[derive(Clone, Copy)]
 enum Scope<'a> {
     /// A `SELECT` list: a variable it does not name is a different variable below it.
-    Project(&'a [Variable]),
+    Project(purrdf_sparql_algebra::ProjectionNames<'a>),
     /// A `GROUP BY` list: rows below it reach the enclosing operator only through an
     /// aggregate unless the variable is a grouping key.
     Group(&'a [Variable]),
@@ -518,8 +518,10 @@ fn classify_admitted(
                     )?;
                     pending.push(ClassifyStep::Pattern(inner, direct))?;
                 }
-                GraphPattern::Project { inner, variables } => {
-                    scopes.push(Scope::Project(variables))?;
+                GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                    scopes.push(Scope::Project(
+                        pattern.projected_names().expect("projection names"),
+                    ))?;
                     pending.push(ClassifyStep::LeaveScope)?;
                     pending.push(ClassifyStep::Pattern(inner, direct))?;
                 }
@@ -1052,7 +1054,8 @@ impl ServedIndex {
                     }
                     summary
                 }
-                GraphPattern::Project { variables, .. } => {
+                GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                    let variables = pattern.projected_names().expect("projection names");
                     let mut summary = part(kids);
                     summary.retain(|o| variables.contains(&o.variable));
                     summary
@@ -1176,6 +1179,7 @@ fn summary_parts<'a>(node: SummaryNode<'a>, push: &mut impl FnMut(SummaryNode<'a
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Slice { inner, .. } => push(SummaryNode::Pattern(inner)),
             GraphPattern::OrderBy { inner, expression } => {
                 push(SummaryNode::Pattern(inner));
@@ -1595,7 +1599,7 @@ fn lateral_endpoint_uses_admitted(
 ) -> Result<(), EvalError> {
     enum Step<'a> {
         Pattern(&'a GraphPattern),
-        LeaveProject(&'a [Variable], usize),
+        LeaveProject(purrdf_sparql_algebra::ProjectionNames<'a>, usize),
     }
     let mut pending = AdmittedVec::with_capacity(1, workspace)?;
     pending.push_reserved(Step::Pattern(pattern));
@@ -1614,8 +1618,14 @@ fn lateral_endpoint_uses_admitted(
                     }
                 }
             }
-            Step::Pattern(GraphPattern::Project { inner, variables }) => {
-                pending.push(Step::LeaveProject(variables, uses.len()))?;
+            Step::Pattern(
+                pattern @ (GraphPattern::Project { inner, .. }
+                | GraphPattern::ProjectStar { inner, .. }),
+            ) => {
+                pending.push(Step::LeaveProject(
+                    pattern.projected_names().expect("projection names"),
+                    uses.len(),
+                ))?;
                 pending.push(Step::Pattern(inner))?;
             }
             Step::Pattern(pattern) => {
@@ -1669,7 +1679,7 @@ fn lateral_endpoint_uses(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)
 /// Whatever evaluating `inner` raises.
 pub(crate) fn eval_projected<D: DatasetView + Sync>(
     inner: &GraphPattern,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     if ctx.endpoint_frames.is_empty() {
@@ -2157,7 +2167,7 @@ mod tests {
     /// fails), all through `ex:endpoint`; and `ex:g1 ex:other ex:o`.
     fn local() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let endpoint = b.intern_iri(&format!("{EX}endpoint"));
+        let endpoint = b.intern_iri(&format!("{EX}endpoint")).unwrap();
         for (g, e) in [
             ("g1", "e1"),
             ("g2", "e2"),
@@ -2165,14 +2175,14 @@ mod tests {
             ("g4", "e3"),
             ("g5", "down"),
         ] {
-            let g = b.intern_iri(&format!("{EX}{g}"));
-            let e = b.intern_iri(&format!("{EX}{e}"));
-            b.push_quad(g, endpoint, e, None);
+            let g = b.intern_iri(&format!("{EX}{g}")).unwrap();
+            let e = b.intern_iri(&format!("{EX}{e}")).unwrap();
+            b.push_quad(g, endpoint, e, None).unwrap();
         }
-        let g1 = b.intern_iri(&format!("{EX}g1"));
-        let other = b.intern_iri(&format!("{EX}other"));
-        let o = b.intern_iri(&format!("{EX}o"));
-        b.push_quad(g1, other, o, None);
+        let g1 = b.intern_iri(&format!("{EX}g1")).unwrap();
+        let other = b.intern_iri(&format!("{EX}other")).unwrap();
+        let o = b.intern_iri(&format!("{EX}o")).unwrap();
+        b.push_quad(g1, other, o, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3048,8 +3058,10 @@ pub(crate) mod walk_tests {
                     classify_expression_reference(key.expression(), scopes, uses);
                 }
             }
-            GraphPattern::Project { inner, variables } => {
-                scopes.push(Scope::Project(variables));
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                scopes.push(Scope::Project(
+                    pattern.projected_names().expect("projection names"),
+                ));
                 classify_reference(inner, direct, scopes, uses);
                 scopes.pop();
             }
@@ -3230,7 +3242,8 @@ pub(crate) mod walk_tests {
                     }
                     summary
                 }
-                GraphPattern::Project { inner, variables } => {
+                GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                    let variables = pattern.projected_names().expect("projection names");
                     let mut summary = self.summarize_reference(inner, ids);
                     summary.retain(|o| variables.contains(&o.variable));
                     summary
@@ -3317,7 +3330,8 @@ pub(crate) mod walk_tests {
                     }
                 }
             }
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 let before = uses.len();
                 lateral_uses_reference(inner, uses);
                 let mut index = before;

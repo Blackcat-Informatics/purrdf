@@ -30,14 +30,16 @@ const NOTE: &str = "https://example.org/note";
 /// Build an index over `(subject, lexical form, language tag)` rows.
 fn index_of(rows: &[(&str, &str, Option<&str>)]) -> TextIndex {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     for &(subject, text, language) in rows {
-        let s = builder.intern_iri(subject);
-        let literal = builder.intern_literal(match language {
-            Some(tag) => RdfLiteral::language_tagged(text, tag),
-            None => RdfLiteral::simple(text),
-        });
-        builder.push_quad(s, note, literal, None);
+        let s = builder.intern_iri(subject).unwrap();
+        let literal = builder
+            .intern_literal(match language {
+                Some(tag) => RdfLiteral::language_tagged(text, tag),
+                None => RdfLiteral::simple(text),
+            })
+            .unwrap();
+        builder.push_quad(s, note, literal, None).unwrap();
     }
     let dataset: Arc<RdfDataset> = builder.freeze().expect("the fixture must validate");
     TextIndex::from_dataset(
@@ -61,18 +63,22 @@ fn everything() -> PartitionFilter {
 fn predicate_scope_precedes_depth_without_changing_score_weights() {
     let from = "https://example.org/from";
     let mut builder = RdfDatasetBuilder::new();
-    let note_id = builder.intern_iri(NOTE);
-    let from_id = builder.intern_iri(from);
-    let a = builder.intern_iri("https://example.org/a");
-    let b = builder.intern_iri("https://example.org/b");
-    let a_text = builder.intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"));
-    let b_text = builder.intern_literal(RdfLiteral::simple(
-        "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
-    ));
-    let b_from = builder.intern_literal(RdfLiteral::simple("alpha"));
-    builder.push_quad(a, note_id, a_text, None);
-    builder.push_quad(b, note_id, b_text, None);
-    builder.push_quad(b, from_id, b_from, None);
+    let note_id = builder.intern_iri(NOTE).unwrap();
+    let from_id = builder.intern_iri(from).unwrap();
+    let a = builder.intern_iri("https://example.org/a").unwrap();
+    let b = builder.intern_iri("https://example.org/b").unwrap();
+    let a_text = builder
+        .intern_literal(RdfLiteral::simple("alpha alpha alpha alpha alpha"))
+        .unwrap();
+    let b_text = builder
+        .intern_literal(RdfLiteral::simple(
+            "beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        ))
+        .unwrap();
+    let b_from = builder.intern_literal(RdfLiteral::simple("alpha")).unwrap();
+    builder.push_quad(a, note_id, a_text, None).unwrap();
+    builder.push_quad(b, note_id, b_text, None).unwrap();
+    builder.push_quad(b, from_id, b_from, None).unwrap();
     let dataset = builder.freeze().unwrap();
     let predicate = TermValue::iri(from);
     let index = TextIndex::from_dataset(
@@ -1143,14 +1149,15 @@ fn two_independently_built_indexes_rank_identically() {
 /// control protection is part of analyzer identity. Ranking v2 changes the index
 /// identity because its canonical profile binds exact promotion and the actual
 /// query-bound law. The RDF source, analyzer, term-sequence and score lexical
-/// identities remain frozen across that ranking migration.
+/// identities remain frozen across that ranking migration. Index v4 additionally
+/// binds surface presence; only the index fingerprint changes for that migration.
 #[test]
 fn the_published_text_identities_are_frozen() {
     let hex = |digest: [u8; 32]| purrdf_hash::hex::Lower(&digest).to_string();
     let index = golden_index();
     assert_eq!(
         hex(index.fingerprint()),
-        "106fef6680a6be9aac5508747e74af3e28699ca24326095fd444d05f8ae8adcd",
+        "573a3db7a8a89832030eb4224ee172804b7dd05531173bbde521acaf1ffd79dd",
         "the index fingerprint"
     );
     assert_eq!(

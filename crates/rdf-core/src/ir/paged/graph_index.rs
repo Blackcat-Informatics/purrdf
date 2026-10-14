@@ -30,8 +30,9 @@ use crate::ir::GlobalTermId;
 /// is the ascending [`PageId`] list for key `i`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StreamCsr {
-    /// Row offsets into `postings`, length `keys.len() + 1`.
-    offsets: Box<[u32]>,
+    /// Resident offsets into `postings`, length `keys.len() + 1`. The combined
+    /// graph/page postings are not bounded by any single page's local u32 ids.
+    offsets: Box<[usize]>,
     /// The concatenated per-key `PageId` postings, each key's slice ascending.
     postings: Box<[PageId]>,
 }
@@ -41,8 +42,8 @@ impl StreamCsr {
     /// owning [`GraphPageIndex::keys`], already known to be in range).
     #[inline]
     fn pages(&self, index: usize) -> &[PageId] {
-        let start = usize::try_from(self.offsets[index]).expect("offset fits usize");
-        let end = usize::try_from(self.offsets[index + 1]).expect("offset fits usize");
+        let start = self.offsets[index];
+        let end = self.offsets[index + 1];
         &self.postings[start..end]
     }
 }
@@ -105,12 +106,12 @@ fn build_csr(
     named: &BTreeMap<GlobalTermId, GraphPostings>,
     select: impl Fn(&GraphPostings) -> &[PageId],
 ) -> StreamCsr {
-    let mut offsets: Vec<u32> = Vec::with_capacity(named.len() + 1);
+    let mut offsets: Vec<usize> = Vec::with_capacity(named.len() + 1);
     let mut postings: Vec<PageId> = Vec::new();
     offsets.push(0);
     for value in named.values() {
         postings.extend_from_slice(select(value));
-        offsets.push(u32::try_from(postings.len()).expect("posting count fits u32"));
+        offsets.push(postings.len());
     }
     StreamCsr {
         offsets: offsets.into_boxed_slice(),
@@ -243,15 +244,39 @@ impl GraphPageIndex {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
     use super::super::provider::{CountingDemandProvider, InMemoryPageProvider, PageProvider};
     use super::super::summary::PageStream;
-    use super::PageId;
+    use super::{GraphPostings, PageId, build_csr};
     use crate::dataset_view::DatasetView;
     use crate::ir::paged::PagedDataset;
-    use crate::ir::{RdfDatasetBuilder, TermValue};
+    use crate::ir::{GlobalTermId, RdfDatasetBuilder, TermValue};
+
+    #[test]
+    fn composed_postings_use_resident_offsets_and_preserve_wide_page_ids() {
+        let mut named = BTreeMap::new();
+        for graph in 0..4 {
+            let declaring = (0..129)
+                .map(|page| PageId(u64::from(u32::MAX) + 1 + graph * 129 + page))
+                .collect();
+            named.insert(
+                GlobalTermId::from_index(graph).unwrap(),
+                GraphPostings {
+                    declaring,
+                    ..GraphPostings::default()
+                },
+            );
+        }
+        let csr = build_csr(&named, |postings| &postings.declaring);
+        // The actual producer stores buffer addresses, never a local term/row id.
+        let offsets: &[usize] = &csr.offsets;
+        assert_eq!(offsets, [0, 129, 258, 387, 516]);
+        for (index, postings) in named.values().enumerate() {
+            assert_eq!(csr.pages(index), postings.declaring);
+        }
+    }
 
     /// An `example.org` IRI value.
     fn iri(name: &str) -> TermValue {
@@ -267,39 +292,39 @@ mod tests {
         // Page 0: a base row in graph A.
         let page0 = {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri("http://example.org/s0");
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o0");
-            let ga = b.intern_iri("http://example.org/gA");
-            b.push_quad(s, p, o, Some(ga));
+            let s = b.intern_iri("http://example.org/s0").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o0").unwrap();
+            let ga = b.intern_iri("http://example.org/gA").unwrap();
+            b.push_quad(s, p, o, Some(ga)).unwrap();
             b.freeze().expect("page0 freeze")
         };
         // Page 1: a base row in graph B, and a reifier row in graph A.
         let page1 = {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri("http://example.org/s1");
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o1");
-            let gb = b.intern_iri("http://example.org/gB");
-            b.push_quad(s, p, o, Some(gb));
-            let a = b.intern_iri("http://example.org/a");
-            let bb = b.intern_iri("http://example.org/b");
-            let c = b.intern_iri("http://example.org/c");
-            let triple = b.intern_triple(a, bb, c);
-            let r = b.intern_iri("http://example.org/r");
-            let ga = b.intern_iri("http://example.org/gA");
-            b.push_reifier_in_graph(r, triple, Some(ga));
+            let s = b.intern_iri("http://example.org/s1").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o1").unwrap();
+            let gb = b.intern_iri("http://example.org/gB").unwrap();
+            b.push_quad(s, p, o, Some(gb)).unwrap();
+            let a = b.intern_iri("http://example.org/a").unwrap();
+            let bb = b.intern_iri("http://example.org/b").unwrap();
+            let c = b.intern_iri("http://example.org/c").unwrap();
+            let triple = b.intern_triple(a, bb, c).unwrap();
+            let r = b.intern_iri("http://example.org/r").unwrap();
+            let ga = b.intern_iri("http://example.org/gA").unwrap();
+            b.push_reifier_in_graph(r, triple, Some(ga)).unwrap();
             b.freeze().expect("page1 freeze")
         };
         // Page 2: graph C declared but empty, plus a default-graph base row.
         let page2 = {
             let mut b = RdfDatasetBuilder::new();
-            let gc = b.intern_iri("http://example.org/gC");
-            b.declare_named_graph(gc);
-            let s = b.intern_iri("http://example.org/s2");
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o2");
-            b.push_quad(s, p, o, None);
+            let gc = b.intern_iri("http://example.org/gC").unwrap();
+            b.declare_named_graph(gc).unwrap();
+            let s = b.intern_iri("http://example.org/s2").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o2").unwrap();
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("page2 freeze")
         };
 
@@ -357,27 +382,27 @@ mod tests {
     fn derive_survives_compaction_and_page_subsetting() {
         let page0 = {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri("http://example.org/s0");
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o0");
-            let ga = b.intern_iri("http://example.org/gA");
-            b.push_quad(s, p, o, Some(ga));
+            let s = b.intern_iri("http://example.org/s0").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o0").unwrap();
+            let ga = b.intern_iri("http://example.org/gA").unwrap();
+            b.push_quad(s, p, o, Some(ga)).unwrap();
             b.freeze().expect("page0 freeze")
         };
         let page1 = {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri("http://example.org/s1");
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o1");
-            let gb = b.intern_iri("http://example.org/gB");
-            b.push_quad(s, p, o, Some(gb));
-            let a = b.intern_iri("http://example.org/a");
-            let bb = b.intern_iri("http://example.org/b");
-            let c = b.intern_iri("http://example.org/c");
-            let triple = b.intern_triple(a, bb, c);
-            let r = b.intern_iri("http://example.org/r");
-            let ga = b.intern_iri("http://example.org/gA");
-            b.push_reifier_in_graph(r, triple, Some(ga));
+            let s = b.intern_iri("http://example.org/s1").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o1").unwrap();
+            let gb = b.intern_iri("http://example.org/gB").unwrap();
+            b.push_quad(s, p, o, Some(gb)).unwrap();
+            let a = b.intern_iri("http://example.org/a").unwrap();
+            let bb = b.intern_iri("http://example.org/b").unwrap();
+            let c = b.intern_iri("http://example.org/c").unwrap();
+            let triple = b.intern_triple(a, bb, c).unwrap();
+            let r = b.intern_iri("http://example.org/r").unwrap();
+            let ga = b.intern_iri("http://example.org/gA").unwrap();
+            b.push_reifier_in_graph(r, triple, Some(ga)).unwrap();
             b.freeze().expect("page1 freeze")
         };
 
@@ -398,7 +423,7 @@ mod tests {
 
         // Compaction renumbers global ids; the index must be rebuilt and resolve to
         // the SAME graph VALUES even though the ids themselves changed.
-        let compacted = paged.compact();
+        let compacted = paged.compact().unwrap();
         let compacted_values: BTreeSet<String> = compacted
             .graph_index()
             .keys()
@@ -444,11 +469,11 @@ mod tests {
     fn derive_materializes_no_page() {
         let page = {
             let mut b = RdfDatasetBuilder::new();
-            let s = b.intern_iri("http://example.org/s");
-            let p = b.intern_iri("http://example.org/p");
-            let o = b.intern_iri("http://example.org/o");
-            let g = b.intern_iri("http://example.org/g");
-            b.push_quad(s, p, o, Some(g));
+            let s = b.intern_iri("http://example.org/s").unwrap();
+            let p = b.intern_iri("http://example.org/p").unwrap();
+            let o = b.intern_iri("http://example.org/o").unwrap();
+            let g = b.intern_iri("http://example.org/g").unwrap();
+            b.push_quad(s, p, o, Some(g)).unwrap();
             b.freeze().expect("page freeze")
         };
         let eager =

@@ -2359,25 +2359,25 @@ mod tests {
     /// real realization to bind.
     fn taxonomy() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri(EX_CAT);
-        let animal = b.intern_iri(EX_ANIMAL);
-        let fish = b.intern_iri(EX_FISH);
-        let tom = b.intern_iri(EX_TOM);
-        let sub = b.intern_iri(RDFS_SUBCLASS_OF);
-        let ty = b.intern_iri(RDF_TYPE);
-        b.push_quad(cat, sub, animal, None);
-        b.push_quad(fish, sub, animal, None);
-        b.push_quad(tom, ty, cat, None);
+        let cat = b.intern_iri(EX_CAT).unwrap();
+        let animal = b.intern_iri(EX_ANIMAL).unwrap();
+        let fish = b.intern_iri(EX_FISH).unwrap();
+        let tom = b.intern_iri(EX_TOM).unwrap();
+        let sub = b.intern_iri(RDFS_SUBCLASS_OF).unwrap();
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        b.push_quad(cat, sub, animal, None).unwrap();
+        b.push_quad(fish, sub, animal, None).unwrap();
+        b.push_quad(tom, ty, cat, None).unwrap();
         b.freeze().expect("the fixture freezes")
     }
 
     /// A different consistent ontology, for the wrong-ontology negatives.
     fn other_ontology() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://example.org/a");
-        let p = b.intern_iri("http://example.org/p");
-        let c = b.intern_iri("http://example.org/c");
-        b.push_quad(a, p, c, None);
+        let a = b.intern_iri("http://example.org/a").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let c = b.intern_iri("http://example.org/c").unwrap();
+        b.push_quad(a, p, c, None).unwrap();
         b.freeze().expect("the fixture freezes")
     }
 
@@ -3360,13 +3360,15 @@ mod tests {
     /// `Cat`-seeded ⊥-module carries the reserved IRI through to its own content.
     fn reserved_taxonomy() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri(EX_CAT);
-        let animal = b.intern_iri(&format!("{}Animal", purrdf_core::RESERVED_NAMESPACE));
-        let tom = b.intern_iri(EX_TOM);
-        let sub = b.intern_iri(RDFS_SUBCLASS_OF);
-        let ty = b.intern_iri(RDF_TYPE);
-        b.push_quad(cat, sub, animal, None);
-        b.push_quad(tom, ty, cat, None);
+        let cat = b.intern_iri(EX_CAT).unwrap();
+        let animal = b
+            .intern_iri(&format!("{}Animal", purrdf_core::RESERVED_NAMESPACE))
+            .unwrap();
+        let tom = b.intern_iri(EX_TOM).unwrap();
+        let sub = b.intern_iri(RDFS_SUBCLASS_OF).unwrap();
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        b.push_quad(cat, sub, animal, None).unwrap();
+        b.push_quad(tom, ty, cat, None).unwrap();
         b.freeze().expect("the fixture freezes")
     }
 

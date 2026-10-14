@@ -773,19 +773,19 @@ mod tests {
     /// and two annotations on `r`, one in the default graph and one in `g1`.
     fn build_fixture() -> (std::sync::Arc<RdfDataset>, PackDict, Vec<u8>) {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_value(&iri("s"));
-        let p = b.intern_value(&iri("p"));
-        let o = b.intern_value(&iri("o"));
-        let triple = b.intern_triple(s, p, o);
-        let r = b.intern_value(&iri("r"));
-        let g1 = b.intern_value(&iri("g1"));
-        b.push_reifier(r, triple);
-        let ap1 = b.intern_value(&iri("ap1"));
-        let ao1 = b.intern_value(&iri("ao1"));
-        b.push_annotation(r, ap1, ao1);
-        let ap2 = b.intern_value(&iri("ap2"));
-        let ao2 = b.intern_value(&iri("ao2"));
-        b.push_annotation_in_graph(r, ap2, ao2, Some(g1));
+        let s = b.intern_value(&iri("s")).unwrap();
+        let p = b.intern_value(&iri("p")).unwrap();
+        let o = b.intern_value(&iri("o")).unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        let r = b.intern_value(&iri("r")).unwrap();
+        let g1 = b.intern_value(&iri("g1")).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        let ap1 = b.intern_value(&iri("ap1")).unwrap();
+        let ao1 = b.intern_value(&iri("ao1")).unwrap();
+        b.push_annotation(r, ap1, ao1).unwrap();
+        let ap2 = b.intern_value(&iri("ap2")).unwrap();
+        let ao2 = b.intern_value(&iri("ao2")).unwrap();
+        b.push_annotation_in_graph(r, ap2, ao2, Some(g1)).unwrap();
         let dataset = b.freeze().expect("valid dataset");
 
         let dict_bytes = PackDict::encode(&dataset).to_bytes();
@@ -981,10 +981,10 @@ mod tests {
     #[test]
     fn empty_dataset_yields_empty_side_tables() {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://example.org/s");
-        let p = b.intern_iri("http://example.org/p");
-        let o = b.intern_iri("http://example.org/o");
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let dataset = b.freeze().expect("valid dataset");
         let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("dict opens");
         let bytes = SideTables::encode(&dict, &dataset).to_bytes();

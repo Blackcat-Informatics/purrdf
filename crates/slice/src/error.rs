@@ -8,6 +8,8 @@
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SliceError {
+    /// Logical capacity or physical storage refused RDF construction.
+    Storage(purrdf_lex::allocation::StorageError),
     /// An I/O error reading from the filesystem.
     Io(std::io::Error),
     /// An RDF parse error (Turtle or other format).
@@ -35,6 +37,7 @@ pub enum SliceError {
 impl std::fmt::Display for SliceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => write!(f, "RDF storage error: {error}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Parse(msg) => write!(f, "RDF parse error: {msg}"),
             Self::InvalidManifest(msg) => write!(f, "invalid manifest: {msg}"),
@@ -51,6 +54,7 @@ impl std::fmt::Display for SliceError {
 impl std::error::Error for SliceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(error) => Some(error),
             Self::Io(e) => Some(e),
             Self::RdfList(e) => Some(e),
             _ => None,
@@ -59,5 +63,14 @@ impl std::error::Error for SliceError {
 }
 
 purrdf_lex::variant_from!(SliceError {
+    Storage(purrdf_lex::allocation::StorageError),
     Io(std::io::Error),
 });
+
+impl SliceError {
+    pub(crate) fn rdf(error: &purrdf_rdf::RdfDiagnostic, context: &str) -> Self {
+        error
+            .storage_error()
+            .map_or_else(|| Self::Parse(format!("{context}: {error}")), Self::Storage)
+    }
+}

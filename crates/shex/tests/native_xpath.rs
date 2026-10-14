@@ -281,10 +281,10 @@ fn negation_alternatives_references_and_partial_maps_do_not_erase_refusal() {
 #[test]
 fn triple_assignment_cannot_hide_an_operational_value_failure() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("urn:example:subject");
-    let predicate = builder.intern_iri("urn:example:predicate");
-    let value = builder.intern_literal(RdfLiteral::simple("aa"));
-    builder.push_quad(subject, predicate, value, None);
+    let subject = builder.intern_iri("urn:example:subject").unwrap();
+    let predicate = builder.intern_iri("urn:example:predicate").unwrap();
+    let value = builder.intern_literal(RdfLiteral::simple("aa")).unwrap();
+    builder.push_quad(subject, predicate, value, None).unwrap();
     let data = builder.freeze().unwrap();
     let pattern = node(r"^(a)\1$", "");
     let parsed = schema(&format!(
@@ -354,10 +354,10 @@ fn textual_shape_map_door_preserves_both_parse_and_operational_causes() {
 #[test]
 fn interned_labeled_verdicts_do_not_survive_into_a_request_with_less_fuel() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("urn:example:subject");
-    let predicate = builder.intern_iri("urn:example:predicate");
-    let value = builder.intern_literal(RdfLiteral::simple("aa"));
-    builder.push_quad(subject, predicate, value, None);
+    let subject = builder.intern_iri("urn:example:subject").unwrap();
+    let predicate = builder.intern_iri("urn:example:predicate").unwrap();
+    let value = builder.intern_literal(RdfLiteral::simple("aa")).unwrap();
+    builder.push_quad(subject, predicate, value, None).unwrap();
     let data = builder.freeze().unwrap();
     let expr = labeled("urn:example:pattern", &node(r"^(a)\1$", ""));
     let parsed = parse_shexj(

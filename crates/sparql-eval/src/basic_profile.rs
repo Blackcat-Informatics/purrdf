@@ -314,6 +314,7 @@ fn check_from(root: Pending<'_>) -> Result<(), EvalError> {
                     pending.push(Pending::Pattern(inner));
                 }
                 GraphPattern::Project { inner, .. }
+                | GraphPattern::ProjectStar { inner, .. }
                 | GraphPattern::Distinct { inner }
                 | GraphPattern::Reduced { inner }
                 | GraphPattern::Slice { inner, .. } => pending.push(Pending::Pattern(inner)),
@@ -551,6 +552,7 @@ mod walk_tests {
                 reference_pattern(inner)
             }
             GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => reference_pattern(inner),

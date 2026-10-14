@@ -630,24 +630,36 @@ mod tests {
 
     fn fixture() -> (std::sync::Arc<RdfDataset>, ContentStore) {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_blank("subject", BlankScope(7));
-        let predicate = builder.intern_iri("https://example.org/p");
-        let object = builder.intern_literal(RdfLiteral::typed("42", "https://example.org/integer"));
-        let directional = builder.intern_literal(RdfLiteral {
-            lexical_form: "مرحبا".to_owned(),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        let graph = builder.intern_iri("https://example.org/graph");
-        let empty_graph = builder.intern_iri("https://example.org/empty");
-        builder.declare_named_graph(empty_graph);
-        builder.push_quad(subject, predicate, object, Some(graph));
+        let subject = builder.intern_blank("subject", BlankScope(7)).unwrap();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::typed("42", "https://example.org/integer"))
+            .unwrap();
+        let directional = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "مرحبا".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        let graph = builder.intern_iri("https://example.org/graph").unwrap();
+        let empty_graph = builder.intern_iri("https://example.org/empty").unwrap();
+        builder.declare_named_graph(empty_graph).unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
 
-        let triple = builder.intern_triple(subject, predicate, directional);
-        let reifier = builder.intern_blank("reifier", BlankScope(7));
-        builder.push_reifier_in_graph(reifier, triple, Some(graph));
-        builder.push_annotation_in_graph(reifier, predicate, object, None);
+        let triple = builder
+            .intern_triple(subject, predicate, directional)
+            .unwrap();
+        let reifier = builder.intern_blank("reifier", BlankScope(7)).unwrap();
+        builder
+            .push_reifier_in_graph(reifier, triple, Some(graph))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(reifier, predicate, object, None)
+            .unwrap();
 
         let mut blobs = ContentStore::new();
         blobs.insert(b"columnar payload".to_vec());
@@ -700,15 +712,21 @@ mod tests {
     #[test]
     fn pack_view_and_native_dataset_emit_identical_files() {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_blank("subject", BlankScope(9));
-        let predicate = builder.intern_iri("https://example.org/p");
-        let object = builder.intern_literal(RdfLiteral::simple("object"));
-        let graph = builder.intern_iri("https://example.org/graph");
-        builder.push_quad(subject, predicate, object, Some(graph));
-        let triple = builder.intern_triple(subject, predicate, object);
-        let reifier = builder.intern_iri("https://example.org/reifier");
-        builder.push_reifier_in_graph(reifier, triple, Some(graph));
-        builder.push_annotation(reifier, predicate, object);
+        let subject = builder.intern_blank("subject", BlankScope(9)).unwrap();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::simple("object"))
+            .unwrap();
+        let graph = builder.intern_iri("https://example.org/graph").unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(graph))
+            .unwrap();
+        let triple = builder.intern_triple(subject, predicate, object).unwrap();
+        let reifier = builder.intern_iri("https://example.org/reifier").unwrap();
+        builder
+            .push_reifier_in_graph(reifier, triple, Some(graph))
+            .unwrap();
+        builder.push_annotation(reifier, predicate, object).unwrap();
         let dataset = builder.freeze().unwrap();
         let blobs = ContentStore::new();
         let pack_bytes = PackBuilder::build_bytes(&dataset).unwrap();
@@ -723,20 +741,24 @@ mod tests {
         fn build(reverse: bool) -> std::sync::Arc<RdfDataset> {
             let mut builder = RdfDatasetBuilder::new();
             let (subject, second_subject, predicate, object, graph, reifier) = if reverse {
-                let reifier = builder.intern_iri("https://example.org/reifier");
-                let graph = builder.intern_iri("https://example.org/graph");
-                let object = builder.intern_literal(RdfLiteral::simple("object"));
-                let predicate = builder.intern_iri("https://example.org/p");
-                let second_subject = builder.intern_iri("https://example.org/second");
-                let subject = builder.intern_blank("subject", BlankScope(4));
+                let reifier = builder.intern_iri("https://example.org/reifier").unwrap();
+                let graph = builder.intern_iri("https://example.org/graph").unwrap();
+                let object = builder
+                    .intern_literal(RdfLiteral::simple("object"))
+                    .unwrap();
+                let predicate = builder.intern_iri("https://example.org/p").unwrap();
+                let second_subject = builder.intern_iri("https://example.org/second").unwrap();
+                let subject = builder.intern_blank("subject", BlankScope(4)).unwrap();
                 (subject, second_subject, predicate, object, graph, reifier)
             } else {
-                let subject = builder.intern_blank("subject", BlankScope(4));
-                let second_subject = builder.intern_iri("https://example.org/second");
-                let predicate = builder.intern_iri("https://example.org/p");
-                let object = builder.intern_literal(RdfLiteral::simple("object"));
-                let graph = builder.intern_iri("https://example.org/graph");
-                let reifier = builder.intern_iri("https://example.org/reifier");
+                let subject = builder.intern_blank("subject", BlankScope(4)).unwrap();
+                let second_subject = builder.intern_iri("https://example.org/second").unwrap();
+                let predicate = builder.intern_iri("https://example.org/p").unwrap();
+                let object = builder
+                    .intern_literal(RdfLiteral::simple("object"))
+                    .unwrap();
+                let graph = builder.intern_iri("https://example.org/graph").unwrap();
+                let reifier = builder.intern_iri("https://example.org/reifier").unwrap();
                 (subject, second_subject, predicate, object, graph, reifier)
             };
             let rows = [
@@ -748,11 +770,13 @@ mod tests {
             } else {
                 rows.iter().collect()
             } {
-                builder.push_quad(s, p, o, g);
+                builder.push_quad(s, p, o, g).unwrap();
             }
-            let triple = builder.intern_triple(subject, predicate, object);
-            builder.push_reifier_in_graph(reifier, triple, Some(graph));
-            builder.push_annotation(reifier, predicate, object);
+            let triple = builder.intern_triple(subject, predicate, object).unwrap();
+            builder
+                .push_reifier_in_graph(reifier, triple, Some(graph))
+                .unwrap();
+            builder.push_annotation(reifier, predicate, object).unwrap();
             builder.freeze().unwrap()
         }
 
@@ -846,9 +870,9 @@ mod term_walk_tests {
                 purrdf_core::term_fixture::TermShape::WellFormed,
             );
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let dataset: std::sync::Arc<RdfDataset> =
                 builder.freeze().expect("a generated term freezes");
             let (mut found, mut expected) = (Resolver::new(&*dataset), Resolver::new(&*dataset));

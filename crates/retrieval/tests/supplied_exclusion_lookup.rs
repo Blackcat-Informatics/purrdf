@@ -2439,27 +2439,31 @@ mod text_relation {
     /// [`dataset`], and `(subject, predicate, literal, graph)` quads beside it.
     pub(super) fn dataset_with(extra: &[(&str, &str, &str, Option<&str>)]) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let config = builder.intern_iri(&ex("config"));
-        let needle = builder.intern_iri(&ex("needle"));
-        let value = builder.intern_literal(RdfLiteral::simple(NEEDLE));
-        builder.push_quad(config, needle, value, None);
+        let config = builder.intern_iri(&ex("config")).unwrap();
+        let needle = builder.intern_iri(&ex("needle")).unwrap();
+        let value = builder.intern_literal(RdfLiteral::simple(NEEDLE)).unwrap();
+        builder.push_quad(config, needle, value, None).unwrap();
         for (subject, predicate, object, graph) in extra {
-            let subject = builder.intern_iri(&ex(subject));
-            let predicate = builder.intern_iri(&ex(predicate));
+            let subject = builder.intern_iri(&ex(subject)).unwrap();
+            let predicate = builder.intern_iri(&ex(predicate)).unwrap();
             let object = if object.starts_with('<') {
-                builder.intern_iri(&ex(object.trim_start_matches('<').trim_end_matches('>')))
+                builder
+                    .intern_iri(&ex(object.trim_start_matches('<').trim_end_matches('>')))
+                    .unwrap()
             } else {
-                builder.intern_literal(RdfLiteral::simple(*object))
+                builder.intern_literal(RdfLiteral::simple(*object)).unwrap()
             };
-            let graph = graph.map(|graph| builder.intern_iri(&ex(graph)));
-            builder.push_quad(subject, predicate, object, graph);
+            let graph = graph.map(|graph| builder.intern_iri(&ex(graph)).unwrap());
+            builder
+                .push_quad(subject, predicate, object, graph)
+                .unwrap();
         }
         for (side, (_, predicate, _, _)) in sides().iter().enumerate() {
-            let predicate = builder.intern_iri(predicate);
+            let predicate = builder.intern_iri(predicate).unwrap();
             for (subject, text) in rows(side) {
-                let subject = builder.intern_iri(&subject);
-                let object = builder.intern_literal(RdfLiteral::simple(&text));
-                builder.push_quad(subject, predicate, object, None);
+                let subject = builder.intern_iri(&subject).unwrap();
+                let object = builder.intern_literal(RdfLiteral::simple(&text)).unwrap();
+                builder.push_quad(subject, predicate, object, None).unwrap();
             }
         }
         builder.freeze().expect("the fixture dataset is valid")
@@ -2857,15 +2861,17 @@ fn a_lookup_driven_by_several_needles_asks_each_distinct_one_and_needs_all_to_ex
 
     let dataset_with = |second: &str| {
         let mut builder = RdfDatasetBuilder::new();
-        let needle = builder.intern_iri(&ex("needle"));
+        let needle = builder.intern_iri(&ex("needle")).unwrap();
         for (config, text) in [
             ("config/one", "quick brown fox"),
             ("config/two", "quick brown fox"),
             ("config/one", second),
         ] {
-            let config = builder.intern_iri(&ex(config));
-            let value = builder.intern_literal(RdfLiteral::language_tagged(text, "en"));
-            builder.push_quad(config, needle, value, None);
+            let config = builder.intern_iri(&ex(config)).unwrap();
+            let value = builder
+                .intern_literal(RdfLiteral::language_tagged(text, "en"))
+                .unwrap();
+            builder.push_quad(config, needle, value, None).unwrap();
         }
         builder.freeze().expect("the fixture dataset is valid")
     };
@@ -3499,22 +3505,28 @@ fn a_driving_pattern_binding_no_input_excludes_every_candidate_and_answers_the_f
 fn tagged_dataset() -> Arc<RdfDataset> {
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
     let mut builder = RdfDatasetBuilder::new();
-    let tag = builder.intern_iri(&ex("data/tag"));
-    let alias = builder.intern_iri(&ex("data/alias"));
-    let graph = builder.intern_iri(&ex("g1"));
-    let value = builder.intern_literal(RdfLiteral::simple("t"));
-    let intruder = builder.intern_iri(&ex("intruder"));
+    let tag = builder.intern_iri(&ex("data/tag")).unwrap();
+    let alias = builder.intern_iri(&ex("data/alias")).unwrap();
+    let graph = builder.intern_iri(&ex("g1")).unwrap();
+    let value = builder.intern_literal(RdfLiteral::simple("t")).unwrap();
+    let intruder = builder.intern_iri(&ex("intruder")).unwrap();
     for prefix in DISJOINT {
         for index in 0..40_u64 {
-            let subject = builder.intern_iri(&ex(&format!("{prefix}entity{index:06}")));
-            builder.push_quad(subject, tag, value, None);
-            builder.push_quad(subject, tag, value, Some(graph));
+            let subject = builder
+                .intern_iri(&ex(&format!("{prefix}entity{index:06}")))
+                .unwrap();
+            builder.push_quad(subject, tag, value, None).unwrap();
+            builder.push_quad(subject, tag, value, Some(graph)).unwrap();
         }
-        let fourth = builder.intern_iri(&ex(&format!("{prefix}entity000003")));
-        builder.push_quad(fourth, alias, intruder, None);
+        let fourth = builder
+            .intern_iri(&ex(&format!("{prefix}entity000003")))
+            .unwrap();
+        builder.push_quad(fourth, alias, intruder, None).unwrap();
     }
-    builder.push_quad(intruder, tag, value, None);
-    builder.push_quad(intruder, tag, value, Some(graph));
+    builder.push_quad(intruder, tag, value, None).unwrap();
+    builder
+        .push_quad(intruder, tag, value, Some(graph))
+        .unwrap();
     builder.freeze().expect("the fixture dataset is valid")
 }
 

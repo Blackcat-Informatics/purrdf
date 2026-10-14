@@ -860,7 +860,9 @@ impl AggregateAccumulator for PercentileAccumulator {
         };
         let order = series_order(&values, &original)?;
         percentile_native(&values, &order, &p, &original)?
-            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .map(|value| {
+                crate::expr::xsd_workspace_value(&value, workspace, value.datatype().iri())
+            })
             .transpose()
     }
 }
@@ -1140,7 +1142,8 @@ impl AggregateAccumulator for MomentsAccumulator {
         };
         match kind {
             MomentsKind::Variance | MomentsKind::VarPop => {
-                crate::expr::xsd_workspace_value(&variance, workspace).map(Some)
+                crate::expr::xsd_workspace_value(&variance, workspace, variance.datatype().iri())
+                    .map(Some)
             }
             MomentsKind::Stddev | MomentsKind::StddevPop => {
                 let mut frame = crate::native_numeric::NumericFrame::new(&original);
@@ -1152,7 +1155,12 @@ impl AggregateAccumulator for MomentsAccumulator {
                     return Ok(None);
                 };
                 let root = purrdf_xsd::ieee::f64_sqrt(number.max(0.0));
-                crate::expr::xsd_workspace_value(&XsdValue::Double(root), workspace).map(Some)
+                crate::expr::xsd_workspace_value(
+                    &XsdValue::Double(root),
+                    workspace,
+                    XsdDatatype::Double.iri(),
+                )
+                .map(Some)
             }
         }
     }

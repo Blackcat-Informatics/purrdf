@@ -98,14 +98,24 @@ fn triple(subject: TermPattern, predicate: &str, object: TermPattern) -> TripleP
 /// than merely reachable.
 fn chain_dataset(links: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
+    let p = builder
+        .intern_iri(&format!("{EX}p"))
+        .expect("fixture capacity");
+    let q = builder
+        .intern_iri(&format!("{EX}q"))
+        .expect("fixture capacity");
     for index in 0..links {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let m = builder.intern_iri(&format!("{EX}m{index}"));
-        let z = builder.intern_iri(&format!("{EX}z{index}"));
-        builder.push_quad(s, p, m, None);
-        builder.push_quad(m, q, z, None);
+        let s = builder
+            .intern_iri(&format!("{EX}s{index}"))
+            .expect("fixture capacity");
+        let m = builder
+            .intern_iri(&format!("{EX}m{index}"))
+            .expect("fixture capacity");
+        let z = builder
+            .intern_iri(&format!("{EX}z{index}"))
+            .expect("fixture capacity");
+        builder.push_quad(s, p, m, None).expect("fixture capacity");
+        builder.push_quad(m, q, z, None).expect("fixture capacity");
     }
     builder
         .freeze()
@@ -321,11 +331,17 @@ fn intermediate_cells_use_the_maximum_operator_instance_not_a_sum() {
     // instances commit 20, 20 and 10 cells: the largest single instance is 20 and the
     // sum is 50, so a ceiling of exactly 20 separates the two readings.
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder
+        .intern_iri(&format!("{EX}p"))
+        .expect("fixture capacity");
     for index in 0..10 {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let o = builder.intern_iri(&format!("{EX}o{index}"));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("{EX}s{index}"))
+            .expect("fixture capacity");
+        let o = builder
+            .intern_iri(&format!("{EX}o{index}"))
+            .expect("fixture capacity");
+        builder.push_quad(s, p, o, None).expect("fixture capacity");
     }
     let dataset = builder.freeze().expect("fixture is positionally valid");
 
@@ -393,16 +409,22 @@ fn scratch_growth_is_charged_so_a_satisfied_row_count_cannot_hide_an_oom() {
     // scratch arena, which is the shape that takes a process out on wasm where an
     // allocation trap kills the module instance outright.
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder
+        .intern_iri(&format!("{EX}p"))
+        .expect("fixture capacity");
     for index in 0..5 {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let o = builder.intern_literal(RdfLiteral {
-            lexical_form: format!("value-{index}"),
-            datatype: None,
-            language: None,
-            direction: None,
-        });
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("{EX}s{index}"))
+            .expect("fixture capacity");
+        let o = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: format!("value-{index}"),
+                datatype: None,
+                language: None,
+                direction: None,
+            })
+            .expect("fixture capacity");
+        builder.push_quad(s, p, o, None).expect("fixture capacity");
     }
     let dataset = builder.freeze().expect("fixture is positionally valid");
 
@@ -939,11 +961,17 @@ fn pf_pattern() -> GraphPattern {
 /// A dataset of `links` driving rows for [`pf_pattern`].
 fn pf_dataset(links: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
+    let p = builder
+        .intern_iri(&format!("{EX}p"))
+        .expect("fixture capacity");
     for index in 0..links {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let m = builder.intern_iri(&format!("{EX}m{index}"));
-        builder.push_quad(s, p, m, None);
+        let s = builder
+            .intern_iri(&format!("{EX}s{index}"))
+            .expect("fixture capacity");
+        let m = builder
+            .intern_iri(&format!("{EX}m{index}"))
+            .expect("fixture capacity");
+        builder.push_quad(s, p, m, None).expect("fixture capacity");
     }
     builder.freeze().expect("dataset is positionally valid")
 }
@@ -1318,26 +1346,34 @@ use purrdf_xsd::datatype::XSD_INTEGER;
 /// feeds `SUM`, and it alone carries [`XSD_INTEGER`].
 fn agg_group_dataset(groups: i64, rows_per_group: i64) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let cat_pred = b.intern_iri(&format!("{EX}cat"));
-    let val_pred = b.intern_iri(&format!("{EX}val"));
+    let cat_pred = b.intern_iri(&format!("{EX}cat")).expect("fixture capacity");
+    let val_pred = b.intern_iri(&format!("{EX}val")).expect("fixture capacity");
     for g in 0..groups {
         for r in 0..rows_per_group {
             let i = g * rows_per_group + r;
-            let subject = b.intern_iri(&format!("{EX}s{i}"));
-            let cat = b.intern_literal(RdfLiteral {
-                lexical_form: format!("cat{g}"),
-                datatype: None,
-                language: None,
-                direction: None,
-            });
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: i.to_string(),
-                datatype: Some(XSD_INTEGER.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subject, cat_pred, cat, None);
-            b.push_quad(subject, val_pred, val, None);
+            let subject = b
+                .intern_iri(&format!("{EX}s{i}"))
+                .expect("fixture capacity");
+            let cat = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: format!("cat{g}"),
+                    datatype: None,
+                    language: None,
+                    direction: None,
+                })
+                .expect("fixture capacity");
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: i.to_string(),
+                    datatype: Some(XSD_INTEGER.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .expect("fixture capacity");
+            b.push_quad(subject, cat_pred, cat, None)
+                .expect("fixture capacity");
+            b.push_quad(subject, val_pred, val, None)
+                .expect("fixture capacity");
         }
     }
     b.freeze().expect("aggregate dataset is positionally valid")
@@ -1418,16 +1454,21 @@ fn count_distinct_group_pattern() -> GraphPattern {
 /// still touching every row.
 fn duplicate_value_dataset(rows: i64) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let val_pred = b.intern_iri(&format!("{EX}val"));
-    let same = b.intern_literal(RdfLiteral {
-        lexical_form: "same".to_owned(),
-        datatype: None,
-        language: None,
-        direction: None,
-    });
+    let val_pred = b.intern_iri(&format!("{EX}val")).expect("fixture capacity");
+    let same = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "same".to_owned(),
+            datatype: None,
+            language: None,
+            direction: None,
+        })
+        .expect("fixture capacity");
     for i in 0..rows {
-        let subject = b.intern_iri(&format!("{EX}s{i}"));
-        b.push_quad(subject, val_pred, same, None);
+        let subject = b
+            .intern_iri(&format!("{EX}s{i}"))
+            .expect("fixture capacity");
+        b.push_quad(subject, val_pred, same, None)
+            .expect("fixture capacity");
     }
     b.freeze()
         .expect("duplicate-value dataset is positionally valid")
@@ -1854,16 +1895,21 @@ fn partial_counter_pattern() -> GraphPattern {
 /// [`partial_counter_pattern`] needs.
 fn ungrouped_val_dataset(rows: i64) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let val_pred = b.intern_iri(&format!("{EX}val"));
+    let val_pred = b.intern_iri(&format!("{EX}val")).expect("fixture capacity");
     for i in 0..rows {
-        let subject = b.intern_iri(&format!("{EX}s{i}"));
-        let val = b.intern_literal(RdfLiteral {
-            lexical_form: i.to_string(),
-            datatype: Some(XSD_INTEGER.to_owned()),
-            language: None,
-            direction: None,
-        });
-        b.push_quad(subject, val_pred, val, None);
+        let subject = b
+            .intern_iri(&format!("{EX}s{i}"))
+            .expect("fixture capacity");
+        let val = b
+            .intern_literal(RdfLiteral {
+                lexical_form: i.to_string(),
+                datatype: Some(XSD_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .expect("fixture capacity");
+        b.push_quad(subject, val_pred, val, None)
+            .expect("fixture capacity");
     }
     b.freeze()
         .expect("ungrouped aggregate dataset is positionally valid")

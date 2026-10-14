@@ -10,14 +10,14 @@ use std::sync::Arc;
 
 use purrdf_core::{
     BlankScope, CanonHash, CompositeDatasetView, CompositeSource, ContentDigest, DatasetMut,
-    DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch, GraphMatchValue,
-    GraphPlacement, InMemoryPageProvider, MutableDataset, OwnerMutability, PagedDataset,
-    PagedQueryLimits, QuadIds, QuadValues, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger, RetentionSnapshot, ScopeBinding,
-    TermRef, TermValue, ViewAccountingReport, ViewLimits, ViewOperationStatus, ViewStats, ViewWork,
-    blank_count_view, canonicalize, canonicalize_graph_view, canonicalize_view,
-    check_admissible_view, datasets_isomorphic, graph_digest_view, try_canonicalize_flat_view,
-    try_canonicalize_view, try_graph_digest_view,
+    DatasetView, DeltaDatasetView, FallibleDatasetView, GraphExistenceMode, GraphMatch,
+    GraphMatchValue, GraphPlacement, InMemoryPageProvider, MutableDataset, OwnerMutability,
+    PagedDataset, PagedQueryLimits, QuadIds, QuadValues, RESERVED_NAMESPACE, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger,
+    RetentionSnapshot, ScopeBinding, TermRef, TermValue, ViewAccountingReport, ViewLimits,
+    ViewOperationStatus, ViewStats, ViewWork, blank_count_view, canonicalize,
+    canonicalize_graph_view, canonicalize_view, check_admissible_view, datasets_isomorphic,
+    graph_digest_view, try_canonicalize_flat_view, try_canonicalize_view, try_graph_digest_view,
 };
 
 const P: &str = "http://example.org/p";
@@ -49,21 +49,24 @@ fn surface<D: DatasetView>(view: &D) -> [BTreeSet<Row>; 3] {
 
 fn complete_source() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank("same", BlankScope::DEFAULT);
-    let p = b.intern_iri(P);
-    let text = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    let triple = b.intern_triple(s, p, text);
-    let nested = b.intern_triple(s, p, triple);
-    let reifier = b.intern_blank("statement", BlankScope(7));
-    let g = b.intern_iri("http://example.org/graph");
-    let empty = b.intern_blank("empty", BlankScope(8));
-    b.push_quad(s, p, nested, Some(g));
-    b.push_reifier_in_graph(reifier, nested, Some(g));
-    b.push_annotation_in_graph(reifier, p, text, Some(g));
-    b.declare_named_graph(empty);
+    let s = b.intern_blank("same", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let text = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    let triple = b.intern_triple(s, p, text).unwrap();
+    let nested = b.intern_triple(s, p, triple).unwrap();
+    let reifier = b.intern_blank("statement", BlankScope(7)).unwrap();
+    let g = b.intern_iri("http://example.org/graph").unwrap();
+    let empty = b.intern_blank("empty", BlankScope(8)).unwrap();
+    b.push_quad(s, p, nested, Some(g)).unwrap();
+    b.push_reifier_in_graph(reifier, nested, Some(g)).unwrap();
+    b.push_annotation_in_graph(reifier, p, text, Some(g))
+        .unwrap();
+    b.declare_named_graph(empty).unwrap();
     b.freeze().unwrap()
 }
 
@@ -179,8 +182,8 @@ fn independent_occurrences_and_shared_contributions_have_explicit_blank_identity
         assert_probes(view);
     }
     let mut native = RdfDatasetBuilder::new();
-    native.push_dataset(&source);
-    native.push_dataset(&source);
+    native.push_dataset(&source).unwrap();
+    native.push_dataset(&source).unwrap();
     assert!(datasets_isomorphic(
         &native.freeze().unwrap(),
         &independent.materialize().unwrap()
@@ -190,14 +193,16 @@ fn independent_occurrences_and_shared_contributions_have_explicit_blank_identity
 #[test]
 fn source_local_integer_collision_does_not_alias_typed_values() {
     let mut a = RdfDatasetBuilder::new();
-    let a_s = a.intern_iri("http://example.org/a");
-    let a_p = a.intern_iri(P);
-    a.push_quad(a_s, a_p, a_s, None);
+    let a_s = a.intern_iri("http://example.org/a").unwrap();
+    let a_p = a.intern_iri(P).unwrap();
+    a.push_quad(a_s, a_p, a_s, None).unwrap();
     let mut b = RdfDatasetBuilder::new();
-    let b_s = b.intern_blank("a", BlankScope::DEFAULT);
-    let b_p = b.intern_iri(P);
-    let b_o = b.intern_literal(RdfLiteral::simple("http://example.org/a"));
-    b.push_quad(b_s, b_p, b_o, None);
+    let b_s = b.intern_blank("a", BlankScope::DEFAULT).unwrap();
+    let b_p = b.intern_iri(P).unwrap();
+    let b_o = b
+        .intern_literal(RdfLiteral::simple("http://example.org/a"))
+        .unwrap();
+    b.push_quad(b_s, b_p, b_o, None).unwrap();
     let a = a.freeze().unwrap();
     let b = b.freeze().unwrap();
     let view = CompositeDatasetView::new(vec![a, b], ViewLimits::default()).unwrap();
@@ -210,19 +215,19 @@ fn source_local_integer_collision_does_not_alias_typed_values() {
 #[test]
 fn graph_projection_deduplicates_within_and_between_sources() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri(P);
-    let o = b.intern_iri("http://example.org/o");
-    let g = b.intern_iri("http://example.org/g");
-    let h = b.intern_iri("http://example.org/h");
-    let empty = b.intern_iri("http://example.org/empty");
-    let triple = b.intern_triple(s, p, o);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    let h = b.intern_iri("http://example.org/h").unwrap();
+    let empty = b.intern_iri("http://example.org/empty").unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
     for graph in [None, Some(g), Some(h)] {
-        b.push_quad(s, p, o, graph);
-        b.push_reifier_in_graph(s, triple, graph);
-        b.push_annotation_in_graph(s, p, o, graph);
+        b.push_quad(s, p, o, graph).unwrap();
+        b.push_reifier_in_graph(s, triple, graph).unwrap();
+        b.push_annotation_in_graph(s, p, o, graph).unwrap();
     }
-    b.declare_named_graph(empty);
+    b.declare_named_graph(empty).unwrap();
     let source = b.freeze().unwrap();
     for placement in [
         GraphPlacement::Default,
@@ -255,14 +260,29 @@ fn graph_projection_deduplicates_within_and_between_sources() {
 #[test]
 fn prepared_composite_probes_reuse_plans_across_rows_and_graph_placements() {
     let mut builder = RdfDatasetBuilder::new();
-    let subjects = ["s", "t"].map(|name| builder.intern_iri(&format!("http://example.org/{name}")));
-    let predicates =
-        ["p", "q"].map(|name| builder.intern_iri(&format!("http://example.org/{name}")));
-    let objects = ["o", "v"].map(|name| builder.intern_iri(&format!("http://example.org/{name}")));
-    let graphs = ["g", "h"].map(|name| builder.intern_iri(&format!("http://example.org/{name}")));
+    let subjects = ["s", "t"].map(|name| {
+        builder
+            .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap()
+    });
+    let predicates = ["p", "q"].map(|name| {
+        builder
+            .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap()
+    });
+    let objects = ["o", "v"].map(|name| {
+        builder
+            .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap()
+    });
+    let graphs = ["g", "h"].map(|name| {
+        builder
+            .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap()
+    });
     for (index, (s, p)) in subjects.into_iter().zip(predicates).enumerate() {
         for g in [None, Some(graphs[0]), Some(graphs[1])] {
-            builder.push_quad(s, p, objects[index], g);
+            builder.push_quad(s, p, objects[index], g).unwrap();
         }
     }
     let native = builder.freeze().unwrap();
@@ -389,24 +409,28 @@ fn declaration_only_projection_and_named_blank_scope_do_not_collide() {
 #[test]
 fn composite_literals_rebind_external_nested_and_triple_term_references() {
     let mut b = RdfDatasetBuilder::new();
-    let external = b.intern_blank("external", BlankScope::DEFAULT);
-    let p = b.intern_iri(P);
-    let list = b.intern_literal(RdfLiteral::typed(
-        "[_:external, [_:external], {\"key\": _:external}]",
-        LIST,
-    ));
-    let map = b.intern_literal(RdfLiteral::typed("{\"key\": [_:external]}", MAP));
-    let triple = b.intern_triple(external, p, list);
-    let nested = b.intern_triple(external, p, triple);
-    b.push_quad(external, p, nested, None);
-    b.push_quad(external, p, map, None);
+    let external = b.intern_blank("external", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let list = b
+        .intern_literal(RdfLiteral::typed(
+            "[_:external, [_:external], {\"key\": _:external}]",
+            LIST,
+        ))
+        .unwrap();
+    let map = b
+        .intern_literal(RdfLiteral::typed("{\"key\": [_:external]}", MAP))
+        .unwrap();
+    let triple = b.intern_triple(external, p, list).unwrap();
+    let nested = b.intern_triple(external, p, triple).unwrap();
+    b.push_quad(external, p, nested, None).unwrap();
+    b.push_quad(external, p, map, None).unwrap();
     let source = b.freeze().unwrap();
     let view =
         CompositeDatasetView::new(vec![source.clone(), source.clone()], ViewLimits::default())
             .unwrap();
     let mut native = RdfDatasetBuilder::new();
-    native.push_dataset(&source);
-    native.push_dataset(&source);
+    native.push_dataset(&source).unwrap();
+    native.push_dataset(&source).unwrap();
     let materialized = view.materialize().unwrap();
     assert!(datasets_isomorphic(
         &native.freeze().unwrap(),
@@ -505,14 +529,188 @@ fn statement_rows_remove_and_reinsert_without_resurrection_or_duplicates() {
 }
 
 #[test]
+fn mutable_freeze_obeys_caller_limits_and_preserves_the_effective_rdf() {
+    let source = complete_source();
+    let mut mutable =
+        MutableDataset::new_with_graph_existence(source.clone(), GraphExistenceMode::RememberEmpty);
+    let mut annotation = metadata_row(&source, source.annotation_quads().next().unwrap());
+    assert!(mutable.remove(&annotation));
+    annotation.o = TermValue::simple_literal("updated");
+    assert!(mutable.insert(annotation).unwrap());
+    let added = QuadValues::triple(
+        iri("added"),
+        TermValue::iri(P),
+        TermValue::simple_literal("delta"),
+    );
+    assert!(mutable.insert(added.clone()).unwrap());
+    let snapshot = mutable.snapshot_view().unwrap();
+    let stats = snapshot.stats();
+    let exact = ViewLimits {
+        max_sources: stats.retained_sources,
+        max_terms: stats.retained_terms,
+        max_rows: stats.retained_rows,
+        max_payload_bytes: stats.retained_payload_bytes,
+        max_auxiliary_bytes: stats.auxiliary_bytes,
+    };
+    for (name, limits) in [
+        (
+            "sources",
+            ViewLimits {
+                max_sources: exact.max_sources - 1,
+                ..exact
+            },
+        ),
+        (
+            "terms",
+            ViewLimits {
+                max_terms: exact.max_terms - 1,
+                ..exact
+            },
+        ),
+        (
+            "rows",
+            ViewLimits {
+                max_rows: exact.max_rows - 1,
+                ..exact
+            },
+        ),
+        (
+            "payload bytes",
+            ViewLimits {
+                max_payload_bytes: exact.max_payload_bytes - 1,
+                ..exact
+            },
+        ),
+        (
+            "auxiliary bytes",
+            ViewLimits {
+                max_auxiliary_bytes: exact.max_auxiliary_bytes - 1,
+                ..exact
+            },
+        ),
+    ] {
+        let before = mutable.work_stats();
+        let refused = mutable.freeze_with_limits(limits).unwrap_err();
+        assert_eq!(refused.code, "view-retention-limit");
+        assert!(refused.message.contains(name), "{refused:?}");
+        assert_eq!(mutable.work_stats(), before, "{name}: refused publication");
+        let compacted = mutable.freeze_with_limits(exact).unwrap();
+        assert_eq!(surface(&compacted), surface(&snapshot));
+        assert_eq!(
+            compacted.named_graphs().count(),
+            snapshot.named_graphs().count()
+        );
+        assert_eq!(
+            mutable.work_stats().materializations,
+            before.materializations + 1
+        );
+    }
+    let default = mutable.freeze().unwrap();
+    let explicit_default = mutable.freeze_with_limits(ViewLimits::default()).unwrap();
+    assert_eq!(surface(&default), surface(&explicit_default));
+    assert_eq!(surface(&default), surface(&snapshot));
+    assert!(mutable.remove(&added));
+    assert_eq!(snapshot.quads().count(), default.quad_count());
+    assert_eq!(
+        mutable.freeze_with_limits(exact).unwrap().quad_count() + 1,
+        default.quad_count()
+    );
+}
+
+#[test]
+#[ignore = "large native compaction acceptance; run explicitly with a memory ceiling"]
+fn large_mutable_claims_freeze_with_the_snapshot_limits() {
+    let claims = 950_000;
+    let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().unwrap());
+    let predicate = TermValue::iri(P);
+    let reifies = TermValue::iri(REIFIES);
+    let annotation_predicates = [iri("annotation/one"), iri("annotation/two")];
+    for index in 0..claims {
+        let subject = iri(&format!("subject/{index}"));
+        let object = TermValue::simple_literal(index.to_string());
+        let reifier = iri(&format!("claim/{index}"));
+        let triple = TermValue::Triple {
+            s: TermBox::new(subject.clone()),
+            p: TermBox::new(predicate.clone()),
+            o: TermBox::new(object.clone()),
+        };
+        assert!(
+            mutable
+                .insert(QuadValues::triple(
+                    subject,
+                    predicate.clone(),
+                    object.clone()
+                ))
+                .unwrap()
+        );
+        assert!(
+            mutable
+                .insert(QuadValues::triple(reifier.clone(), reifies.clone(), triple))
+                .unwrap()
+        );
+        for annotation in &annotation_predicates {
+            assert!(
+                mutable
+                    .insert(QuadValues::triple(
+                        reifier.clone(),
+                        annotation.clone(),
+                        object.clone()
+                    ))
+                    .unwrap()
+            );
+        }
+    }
+    let limits = ViewLimits {
+        max_auxiliary_bytes: 1_073_741_824,
+        ..ViewLimits::default()
+    };
+    let snapshot = mutable.snapshot_view_with_limits(limits).unwrap();
+    let stats = snapshot.stats();
+    eprintln!(
+        "claims={claims} rows={} auxiliary_bytes={}",
+        stats.retained_rows, stats.auxiliary_bytes
+    );
+    assert!(stats.auxiliary_bytes > ViewLimits::default().max_auxiliary_bytes);
+    let refused = mutable.freeze().unwrap_err();
+    assert_eq!(refused.code, "view-retention-limit");
+    assert!(refused.message.contains("auxiliary bytes"));
+    let compacted = mutable.freeze_with_limits(limits).unwrap();
+    assert_eq!(compacted.quad_count(), claims);
+    assert_eq!(compacted.reifiers().count(), claims);
+    assert_eq!(compacted.annotations().count(), 2 * claims);
+    assert_eq!(compacted.rdf_row_count(), stats.retained_rows);
+    // Full table populations establish scale; the small fixture above compares
+    // every RDF value. Probe boundary/interior identities here without retaining
+    // two further whole-corpus copies in the comparison oracle.
+    for index in [0, claims / 2, claims - 1] {
+        let subject = DatasetView::term_id_by_value(&*compacted, &iri(&format!("subject/{index}")))
+            .unwrap()
+            .unwrap();
+        let quad = compacted
+            .quads_for_pattern(Some(subject), None, None, GraphMatch::Default)
+            .next()
+            .unwrap();
+        assert_eq!(
+            owned(&compacted, quad.o),
+            TermValue::simple_literal(index.to_string())
+        );
+        let reifier = DatasetView::term_id_by_value(&*compacted, &iri(&format!("claim/{index}")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(compacted.reifier_quads_of(reifier).count(), 1);
+        assert_eq!(compacted.annotations_of_with_graph(reifier).count(), 2);
+    }
+}
+
+#[test]
 fn adding_reifier_classifies_only_rows_in_the_same_graph() {
     let mut b = RdfDatasetBuilder::new();
-    let r = b.intern_iri("http://example.org/r");
-    let p = b.intern_iri(P);
-    let o = b.intern_iri("http://example.org/o");
-    let g = b.intern_iri("http://example.org/g");
-    b.push_quad(r, p, o, None);
-    b.push_quad(r, p, o, Some(g));
+    let r = b.intern_iri("http://example.org/r").unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    b.push_quad(r, p, o, None).unwrap();
+    b.push_quad(r, p, o, Some(g)).unwrap();
     let source = b.freeze().unwrap();
     let declaration = QuadValues {
         s: iri("r"),
@@ -539,17 +737,17 @@ fn adding_reifier_classifies_only_rows_in_the_same_graph() {
     assert_eq!(view.reifier_quads().count(), 1);
     assert_eq!(view.annotation_quads().count(), 1);
     let mut expected = RdfDatasetBuilder::new();
-    let r = expected.intern_iri("http://example.org/r");
-    let p = expected.intern_iri(P);
-    let o = expected.intern_iri("http://example.org/o");
-    let g = expected.intern_iri("http://example.org/g");
-    let s = expected.intern_iri("http://example.org/s");
-    let q = expected.intern_iri("http://example.org/q");
-    let triple = expected.intern_triple(s, p, o);
-    expected.push_quad(r, p, o, None);
-    expected.push_quad(r, q, o, None);
-    expected.push_reifier_in_graph(r, triple, Some(g));
-    expected.push_annotation_in_graph(r, p, o, Some(g));
+    let r = expected.intern_iri("http://example.org/r").unwrap();
+    let p = expected.intern_iri(P).unwrap();
+    let o = expected.intern_iri("http://example.org/o").unwrap();
+    let g = expected.intern_iri("http://example.org/g").unwrap();
+    let s = expected.intern_iri("http://example.org/s").unwrap();
+    let q = expected.intern_iri("http://example.org/q").unwrap();
+    let triple = expected.intern_triple(s, p, o).unwrap();
+    expected.push_quad(r, p, o, None).unwrap();
+    expected.push_quad(r, q, o, None).unwrap();
+    expected.push_reifier_in_graph(r, triple, Some(g)).unwrap();
+    expected.push_annotation_in_graph(r, p, o, Some(g)).unwrap();
     assert_eq!(surface(&view), surface(&expected.freeze().unwrap()));
     assert!(view.annotation_quads().all(|q| q.g.is_some()));
     assert!(view.quads().all(|q| q.g.is_none()));
@@ -725,11 +923,13 @@ fn shared_ownership_drops_explicitly_and_clones_do_not_copy_dictionaries_or_maps
 #[test]
 fn repeated_snapshots_release_their_deltas_and_keep_nested_payloads_borrowed() {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(P);
-    let literal = b.intern_literal(RdfLiteral::simple("large".repeat(65_536)));
-    let inner = b.intern_triple(p, p, literal);
-    let outer = b.intern_triple(p, p, inner);
-    b.push_quad(p, p, outer, None);
+    let p = b.intern_iri(P).unwrap();
+    let literal = b
+        .intern_literal(RdfLiteral::simple("large".repeat(65_536)))
+        .unwrap();
+    let inner = b.intern_triple(p, p, literal).unwrap();
+    let outer = b.intern_triple(p, p, inner).unwrap();
+    b.push_quad(p, p, outer, None).unwrap();
     let source = b.freeze().unwrap();
     let mutable = MutableDataset::new(source.clone());
     for _ in 0..16 {
@@ -776,10 +976,12 @@ fn repeated_snapshots_release_their_deltas_and_keep_nested_payloads_borrowed() {
 #[test]
 fn blanks_referenced_only_inside_composite_literals_stay_independent() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri(P);
-    let literal = b.intern_literal(RdfLiteral::typed("[[{\"key\": _:hidden}]]", LIST));
-    b.push_quad(s, p, literal, None);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let literal = b
+        .intern_literal(RdfLiteral::typed("[[{\"key\": _:hidden}]]", LIST))
+        .unwrap();
+    b.push_quad(s, p, literal, None).unwrap();
     let source = b.freeze().unwrap();
     assert!(
         source
@@ -795,8 +997,8 @@ fn blanks_referenced_only_inside_composite_literals_stay_independent() {
         "literal-only blanks must not alias"
     );
     let mut native = RdfDatasetBuilder::new();
-    native.push_dataset(&source);
-    native.push_dataset(&source);
+    native.push_dataset(&source).unwrap();
+    native.push_dataset(&source).unwrap();
     assert!(datasets_isomorphic(
         &native.freeze().unwrap(),
         &view.materialize().unwrap()
@@ -985,12 +1187,16 @@ fn composite_literals_are_charged_with_the_blanks_they_embed() {
     // Base-held: a row that names a base composite literal re-interns it, its
     // datatype and both embedded blanks; a map embeds blanks in keys and values.
     let mut b = RdfDatasetBuilder::new();
-    let list = b.intern_literal(RdfLiteral::typed("[_:b1, _:b2]", LIST));
-    let map = b.intern_literal(RdfLiteral::typed("{_:k : _:v}", MAP));
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri(P);
-    b.push_quad(s, p, list, None);
-    b.push_quad(s, p, map, None);
+    let list = b
+        .intern_literal(RdfLiteral::typed("[_:b1, _:b2]", LIST))
+        .unwrap();
+    let map = b
+        .intern_literal(RdfLiteral::typed("{_:k : _:v}", MAP))
+        .unwrap();
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri(P).unwrap();
+    b.push_quad(s, p, list, None).unwrap();
+    b.push_quad(s, p, map, None).unwrap();
     let base = b.freeze().unwrap();
     let base_held = || {
         let mut mutable = MutableDataset::new(Arc::clone(&base));
@@ -1055,10 +1261,12 @@ fn language_tags_are_charged_folded_as_the_freeze_interns_them() {
 
     // A mixed-case tag that folds to a literal the base holds is that base term.
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/a");
-    let p = b.intern_iri("http://example.org/b");
-    let o = b.intern_literal(RdfLiteral::language_tagged("x", "en"));
-    b.push_quad(s, p, o, None);
+    let s = b.intern_iri("http://example.org/a").unwrap();
+    let p = b.intern_iri("http://example.org/b").unwrap();
+    let o = b
+        .intern_literal(RdfLiteral::language_tagged("x", "en"))
+        .unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let base = b.freeze().unwrap();
     assert_exact_snapshot_limits(|| {
         let mut mutable = MutableDataset::new(Arc::clone(&base));
@@ -1080,7 +1288,10 @@ fn every_term_shape_is_charged_as_the_freeze_interns_it() {
     // declared graph that also names a row.
     let base = complete_source();
     let build = || {
-        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let mut mutable = MutableDataset::new_with_graph_existence(
+            Arc::clone(&base),
+            GraphExistenceMode::Implicit,
+        );
         let same = TermValue::blank("same");
         let p = TermValue::iri(P);
         let inner = TermValue::Triple {
@@ -1126,11 +1337,11 @@ fn every_term_shape_is_charged_as_the_freeze_interns_it() {
 #[test]
 fn suppression_counts_every_native_table_occurrence_and_reclassification_deduplicates() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri(P);
-    let o = b.intern_iri("http://example.org/o");
-    b.push_quad(s, p, o, None);
-    b.push_annotation(s, p, o);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    b.push_annotation(s, p, o).unwrap();
     let base = b.freeze().unwrap();
     let row = QuadValues::triple(iri("s"), iri("p"), iri("o"));
     let mut mutable = MutableDataset::new(base);
@@ -1162,11 +1373,14 @@ fn suppression_counts_every_native_table_occurrence_and_reclassification_dedupli
 fn deleting_one_declaration_keeps_unrelated_annotation_only_records_in_their_table() {
     let source = complete_source();
     let mut b = RdfDatasetBuilder::new();
-    purrdf_core::ir::import::DatasetImporter::new(&mut b, &source).append();
-    let orphan = b.intern_iri("http://example.org/annotation-only");
-    let p = b.intern_iri(P);
-    let o = b.intern_iri("http://example.org/o");
-    b.push_annotation(orphan, p, o);
+    purrdf_core::ir::import::DatasetImporter::new(&mut b, &source)
+        .unwrap()
+        .append()
+        .unwrap();
+    let orphan = b.intern_iri("http://example.org/annotation-only").unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    b.push_annotation(orphan, p, o).unwrap();
     let base = b.freeze().unwrap();
     let declaration = metadata_row(&base, base.reifier_quads().next().unwrap());
     let mut mutable = MutableDataset::new(base);
@@ -1201,9 +1415,11 @@ fn materialized_bytes_ignore_operational_counter_changes() {
 #[test]
 fn reusing_source_owners_does_not_carry_a_previous_views_literal_rebinding() {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(P);
-    let literal = b.intern_literal(RdfLiteral::typed("[_:hidden]", LIST));
-    b.push_quad(p, p, literal, None);
+    let p = b.intern_iri(P).unwrap();
+    let literal = b
+        .intern_literal(RdfLiteral::typed("[_:hidden]", LIST))
+        .unwrap();
+    b.push_quad(p, p, literal, None).unwrap();
     let source = b.freeze().unwrap();
     let independent =
         CompositeDatasetView::new(vec![source.clone(), source.clone()], ViewLimits::default())
@@ -1236,38 +1452,45 @@ const OTHER_GRAPH: &str = "http://example.org/other";
 /// admitted a neighbour's statement layer would still pass a single-graph fixture.
 fn identity_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(P);
-    let q = b.intern_iri("http://example.org/q");
-    let o = b.intern_iri("http://example.org/o");
-    let g = b.intern_iri(GRAPH);
-    let other = b.intern_iri(OTHER_GRAPH);
+    let p = b.intern_iri(P).unwrap();
+    let q = b.intern_iri("http://example.org/q").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g = b.intern_iri(GRAPH).unwrap();
+    let other = b.intern_iri(OTHER_GRAPH).unwrap();
     // One local label in two scopes: distinct nodes a label-keyed canonicalization
     // would conflate, and a `shared` that is CO-REFERENT across several rows.
-    let shared = b.intern_blank("n", BlankScope::DEFAULT);
-    let scoped = b.intern_blank("n", BlankScope(4));
-    let plain = b.intern_literal(RdfLiteral::simple("plain"));
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("hello", "en"));
-    let directional = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    b.push_quad(shared, p, plain, None);
-    b.push_quad(shared, q, tagged, None);
-    b.push_quad(scoped, p, o, None);
-    b.push_quad(shared, p, directional, Some(g));
-    let triple = b.intern_triple(shared, p, directional);
-    b.push_quad(scoped, q, triple, Some(g));
-    let reifier = b.intern_blank("statement", BlankScope(7));
-    b.push_reifier_in_graph(reifier, triple, Some(g));
-    b.push_annotation_in_graph(reifier, q, tagged, Some(g));
+    let shared = b.intern_blank("n", BlankScope::DEFAULT).unwrap();
+    let scoped = b.intern_blank("n", BlankScope(4)).unwrap();
+    let plain = b.intern_literal(RdfLiteral::simple("plain")).unwrap();
+    let tagged = b
+        .intern_literal(RdfLiteral::language_tagged("hello", "en"))
+        .unwrap();
+    let directional = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    b.push_quad(shared, p, plain, None).unwrap();
+    b.push_quad(shared, q, tagged, None).unwrap();
+    b.push_quad(scoped, p, o, None).unwrap();
+    b.push_quad(shared, p, directional, Some(g)).unwrap();
+    let triple = b.intern_triple(shared, p, directional).unwrap();
+    b.push_quad(scoped, q, triple, Some(g)).unwrap();
+    let reifier = b.intern_blank("statement", BlankScope(7)).unwrap();
+    b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+    b.push_annotation_in_graph(reifier, q, tagged, Some(g))
+        .unwrap();
     // The SAME triple term reified in the default graph as well.
-    let default_reifier = b.intern_iri("http://example.org/r");
-    b.push_reifier_in_graph(default_reifier, triple, None);
-    b.push_annotation_in_graph(default_reifier, q, plain, None);
-    b.push_quad(o, p, o, Some(other));
+    let default_reifier = b.intern_iri("http://example.org/r").unwrap();
+    b.push_reifier_in_graph(default_reifier, triple, None)
+        .unwrap();
+    b.push_annotation_in_graph(default_reifier, q, plain, None)
+        .unwrap();
+    b.push_quad(o, p, o, Some(other)).unwrap();
     // A named graph owning no row at all.
-    let empty = b.intern_blank("declared only", BlankScope(9));
-    b.declare_named_graph(empty);
+    let empty = b.intern_blank("declared only", BlankScope(9)).unwrap();
+    b.declare_named_graph(empty).unwrap();
     b.freeze().unwrap()
 }
 
@@ -1355,10 +1578,12 @@ fn canonical_identity_is_byte_equal_over_flat_composite_and_delta_views() {
     assert!(try_canonicalize_view(&independent, CanonHash::Sha256).is_ok());
 
     let mut inadmissible = RdfDatasetBuilder::new();
-    let s = inadmissible.intern_iri("http://example.org/s");
-    let o = inadmissible.intern_iri("http://example.org/o");
-    let reserved = inadmissible.intern_iri(&format!("{RESERVED_NAMESPACE}reifies"));
-    inadmissible.push_quad(s, reserved, o, None);
+    let s = inadmissible.intern_iri("http://example.org/s").unwrap();
+    let o = inadmissible.intern_iri("http://example.org/o").unwrap();
+    let reserved = inadmissible
+        .intern_iri(&format!("{RESERVED_NAMESPACE}reifies"))
+        .unwrap();
+    inadmissible.push_quad(s, reserved, o, None).unwrap();
     let inadmissible =
         CompositeDatasetView::new(vec![inadmissible.freeze().unwrap()], ViewLimits::default())
             .unwrap();
@@ -1390,8 +1615,8 @@ fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
     // within one occurrence the shared blank stays one node, across occurrences it
     // becomes two.
     let mut native = RdfDatasetBuilder::new();
-    native.push_dataset(&flat);
-    native.push_dataset(&flat);
+    native.push_dataset(&flat).unwrap();
+    native.push_dataset(&flat).unwrap();
     let native = native.freeze().unwrap();
     assert!(datasets_isomorphic(&native, &doubled));
 
@@ -1405,10 +1630,13 @@ fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
 
     // A negative that is not about counts: same shape, one different ground IRI.
     let mut altered = RdfDatasetBuilder::new();
-    purrdf_core::ir::import::DatasetImporter::new(&mut altered, &flat).append();
-    let s = altered.intern_iri("http://example.org/s");
-    let p = altered.intern_iri(P);
-    altered.push_quad(s, p, s, None);
+    purrdf_core::ir::import::DatasetImporter::new(&mut altered, &flat)
+        .unwrap()
+        .append()
+        .unwrap();
+    let s = altered.intern_iri("http://example.org/s").unwrap();
+    let p = altered.intern_iri(P).unwrap();
+    altered.push_quad(s, p, s, None).unwrap();
     let altered = altered.freeze().unwrap();
     assert!(!datasets_isomorphic(&altered, &independent));
 }
@@ -1422,7 +1650,7 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     for graph in [GRAPH, OTHER_GRAPH] {
         // The reference: materialize the named-graph projection and canonicalize it,
         // exactly as the flat per-graph digest does today.
-        let projected = canonicalize(&flat.project_named_graph(graph)).nquads;
+        let projected = canonicalize(&flat.project_named_graph(graph).unwrap()).nquads;
         assert!(
             !projected.is_empty(),
             "{graph} must actually hold content, or parity proves nothing"
@@ -1483,7 +1711,10 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     // A graph this view never names selects nothing — an empty subgraph, not an
     // error, and byte-identical to projecting an absent graph flat.
     let absent = "http://example.org/no-such-graph";
-    assert_eq!(canonicalize(&flat.project_named_graph(absent)).nquads, "");
+    assert_eq!(
+        canonicalize(&flat.project_named_graph(absent).unwrap()).nquads,
+        ""
+    );
     for empty in [
         canonicalize_graph_view(&*flat, absent, CanonHash::Sha256).nquads,
         canonicalize_graph_view(&independent, absent, CanonHash::Sha256).nquads,
@@ -1519,14 +1750,16 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     // … and refuses exactly the graph carrying reserved vocabulary, without
     // the refusal spreading to a neighbouring clean graph.
     let mut poisoned = RdfDatasetBuilder::new();
-    let s = poisoned.intern_iri("http://example.org/s");
-    let p = poisoned.intern_iri(P);
-    let o = poisoned.intern_iri("http://example.org/o");
-    let reserved = poisoned.intern_iri(&format!("{RESERVED_NAMESPACE}reifies"));
-    let bad_graph = poisoned.intern_iri(GRAPH);
-    let clean_graph = poisoned.intern_iri(OTHER_GRAPH);
-    poisoned.push_quad(s, reserved, o, Some(bad_graph));
-    poisoned.push_quad(s, p, o, Some(clean_graph));
+    let s = poisoned.intern_iri("http://example.org/s").unwrap();
+    let p = poisoned.intern_iri(P).unwrap();
+    let o = poisoned.intern_iri("http://example.org/o").unwrap();
+    let reserved = poisoned
+        .intern_iri(&format!("{RESERVED_NAMESPACE}reifies"))
+        .unwrap();
+    let bad_graph = poisoned.intern_iri(GRAPH).unwrap();
+    let clean_graph = poisoned.intern_iri(OTHER_GRAPH).unwrap();
+    poisoned.push_quad(s, reserved, o, Some(bad_graph)).unwrap();
+    poisoned.push_quad(s, p, o, Some(clean_graph)).unwrap();
     let poisoned =
         CompositeDatasetView::new(vec![poisoned.freeze().unwrap()], ViewLimits::default()).unwrap();
     assert!(try_graph_digest_view(&poisoned, GRAPH).is_err());
@@ -1946,8 +2179,8 @@ fn a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart
     // The reference for "two independent occurrences": the flat dataset built by
     // appending the source to itself.
     let mut doubled = RdfDatasetBuilder::new();
-    doubled.push_dataset(&base);
-    doubled.push_dataset(&base);
+    doubled.push_dataset(&base).unwrap();
+    doubled.push_dataset(&base).unwrap();
     let doubled = canonicalize(&doubled.freeze().unwrap()).nquads;
     assert_ne!(alone, doubled, "the fixture must carry blanks to separate");
 
@@ -2442,30 +2675,35 @@ struct Note(&'static str);
 /// direction did not survive composition.
 fn carrier_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(P);
-    let q = b.intern_iri("http://example.org/q");
-    let o = b.intern_iri("http://example.org/o");
-    let g1 = b.intern_iri(CG1);
-    let g2 = b.intern_iri(CG2);
-    let declared = b.intern_iri(CDECLARED);
-    let shared = b.intern_blank("n", BlankScope::DEFAULT);
-    let scoped = b.intern_blank("n", BlankScope(4));
-    let plain = b.intern_literal(RdfLiteral::simple("plain"));
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("hello", "en"));
-    let directional = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    b.push_quad(shared, p, plain, None);
-    b.push_quad(scoped, p, o, None);
-    b.push_quad(shared, p, directional, Some(g1));
-    let triple = b.intern_triple(shared, p, directional);
-    b.push_quad(scoped, q, triple, Some(g1));
-    let reifier = b.intern_blank("statement", BlankScope(7));
-    b.push_reifier_in_graph(reifier, triple, Some(g1));
-    b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
-    b.push_quad(o, p, o, Some(g2));
-    b.declare_named_graph(declared);
+    let p = b.intern_iri(P).unwrap();
+    let q = b.intern_iri("http://example.org/q").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g1 = b.intern_iri(CG1).unwrap();
+    let g2 = b.intern_iri(CG2).unwrap();
+    let declared = b.intern_iri(CDECLARED).unwrap();
+    let shared = b.intern_blank("n", BlankScope::DEFAULT).unwrap();
+    let scoped = b.intern_blank("n", BlankScope(4)).unwrap();
+    let plain = b.intern_literal(RdfLiteral::simple("plain")).unwrap();
+    let tagged = b
+        .intern_literal(RdfLiteral::language_tagged("hello", "en"))
+        .unwrap();
+    let directional = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    b.push_quad(shared, p, plain, None).unwrap();
+    b.push_quad(scoped, p, o, None).unwrap();
+    b.push_quad(shared, p, directional, Some(g1)).unwrap();
+    let triple = b.intern_triple(shared, p, directional).unwrap();
+    b.push_quad(scoped, q, triple, Some(g1)).unwrap();
+    let reifier = b.intern_blank("statement", BlankScope(7)).unwrap();
+    b.push_reifier_in_graph(reifier, triple, Some(g1)).unwrap();
+    b.push_annotation_in_graph(reifier, q, tagged, Some(g1))
+        .unwrap();
+    b.push_quad(o, p, o, Some(g2)).unwrap();
+    b.declare_named_graph(declared).unwrap();
     b.freeze().unwrap()
 }
 
@@ -2475,15 +2713,15 @@ fn carrier_fixture() -> Arc<RdfDataset> {
 /// either shows up as a moved digest.
 fn contained_contribution(graph: &str) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(P);
-    let q = b.intern_iri("http://example.org/q");
-    let o = b.intern_iri("http://example.org/o");
-    let g = b.intern_iri(graph);
-    let node = b.intern_blank("n", BlankScope::DEFAULT);
-    let elsewhere = b.intern_blank("n", BlankScope(4));
-    b.push_quad(node, p, o, Some(g));
-    b.push_quad(node, q, elsewhere, Some(g));
-    b.push_quad(elsewhere, p, o, Some(g));
+    let p = b.intern_iri(P).unwrap();
+    let q = b.intern_iri("http://example.org/q").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g = b.intern_iri(graph).unwrap();
+    let node = b.intern_blank("n", BlankScope::DEFAULT).unwrap();
+    let elsewhere = b.intern_blank("n", BlankScope(4)).unwrap();
+    b.push_quad(node, p, o, Some(g)).unwrap();
+    b.push_quad(node, q, elsewhere, Some(g)).unwrap();
+    b.push_quad(elsewhere, p, o, Some(g)).unwrap();
     b.freeze().unwrap()
 }
 
@@ -2508,21 +2746,33 @@ fn loadout() -> (RdfLookaside, Arc<ContentStore>, DatasetProvenance) {
     blobs.insert(b"second blob payload".to_vec());
 
     let mut provenance = DatasetProvenance::new();
-    let unit = provenance.register_unit("units/core", OriginKind::Source);
-    let artifact = provenance.register_artifact("units/core/core.ttl");
+    let unit = provenance
+        .register_unit("units/core", OriginKind::Source)
+        .unwrap();
+    let artifact = provenance.register_artifact("units/core/core.ttl").unwrap();
     provenance.record_occurrence(
         QuadHandle::from_index(0),
         unit,
         artifact,
         Some("core.ttl:1".to_owned()),
     );
-    let second = provenance.register_unit("units/derived", OriginKind::Generated);
-    let second_artifact = provenance.register_artifact("units/derived/derived.ttl");
+    let second = provenance
+        .register_unit("units/derived", OriginKind::Generated)
+        .unwrap();
+    let second_artifact = provenance
+        .register_artifact("units/derived/derived.ttl")
+        .unwrap();
     provenance.record_occurrence(QuadHandle::from_index(1), second, second_artifact, None);
     // Private: interned but never projected.
-    provenance.intern_origin_set(vec![(unit, artifact), (second, second_artifact)]);
-    provenance.register_unit("units/registered-only", OriginKind::Source);
-    provenance.register_artifact("units/registered-only/unused.ttl");
+    provenance
+        .intern_origin_set(vec![(unit, artifact), (second, second_artifact)])
+        .unwrap();
+    provenance
+        .register_unit("units/registered-only", OriginKind::Source)
+        .unwrap();
+    provenance
+        .register_artifact("units/registered-only/unused.ttl")
+        .unwrap();
 
     (lookaside, Arc::new(blobs), provenance)
 }
@@ -2568,25 +2818,35 @@ fn flat_and_view_carriers_agree_on_every_identity_they_publish() {
     assert_eq!(graphs, view.named_graph_iris());
     for graph in &graphs {
         assert_eq!(
-            flat.graph_digest(graph),
+            flat.graph_digest(graph).unwrap(),
             view.graph_digest(graph).unwrap(),
             "per-graph digest of <{graph}>"
         );
     }
     // Absence is an empty subgraph on both carriers, never an error.
     assert_eq!(
-        flat.graph_digest(CABSENT),
+        flat.graph_digest(CABSENT).unwrap(),
         view.graph_digest(CABSENT).unwrap()
     );
 
-    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap(), "root");
+    assert_eq!(
+        flat.pipeline_root().unwrap(),
+        view.pipeline_root().unwrap(),
+        "root"
+    );
 
     // Non-vacuity: the fixture's graphs are genuinely different from each other, the
     // declaration-only graph is genuinely empty, and the root is a DIFFERENT identity
     // from the digest rather than the same bytes under another name.
-    assert_ne!(flat.graph_digest(CG1), flat.graph_digest(CG2));
-    assert_eq!(flat.graph_digest(CDECLARED), flat.graph_digest(CABSENT));
-    assert_ne!(flat.digest(), flat.pipeline_root());
+    assert_ne!(
+        flat.graph_digest(CG1).unwrap(),
+        flat.graph_digest(CG2).unwrap()
+    );
+    assert_eq!(
+        flat.graph_digest(CDECLARED).unwrap(),
+        flat.graph_digest(CABSENT).unwrap()
+    );
+    assert_ne!(flat.digest(), flat.pipeline_root().unwrap());
     assert!(
         canonicalize_graph_view(&*base, CG1, CanonHash::Sha256)
             .nquads
@@ -2608,7 +2868,7 @@ fn accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers(
 
     // <g1> is the graph with the scoped blanks, the triple term and the statement
     // layer. Pin it on both carriers.
-    let pinned = flat.graph_digest(CG1);
+    let pinned = flat.graph_digest(CG1).unwrap();
     assert_eq!(pinned, view.graph_digest(CG1).unwrap());
     flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
     view.pin_handle(CG1, Note("g1"), pinned).unwrap();
@@ -2622,7 +2882,7 @@ fn accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers(
     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
     assert_eq!(view.handle(CG1).unwrap().content_digest, pinned);
     assert_eq!(
-        flat.graph_digest(CG1),
+        flat.graph_digest(CG1).unwrap(),
         pinned,
         "the pin still verifies (flat)"
     );
@@ -2633,10 +2893,16 @@ fn accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers(
     );
 
     // The contribution genuinely landed, identically, on both carriers.
-    assert_eq!(flat.graph_digest(CG3), view.graph_digest(CG3).unwrap());
-    assert_ne!(flat.graph_digest(CG3), flat.graph_digest(CABSENT));
+    assert_eq!(
+        flat.graph_digest(CG3).unwrap(),
+        view.graph_digest(CG3).unwrap()
+    );
+    assert_ne!(
+        flat.graph_digest(CG3).unwrap(),
+        flat.graph_digest(CABSENT).unwrap()
+    );
     assert_eq!(flat.digest(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
 }
 
 /// Reseating the per-graph memo rather than clearing a SHARED one: a clone taken
@@ -2650,7 +2916,7 @@ fn a_clone_taken_before_accumulate_reads_its_own_content_on_both_carriers() {
     let mut flat = flat_carrier(&base);
     let mut view = view_carrier(&base, &ledger);
 
-    let before = flat.graph_digest(CG2);
+    let before = flat.graph_digest(CG2).unwrap();
     assert_eq!(before, view.graph_digest(CG2).unwrap());
     let flat_snapshot = flat.clone();
     let view_snapshot = view.clone();
@@ -2663,14 +2929,17 @@ fn a_clone_taken_before_accumulate_reads_its_own_content_on_both_carriers() {
         .unwrap();
 
     assert_ne!(
-        flat.graph_digest(CG2),
+        flat.graph_digest(CG2).unwrap(),
         before,
         "the fixture must actually move <g2>, or the test proves nothing"
     );
-    assert_eq!(flat.graph_digest(CG2), view.graph_digest(CG2).unwrap());
+    assert_eq!(
+        flat.graph_digest(CG2).unwrap(),
+        view.graph_digest(CG2).unwrap()
+    );
 
     assert_eq!(
-        flat_snapshot.graph_digest(CG2),
+        flat_snapshot.graph_digest(CG2).unwrap(),
         before,
         "the pre-accumulate flat clone answers for its own content"
     );
@@ -2699,12 +2968,12 @@ fn a_contribution_reaching_outside_its_graph_is_refused_by_both_carriers() {
     // carrier `GraphPlacement::Named` would silently relocate that row.
     let straying = {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri(P);
-        let o = b.intern_iri("http://example.org/o");
-        let s = b.intern_iri("http://example.org/s");
-        let g = b.intern_iri(CG3);
-        b.push_quad(s, p, o, Some(g));
-        b.push_quad(o, p, s, None);
+        let p = b.intern_iri(P).unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let g = b.intern_iri(CG3).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
+        b.push_quad(o, p, s, None).unwrap();
         b.freeze().unwrap()
     };
 
@@ -2743,7 +3012,7 @@ fn a_contribution_reaching_outside_its_graph_is_refused_by_both_carriers() {
     view.accumulate_named_graph(CG3, &contained, Note("ok"))
         .expect("the contained twin must still be admitted (view)");
     assert_eq!(flat.digest(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
 }
 
 /// Exact invalidation: an accumulation re-canonicalizes exactly the graph it
@@ -2816,7 +3085,7 @@ fn the_pipeline_root_moves_with_one_leaf_and_stands_still_otherwise() {
     let mut flat = flat_carrier(&base);
 
     let root_before = view.pipeline_root().unwrap();
-    assert_eq!(root_before, flat.pipeline_root());
+    assert_eq!(root_before, flat.pipeline_root().unwrap());
     // Reading it twice does not move it.
     assert_eq!(view.pipeline_root().unwrap(), root_before);
 
@@ -2832,7 +3101,11 @@ fn the_pipeline_root_moves_with_one_leaf_and_stands_still_otherwise() {
 
     let root_after = view.pipeline_root().unwrap();
     assert_ne!(root_after, root_before, "a new leaf must move the root");
-    assert_eq!(root_after, flat.pipeline_root(), "on both carriers alike");
+    assert_eq!(
+        root_after,
+        flat.pipeline_root().unwrap(),
+        "on both carriers alike"
+    );
     assert_eq!(view.graph_digest(CG1).unwrap(), g1, "untouched leaf");
     assert_eq!(view.graph_digest(CG2).unwrap(), g2, "untouched leaf");
     assert_eq!(
@@ -2902,12 +3175,12 @@ fn content_equal_views_with_different_fingerprints_publish_equal_identities() {
     // content, while charging retention twice.
     let base = {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri(P);
-        let o = b.intern_iri("http://example.org/o");
-        let s = b.intern_iri("http://example.org/s");
-        let g = b.intern_iri(CG1);
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, p, o, Some(g));
+        let p = b.intern_iri(P).unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let g = b.intern_iri(CG1).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
         b.freeze().unwrap()
     };
     let once = CompositeDatasetView::new(vec![base.clone()], ViewLimits::default()).unwrap();
@@ -2957,12 +3230,12 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
     let base = carrier_fixture();
     let ledger = RetentionLedger::new();
     let mut flat = flat_carrier(&base);
-    let d1 = flat.graph_digest(CG1);
-    let d2 = flat.graph_digest(CG2);
+    let d1 = flat.graph_digest(CG1).unwrap();
+    let d2 = flat.graph_digest(CG2).unwrap();
     flat.pin_handle(CG1, Note("g1"), d1).unwrap();
     flat.pin_handle(CG2, Note("g2"), d2).unwrap();
     let flat_digest = flat.digest();
-    let flat_root = flat.pipeline_root();
+    let flat_root = flat.pipeline_root().unwrap();
 
     let assert_loadout = |lookaside: &RdfLookaside,
                           blobs: &ContentStore,
@@ -3064,9 +3337,12 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
     );
     assert_eq!(back.handles(), grown.handles());
     assert_eq!(back.digest(), grown.digest().unwrap());
-    assert_eq!(back.pipeline_root(), grown.pipeline_root().unwrap());
+    assert_eq!(
+        back.pipeline_root().unwrap(),
+        grown.pipeline_root().unwrap()
+    );
     for (graph, entry) in back.handles() {
-        assert_eq!(back.graph_digest(graph), entry.content_digest);
+        assert_eq!(back.graph_digest(graph).unwrap(), entry.content_digest);
     }
     // A round trip that ends where it started.
     let round = back
@@ -3101,7 +3377,10 @@ fn a_delta_rides_the_view_carrier_without_compaction() {
     // flat carrier's.
     let flat = flat_carrier(&base);
     assert_eq!(carrier.digest().unwrap(), flat.digest());
-    assert_eq!(carrier.pipeline_root().unwrap(), flat.pipeline_root());
+    assert_eq!(
+        carrier.pipeline_root().unwrap(),
+        flat.pipeline_root().unwrap()
+    );
     assert_eq!(carrier.named_graph_iris(), flat.named_graph_iris());
 
     // Both owners are on the ledger, and the base is charged once even though a
@@ -3347,16 +3626,19 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
 
     // Pin <g1> on both carriers — the graph with the scoped blanks, the triple term
     // and the statement layer.
-    let pinned = flat.graph_digest(CG1);
+    let pinned = flat.graph_digest(CG1).unwrap();
     assert_eq!(pinned, view.graph_digest(CG1).unwrap());
     flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
     view.pin_handle(CG1, Note("g1"), pinned).unwrap();
 
     // Everything the refusal must leave exactly where it found it.
     let leaves = flat.named_graph_iris();
-    let leaf_digests: Vec<ContentDigest> = leaves.iter().map(|g| flat.graph_digest(g)).collect();
+    let leaf_digests: Vec<ContentDigest> = leaves
+        .iter()
+        .map(|g| flat.graph_digest(g).unwrap())
+        .collect();
     let flat_digest = flat.digest();
-    let flat_root = flat.pipeline_root();
+    let flat_root = flat.pipeline_root().unwrap();
     let view_digest = view.digest().unwrap();
     let view_root = view.pipeline_root().unwrap();
     let ledger_before = ledger.snapshot();
@@ -3384,7 +3666,11 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
     }
 
     assert_eq!(flat.digest(), flat_digest, "flat bundle digest");
-    assert_eq!(flat.pipeline_root(), flat_root, "flat pipeline root");
+    assert_eq!(
+        flat.pipeline_root().unwrap(),
+        flat_root,
+        "flat pipeline root"
+    );
     assert_eq!(view.digest().unwrap(), view_digest, "view bundle digest");
     assert_eq!(
         view.pipeline_root().unwrap(),
@@ -3394,7 +3680,7 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
     assert_eq!(flat.named_graph_iris(), leaves, "flat leaf set");
     assert_eq!(view.named_graph_iris(), leaves, "view leaf set");
     for (graph, before) in leaves.iter().zip(&leaf_digests) {
-        assert_eq!(flat.graph_digest(graph), *before, "flat <{graph}>");
+        assert_eq!(flat.graph_digest(graph).unwrap(), *before, "flat <{graph}>");
         assert_eq!(view.graph_digest(graph).unwrap(), *before, "view <{graph}>");
     }
     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
@@ -3416,7 +3702,7 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
     view.accumulate_named_graph(CG3, &elsewhere, Note("g3"))
         .expect("the undisturbing twin must still be admitted (view)");
     assert_eq!(
-        flat.graph_digest(CG1),
+        flat.graph_digest(CG1).unwrap(),
         pinned,
         "the pin still verifies (flat)"
     );
@@ -3425,10 +3711,16 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
         pinned,
         "the pin still verifies (view)"
     );
-    assert_eq!(flat.graph_digest(CG3), view.graph_digest(CG3).unwrap());
-    assert_ne!(flat.graph_digest(CG3), flat.graph_digest(CABSENT));
+    assert_eq!(
+        flat.graph_digest(CG3).unwrap(),
+        view.graph_digest(CG3).unwrap()
+    );
+    assert_ne!(
+        flat.graph_digest(CG3).unwrap(),
+        flat.graph_digest(CABSENT).unwrap()
+    );
     assert_eq!(flat.digest(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
     assert_eq!(
         ledger.snapshot().distinct_owners,
         2,
@@ -3447,53 +3739,59 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
 /// re-scoped or re-identified anything would show up immediately.
 fn selection_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let shared = b.intern_blank("shared", BlankScope::DEFAULT);
-    let p = b.intern_iri(P);
-    let o = b.intern_iri("http://example.org/o");
-    let g = b.intern_iri("http://example.org/g");
-    let h = b.intern_iri("http://example.org/h");
-    let empty = b.intern_iri("http://example.org/empty");
-    let text = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    let triple = b.intern_triple(shared, p, o);
-    let reifier = b.intern_blank("statement", BlankScope(3));
+    let shared = b.intern_blank("shared", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    let h = b.intern_iri("http://example.org/h").unwrap();
+    let empty = b.intern_iri("http://example.org/empty").unwrap();
+    let text = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    let triple = b.intern_triple(shared, p, o).unwrap();
+    let reifier = b.intern_blank("statement", BlankScope(3)).unwrap();
     // Kept by the selection, across all three row layers.
-    b.push_quad(shared, p, o, Some(g));
-    b.push_quad(shared, p, triple, Some(g));
-    b.push_reifier_in_graph(reifier, triple, Some(g));
-    b.push_annotation_in_graph(reifier, p, text, Some(g));
+    b.push_quad(shared, p, o, Some(g)).unwrap();
+    b.push_quad(shared, p, triple, Some(g)).unwrap();
+    b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+    b.push_annotation_in_graph(reifier, p, text, Some(g))
+        .unwrap();
     // Dropped by it — and co-referent with what it keeps, so dropping the rows
     // must not drop the identities.
-    b.push_quad(shared, p, text, Some(h));
-    b.push_reifier_in_graph(reifier, triple, Some(h));
-    b.push_annotation_in_graph(reifier, p, o, Some(h));
+    b.push_quad(shared, p, text, Some(h)).unwrap();
+    b.push_reifier_in_graph(reifier, triple, Some(h)).unwrap();
+    b.push_annotation_in_graph(reifier, p, o, Some(h)).unwrap();
     // Never selectable: the default graph has no name to give.
-    b.push_quad(shared, p, o, None);
-    b.declare_named_graph(empty);
+    b.push_quad(shared, p, o, None).unwrap();
+    b.declare_named_graph(empty).unwrap();
     b.freeze().unwrap()
 }
 
 /// Exactly what a selection of `{g, empty}` over [`selection_fixture`] holds.
 fn selection_expectation() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let shared = b.intern_blank("shared", BlankScope::DEFAULT);
-    let p = b.intern_iri(P);
-    let o = b.intern_iri("http://example.org/o");
-    let g = b.intern_iri("http://example.org/g");
-    let empty = b.intern_iri("http://example.org/empty");
-    let text = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    let triple = b.intern_triple(shared, p, o);
-    let reifier = b.intern_blank("statement", BlankScope(3));
-    b.push_quad(shared, p, o, Some(g));
-    b.push_quad(shared, p, triple, Some(g));
-    b.push_reifier_in_graph(reifier, triple, Some(g));
-    b.push_annotation_in_graph(reifier, p, text, Some(g));
-    b.declare_named_graph(empty);
+    let shared = b.intern_blank("shared", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri(P).unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let g = b.intern_iri("http://example.org/g").unwrap();
+    let empty = b.intern_iri("http://example.org/empty").unwrap();
+    let text = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
+    let triple = b.intern_triple(shared, p, o).unwrap();
+    let reifier = b.intern_blank("statement", BlankScope(3)).unwrap();
+    b.push_quad(shared, p, o, Some(g)).unwrap();
+    b.push_quad(shared, p, triple, Some(g)).unwrap();
+    b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+    b.push_annotation_in_graph(reifier, p, text, Some(g))
+        .unwrap();
+    b.declare_named_graph(empty).unwrap();
     b.freeze().unwrap()
 }
 
@@ -3905,33 +4203,33 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
 /// `reified`, `r` reifies `<<s0 p0 o0>>` in `g0` and annotates it there.
 fn order_source(seed: usize, reified: bool) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let g0 = b.intern_iri("http://example.org/g0");
-    let g1 = b.intern_iri("http://example.org/g1");
+    let g0 = b.intern_iri("http://example.org/g0").unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
     let graphs = [None, Some(g0), Some(g1)];
     for s in 0..4 {
-        let subject = b.intern_iri(&format!("http://example.org/s{s}"));
+        let subject = b.intern_iri(&format!("http://example.org/s{s}")).unwrap();
         for p in 0..2 {
-            let predicate = b.intern_iri(&format!("http://example.org/p{p}"));
+            let predicate = b.intern_iri(&format!("http://example.org/p{p}")).unwrap();
             for o in 0..2 {
-                let object = b.intern_iri(&format!("http://example.org/o{o}"));
+                let object = b.intern_iri(&format!("http://example.org/o{o}")).unwrap();
                 for (g, &graph) in graphs.iter().enumerate() {
                     if (s * 5 + p * 3 + o * 7 + g * 2 + seed).is_multiple_of(3) {
-                        b.push_quad(subject, predicate, object, graph);
+                        b.push_quad(subject, predicate, object, graph).unwrap();
                     }
                 }
             }
         }
     }
     if reified {
-        let r = b.intern_iri("http://example.org/r");
-        let s = b.intern_iri("http://example.org/s0");
-        let p0 = b.intern_iri("http://example.org/p0");
-        let p1 = b.intern_iri("http://example.org/p1");
-        let o0 = b.intern_iri("http://example.org/o0");
-        let o1 = b.intern_iri("http://example.org/o1");
-        let triple = b.intern_triple(s, p0, o0);
-        b.push_reifier_in_graph(r, triple, Some(g0));
-        b.push_annotation_in_graph(r, p1, o1, Some(g0));
+        let r = b.intern_iri("http://example.org/r").unwrap();
+        let s = b.intern_iri("http://example.org/s0").unwrap();
+        let p0 = b.intern_iri("http://example.org/p0").unwrap();
+        let p1 = b.intern_iri("http://example.org/p1").unwrap();
+        let o0 = b.intern_iri("http://example.org/o0").unwrap();
+        let o1 = b.intern_iri("http://example.org/o1").unwrap();
+        let triple = b.intern_triple(s, p0, o0).unwrap();
+        b.push_reifier_in_graph(r, triple, Some(g0)).unwrap();
+        b.push_annotation_in_graph(r, p1, o1, Some(g0)).unwrap();
     }
     b.freeze().unwrap()
 }

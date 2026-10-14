@@ -109,26 +109,42 @@ fn config() -> LpgConfig {
 
 fn dataset() -> std::sync::Arc<purrdf_rdf::RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let graph = builder.intern_iri("https://example.org/graph");
-    let rdf_type = builder.intern_iri(TYPE);
-    let class = builder.intern_iri("https://example.org/Person");
-    let name = builder.intern_iri("https://example.org/name");
-    let knows = builder.intern_iri("https://example.org/knows");
-    let confidence = builder.intern_iri("https://example.org/confidence");
-    let alice = builder.intern_iri("https://example.org/alice");
-    let bob = builder.intern_iri("https://example.org/bob");
-    let literal = builder.intern_literal(RdfLiteral::simple("Alice, \"A\""));
-    let biography = builder.intern_iri("https://example.org/biography");
-    let long_literal = builder.intern_literal(RdfLiteral::simple("x".repeat(100_000)));
-    builder.push_quad(alice, rdf_type, class, Some(graph));
-    builder.push_quad(alice, name, literal, Some(graph));
-    builder.push_quad(alice, biography, long_literal, Some(graph));
-    builder.push_quad(alice, knows, bob, Some(graph));
-    let quoted = builder.intern_triple(alice, knows, bob);
-    let reifier = builder.intern_iri("https://example.org/reifier");
-    let high = builder.intern_iri("https://example.org/high");
-    builder.push_reifier_in_graph(reifier, quoted, Some(graph));
-    builder.push_annotation_in_graph(reifier, confidence, high, Some(graph));
+    let graph = builder.intern_iri("https://example.org/graph").unwrap();
+    let rdf_type = builder.intern_iri(TYPE).unwrap();
+    let class = builder.intern_iri("https://example.org/Person").unwrap();
+    let name = builder.intern_iri("https://example.org/name").unwrap();
+    let knows = builder.intern_iri("https://example.org/knows").unwrap();
+    let confidence = builder
+        .intern_iri("https://example.org/confidence")
+        .unwrap();
+    let alice = builder.intern_iri("https://example.org/alice").unwrap();
+    let bob = builder.intern_iri("https://example.org/bob").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral::simple("Alice, \"A\""))
+        .unwrap();
+    let biography = builder.intern_iri("https://example.org/biography").unwrap();
+    let long_literal = builder
+        .intern_literal(RdfLiteral::simple("x".repeat(100_000)))
+        .unwrap();
+    builder
+        .push_quad(alice, rdf_type, class, Some(graph))
+        .unwrap();
+    builder
+        .push_quad(alice, name, literal, Some(graph))
+        .unwrap();
+    builder
+        .push_quad(alice, biography, long_literal, Some(graph))
+        .unwrap();
+    builder.push_quad(alice, knows, bob, Some(graph)).unwrap();
+    let quoted = builder.intern_triple(alice, knows, bob).unwrap();
+    let reifier = builder.intern_iri("https://example.org/reifier").unwrap();
+    let high = builder.intern_iri("https://example.org/high").unwrap();
+    builder
+        .push_reifier_in_graph(reifier, quoted, Some(graph))
+        .unwrap();
+    builder
+        .push_annotation_in_graph(reifier, confidence, high, Some(graph))
+        .unwrap();
     builder.freeze().expect("dataset")
 }
 

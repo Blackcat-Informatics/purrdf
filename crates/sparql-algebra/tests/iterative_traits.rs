@@ -354,6 +354,10 @@ fn m_pattern(p: &GraphPattern) -> mirror::GraphPattern {
             inner: b(inner),
             variables: variables.clone(),
         },
+        GraphPattern::ProjectStar { inner, variables } => M::Project {
+            inner: b(inner),
+            variables: variables.iter().cloned().collect(),
+        },
         GraphPattern::Distinct { inner } => M::Distinct { inner: b(inner) },
         GraphPattern::Reduced { inner } => M::Reduced { inner: b(inner) },
         GraphPattern::Slice {

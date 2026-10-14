@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use purrdf_core::{
     DatasetView, GraphMatch, SegmentedBytes, SegmentedError, SegmentedEvidence, SegmentedProvider,
     SegmentedReadLimits, SegmentedSession, SegmentedSnapshot, SparqlRequest, SparqlResult,
-    TermValue,
+    TermFactory, TermValue,
 };
 use purrdf_sparql_eval::{
     CancellationFlag, FallibleSparqlError, FallibleSparqlResult, GovernedEvidence, GovernorState,
@@ -25,6 +25,240 @@ use purrdf_sparql_eval::{
 
 #[global_allocator]
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+#[test]
+fn chronological_segmented_stack_matches_eager_raw_and_prepared_queries() {
+    use purrdf_core::{
+        RdfDatasetBuilder, SegmentedLayer, SegmentedLayerMetadata, SegmentedResidentHead,
+        SegmentedStack,
+    };
+    let (first, resident) = fixture();
+    let (second, _) = fixture_with_layout(1024, 8);
+    let read_limits = SegmentedReadLimits::new(CEILING, 2, 65_536, 100_000_000, 8);
+    let mut stack = SegmentedStack::default();
+    stack
+        .publish(
+            [first, second]
+                .into_iter()
+                .map(|image| {
+                    Arc::new(
+                        SegmentedLayer::new(
+                            Arc::new(image.provider()),
+                            image.receipt().clone(),
+                            SegmentedLayerMetadata::default(),
+                        )
+                        .unwrap(),
+                    )
+                })
+                .collect(),
+            read_limits,
+        )
+        .unwrap();
+    let target = resident
+        .term_id_by_value(&TermValue::iri("https://example.org/target"))
+        .unwrap()
+        .unwrap();
+    let predicate = resident
+        .term_id_by_value(&TermValue::iri("https://example.org/p"))
+        .unwrap()
+        .unwrap();
+    let removed = resident
+        .quads()
+        .find(|row| row.s == target && row.p == predicate)
+        .unwrap();
+    let copy_row = |builder: &mut RdfDatasetBuilder, row: purrdf_core::QuadIds| {
+        let s = builder
+            .intern_value(&resident.as_ref().term_value(row.s))
+            .unwrap();
+        let p = builder
+            .intern_value(&resident.as_ref().term_value(row.p))
+            .unwrap();
+        let o = builder
+            .intern_value(&resident.as_ref().term_value(row.o))
+            .unwrap();
+        let g = row.g.map(|id| {
+            builder
+                .intern_value(&resident.as_ref().term_value(id))
+                .unwrap()
+        });
+        builder.push_quad(s, p, o, g).unwrap();
+    };
+    let mut removals = RdfDatasetBuilder::new();
+    copy_row(&mut removals, removed);
+    let removals = removals.freeze().unwrap();
+    let mut declarations = RdfDatasetBuilder::new();
+    let empty = declarations
+        .intern_iri("https://example.org/empty")
+        .unwrap();
+    declarations.declare_named_graph(empty).unwrap();
+    let declarations = declarations.freeze().unwrap();
+    let add_scoped = |builder: &mut RdfDatasetBuilder| {
+        for scope in [7, 8] {
+            let blank = TermValue::Blank {
+                label: "same".into(),
+                scope: purrdf_core::BlankScope(scope),
+            };
+            let nested = TermValue::Triple {
+                s: blank.clone().into(),
+                p: TermValue::iri("https://example.org/nested").into(),
+                o: TermValue::typed_literal(
+                    format!("[_:purrdfesc{scope}_same, 42]"),
+                    purrdf_cdt::datatype::CDT_LIST,
+                )
+                .into(),
+            };
+            let s = builder.intern_value(&blank).unwrap();
+            let p = builder.intern_iri("https://example.org/scoped").unwrap();
+            let o = builder.intern_value(&nested).unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
+        }
+    };
+    let engine = NativeSparqlEngine::new();
+    for reinsert in [false, true] {
+        let mut head = RdfDatasetBuilder::new();
+        if reinsert {
+            copy_row(&mut head, removed);
+        }
+        add_scoped(&mut head);
+        stack.set_head(Some(
+            SegmentedResidentHead::new(
+                head.freeze().unwrap(),
+                SegmentedLayerMetadata::new(
+                    Some(Arc::clone(&removals)),
+                    Some(Arc::clone(&declarations)),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        ));
+        let snapshot = stack.snapshot().unwrap();
+        let mut eager = RdfDatasetBuilder::new();
+        for row in resident.quads().filter(|row| reinsert || *row != removed) {
+            copy_row(&mut eager, row);
+        }
+        add_scoped(&mut eager);
+        let empty = eager.intern_iri("https://example.org/empty").unwrap();
+        eager.declare_named_graph(empty).unwrap();
+        let eager = eager.freeze().unwrap();
+        for text in [
+            QUERY,
+            "SELECT ?s ?o WHERE { ?s <https://example.org/scoped> ?o } ORDER BY ?s",
+            "SELECT ?o WHERE { { <https://example.org/target> <https://example.org/q> ?o } UNION { <https://example.org/target> <https://example.org/q> ?o } } ORDER BY ?o",
+            "SELECT ?o ?missing WHERE { <https://example.org/target> <https://example.org/q> ?o OPTIONAL { ?o <https://example.org/absent> ?missing } }",
+            "SELECT ?o (1/0 AS ?undefined) WHERE { <https://example.org/target> <https://example.org/q> ?o }",
+            "SELECT ?o WHERE { <https://example.org/target> (<https://example.org/p>|<https://example.org/q>) ?o } ORDER BY ?o",
+            "SELECT ?o WHERE { <https://example.org/target> <https://example.org/p> ?o OPTIONAL { <https://example.org/target> <https://example.org/q> ?o } } ORDER BY ?o",
+            "SELECT ?o WHERE { <https://example.org/target> <https://example.org/q> ?o MINUS { <https://example.org/target> <https://example.org/p> ?o } }",
+            "SELECT ?o WHERE { <https://example.org/target> <https://example.org/q> ?o FILTER NOT EXISTS { <https://example.org/target> <https://example.org/p> ?o } }",
+            "SELECT (COUNT(*) AS ?n) WHERE { ?s <https://example.org/p> ?o }",
+            "SELECT ?g WHERE { GRAPH ?g {} } ORDER BY ?g",
+            "SELECT ?s WHERE { ?s <https://example.org/p> ?o } ORDER BY ?s LIMIT 3",
+        ] {
+            let prepared = engine.prepare_query(text, None).unwrap();
+            let expected = support::solutions(
+                engine
+                    .query_prepared(&eager, &prepared, &[], QueryOptions::EMPTY)
+                    .unwrap(),
+            );
+            for prepared_entry in [false, true] {
+                let view = snapshot.query(read_limits).unwrap();
+                let actual = if prepared_entry {
+                    engine.query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
+                } else {
+                    engine.query_fallible_view(
+                        &view,
+                        SparqlRequest {
+                            query: text,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        QueryOptions::EMPTY,
+                    )
+                }
+                .unwrap_or_else(|error| match error {
+                    FallibleSparqlError::Operational { error, evidence } => panic!(
+                        "{text}: {error:?}; requests={}, io={}, evictions={}",
+                        evidence.request_count(),
+                        evidence.io_bytes(),
+                        evidence.evictions()
+                    ),
+                    _ => panic!("{text}: engine failure while source remained ready"),
+                });
+                view.check_ready().unwrap();
+                drop(view);
+                assert_eq!(
+                    support::solutions(actual.result),
+                    expected,
+                    "reinsert={reinsert}, prepared={prepared_entry}: {text}"
+                );
+                assert_eq!(actual.evidence.identity().layers().len(), 2);
+                assert!(actual.evidence.peak_bytes() <= CEILING);
+                if text.contains("COUNT(*)") {
+                    eprintln!(
+                        "COUNT reinsert={reinsert} prepared={prepared_entry}: requests={} io={} evictions={} peak={}",
+                        actual.evidence.request_count(),
+                        actual.evidence.io_bytes(),
+                        actual.evidence.evictions(),
+                        actual.evidence.peak_bytes()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn chronological_segmented_provider_failure_preserves_original_final_evidence() {
+    use purrdf_core::{SegmentedLayer, SegmentedLayerMetadata, SegmentedStack};
+    let (image, _) = fixture();
+    let provider = Arc::new(RefusingProvider {
+        bytes: image.provider(),
+        refuse: AtomicBool::new(false),
+        operation: "chronological source read",
+    });
+    let layer = Arc::new(
+        SegmentedLayer::new(
+            provider.clone(),
+            image.receipt().clone(),
+            SegmentedLayerMetadata::default(),
+        )
+        .unwrap(),
+    );
+    let read_limits = SegmentedReadLimits::new(CEILING, 2, 2048, 20_000_000, 8);
+    let mut stack = SegmentedStack::default();
+    stack.publish(vec![layer], read_limits).unwrap();
+    let snapshot = stack.snapshot().unwrap();
+    let view = snapshot.query(read_limits).unwrap();
+    provider.refuse.store(true, Ordering::Relaxed);
+    let error = NativeSparqlEngine::new()
+        .query_fallible_view(
+            &view,
+            SparqlRequest {
+                query: QUERY,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap_err();
+    let FallibleSparqlError::Operational { error, evidence } = error else {
+        panic!("source error must remain operational");
+    };
+    assert_eq!(
+        error,
+        SegmentedError::Provider {
+            operation: "chronological source read",
+            host_code: Some(5)
+        }
+    );
+    evidence.with_requests(|requests| assert!(!requests.last().unwrap().completed()));
+    provider.refuse.store(false, Ordering::Relaxed);
+    assert_eq!(view.check_ready(), Err(error));
+    drop(view);
+    drop(snapshot);
+    drop(stack);
+    assert_eq!(evidence.identity().layers().len(), 1);
+}
 
 #[test]
 fn persistent_id_binding_retains_original_admission_and_refuses_atomically() {
@@ -898,7 +1132,7 @@ fn rdf12_graph_fixture() -> (purrdf_core::SegmentedImage, Arc<purrdf_core::RdfDa
         .expect("limits")
         .with_first_term_index((1_u64 << 53) + 1)
         .expect("wide ids");
-    let mut persistent = SegmentedBuilder::new(limits);
+    let mut persistent = SegmentedBuilder::new(limits).unwrap();
     let mut resident = RdfDatasetBuilder::new();
     let values = [
         TermValue::iri("https://example.org/target"),
@@ -922,7 +1156,9 @@ fn rdf12_graph_fixture() -> (purrdf_core::SegmentedImage, Arc<purrdf_core::RdfDa
         .expect("terms");
     let native: Vec<_> = values
         .iter()
-        .map(|value| purrdf_core::term_fixture::intern_value(&mut resident, value))
+        .map(|value| {
+            purrdf_core::term_fixture::intern_value(&mut resident, value).expect("authored fixture")
+        })
         .collect();
     for (s, p, o, g) in [(0, 1, 2, None), (0, 1, 4, Some(3))] {
         persistent
@@ -933,17 +1169,21 @@ fn rdf12_graph_fixture() -> (purrdf_core::SegmentedImage, Arc<purrdf_core::RdfDa
                 g: g.map(|graph| global[graph]),
             })
             .expect("ordinary row");
-        resident.push_quad(
-            native[s],
-            native[p],
-            native[o],
-            g.map(|graph| native[graph]),
-        );
+        resident
+            .push_quad(
+                native[s],
+                native[p],
+                native[o],
+                g.map(|graph| native[graph]),
+            )
+            .unwrap();
     }
     persistent
         .push_reifier(global[6], global[7], None)
         .expect("reifier stream");
-    resident.push_reifier_in_graph(native[6], native[7], None);
+    resident
+        .push_reifier_in_graph(native[6], native[7], None)
+        .unwrap();
     persistent
         .push_annotation(QuadIds {
             s: global[6],
@@ -952,11 +1192,13 @@ fn rdf12_graph_fixture() -> (purrdf_core::SegmentedImage, Arc<purrdf_core::RdfDa
             g: None,
         })
         .expect("annotation stream");
-    resident.push_annotation_in_graph(native[6], native[8], native[9], None);
+    resident
+        .push_annotation_in_graph(native[6], native[8], native[9], None)
+        .unwrap();
     persistent
         .declare_named_graph(global[5])
         .expect("empty graph");
-    resident.declare_named_graph(native[5]);
+    resident.declare_named_graph(native[5]).unwrap();
     (
         persistent.seal().expect("persisted fixture"),
         resident.freeze().expect("resident fixture"),
@@ -1197,10 +1439,14 @@ fn construct_mint_prefix_completes_and_tight_refusal_preserves_destination() {
         let source = open(&image, ceiling);
         let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
         let mut destination = purrdf_core::RdfDatasetBuilder::new();
-        let blank = destination.intern_blank("existing", purrdf_core::BlankScope::DEFAULT);
-        let predicate = destination.intern_iri("http://example.org/p");
-        let object = destination.intern_iri("http://example.org/o");
-        destination.push_quad(blank, predicate, object, None);
+        let blank = destination
+            .intern_blank("existing", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        let predicate = destination.intern_iri("http://example.org/p").unwrap();
+        let object = destination.intern_iri("http://example.org/o").unwrap();
+        destination
+            .push_quad(blank, predicate, object, None)
+            .unwrap();
         let before = source.evidence();
         let window = purrdf_alloc_probe::CurrentThreadWindow::open();
         let result = engine.construct_prepared_fallible_in_operation_into_view(

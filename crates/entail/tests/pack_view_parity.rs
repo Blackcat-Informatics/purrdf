@@ -29,32 +29,32 @@ use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF;
 fn sample_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
 
-    let cat = b.intern_iri("http://example.org/Cat");
-    let animal = b.intern_iri("http://example.org/Animal");
-    let tom = b.intern_iri("http://example.org/tom");
-    let sub = b.intern_iri(RDFS_SUBCLASSOF);
-    let ty = b.intern_iri(RDF_TYPE);
-    let g_named = b.intern_iri("http://example.org/g1");
-    let note = b.intern_iri("http://example.org/note");
-    let source = b.intern_iri("http://example.org/source-x");
-    let reifier = b.intern_iri("http://example.org/r1");
+    let cat = b.intern_iri("http://example.org/Cat").unwrap();
+    let animal = b.intern_iri("http://example.org/Animal").unwrap();
+    let tom = b.intern_iri("http://example.org/tom").unwrap();
+    let sub = b.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let ty = b.intern_iri(RDF_TYPE).unwrap();
+    let g_named = b.intern_iri("http://example.org/g1").unwrap();
+    let note = b.intern_iri("http://example.org/note").unwrap();
+    let source = b.intern_iri("http://example.org/source-x").unwrap();
+    let reifier = b.intern_iri("http://example.org/r1").unwrap();
 
     // Base quads: default graph (drives rdfs9 re-typing) and a named graph.
-    b.push_quad(cat, sub, animal, None);
-    b.push_quad(tom, ty, cat, None);
-    b.push_quad(tom, ty, animal, Some(g_named));
+    b.push_quad(cat, sub, animal, None).unwrap();
+    b.push_quad(tom, ty, cat, None).unwrap();
+    b.push_quad(tom, ty, animal, Some(g_named)).unwrap();
 
     // A reifier over a triple-term, plus an annotation on the reifier — the two
     // side tables the seeding path now walks via `reifier_quads`/`annotation_quads`.
-    let triple = b.intern_triple(tom, ty, cat);
-    b.push_reifier_in_graph(reifier, triple, None);
-    b.push_annotation_in_graph(reifier, note, source, None);
+    let triple = b.intern_triple(tom, ty, cat).unwrap();
+    b.push_reifier_in_graph(reifier, triple, None).unwrap();
+    b.push_annotation_in_graph(reifier, note, source, None)
+        .unwrap();
 
     // A declared-but-empty named graph: content that occurs in no quad, which the
     // seeding path must still carry (via `named_graphs`).
-    let g_empty = b.intern_iri("http://example.org/empty");
-    b.declare_named_graph(g_empty);
-
+    let g_empty = b.intern_iri("http://example.org/empty").unwrap();
+    b.declare_named_graph(g_empty).unwrap();
     b.freeze().expect("freeze sample dataset")
 }
 

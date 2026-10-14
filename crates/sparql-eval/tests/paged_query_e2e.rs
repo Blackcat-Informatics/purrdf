@@ -119,14 +119,14 @@ fn paged_query_parity_is_byte_identical_to_single_dataset() {
     assert_eq!(corpus.len(), 15, "the fixture corpus is 15 triples");
 
     // (1) the single-dataset reference: all 15 triples in one frozen dataset.
-    let single = build_page(&corpus);
+    let single = build_page(&corpus).expect("authored fixture");
 
     // (2) the paged view over the SAME triples, split so each of `knows`/`name`/`age`
     // lives on its OWN page — a join binding for `?x` therefore straddles all three.
     let paged = paged_over(vec![
-        build_page(&parity_page_knows()),
-        build_page(&parity_page_age()),
-        build_page(&parity_page_name()),
+        build_page(&parity_page_knows()).expect("authored fixture"),
+        build_page(&parity_page_age()).expect("authored fixture"),
+        build_page(&parity_page_name()).expect("authored fixture"),
     ]);
     assert_eq!(paged.page_count(), 3);
 
@@ -195,15 +195,18 @@ fn skew_fixture(light: &str, heavy: &str) -> PagedDataset {
         (iri("s_light"), light, iri("o_light")),
         (iri("h0"), heavy.clone(), iri("v0")),
         (iri("h1"), heavy.clone(), iri("v1")),
-    ]);
+    ])
+    .expect("authored fixture");
     let page1 = build_page(&[
         (iri("h2"), heavy.clone(), iri("v2")),
         (iri("h3"), heavy.clone(), iri("v3")),
-    ]);
+    ])
+    .expect("authored fixture");
     let page2 = build_page(&[
         (iri("h4"), heavy.clone(), iri("v4")),
         (iri("h5"), heavy, iri("v5")),
-    ]);
+    ])
+    .expect("authored fixture");
     paged_over(vec![page0, page1, page2])
 }
 
@@ -303,9 +306,15 @@ fn query_materializes_only_the_pages_the_plan_needs() {
     // `:alice` lives on page 0 ONLY; pages 1 and 2 carry unrelated `knows` edges. A
     // query bound to `:alice` can only match page 0.
     let provider = Arc::new(CountingDemandProvider::new(vec![
-        Box::new(|| build_page(&[(iri("alice"), iri("knows"), iri("bob"))])),
-        Box::new(|| build_page(&[(iri("carol"), iri("knows"), iri("dave"))])),
-        Box::new(|| build_page(&[(iri("eve"), iri("knows"), iri("frank"))])),
+        Box::new(|| {
+            build_page(&[(iri("alice"), iri("knows"), iri("bob"))]).expect("authored fixture")
+        }),
+        Box::new(|| {
+            build_page(&[(iri("carol"), iri("knows"), iri("dave"))]).expect("authored fixture")
+        }),
+        Box::new(|| {
+            build_page(&[(iri("eve"), iri("knows"), iri("frank"))]).expect("authored fixture")
+        }),
     ]));
     let paged = PagedDataset::from_provider(provider.clone() as Arc<dyn purrdf_core::PageProvider>)
         .expect("seal pages");
@@ -371,7 +380,7 @@ fn assert_paged_matches_single(
     query: &str,
     min_rows: usize,
 ) {
-    let single = build_page(corpus);
+    let single = build_page(corpus).expect("authored fixture");
     let paged = paged_over(pages);
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(query, None).expect("prepare");
@@ -419,10 +428,10 @@ fn paged_property_path_parity_across_pages() {
         .cloned()
         .collect();
     let pages = vec![
-        build_page(&p0),
-        build_page(&p1),
-        build_page(&p2),
-        build_page(&p3),
+        build_page(&p0).expect("authored fixture"),
+        build_page(&p1).expect("authored fixture"),
+        build_page(&p2).expect("authored fixture"),
+        build_page(&p3).expect("authored fixture"),
     ];
     // The closure of alice under knows+ is {bob, carol, dave, erin} — 4 rows spanning
     // all four pages.
@@ -447,7 +456,11 @@ fn paged_aggregate_group_by_parity_across_pages() {
     ];
     let p2 = vec![(iri("p5"), iri("inGroup"), iri("g_b"))];
     let corpus: Vec<Triple> = p0.iter().chain(&p1).chain(&p2).cloned().collect();
-    let pages = vec![build_page(&p0), build_page(&p1), build_page(&p2)];
+    let pages = vec![
+        build_page(&p0).expect("authored fixture"),
+        build_page(&p1).expect("authored fixture"),
+        build_page(&p2).expect("authored fixture"),
+    ];
     // Two groups (g_a with 3 members, g_b with 2), each counted across pages → 2 rows.
     assert_paged_matches_single(&corpus, pages, AGGREGATE_QUERY, 2);
 }
@@ -471,7 +484,10 @@ fn paged_subquery_parity_across_pages() {
         (iri("bob"), iri("knows"), iri("carol")),
     ];
     let corpus: Vec<Triple> = p0.iter().chain(&p1).cloned().collect();
-    let pages = vec![build_page(&p0), build_page(&p1)];
+    let pages = vec![
+        build_page(&p0).expect("authored fixture"),
+        build_page(&p1).expect("authored fixture"),
+    ];
     // alice (3 edges) and bob (1 edge) → 2 rows; alice's count only equals 3 if the
     // subquery aggregated across both pages.
     assert_paged_matches_single(&corpus, pages, SUBQUERY_QUERY, 2);

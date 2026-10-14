@@ -3256,6 +3256,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             // which is the direction this survey is documented to fail in.
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -3542,6 +3543,7 @@ fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -3701,16 +3703,16 @@ mod tests {
     ///   :carol :knows :alice .
     fn social_graph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let name = b.intern_iri("http://ex/name");
-        let alice = b.intern_iri("http://ex/alice");
-        let bob = b.intern_iri("http://ex/bob");
-        let carol = b.intern_iri("http://ex/carol");
-        let alice_name = b.intern_literal(RdfLiteral::simple("Alice"));
-        b.push_quad(alice, knows, bob, None);
-        b.push_quad(bob, knows, carol, None);
-        b.push_quad(carol, knows, alice, None);
-        b.push_quad(alice, name, alice_name, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let name = b.intern_iri("http://ex/name").unwrap();
+        let alice = b.intern_iri("http://ex/alice").unwrap();
+        let bob = b.intern_iri("http://ex/bob").unwrap();
+        let carol = b.intern_iri("http://ex/carol").unwrap();
+        let alice_name = b.intern_literal(RdfLiteral::simple("Alice")).unwrap();
+        b.push_quad(alice, knows, bob, None).unwrap();
+        b.push_quad(bob, knows, carol, None).unwrap();
+        b.push_quad(carol, knows, alice, None).unwrap();
+        b.push_quad(alice, name, alice_name, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -3848,11 +3850,11 @@ mod tests {
     fn repeated_variable_requires_self_loop() {
         // A graph with one genuine self-loop and one non-loop edge.
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
-        b.push_quad(x, p, x, None); // self-loop
-        b.push_quad(x, p, y, None); // not a loop
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        let y = b.intern_iri("http://ex/y").unwrap();
+        b.push_quad(x, p, x, None).unwrap(); // self-loop
+        b.push_quad(x, p, y, None).unwrap(); // not a loop
         let ds = b.freeze().expect("freeze");
 
         // { ?v :p ?v } matches only the self-loop.
@@ -3900,32 +3902,38 @@ mod tests {
     /// from the side-tables, not from `quads`.
     fn reified_graph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let age = b.intern_iri("http://ex/age");
-        let alice = b.intern_iri("http://ex/alice");
-        let bob = b.intern_iri("http://ex/bob");
-        let forty_two = b.intern_literal(RdfLiteral::typed(
-            "42",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let seven = b.intern_literal(RdfLiteral::typed(
-            "7",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let statement = b.intern_triple(alice, age, forty_two);
-        let r1 = b.intern_iri("http://ex/r1");
-        let reifies = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
-        let confidence = b.intern_iri("http://ex/confidence");
-        let source = b.intern_iri("http://ex/source");
-        let high = b.intern_literal(RdfLiteral::simple("high"));
-        let census = b.intern_iri("http://ex/census");
+        let age = b.intern_iri("http://ex/age").unwrap();
+        let alice = b.intern_iri("http://ex/alice").unwrap();
+        let bob = b.intern_iri("http://ex/bob").unwrap();
+        let forty_two = b
+            .intern_literal(RdfLiteral::typed(
+                "42",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        let seven = b
+            .intern_literal(RdfLiteral::typed(
+                "7",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        let statement = b.intern_triple(alice, age, forty_two).unwrap();
+        let r1 = b.intern_iri("http://ex/r1").unwrap();
+        let reifies = b
+            .intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies")
+            .unwrap();
+        let confidence = b.intern_iri("http://ex/confidence").unwrap();
+        let source = b.intern_iri("http://ex/source").unwrap();
+        let high = b.intern_literal(RdfLiteral::simple("high")).unwrap();
+        let census = b.intern_iri("http://ex/census").unwrap();
 
         // The interned `reifies` id is the virtual predicate; keep it referenced.
         let _ = reifies;
         // One unrelated asserted quad to prove the reified statement is NOT in `quads`.
-        b.push_quad(bob, age, seven, None);
-        b.push_reifier(r1, statement);
-        b.push_annotation(r1, confidence, high);
-        b.push_annotation(r1, source, census);
+        b.push_quad(bob, age, seven, None).unwrap();
+        b.push_reifier(r1, statement).unwrap();
+        b.push_annotation(r1, confidence, high).unwrap();
+        b.push_annotation(r1, source, census).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -4205,20 +4213,20 @@ mod tests {
 
     fn skewed_graph() -> Skewed {
         let mut b = RdfDatasetBuilder::new();
-        let hot = b.intern_iri("http://ex/hot");
-        let mid = b.intern_iri("http://ex/mid");
-        let rare = b.intern_iri("http://ex/rare");
-        let hub = b.intern_iri("http://ex/hub");
+        let hot = b.intern_iri("http://ex/hot").unwrap();
+        let mid = b.intern_iri("http://ex/mid").unwrap();
+        let rare = b.intern_iri("http://ex/rare").unwrap();
+        let hub = b.intern_iri("http://ex/hub").unwrap();
         for i in 0..20 {
-            let leaf = b.intern_iri(&format!("http://ex/hot{i}"));
-            b.push_quad(hub, hot, leaf, None);
+            let leaf = b.intern_iri(&format!("http://ex/hot{i}")).unwrap();
+            b.push_quad(hub, hot, leaf, None).unwrap();
         }
         for i in 0..5 {
-            let leaf = b.intern_iri(&format!("http://ex/mid{i}"));
-            b.push_quad(hub, mid, leaf, None);
+            let leaf = b.intern_iri(&format!("http://ex/mid{i}")).unwrap();
+            b.push_quad(hub, mid, leaf, None).unwrap();
         }
-        let only = b.intern_iri("http://ex/rare0");
-        b.push_quad(hub, rare, only, None);
+        let only = b.intern_iri("http://ex/rare0").unwrap();
+        b.push_quad(hub, rare, only, None).unwrap();
         Skewed {
             ds: b.freeze().expect("freeze"),
             hot,
@@ -4336,11 +4344,11 @@ mod tests {
     #[test]
     fn all_ground_bgp_orders_without_panicking() {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p");
-        let a = b.intern_iri("http://ex/a");
-        let c = b.intern_iri("http://ex/c");
-        b.push_quad(a, p, c, None);
-        b.push_quad(c, p, a, None);
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        b.push_quad(a, p, c, None).unwrap();
+        b.push_quad(c, p, a, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let p0 = cp(Pos::Bound(a), Pos::Bound(p), Pos::Bound(c)); // card 1
@@ -4456,12 +4464,12 @@ mod tests {
     fn cost_order_materialises_fewer_rows_than_structural() {
         // Skewed fixture: hub --pred--> N leaves, for N ∈ {20, 10, 5, 1}.
         let mut b = RdfDatasetBuilder::new();
-        let hub = b.intern_iri("http://ex/hub");
+        let hub = b.intern_iri("http://ex/hub").unwrap();
         for (name, count) in [("hot", 20), ("warm", 10), ("mid", 5), ("rare", 1)] {
-            let pred_id = b.intern_iri(&format!("http://ex/{name}"));
+            let pred_id = b.intern_iri(&format!("http://ex/{name}")).unwrap();
             for i in 0..count {
-                let leaf = b.intern_iri(&format!("http://ex/{name}{i}"));
-                b.push_quad(hub, pred_id, leaf, None);
+                let leaf = b.intern_iri(&format!("http://ex/{name}{i}")).unwrap();
+                b.push_quad(hub, pred_id, leaf, None).unwrap();
             }
         }
         let ds = b.freeze().expect("freeze");
@@ -5293,7 +5301,7 @@ mod term_walk_tests {
 
         /// The id of the outermost triple.
         fn top(&self) -> TermId {
-            TermId::from_index(2)
+            TermId::from_index(2).expect("stored term index is representable")
         }
     }
 
@@ -5317,12 +5325,13 @@ mod term_walk_tests {
                     0 => TermRef::Iri(&self.leaf),
                     1 => TermRef::Iri(&self.predicate),
                     _ => TermRef::Triple {
-                        s: TermId::from_index(0),
-                        p: TermId::from_index(1),
+                        s: TermId::from_index(0).expect("stored term index is representable"),
+                        p: TermId::from_index(1).expect("stored term index is representable"),
                         o: if index == self.depth + 1 {
-                            TermId::from_index(0)
+                            TermId::from_index(0).expect("stored term index is representable")
                         } else {
                             TermId::from_index(index + 1)
+                                .expect("stored term index is representable")
                         },
                     },
                 }
@@ -5368,34 +5377,39 @@ mod term_walk_tests {
     /// subject is an IRI, the RDF 1.2 term model the freeze gate enforces.
     fn dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri(&format!("{EX}a"));
-        let bb = b.intern_iri(&format!("{EX}b"));
-        let c = b.intern_iri(&format!("{EX}c"));
-        let p = b.intern_iri(&format!("{EX}p"));
-        let q = b.intern_iri(&format!("{EX}q"));
-        let plain = b.intern_literal(RdfLiteral::simple("plain"));
-        let one = b.intern_literal(RdfLiteral::typed(
-            "1",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        let t1 = b.intern_triple(a, p, bb);
-        let t2 = b.intern_triple(c, q, t1);
-        let t3 = b.intern_triple(a, p, t2);
-        let t4 = b.intern_triple(bb, p, t1);
-        b.push_quad(a, p, bb, None);
-        b.push_quad(bb, q, plain, None);
-        b.push_quad(c, p, one, None);
-        b.push_quad(a, q, t1, None);
-        b.push_quad(c, p, t2, None);
-        b.push_quad(a, q, t3, None);
-        b.push_quad(bb, q, t4, None);
+        let a = b.intern_iri(&format!("{EX}a")).unwrap();
+        let bb = b.intern_iri(&format!("{EX}b")).unwrap();
+        let c = b.intern_iri(&format!("{EX}c")).unwrap();
+        let p = b.intern_iri(&format!("{EX}p")).unwrap();
+        let q = b.intern_iri(&format!("{EX}q")).unwrap();
+        let plain = b.intern_literal(RdfLiteral::simple("plain")).unwrap();
+        let one = b
+            .intern_literal(RdfLiteral::typed(
+                "1",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        let t1 = b.intern_triple(a, p, bb).unwrap();
+        let t2 = b.intern_triple(c, q, t1).unwrap();
+        let t3 = b.intern_triple(a, p, t2).unwrap();
+        let t4 = b.intern_triple(bb, p, t1).unwrap();
+        b.push_quad(a, p, bb, None).unwrap();
+        b.push_quad(bb, q, plain, None).unwrap();
+        b.push_quad(c, p, one, None).unwrap();
+        b.push_quad(a, q, t1, None).unwrap();
+        b.push_quad(c, p, t2, None).unwrap();
+        b.push_quad(a, q, t3, None).unwrap();
+        b.push_quad(bb, q, t4, None).unwrap();
         b.freeze().expect("freeze")
     }
 
     /// Every term id `dataset` holds.
     fn ids(dataset: &RdfDataset) -> Vec<TermId> {
         (0..dataset.term_count())
-            .map(|index| TermId::from_index(u32::try_from(index).expect("the index fits")))
+            .map(|index| {
+                TermId::from_index(u32::try_from(index).expect("the index fits"))
+                    .expect("stored term index is representable")
+            })
             .collect()
     }
 
@@ -5604,17 +5618,19 @@ mod term_walk_tests {
         use crate::property_fn::PropertyFunctionRegistry;
 
         let mut builder = RdfDatasetBuilder::new();
-        let p = builder.intern_iri(&format!("{EX}p"));
-        let q = builder.intern_iri(&format!("{EX}q"));
+        let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+        let q = builder.intern_iri(&format!("{EX}q")).unwrap();
         for index in 0..100 {
             let [s, t, v, o] = ["s", "t", "v", "o"]
-                .map(|local| builder.intern_iri(&format!("{EX}{local}{index}")));
-            builder.push_quad(s, p, t, None);
-            builder.push_quad(s, q, v, None);
-            builder.push_quad(t, q, o, None);
+                .map(|local| builder.intern_iri(&format!("{EX}{local}{index}")).unwrap());
+            builder.push_quad(s, p, t, None).unwrap();
+            builder.push_quad(s, q, v, None).unwrap();
+            builder.push_quad(t, q, o, None).unwrap();
         }
         for index in 0..10_000 {
-            builder.intern_iri(&format!("{EX}unrelated{index}"));
+            builder
+                .intern_iri(&format!("{EX}unrelated{index}"))
+                .unwrap();
         }
         let dataset = builder.freeze().expect("relation-domain dataset");
         for body in [
@@ -5888,7 +5904,7 @@ mod term_walk_tests {
     fn a_hundred_thousand_level_position_is_walked_on_a_128_kib_stack() {
         purrdf_stack::on_stack(SMALL_STACK, || {
             let chain = Chain::new(DEPTH);
-            let leaf = TermId::from_index(0);
+            let leaf = TermId::from_index(0).expect("stored term index is representable");
             let deep = deep_position(DEPTH, leaf);
             let bound = [false, true];
             assert!(pos_has_bound_slot(&deep, &bound));
@@ -5918,7 +5934,9 @@ mod term_walk_tests {
             assert_eq!(
                 row.as_slice(),
                 &[
-                    Some(SolutionTerm::Existing(TermId::from_index(1))),
+                    Some(SolutionTerm::Existing(
+                        TermId::from_index(1).expect("stored term index is representable")
+                    )),
                     Some(SolutionTerm::Existing(leaf)),
                 ]
             );
@@ -6125,6 +6143,7 @@ mod survey_tests {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -6244,6 +6263,7 @@ mod survey_tests {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -6313,19 +6333,21 @@ mod survey_tests {
     /// `<a> <p> <b>` and `<a> <q> "1"` in the default graph, `<b> <p> <c>` in `<g>`.
     fn dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri(&format!("{EX}a"));
-        let bb = b.intern_iri(&format!("{EX}b"));
-        let c = b.intern_iri(&format!("{EX}c"));
-        let p = b.intern_iri(&format!("{EX}p"));
-        let q = b.intern_iri(&format!("{EX}q"));
-        let g = b.intern_iri(&format!("{EX}g"));
-        let one = b.intern_literal(RdfLiteral::typed(
-            "1",
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        b.push_quad(a, p, bb, None);
-        b.push_quad(a, q, one, None);
-        b.push_quad(bb, p, c, Some(g));
+        let a = b.intern_iri(&format!("{EX}a")).unwrap();
+        let bb = b.intern_iri(&format!("{EX}b")).unwrap();
+        let c = b.intern_iri(&format!("{EX}c")).unwrap();
+        let p = b.intern_iri(&format!("{EX}p")).unwrap();
+        let q = b.intern_iri(&format!("{EX}q")).unwrap();
+        let g = b.intern_iri(&format!("{EX}g")).unwrap();
+        let one = b
+            .intern_literal(RdfLiteral::typed(
+                "1",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        b.push_quad(a, p, bb, None).unwrap();
+        b.push_quad(a, q, one, None).unwrap();
+        b.push_quad(bb, p, c, Some(g)).unwrap();
         b.freeze().expect("the fixture dataset")
     }
 

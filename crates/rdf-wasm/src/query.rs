@@ -104,7 +104,8 @@ use crate::convert::BlankScopeMode;
 use crate::dataset::{Dataset, serialize_frozen_with_options};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
-    ClosureInputs, JobOutcome, OPTIONS_CODE, OperationInput, coded_error, diagnostic_to_js,
+    ClosureInputs, JobError, JobOutcome, OPTIONS_CODE, OperationInput, SERIALIZE_CODE, coded_error,
+    diagnostic_to_js,
 };
 use crate::term::Term;
 
@@ -1141,7 +1142,7 @@ pub(crate) enum NegotiatedValue {
 pub(crate) fn negotiated_outcome_from_value(
     value: NegotiatedValue,
     blank_scope: BlankScopeMode,
-) -> Result<NegotiatedOutcome, JsError> {
+) -> Result<NegotiatedOutcome, JsValue> {
     match value {
         NegotiatedValue::Complete {
             bytes,
@@ -1415,7 +1416,7 @@ impl QueryEngine {
         xpath_regex: Option<String>,
     ) -> Result<QueryResult, JsValue> {
         let result = self.run_query(dataset, sparql, base.as_deref(), xpath_regex.as_deref())?;
-        Ok(query_result_from_sparql(result, self.blank_scope())?)
+        query_result_from_sparql(result, self.blank_scope())
     }
 
     /// Run a SELECT query and return typed rows.
@@ -1941,6 +1942,7 @@ impl QueryEngine {
         let mut input = OperationInput::new(kind, &self.inner, frozen, sparql, base);
         input.xpath_regex = xpath_regex;
         input.division = self.division();
+        input.graph_existence = dataset.graph_existence();
         input.geo = self.geo_profile();
         Ok(input)
     }
@@ -1954,7 +1956,7 @@ impl QueryEngine {
         xpath_regex: Option<&str>,
     ) -> Result<Dataset, JsValue> {
         let result = self.run_query(dataset, sparql, base, xpath_regex)?;
-        Ok(graph_result_from_sparql(result)?)
+        graph_result_from_sparql(result)
     }
 
     fn run_query(
@@ -2010,12 +2012,12 @@ fn unexpected_outcome(what: &str, outcome: &JobOutcome) -> JsValue {
 
 /// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD options — the
 /// `queryRawConfigured`/`queryRawWithContext` egress, shared by the synchronous and
-/// asynchronous lanes, with a plain `String` error.
+/// asynchronous lanes, preserving native storage diagnostics in the job error.
 pub(crate) fn serialize_configured_graph(
     result: SparqlResult,
     format: &str,
     options: &JsonLdSerializeOptions,
-) -> Result<String, String> {
+) -> Result<String, JobError> {
     match result {
         // WHICH BASE: none. The query's `base` resolves relative IRI references inside
         // the query TEXT. The trailing argument here is the *document* base a result is
@@ -2028,10 +2030,20 @@ pub(crate) fn serialize_configured_graph(
         // the seam, it is that this function has no document base to pass. Giving the
         // caller one would mean a NEW parameter on `queryRawConfigured`, not reusing the
         // query's.
-        SparqlResult::Graph(graph) => serialize_frozen_with_options(&graph, format, options, None),
-        other => Err(kind_mismatch_message(
-            "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
-            &other,
+        SparqlResult::Graph(graph) => serialize_frozen_with_options(&graph, format, options, None)
+            .map_err(|diagnostic| {
+                if diagnostic.storage_error().is_some() {
+                    JobError::diagnostic(diagnostic)
+                } else {
+                    JobError::message(SERIALIZE_CODE, diagnostic.to_string())
+                }
+            }),
+        other => Err(JobError::message(
+            SERIALIZE_CODE,
+            kind_mismatch_message(
+                "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
+                &other,
+            ),
         )),
     }
 }
@@ -2100,7 +2112,7 @@ pub(crate) fn aggregate_env_message(
 pub(crate) fn query_result_from_sparql(
     result: SparqlResult,
     blank_scope: BlankScopeMode,
-) -> Result<QueryResult, JsError> {
+) -> Result<QueryResult, JsValue> {
     Ok(match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -2137,10 +2149,10 @@ fn select_result_from_sparql(
     }
 }
 
-fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
+fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsValue> {
     match result {
         SparqlResult::Graph(graph) => Dataset::from_frozen(graph),
-        other => Err(kind_mismatch("CONSTRUCT/DESCRIBE graph", &other)),
+        other => Err(kind_mismatch("CONSTRUCT/DESCRIBE graph", &other).into()),
     }
 }
 
@@ -2151,7 +2163,7 @@ fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
 pub(crate) fn query_outcome_from_governed(
     outcome: GovernedOutcome,
     blank_scope: BlankScopeMode,
-) -> Result<QueryOutcome, JsError> {
+) -> Result<QueryOutcome, JsValue> {
     match outcome {
         GovernedOutcome::Complete {
             result, evidence, ..
@@ -2180,7 +2192,7 @@ pub(crate) fn query_outcome_from_governed(
 pub(crate) fn entailment_query_outcome_from_native(
     outcome: GovernedEntailment,
     blank_scope: BlankScopeMode,
-) -> Result<EntailmentQueryOutcome, JsError> {
+) -> Result<EntailmentQueryOutcome, JsValue> {
     match outcome {
         GovernedEntailment::Answered { outcome, report } => {
             let tripped = outcome.tripped().map(|inner| TrippedGovernor { inner });
@@ -2199,7 +2211,7 @@ pub(crate) fn entailment_query_outcome_from_native(
             complete: false,
             closure_stopped: true,
         }),
-        _ => Err(JsError::new("unsupported governed entailment outcome")),
+        _ => Err(JsError::new("unsupported governed entailment outcome").into()),
     }
 }
 
@@ -2218,7 +2230,7 @@ pub(crate) fn update_outcome_from_governed(outcome: &GovernedUpdateOutcome) -> U
 fn partial_answers_from_native(
     partial: PartialValue,
     blank_scope: BlankScopeMode,
-) -> Result<PartialAnswers, JsError> {
+) -> Result<PartialAnswers, JsValue> {
     let certainty = match partial {
         PartialValue::Certain(_) => "certain",
         PartialValue::AtMost(_) => "at-most",
@@ -2475,6 +2487,92 @@ mod tests {
     use super::*;
     use crate::term::TermInner;
 
+    /// Ordinary and governed UPDATEs retain the selected native graph lifetime,
+    /// including after a snapshot or a match reconstructs the dataset.
+    #[test]
+    fn updates_keep_the_datasets_graph_existence() {
+        let graph = purrdf::TermValue::iri("https://example.org/g");
+        let trig = "<https://example.org/g> { <https://example.org/s> <https://example.org/p> <https://example.org/o> }";
+        let engine = QueryEngine::new();
+        for remember in [None, Some(true), Some(false)] {
+            let kept = remember != Some(false);
+            for governed in [false, true] {
+                let mut dataset = Dataset::parse(trig, "trig", None, remember).expect("TriG");
+                assert_eq!(dataset.remember_empty_graphs(), kept);
+                let mut matched = dataset
+                    .match_pattern(None, None, None, None)
+                    .expect("match");
+                assert_eq!(matched.remember_empty_graphs(), kept);
+                let quad = matched.quads().expect("quads").pop().expect("one quad");
+                assert!(matched.delete(&quad).expect("delete"));
+                assert_eq!(matched.view().has_named_graph(&graph), kept);
+                let update = "CLEAR GRAPH <https://example.org/g>";
+                if governed {
+                    let outcome = engine
+                        .update_governed(
+                            &mut dataset,
+                            update,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            Some(true),
+                            None,
+                        )
+                        .expect("governed CLEAR");
+                    assert!(outcome.is_applied());
+                } else {
+                    engine
+                        .update(&mut dataset, update, None, None)
+                        .expect("CLEAR");
+                }
+                assert_eq!(dataset.size(), 0);
+                assert_eq!(dataset.view().has_named_graph(&graph), kept);
+                assert_eq!(dataset.remember_empty_graphs(), kept);
+                let mut snapshot = dataset.snapshot().expect("snapshot");
+                assert_ne!(snapshot.identity(), dataset.identity());
+                assert_eq!(snapshot.current_generation(), 0);
+                assert_eq!(snapshot.remember_empty_graphs(), kept);
+                engine
+                    .update(
+                        &mut snapshot,
+                        "CREATE GRAPH <https://example.org/h>",
+                        None,
+                        None,
+                    )
+                    .expect("CREATE");
+                assert_eq!(
+                    snapshot
+                        .view()
+                        .has_named_graph(&purrdf::TermValue::iri("https://example.org/h")),
+                    kept
+                );
+                assert!(
+                    !dataset
+                        .view()
+                        .has_named_graph(&purrdf::TermValue::iri("https://example.org/h"))
+                );
+            }
+            let empty = Dataset::new(remember).expect("empty");
+            assert_eq!(empty.remember_empty_graphs(), kept);
+            let native = purrdf::ir::MutableDataset::new_with_graph_existence(
+                empty.view().freeze().expect("freeze"),
+                empty.graph_existence(),
+            );
+            assert_eq!(
+                Dataset::from_mutable(native)
+                    .expect("native owner")
+                    .remember_empty_graphs(),
+                kept
+            );
+        }
+    }
+
     #[test]
     fn select_rows_are_moved_once_and_share_variables() {
         let rows = vec![
@@ -2691,6 +2789,7 @@ mod tests {
             "<https://example.org/s> <https://example.org/p> <https://example.org/o> .",
             "ntriples",
             None,
+            None,
         )
         .expect("seed dataset parses");
         let constructed = QueryEngine::new()
@@ -2718,7 +2817,7 @@ mod tests {
     const PLAIN_CONSTRUCT: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
 
     fn seed() -> Dataset {
-        Dataset::parse(SEED_NT, "ntriples", None).expect("seed dataset parses")
+        Dataset::parse(SEED_NT, "ntriples", None, None).expect("seed dataset parses")
     }
 
     /// The DEFAULT entry point never answers a graph-carrying result with nothing.
@@ -2855,7 +2954,7 @@ mod tests {
     /// carries named graphs even though no `DESCRIBE` ever names one.
     #[test]
     fn a_describe_carries_its_graphs_and_refuses_a_single_graph_format() {
-        let source = Dataset::parse(GRAPH_STAR_TRIG, "trig", None).expect("TriG parses");
+        let source = Dataset::parse(GRAPH_STAR_TRIG, "trig", None, None).expect("TriG parses");
         let described = QueryEngine::new()
             .describe(&source, "DESCRIBE <https://example.org/s>", None, None)
             .expect("DESCRIBE evaluates");

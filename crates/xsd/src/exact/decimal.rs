@@ -500,9 +500,8 @@ impl Decimal {
     }
 
     /// The XSD 1.1 canonical `xsd:decimal` lexical form (§3.3.3.1, §E.1
-    /// `decimalCanonicalMap`), identical to the bounded
-    /// [`crate::numeric::Decimal::canonical_lexical`] wherever both represent the
-    /// value: an integer value has no decimal point (`"3"`, `"-2"`, `"0"`); any
+    /// `decimalCanonicalMap`): an integer value has no decimal point
+    /// (`"3"`, `"-2"`, `"0"`); any
     /// other keeps exactly its significant fractional digits (`"2.5"`, `"-0.025"`).
     #[must_use]
     pub fn canonical_lexical(&self) -> String {

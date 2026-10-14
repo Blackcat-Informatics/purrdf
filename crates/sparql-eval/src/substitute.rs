@@ -1200,6 +1200,7 @@ pub(crate) fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)
 fn core_slot(pattern: &mut GraphPattern) -> &mut GraphPattern {
     let mut core = pattern;
     while let GraphPattern::Project { inner, .. }
+    | GraphPattern::ProjectStar { inner, .. }
     | GraphPattern::Distinct { inner }
     | GraphPattern::Reduced { inner }
     | GraphPattern::Slice { inner, .. }
@@ -1481,7 +1482,7 @@ impl SeedColumns {
     fn kept(
         self,
         expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
-        columns: &[Variable],
+        columns: purrdf_sparql_algebra::ProjectionNames<'_>,
     ) -> Self {
         let mut kept = self.0;
         for (index, (var, _)) in expr_subs.entries().iter().enumerate().take(64) {
@@ -2014,6 +2015,7 @@ fn own_expressions_with_memory<'n>(
         | GraphPattern::Graph { .. }
         | GraphPattern::Service { .. }
         | GraphPattern::Project { .. }
+        | GraphPattern::ProjectStar { .. }
         | GraphPattern::Distinct { .. }
         | GraphPattern::Reduced { .. }
         | GraphPattern::Slice { .. }
@@ -2053,6 +2055,7 @@ fn push_child_patterns_with_memory<'p, T>(
         | GraphPattern::Unfold { .. }
         | GraphPattern::OrderBy { .. }
         | GraphPattern::Project { .. }
+        | GraphPattern::ProjectStar { .. }
         | GraphPattern::Distinct { .. }
         | GraphPattern::Reduced { .. }
         | GraphPattern::Slice { .. }
@@ -2840,7 +2843,10 @@ fn finish_own_expressions_with_memory(
         } => Ok(operand),
         GraphPattern::Group { variables, .. } => {
             let keys = rewrite_scratch(variables.iter().cloned(), memory)?;
-            let carried = operand.kept(expr_subs, &keys);
+            let carried = operand.kept(
+                expr_subs,
+                purrdf_sparql_algebra::ProjectionNames::Explicit(&keys),
+            );
             drive_expression_reads_with_memory(
                 &mut frame.node,
                 expr_subs,
@@ -3232,6 +3238,7 @@ fn scope_process_node(
             let wrapper = matches!(
                 node,
                 GraphPattern::Project { .. }
+                    | GraphPattern::ProjectStar { .. }
                     | GraphPattern::Distinct { .. }
                     | GraphPattern::Reduced { .. }
                     | GraphPattern::Slice { .. }
@@ -3369,6 +3376,7 @@ pub(crate) fn needs_assignment_join_with_memory(
                 let wrapper = matches!(
                     pattern,
                     GraphPattern::Project { .. }
+                        | GraphPattern::ProjectStar { .. }
                         | GraphPattern::Distinct { .. }
                         | GraphPattern::Reduced { .. }
                         | GraphPattern::Slice { .. }
@@ -3458,9 +3466,11 @@ fn seed_sub_selects_in_with_memory(
     }
     let mut pending = rewrite_scratch([(root, true)], memory)?;
     while let Some((node, top)) = pending.pop() {
-        if !top && matches!(node, GraphPattern::Project { .. }) {
-            let GraphPattern::Project { inner, .. } = node else {
-                unreachable!("Project matched")
+        if !top && node.projected_names().is_some() {
+            let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) =
+                node
+            else {
+                unreachable!("projection matched")
             };
             if !std::ptr::eq(core_slot(inner), seeded) {
                 let core = core_slot(inner);
@@ -3497,8 +3507,8 @@ fn seed_above_a_lone_sub_select_with_memory(
     let mut projected = false;
     loop {
         match core {
-            GraphPattern::Project { .. } if projected => break,
-            GraphPattern::Project { inner, .. } => {
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } if projected => break,
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
                 projected = true;
                 core = inner;
             }
@@ -3761,6 +3771,9 @@ fn enter_push_with_memory<'p>(
         GraphPattern::Project { inner, variables } => probes
             .narrowed(|var| variables.contains(var), memory)?
             .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
+        GraphPattern::ProjectStar { inner, variables } => probes
+            .narrowed(|var| variables.iter().any(|name| name == var), memory)?
+            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
         GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::OrderBy { inner, .. } => {
@@ -3861,6 +3874,7 @@ fn resume_push_with_memory<'p>(
             | GraphPattern::Filter { inner, .. }
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::OrderBy { inner, .. }
@@ -3982,6 +3996,7 @@ fn enter_substitution_with_memory(
         | GraphPattern::Unfold { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
@@ -4031,6 +4046,7 @@ fn descend_into_inner_with_memory(
         | GraphPattern::Unfold { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
@@ -4193,7 +4209,17 @@ fn resume_substitution_with_memory(
         // What the projection does narrow is which seed columns its rows carry out.
         (GraphPattern::Project { inner, variables }, SubstituteStage::Inner) => {
             **inner = operand;
-            Then::Finish(columns.kept(expr_subs, variables))
+            Then::Finish(columns.kept(
+                expr_subs,
+                purrdf_sparql_algebra::ProjectionNames::Explicit(variables),
+            ))
+        }
+        (GraphPattern::ProjectStar { inner, variables }, SubstituteStage::Inner) => {
+            **inner = operand;
+            Then::Finish(columns.kept(
+                expr_subs,
+                purrdf_sparql_algebra::ProjectionNames::Star(variables),
+            ))
         }
         (
             GraphPattern::Distinct { inner }
@@ -4281,7 +4307,9 @@ fn seed_reaches_every_read_with_memory(
             }
             match node {
                 NodeRef::Expr(Expression::Exists(_)) => Flow::Stop,
-                NodeRef::Pattern(GraphPattern::Project { .. }) => {
+                NodeRef::Pattern(
+                    GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. },
+                ) => {
                     if in_head && !projected && !below_modifiers {
                         projected = true;
                         Flow::Descend
@@ -5268,11 +5296,15 @@ mod seed_fast_path_tests {
         rewrite: fn(Query, Vec<(Variable, GroundTerm)>) -> Query,
     ) -> Vec<String> {
         let mut builder = RdfDatasetBuilder::new();
-        let p = builder.intern_iri(P);
+        let p = builder.intern_iri(P).unwrap();
         for (subject, object) in [("a", "o1"), ("a", "o2"), ("b", "o3")] {
-            let s = builder.intern_iri(&format!("http://example.org/{subject}"));
-            let o = builder.intern_iri(&format!("http://example.org/{object}"));
-            builder.push_quad(s, p, o, None);
+            let s = builder
+                .intern_iri(&format!("http://example.org/{subject}"))
+                .unwrap();
+            let o = builder
+                .intern_iri(&format!("http://example.org/{object}"))
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
         }
         let dataset = builder.freeze().expect("freeze");
         let parsed = SparqlParser::new()
@@ -5902,7 +5934,23 @@ mod walk_tests {
             }
             GraphPattern::Project { inner, variables } => {
                 let carried = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
-                (false, carried.kept(expr_subs, variables))
+                (
+                    false,
+                    carried.kept(
+                        expr_subs,
+                        purrdf_sparql_algebra::ProjectionNames::Explicit(variables),
+                    ),
+                )
+            }
+            GraphPattern::ProjectStar { inner, variables } => {
+                let carried = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
+                (
+                    false,
+                    carried.kept(
+                        expr_subs,
+                        purrdf_sparql_algebra::ProjectionNames::Star(variables),
+                    ),
+                )
             }
             GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
@@ -5931,7 +5979,10 @@ mod walk_tests {
             } => {
                 let operand = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
                 let keys = variables.clone();
-                let carried = operand.kept(expr_subs, &keys);
+                let carried = operand.kept(
+                    expr_subs,
+                    purrdf_sparql_algebra::ProjectionNames::Explicit(&keys),
+                );
                 let taken = std::mem::take(aggregates);
                 *aggregates = taken
                     .into_iter()
@@ -6810,26 +6861,38 @@ mod walk_tests {
     fn ground_term_from_id_agrees_with_its_recursive_reference() {
         let mut builder = RdfDatasetBuilder::new();
         let mut ids = Vec::new();
-        let p = builder.intern_iri("http://example.org/p");
+        let p = builder.intern_iri("http://example.org/p").unwrap();
         ids.push(p);
-        ids.push(builder.intern_blank("b", BlankScope::DEFAULT));
-        ids.push(builder.intern_blank("b", BlankScope(1)));
-        ids.push(builder.intern_literal(RdfLiteral::simple("plain")));
-        ids.push(builder.intern_literal(RdfLiteral::typed("42", XSD_INTEGER)));
-        ids.push(builder.intern_literal(RdfLiteral::language_tagged("hi", "en")));
-        let mut nested = builder.intern_iri("http://example.org/leaf");
+        ids.push(builder.intern_blank("b", BlankScope::DEFAULT).unwrap());
+        ids.push(builder.intern_blank("b", BlankScope(1)).unwrap());
+        ids.push(builder.intern_literal(RdfLiteral::simple("plain")).unwrap());
+        ids.push(
+            builder
+                .intern_literal(RdfLiteral::typed("42", XSD_INTEGER))
+                .unwrap(),
+        );
+        ids.push(
+            builder
+                .intern_literal(RdfLiteral::language_tagged("hi", "en"))
+                .unwrap(),
+        );
+        let mut nested = builder.intern_iri("http://example.org/leaf").unwrap();
         ids.push(nested);
         for level in 0..8 {
             let subject = if level % 2 == 0 {
-                builder.intern_iri(&format!("http://example.org/s{level}"))
+                builder
+                    .intern_iri(&format!("http://example.org/s{level}"))
+                    .unwrap()
             } else {
-                builder.intern_blank(&format!("s{level}"), BlankScope::DEFAULT)
+                builder
+                    .intern_blank(&format!("s{level}"), BlankScope::DEFAULT)
+                    .unwrap()
             };
-            nested = builder.intern_triple(subject, p, nested);
+            nested = builder.intern_triple(subject, p, nested).unwrap();
             ids.push(nested);
         }
-        let graph_subject = builder.intern_iri("http://example.org/g");
-        builder.push_quad(graph_subject, p, nested, None);
+        let graph_subject = builder.intern_iri("http://example.org/g").unwrap();
+        builder.push_quad(graph_subject, p, nested, None).unwrap();
         let dataset = builder.freeze().expect("a valid dataset");
         for id in ids {
             assert_eq!(
@@ -7522,6 +7585,7 @@ fn for_each_child_pattern_mut<'p>(
         | GraphPattern::Unfold { inner, .. }
         | GraphPattern::OrderBy { inner, .. }
         | GraphPattern::Project { inner, .. }
+        | GraphPattern::ProjectStar { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }

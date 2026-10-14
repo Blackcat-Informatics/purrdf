@@ -58,17 +58,19 @@ fn index_of(dataset: &Arc<RdfDataset>, predicates: &[&str]) -> TextIndex {
 #[test]
 fn annotation_layer_literals_are_indexed() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let p = builder.intern_iri(P);
-    let o = builder.intern_iri(O);
-    let note = builder.intern_iri(NOTE);
-    let reifier = builder.intern_iri(REIFIER);
-    let text = builder.intern_literal(RdfLiteral::simple("annotation text"));
+    let s = builder.intern_iri(S).unwrap();
+    let p = builder.intern_iri(P).unwrap();
+    let o = builder.intern_iri(O).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let reifier = builder.intern_iri(REIFIER).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("annotation text"))
+        .unwrap();
 
-    builder.push_quad(s, p, o, None);
-    let statement = builder.intern_triple(s, p, o);
-    builder.push_reifier(reifier, statement);
-    builder.push_annotation(reifier, note, text);
+    builder.push_quad(s, p, o, None).unwrap();
+    let statement = builder.intern_triple(s, p, o).unwrap();
+    builder.push_reifier(reifier, statement).unwrap();
+    builder.push_annotation(reifier, note, text).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     // The asserted table really does hide the annotation: nothing in it carries
@@ -109,19 +111,23 @@ fn annotation_layer_literals_are_indexed() {
 #[test]
 fn asserted_and_annotation_text_merge_into_one_document() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let p = builder.intern_iri(P);
-    let o = builder.intern_iri(O);
-    let note = builder.intern_iri(NOTE);
-    let reifier = builder.intern_iri(REIFIER);
-    let asserted = builder.intern_literal(RdfLiteral::simple("asserted"));
-    let annotated = builder.intern_literal(RdfLiteral::simple("annotated"));
+    let s = builder.intern_iri(S).unwrap();
+    let p = builder.intern_iri(P).unwrap();
+    let o = builder.intern_iri(O).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let reifier = builder.intern_iri(REIFIER).unwrap();
+    let asserted = builder
+        .intern_literal(RdfLiteral::simple("asserted"))
+        .unwrap();
+    let annotated = builder
+        .intern_literal(RdfLiteral::simple("annotated"))
+        .unwrap();
 
-    builder.push_quad(s, p, o, None);
-    builder.push_quad(reifier, note, asserted, None);
-    let statement = builder.intern_triple(s, p, o);
-    builder.push_reifier(reifier, statement);
-    builder.push_annotation(reifier, note, annotated);
+    builder.push_quad(s, p, o, None).unwrap();
+    builder.push_quad(reifier, note, asserted, None).unwrap();
+    let statement = builder.intern_triple(s, p, o).unwrap();
+    builder.push_reifier(reifier, statement).unwrap();
+    builder.push_annotation(reifier, note, annotated).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let index = index_of(&dataset, &[NOTE]);
@@ -141,10 +147,12 @@ fn asserted_and_annotation_text_merge_into_one_document() {
 #[test]
 fn blank_node_subjects_are_indexed() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_blank("b0", BlankScope::DEFAULT);
-    let note = builder.intern_iri(NOTE);
-    let text = builder.intern_literal(RdfLiteral::simple("blank subject text"));
-    builder.push_quad(subject, note, text, None);
+    let subject = builder.intern_blank("b0", BlankScope::DEFAULT).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("blank subject text"))
+        .unwrap();
+    builder.push_quad(subject, note, text, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let index = index_of(&dataset, &[NOTE]);
@@ -248,15 +256,17 @@ impl DatasetView for TripleSubjectView {
 #[test]
 fn triple_term_subjects_are_indexed() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let p = builder.intern_iri(P);
-    let o = builder.intern_iri(O);
-    let note = builder.intern_iri(NOTE);
-    let text = builder.intern_literal(RdfLiteral::simple("quoted subject text"));
-    builder.push_quad(s, note, text, None);
+    let s = builder.intern_iri(S).unwrap();
+    let p = builder.intern_iri(P).unwrap();
+    let o = builder.intern_iri(O).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("quoted subject text"))
+        .unwrap();
+    builder.push_quad(s, note, text, None).unwrap();
     // Keeps the triple term's components referenced by an ordinary statement,
     // under a predicate the configuration does not name.
-    builder.push_quad(o, p, o, None);
+    builder.push_quad(o, p, o, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     // The disguise must not name `s` itself: a term that contains its own id is
@@ -292,19 +302,25 @@ fn triple_term_subjects_are_indexed() {
 #[test]
 fn language_splits_documents_but_base_direction_does_not() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let plain_en = builder.intern_literal(RdfLiteral::language_tagged("alpha", "en"));
-    let directional_en = builder.intern_literal(RdfLiteral {
-        lexical_form: "beta".to_owned(),
-        datatype: None,
-        language: Some("en".to_owned()),
-        direction: Some(RdfTextDirection::Ltr),
-    });
-    let french = builder.intern_literal(RdfLiteral::language_tagged("gamma", "fr"));
-    builder.push_quad(s, note, plain_en, None);
-    builder.push_quad(s, note, directional_en, None);
-    builder.push_quad(s, note, french, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let plain_en = builder
+        .intern_literal(RdfLiteral::language_tagged("alpha", "en"))
+        .unwrap();
+    let directional_en = builder
+        .intern_literal(RdfLiteral {
+            lexical_form: "beta".to_owned(),
+            datatype: None,
+            language: Some("en".to_owned()),
+            direction: Some(RdfTextDirection::Ltr),
+        })
+        .unwrap();
+    let french = builder
+        .intern_literal(RdfLiteral::language_tagged("gamma", "fr"))
+        .unwrap();
+    builder.push_quad(s, note, plain_en, None).unwrap();
+    builder.push_quad(s, note, directional_en, None).unwrap();
+    builder.push_quad(s, note, french, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let index = index_of(&dataset, &[NOTE]);
@@ -344,12 +360,16 @@ fn language_splits_documents_but_base_direction_does_not() {
 #[test]
 fn untagged_literals_do_not_collide_with_a_real_language_tag() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let untagged = builder.intern_literal(RdfLiteral::simple("untagged"));
-    let tagged = builder.intern_literal(RdfLiteral::language_tagged("tagged", "en"));
-    builder.push_quad(s, note, untagged, None);
-    builder.push_quad(s, note, tagged, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let untagged = builder
+        .intern_literal(RdfLiteral::simple("untagged"))
+        .unwrap();
+    let tagged = builder
+        .intern_literal(RdfLiteral::language_tagged("tagged", "en"))
+        .unwrap();
+    builder.push_quad(s, note, untagged, None).unwrap();
+    builder.push_quad(s, note, tagged, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let index = index_of(&dataset, &[NOTE]);
@@ -383,13 +403,19 @@ fn untagged_literals_do_not_collide_with_a_real_language_tag() {
 #[test]
 fn a_document_without_lexical_terms_retains_auxiliary_evidence() {
     let mut builder = RdfDatasetBuilder::new();
-    let punctuation_only = builder.intern_iri("https://example.org/quiet");
-    let real = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let noise = builder.intern_literal(RdfLiteral::simple("--- ... !!!"));
-    let text = builder.intern_literal(RdfLiteral::simple("real text"));
-    builder.push_quad(punctuation_only, note, noise, None);
-    builder.push_quad(real, note, text, None);
+    let punctuation_only = builder.intern_iri("https://example.org/quiet").unwrap();
+    let real = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let noise = builder
+        .intern_literal(RdfLiteral::simple("--- ... !!!"))
+        .unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("real text"))
+        .unwrap();
+    builder
+        .push_quad(punctuation_only, note, noise, None)
+        .unwrap();
+    builder.push_quad(real, note, text, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let index = index_of(&dataset, &[NOTE]);
@@ -410,6 +436,7 @@ fn a_document_without_lexical_terms_retains_auxiliary_evidence() {
     );
     let evidence = index
         .surface_index()
+        .expect("default surface index")
         .substring("!!!")
         .expect("selective punctuation fragment");
     assert_eq!(evidence.len(), 1);
@@ -433,18 +460,24 @@ fn a_document_without_lexical_terms_retains_auxiliary_evidence() {
 #[test]
 fn statistics_are_per_partition_not_pooled() {
     let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE);
+    let note = builder.intern_iri(NOTE).unwrap();
     // One short English document, two long French ones.
-    let en_subject = builder.intern_iri("https://example.org/en");
-    let en_text = builder.intern_literal(RdfLiteral::language_tagged("one two", "en"));
-    builder.push_quad(en_subject, note, en_text, None);
+    let en_subject = builder.intern_iri("https://example.org/en").unwrap();
+    let en_text = builder
+        .intern_literal(RdfLiteral::language_tagged("one two", "en"))
+        .unwrap();
+    builder.push_quad(en_subject, note, en_text, None).unwrap();
     for (index, lexical) in ["un deux trois quatre", "cinq six sept huit"]
         .into_iter()
         .enumerate()
     {
-        let subject = builder.intern_iri(&format!("https://example.org/fr{index}"));
-        let literal = builder.intern_literal(RdfLiteral::language_tagged(lexical, "fr"));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/fr{index}"))
+            .unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral::language_tagged(lexical, "fr"))
+            .unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
     }
     let dataset = builder.freeze().expect("the fixture must validate");
 
@@ -498,21 +531,21 @@ fn two_independently_built_datasets_share_a_fingerprint() {
 
     let forward = {
         let mut builder = RdfDatasetBuilder::new();
-        let note = builder.intern_iri(NOTE);
+        let note = builder.intern_iri(NOTE).unwrap();
         for (subject, text) in triples {
-            let s = builder.intern_iri(subject);
-            let literal = builder.intern_literal(RdfLiteral::simple(text));
-            builder.push_quad(s, note, literal, None);
+            let s = builder.intern_iri(subject).unwrap();
+            let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+            builder.push_quad(s, note, literal, None).unwrap();
         }
         builder.freeze().expect("the fixture must validate")
     };
     let backward = {
         let mut builder = RdfDatasetBuilder::new();
         for (subject, text) in triples.into_iter().rev() {
-            let s = builder.intern_iri(subject);
-            let note = builder.intern_iri(NOTE);
-            let literal = builder.intern_literal(RdfLiteral::simple(text));
-            builder.push_quad(s, note, literal, None);
+            let s = builder.intern_iri(subject).unwrap();
+            let note = builder.intern_iri(NOTE).unwrap();
+            let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+            builder.push_quad(s, note, literal, None).unwrap();
         }
         builder.freeze().expect("the fixture must validate")
     };
@@ -551,10 +584,12 @@ fn two_independently_built_datasets_share_a_fingerprint() {
 fn blank_node_labels_change_the_fingerprint() {
     let build = |label: &str| {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_blank(label, BlankScope::DEFAULT);
-        let note = builder.intern_iri(NOTE);
-        let literal = builder.intern_literal(RdfLiteral::simple("identical text"));
-        builder.push_quad(subject, note, literal, None);
+        let subject = builder.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        let note = builder.intern_iri(NOTE).unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral::simple("identical text"))
+            .unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
         builder.freeze().expect("the fixture must validate")
     };
 
@@ -666,10 +701,12 @@ fn a_duplicate_predicate_is_a_config_error() {
 #[test]
 fn a_predicate_absent_from_the_dataset_contributes_no_rows() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let text = builder.intern_literal(RdfLiteral::simple("present"));
-    builder.push_quad(s, note, text, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("present"))
+        .unwrap();
+    builder.push_quad(s, note, text, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let widened = TextIndex::from_dataset(&*dataset, &config(&[NOTE, LABEL]))
@@ -716,13 +753,17 @@ fn a_predicate_absent_from_the_dataset_contributes_no_rows() {
     // present one: text that lands under ex:label later is found by the SAME
     // configuration, which is the whole reason the widened build is allowed.
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let label = builder.intern_iri(LABEL);
-    let text = builder.intern_literal(RdfLiteral::simple("present"));
-    let later = builder.intern_literal(RdfLiteral::simple("arrived"));
-    builder.push_quad(s, note, text, None);
-    builder.push_quad(s, label, later, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let label = builder.intern_iri(LABEL).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("present"))
+        .unwrap();
+    let later = builder
+        .intern_literal(RdfLiteral::simple("arrived"))
+        .unwrap();
+    builder.push_quad(s, note, text, None).unwrap();
+    builder.push_quad(s, label, later, None).unwrap();
     let grown = builder.freeze().expect("the fixture must validate");
     let grown = TextIndex::from_dataset(&*grown, &config(&[NOTE, LABEL]))
         .expect("the same configuration builds once ex:label carries text");
@@ -816,10 +857,12 @@ fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation()
     // The same configuration once one document lands: a non-zero corpus, an
     // answer, and a generation that differs from the empty index's.
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let text = builder.intern_literal(RdfLiteral::simple("anything at all"));
-    builder.push_quad(s, note, text, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("anything at all"))
+        .unwrap();
+    builder.push_quad(s, note, text, None).unwrap();
     let landed = builder.freeze().expect("the fixture must validate");
     let landed = TextIndex::from_dataset(&*landed, &over_note)
         .expect("the SAME configuration must build once the document lands");
@@ -860,10 +903,12 @@ fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation()
 /// The one-document dataset the empty index must NOT verify against.
 fn landed_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let text = builder.intern_literal(RdfLiteral::simple("anything at all"));
-    builder.push_quad(s, note, text, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("anything at all"))
+        .unwrap();
+    builder.push_quad(s, note, text, None).unwrap();
     builder.freeze().expect("the fixture must validate")
 }
 
@@ -888,10 +933,14 @@ const MISTYPED_SUMMARY: &str = "https://example.org/summarv";
 fn document_per_predicate(predicates: &[&str]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for (at, predicate) in predicates.iter().enumerate() {
-        let subject = builder.intern_iri(&format!("https://example.org/s{at}"));
-        let predicate = builder.intern_iri(predicate);
-        let text = builder.intern_literal(RdfLiteral::simple(format!("text{at}")));
-        builder.push_quad(subject, predicate, text, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/s{at}"))
+            .unwrap();
+        let predicate = builder.intern_iri(predicate).unwrap();
+        let text = builder
+            .intern_literal(RdfLiteral::simple(format!("text{at}")))
+            .unwrap();
+        builder.push_quad(subject, predicate, text, None).unwrap();
     }
     builder.freeze().expect("the fixture must validate")
 }
@@ -1075,13 +1124,15 @@ fn an_unloaded_predicate_reads_as_a_shortfall_and_an_iri_valued_one_does_not() {
     // The valid neighbour, against a dataset where every configured predicate
     // occupies a statement and one of them carries no literal.
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let title = builder.intern_iri(FIVE[4]);
-    let o = builder.intern_iri(O);
-    let text = builder.intern_literal(RdfLiteral::simple("only this counts"));
-    builder.push_quad(s, note, text, None);
-    builder.push_quad(s, title, o, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let title = builder.intern_iri(FIVE[4]).unwrap();
+    let o = builder.intern_iri(O).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("only this counts"))
+        .unwrap();
+    builder.push_quad(s, note, text, None).unwrap();
+    builder.push_quad(s, title, o, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let two = config(&[NOTE, FIVE[4]]);
@@ -1109,16 +1160,18 @@ fn an_unloaded_predicate_reads_as_a_shortfall_and_an_iri_valued_one_does_not() {
 #[test]
 fn an_annotation_only_predicate_is_found_by_the_coverage() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let p = builder.intern_iri(P);
-    let o = builder.intern_iri(O);
-    let note = builder.intern_iri(NOTE);
-    let reifier = builder.intern_iri(REIFIER);
-    let text = builder.intern_literal(RdfLiteral::simple("annotation text"));
-    builder.push_quad(s, p, o, None);
-    let statement = builder.intern_triple(s, p, o);
-    builder.push_reifier(reifier, statement);
-    builder.push_annotation(reifier, note, text);
+    let s = builder.intern_iri(S).unwrap();
+    let p = builder.intern_iri(P).unwrap();
+    let o = builder.intern_iri(O).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let reifier = builder.intern_iri(REIFIER).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("annotation text"))
+        .unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
+    let statement = builder.intern_triple(s, p, o).unwrap();
+    builder.push_reifier(reifier, statement).unwrap();
+    builder.push_annotation(reifier, note, text).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let over_note = config(&[NOTE]);
@@ -1137,14 +1190,16 @@ fn an_annotation_only_predicate_is_found_by_the_coverage() {
 #[test]
 fn non_literal_objects_are_skipped_not_errors() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let o = builder.intern_iri(O);
-    let blank = builder.intern_blank("b0", BlankScope::DEFAULT);
-    let text = builder.intern_literal(RdfLiteral::simple("only this counts"));
-    builder.push_quad(s, note, o, None);
-    builder.push_quad(s, note, blank, None);
-    builder.push_quad(s, note, text, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let o = builder.intern_iri(O).unwrap();
+    let blank = builder.intern_blank("b0", BlankScope::DEFAULT).unwrap();
+    let text = builder
+        .intern_literal(RdfLiteral::simple("only this counts"))
+        .unwrap();
+    builder.push_quad(s, note, o, None).unwrap();
+    builder.push_quad(s, note, blank, None).unwrap();
+    builder.push_quad(s, note, text, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let index = index_of(&dataset, &[NOTE]);
@@ -1161,13 +1216,17 @@ fn non_literal_objects_are_skipped_not_errors() {
 #[test]
 fn a_named_graph_selector_restricts_the_walk() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(S);
-    let note = builder.intern_iri(NOTE);
-    let graph = builder.intern_iri(GRAPH);
-    let inside = builder.intern_literal(RdfLiteral::simple("inside"));
-    let outside = builder.intern_literal(RdfLiteral::simple("outside"));
-    builder.push_quad(s, note, inside, Some(graph));
-    builder.push_quad(s, note, outside, None);
+    let s = builder.intern_iri(S).unwrap();
+    let note = builder.intern_iri(NOTE).unwrap();
+    let graph = builder.intern_iri(GRAPH).unwrap();
+    let inside = builder
+        .intern_literal(RdfLiteral::simple("inside"))
+        .unwrap();
+    let outside = builder
+        .intern_literal(RdfLiteral::simple("outside"))
+        .unwrap();
+    builder.push_quad(s, note, inside, Some(graph)).unwrap();
+    builder.push_quad(s, note, outside, None).unwrap();
     let dataset = builder.freeze().expect("the fixture must validate");
 
     let everywhere = index_of(&dataset, &[NOTE]);

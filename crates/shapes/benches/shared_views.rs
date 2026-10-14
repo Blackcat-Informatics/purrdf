@@ -40,13 +40,15 @@ use std::sync::Arc;
 
 fn data(rows: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/value");
-    let g = b.intern_iri("https://example.org/g");
-    let o = b.intern_literal(RdfLiteral::simple("value"));
+    let p = b.intern_iri("https://example.org/value").unwrap();
+    let g = b.intern_iri("https://example.org/g").unwrap();
+    let o = b.intern_literal(RdfLiteral::simple("value")).unwrap();
     for row in 0..rows {
-        let s = b.intern_iri(&format!("https://example.org/s{row}"));
-        b.push_quad(s, p, o, Some(g));
-        b.push_annotation_in_graph(s, p, o, Some(g));
+        let s = b
+            .intern_iri(&format!("https://example.org/s{row}"))
+            .unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
+        b.push_annotation_in_graph(s, p, o, Some(g)).unwrap();
     }
     b.freeze().expect("data")
 }
@@ -222,23 +224,37 @@ const SELECTED_GRAPH: &str = "https://example.org/selected";
 
 fn named_graph_data(rows: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/value");
-    let rdf_type = builder.intern_iri(purrdf_iri::vocab::rdf::TYPE);
-    let subclass = builder.intern_iri(purrdf_iri::vocab::rdfs::SUB_CLASS_OF);
-    let child = builder.intern_iri("https://example.org/Child");
-    let parent = builder.intern_iri("https://example.org/Parent");
-    let selected = builder.intern_iri(SELECTED_GRAPH);
-    let sibling = builder.intern_iri("https://example.org/sibling");
-    let good = builder.intern_literal(RdfLiteral::simple("good"));
-    let bad = builder.intern_literal(RdfLiteral::simple("bad"));
-    builder.push_quad(child, subclass, parent, Some(selected));
+    let predicate = builder.intern_iri("https://example.org/value").unwrap();
+    let rdf_type = builder.intern_iri(purrdf_iri::vocab::rdf::TYPE).unwrap();
+    let subclass = builder
+        .intern_iri(purrdf_iri::vocab::rdfs::SUB_CLASS_OF)
+        .unwrap();
+    let child = builder.intern_iri("https://example.org/Child").unwrap();
+    let parent = builder.intern_iri("https://example.org/Parent").unwrap();
+    let selected = builder.intern_iri(SELECTED_GRAPH).unwrap();
+    let sibling = builder.intern_iri("https://example.org/sibling").unwrap();
+    let good = builder.intern_literal(RdfLiteral::simple("good")).unwrap();
+    let bad = builder.intern_literal(RdfLiteral::simple("bad")).unwrap();
+    builder
+        .push_quad(child, subclass, parent, Some(selected))
+        .unwrap();
     for row in 0..rows {
-        let subject = builder.intern_iri(&format!("https://example.org/subject{row}"));
-        builder.push_quad(subject, rdf_type, child, Some(selected));
-        builder.push_quad(subject, predicate, good, Some(selected));
-        builder.push_quad(subject, predicate, bad, Some(sibling));
-        builder.push_annotation_in_graph(subject, predicate, bad, Some(sibling));
-        builder.push_quad(subject, predicate, bad, None);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/subject{row}"))
+            .unwrap();
+        builder
+            .push_quad(subject, rdf_type, child, Some(selected))
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, good, Some(selected))
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, bad, Some(sibling))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(subject, predicate, bad, Some(sibling))
+            .unwrap();
+        builder.push_quad(subject, predicate, bad, None).unwrap();
     }
     builder.freeze().expect("named-graph data")
 }
@@ -269,7 +285,11 @@ fn named_graph_bench(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_named_graph");
     for rows in [100, 10_000] {
         let source = named_graph_data(rows);
-        let native = Arc::new(source.project_named_graph(SELECTED_GRAPH));
+        let native = Arc::new(
+            source
+                .project_named_graph(SELECTED_GRAPH)
+                .expect("graph projects"),
+        );
         let views = [
             ("native_owned", Arc::new(ShaclDatasetView::native(native))),
             (
@@ -366,7 +386,13 @@ fn named_graph_bench(c: &mut Bench) {
             BenchmarkId::new("owned_projection/construct", rows),
             &source,
             |b, source| {
-                b.iter(|| std::hint::black_box(source.project_named_graph(SELECTED_GRAPH)));
+                b.iter(|| {
+                    std::hint::black_box(
+                        source
+                            .project_named_graph(SELECTED_GRAPH)
+                            .expect("graph projects"),
+                    )
+                });
             },
         );
         group.bench_with_input(

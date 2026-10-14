@@ -392,7 +392,7 @@ fn load_first_party(case: &shacl_corpora::FirstPartyCase) -> Result<Loaded, Stri
 /// `sh:shapesGraph` IRI (`None` here means "do not override").
 fn run_lane(shapes: &Shapes, data: &RdfDataset) -> LaneOutcome {
     let answer = catch_unwind(AssertUnwindSafe(|| {
-        validate_dataset_with_shapes_graph(data, shapes, None).map_err(String::from)
+        validate_dataset_with_shapes_graph(data, shapes, None).map_err(|error| error.to_string())
     }))
     .unwrap_or_else(|payload| {
         let message = payload
@@ -404,7 +404,12 @@ fn run_lane(shapes: &Shapes, data: &RdfDataset) -> LaneOutcome {
     });
 
     LaneOutcome {
-        answer: answer.map(|report| (report.to_ntriples(), report.results.len())),
+        answer: answer.and_then(|report| {
+            report
+                .to_ntriples()
+                .map(|text| (text, report.results.len()))
+                .map_err(|error| error.to_string())
+        }),
     }
 }
 

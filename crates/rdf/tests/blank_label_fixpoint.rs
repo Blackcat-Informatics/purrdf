@@ -60,10 +60,10 @@ fn parse(bytes: &[u8], format: NativeRdfFormat) -> Arc<RdfDataset> {
 /// `(label, scope)`.
 fn blank_subject_dataset(label: &str, scope: BlankScope) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank(label, scope);
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(s, p, o, None);
+    let s = b.intern_blank(label, scope).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("dataset freezes")
 }
 
@@ -116,24 +116,30 @@ fn arb_blank() -> impl Strategy<Value = (String, u32)> {
 fn arb_dataset() -> impl Strategy<Value = Arc<RdfDataset>> {
     prop::collection::vec((arb_blank(), arb_blank(), 0usize..3), 1..5).prop_map(|rows| {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("https://example.org/p");
+        let p = b.intern_iri("https://example.org/p").unwrap();
         for ((subject_label, subject_scope), (object_label, object_scope), object_kind) in rows {
-            let s = b.intern_blank(&subject_label, BlankScope(subject_scope));
+            let s = b
+                .intern_blank(&subject_label, BlankScope(subject_scope))
+                .unwrap();
             let o = match object_kind {
-                0 => b.intern_blank(&object_label, BlankScope(object_scope)),
-                1 => b.intern_iri("https://example.org/o"),
+                0 => b
+                    .intern_blank(&object_label, BlankScope(object_scope))
+                    .unwrap(),
+                1 => b.intern_iri("https://example.org/o").unwrap(),
                 // A plain literal object, so a quad can end in something that is
                 // not a node at all. The lexical form is deliberately benign:
                 // this gate is about blank LABELS, and a control character in a
                 // literal is a separate (XML-representability) concern.
-                _ => b.intern_literal(purrdf_rdf::RdfLiteral {
-                    lexical_form: "value".to_owned(),
-                    datatype: None,
-                    language: None,
-                    direction: None,
-                }),
+                _ => b
+                    .intern_literal(purrdf_rdf::RdfLiteral {
+                        lexical_form: "value".to_owned(),
+                        datatype: None,
+                        language: None,
+                        direction: None,
+                    })
+                    .unwrap(),
             };
-            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("dataset freezes")
     })
@@ -258,11 +264,11 @@ fn scoped_label_is_stable_across_three_cycles() {
 #[test]
 fn an_envelope_shaped_label_settles_after_one_write() {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
     for label in ["purrdfesc_abc", "abc"] {
-        let s = b.intern_blank(label, BlankScope::DEFAULT);
-        b.push_quad(s, p, o, None);
+        let s = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     let dataset = b.freeze().expect("dataset freezes");
     for format in [NativeRdfFormat::NTriples, NativeRdfFormat::Turtle] {

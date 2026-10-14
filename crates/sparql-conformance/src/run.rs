@@ -360,14 +360,17 @@ fn freeze_sources(
 ) -> Result<Arc<RdfDataset>, String> {
     let mut builder = purrdf_core::RdfDatasetBuilder::new();
     for (index, (source, graph)) in sources.iter().enumerate() {
-        let ordinal = u32::try_from(index + 1)
-            .map_err(|_| format!("more than {} source documents in one case", u32::MAX))?;
+        let ordinal = u32::try_from(index)
+            .ok()
+            .and_then(|ordinal| ordinal.checked_add(1))
+            .ok_or_else(|| format!("more than {} source documents in one case", u32::MAX))?;
         merge_source(
             &mut builder,
             source,
             purrdf_core::BlankScope(ordinal),
             graph.as_ref(),
-        );
+        )
+        .map_err(|error| format!("merge case source {index}: {error}"))?;
     }
     // A `qt:graphData` file that parses to ZERO quads (e.g. `empty.ttl`) leaves
     // nothing behind to imply its graph, so the graph is declared explicitly —
@@ -375,8 +378,12 @@ fn freeze_sources(
     // one that DOES own quads is a no-op, so every graph is declared uniformly
     // rather than only the empty ones.
     for (graph_iri, _) in graph_data {
-        let g = builder.intern_iri(graph_iri);
-        builder.declare_named_graph(g);
+        let g = builder
+            .intern_iri(graph_iri)
+            .map_err(|error| error.to_string())?;
+        builder
+            .declare_named_graph(g)
+            .map_err(|error| error.to_string())?;
     }
 
     builder
@@ -474,34 +481,35 @@ fn merge_source(
     source: &RdfDataset,
     scope: purrdf_core::BlankScope,
     graph: Option<&purrdf_core::RdfTerm>,
-) {
+) -> Result<(), purrdf_core::RdfDiagnostic> {
     for mut quad in source.owned_quads() {
         if let Some(g) = graph {
             quad.graph_name = Some(g.clone());
         }
-        builder.push_owned_quad_scoped(&quad, scope);
+        builder.push_owned_quad_scoped(&quad, scope)?;
     }
     for mut reifier in source.owned_reifiers() {
         if let Some(g) = graph {
             reifier.graph = Some(g.clone());
         }
-        builder.push_owned_reifier_scoped(&reifier, scope);
+        builder.push_owned_reifier_scoped(&reifier, scope)?;
     }
     for mut annotation in source.owned_annotations() {
         if let Some(g) = graph {
             annotation.graph = Some(g.clone());
         }
-        builder.push_owned_annotation_scoped(&annotation, scope);
+        builder.push_owned_annotation_scoped(&annotation, scope)?;
     }
     // A source being retagged into ONE named graph contributes no graph names of
     // its own — they have all been replaced by `graph`, which the caller declares.
     // A default-graph source (a `.trig` / `.nq` fixture) keeps its own.
     if graph.is_none() {
         for named in source.owned_named_graphs() {
-            let g = builder.intern_owned_term_scoped(&named, scope);
-            builder.declare_named_graph(g);
+            let g = builder.intern_owned_term_scoped(&named, scope)?;
+            builder.declare_named_graph(g)?;
         }
     }
+    Ok(())
 }
 
 /// Run `case`, optionally resolving `SERVICE` clauses through `remote`.
@@ -827,6 +835,7 @@ fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool
         match node {
             GraphPattern::OrderBy { .. } => return true,
             GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => node = inner,

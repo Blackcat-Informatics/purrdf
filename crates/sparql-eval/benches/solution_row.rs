@@ -47,9 +47,10 @@ const SPILLED_COLS: usize = 9;
 
 /// A distinct `Existing` term for synthetic index `i`.
 fn term(i: usize) -> SolutionTerm {
-    SolutionTerm::Existing(TermId::from_index(
-        u32::try_from(i).expect("index fits u32"),
-    ))
+    SolutionTerm::Existing(
+        TermId::from_index(u32::try_from(i).expect("index fits u32"))
+            .expect("stored term index is representable"),
+    )
 }
 
 /// A fully-bound row of `cols` distinct terms, seeded from `base` so successive

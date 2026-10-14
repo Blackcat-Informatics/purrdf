@@ -430,12 +430,16 @@ SELECT ?id WHERE {
 #[test]
 fn a_blank_node_still_ranks_below_a_composite_literal() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/s");
-    let p = b.intern_iri("http://example.org/p");
-    let blank = b.intern_blank("x", purrdf_core::BlankScope::DEFAULT);
-    let list = b.intern_literal(RdfLiteral::typed("[1]", CDT_LIST));
-    b.push_quad(s, p, blank, None);
-    b.push_quad(s, p, list, None);
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let blank = b
+        .intern_blank("x", purrdf_core::BlankScope::DEFAULT)
+        .unwrap();
+    let list = b
+        .intern_literal(RdfLiteral::typed("[1]", CDT_LIST))
+        .unwrap();
+    b.push_quad(s, p, blank, None).unwrap();
+    b.push_quad(s, p, list, None).unwrap();
     let ds = b.freeze().expect("freeze");
 
     let engine = NativeSparqlEngine::new();

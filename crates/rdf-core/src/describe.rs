@@ -576,7 +576,7 @@ mod tests {
     fn dataset(quads: &[RdfQuad]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for q in quads {
-            b.push_owned_quad(q);
+            b.push_owned_quad(q).unwrap();
         }
         b.freeze().expect("freeze test dataset")
     }
@@ -661,13 +661,13 @@ mod tests {
         // S -> _:b (restriction) -> onProperty target. The blank closure must bring the
         // blank's own triples along, both hops.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S);
-        let has = b.intern_iri("https://e/hasRestriction");
-        let bnode = b.intern_blank("r1", crate::BlankScope::DEFAULT);
-        let on = b.intern_iri("https://e/onProperty");
-        let target = b.intern_iri("https://e/target");
-        b.push_quad(s, has, bnode, None);
-        b.push_quad(bnode, on, target, None);
+        let s = b.intern_iri(S).unwrap();
+        let has = b.intern_iri("https://e/hasRestriction").unwrap();
+        let bnode = b.intern_blank("r1", crate::BlankScope::DEFAULT).unwrap();
+        let on = b.intern_iri("https://e/onProperty").unwrap();
+        let target = b.intern_iri("https://e/target").unwrap();
+        b.push_quad(s, has, bnode, None).unwrap();
+        b.push_quad(bnode, on, target, None).unwrap();
         let ds = b.freeze().unwrap();
 
         let scbd = describe(&ds, S).unwrap();
@@ -696,16 +696,16 @@ mod tests {
     fn includes_reifiers_about_the_subject() {
         // S p o, with a reifier annotating that statement (a certainty note).
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S);
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        b.push_quad(s, p, o, None);
-        let triple_term = b.intern_triple(s, p, o);
-        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT);
-        b.push_reifier(reifier, triple_term);
-        let certainty = b.intern_iri("https://e/certainty");
-        let high = b.intern_literal(RdfLiteral::simple("high"));
-        b.push_annotation(reifier, certainty, high);
+        let s = b.intern_iri(S).unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        let triple_term = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT).unwrap();
+        b.push_reifier(reifier, triple_term).unwrap();
+        let certainty = b.intern_iri("https://e/certainty").unwrap();
+        let high = b.intern_literal(RdfLiteral::simple("high")).unwrap();
+        b.push_annotation(reifier, certainty, high).unwrap();
         let ds = b.freeze().unwrap();
 
         let scbd = describe(&ds, S).unwrap();
@@ -740,17 +740,17 @@ mod tests {
         // (`_:stmt ex:author ex:alice`). That describing quad must ride along with the
         // reifier — a plain forward walk would drop it, leaving a dangling blank.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S);
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        b.push_quad(s, p, o, None);
-        let triple_term = b.intern_triple(s, p, o);
-        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT);
-        b.push_reifier(reifier, triple_term);
+        let s = b.intern_iri(S).unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        let triple_term = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT).unwrap();
+        b.push_reifier(reifier, triple_term).unwrap();
         // A plain triple describing the blank reifier itself.
-        let author = b.intern_iri("https://e/author");
-        let alice = b.intern_iri("https://e/alice");
-        b.push_quad(reifier, author, alice, None);
+        let author = b.intern_iri("https://e/author").unwrap();
+        let alice = b.intern_iri("https://e/alice").unwrap();
+        b.push_quad(reifier, author, alice, None).unwrap();
         let ds = b.freeze().unwrap();
 
         let scbd = describe(&ds, S).unwrap();
@@ -777,20 +777,20 @@ mod tests {
         // side-table does not live in `by_endpoint`, so without folding the annotation
         // harvest into the walk that blank would dangle.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S);
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        b.push_quad(s, p, o, None);
-        let triple_term = b.intern_triple(s, p, o);
-        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT);
-        b.push_reifier(reifier, triple_term);
-        let source = b.intern_iri("https://e/source");
-        let prov = b.intern_blank("prov", crate::BlankScope::DEFAULT);
-        b.push_annotation(reifier, source, prov);
+        let s = b.intern_iri(S).unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        let triple_term = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_blank("stmt1", crate::BlankScope::DEFAULT).unwrap();
+        b.push_reifier(reifier, triple_term).unwrap();
+        let source = b.intern_iri("https://e/source").unwrap();
+        let prov = b.intern_blank("prov", crate::BlankScope::DEFAULT).unwrap();
+        b.push_annotation(reifier, source, prov).unwrap();
         // The blank provenance node's own describing triple (a plain quad).
-        let by = b.intern_iri("https://e/by");
-        let agent = b.intern_iri("https://e/agent");
-        b.push_quad(prov, by, agent, None);
+        let by = b.intern_iri("https://e/by").unwrap();
+        let agent = b.intern_iri("https://e/agent").unwrap();
+        b.push_quad(prov, by, agent, None).unwrap();
         let ds = b.freeze().unwrap();
 
         let scbd = describe(&ds, S).unwrap();
@@ -845,17 +845,19 @@ mod tests {
         // must keep all three there — collapsing the statement layer into the default
         // graph would relocate two of the three.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S);
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let g = b.intern_iri("https://e/g");
-        b.push_quad(s, p, o, Some(g));
-        let triple_term = b.intern_triple(s, p, o);
-        let reifier = b.intern_iri("https://e/r");
-        b.push_reifier_in_graph(reifier, triple_term, Some(g));
-        let certainty = b.intern_iri("https://e/certainty");
-        let high = b.intern_literal(RdfLiteral::simple("high"));
-        b.push_annotation_in_graph(reifier, certainty, high, Some(g));
+        let s = b.intern_iri(S).unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let g = b.intern_iri("https://e/g").unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
+        let triple_term = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_iri("https://e/r").unwrap();
+        b.push_reifier_in_graph(reifier, triple_term, Some(g))
+            .unwrap();
+        let certainty = b.intern_iri("https://e/certainty").unwrap();
+        let high = b.intern_literal(RdfLiteral::simple("high")).unwrap();
+        b.push_annotation_in_graph(reifier, certainty, high, Some(g))
+            .unwrap();
         let ds = b.freeze().unwrap();
 
         let scbd = describe(&ds, S).unwrap();
@@ -885,18 +887,20 @@ mod tests {
         // Selection ignores graphs, so the declaration is reached; emission is faithful,
         // so it lands in <g2> — not in <g1>, and not in the default graph.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S);
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let g1 = b.intern_iri("https://e/g1");
-        let g2 = b.intern_iri("https://e/g2");
-        b.push_quad(s, p, o, Some(g1));
-        let triple_term = b.intern_triple(s, p, o);
-        let reifier = b.intern_iri("https://e/r");
-        b.push_reifier_in_graph(reifier, triple_term, Some(g2));
-        let source = b.intern_iri("https://e/source");
-        let ledger = b.intern_iri("https://e/ledger");
-        b.push_annotation_in_graph(reifier, source, ledger, Some(g2));
+        let s = b.intern_iri(S).unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let g1 = b.intern_iri("https://e/g1").unwrap();
+        let g2 = b.intern_iri("https://e/g2").unwrap();
+        b.push_quad(s, p, o, Some(g1)).unwrap();
+        let triple_term = b.intern_triple(s, p, o).unwrap();
+        let reifier = b.intern_iri("https://e/r").unwrap();
+        b.push_reifier_in_graph(reifier, triple_term, Some(g2))
+            .unwrap();
+        let source = b.intern_iri("https://e/source").unwrap();
+        let ledger = b.intern_iri("https://e/ledger").unwrap();
+        b.push_annotation_in_graph(reifier, source, ledger, Some(g2))
+            .unwrap();
         let ds = b.freeze().unwrap();
 
         let scbd = describe(&ds, S).unwrap();
@@ -921,24 +925,27 @@ mod tests {
         // a reifier-only harvest would emit the <g2> annotation into a graph whose
         // declaration is not in the description at all.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S);
-        let p = b.intern_iri("https://e/p");
-        let o = b.intern_iri("https://e/o");
-        let other = b.intern_iri(OTHER);
-        let g1 = b.intern_iri("https://e/g1");
-        let g2 = b.intern_iri("https://e/g2");
-        b.push_quad(s, p, o, Some(g1));
-        b.push_quad(other, p, o, Some(g2));
-        let about_s = b.intern_triple(s, p, o);
-        let about_other = b.intern_triple(other, p, o);
-        let reifier = b.intern_iri("https://e/r");
-        b.push_reifier_in_graph(reifier, about_s, Some(g1));
-        b.push_reifier_in_graph(reifier, about_other, Some(g2));
-        let source = b.intern_iri("https://e/source");
-        let here = b.intern_iri("https://e/here");
-        let elsewhere = b.intern_iri("https://e/elsewhere");
-        b.push_annotation_in_graph(reifier, source, here, Some(g1));
-        b.push_annotation_in_graph(reifier, source, elsewhere, Some(g2));
+        let s = b.intern_iri(S).unwrap();
+        let p = b.intern_iri("https://e/p").unwrap();
+        let o = b.intern_iri("https://e/o").unwrap();
+        let other = b.intern_iri(OTHER).unwrap();
+        let g1 = b.intern_iri("https://e/g1").unwrap();
+        let g2 = b.intern_iri("https://e/g2").unwrap();
+        b.push_quad(s, p, o, Some(g1)).unwrap();
+        b.push_quad(other, p, o, Some(g2)).unwrap();
+        let about_s = b.intern_triple(s, p, o).unwrap();
+        let about_other = b.intern_triple(other, p, o).unwrap();
+        let reifier = b.intern_iri("https://e/r").unwrap();
+        b.push_reifier_in_graph(reifier, about_s, Some(g1)).unwrap();
+        b.push_reifier_in_graph(reifier, about_other, Some(g2))
+            .unwrap();
+        let source = b.intern_iri("https://e/source").unwrap();
+        let here = b.intern_iri("https://e/here").unwrap();
+        let elsewhere = b.intern_iri("https://e/elsewhere").unwrap();
+        b.push_annotation_in_graph(reifier, source, here, Some(g1))
+            .unwrap();
+        b.push_annotation_in_graph(reifier, source, elsewhere, Some(g2))
+            .unwrap();
         let ds = b.freeze().unwrap();
 
         let scbd = describe(&ds, S).unwrap();
@@ -962,23 +969,23 @@ mod tests {
         // binding on the reifier id (rather than only the annotation harvest) would skip
         // closing the second triple's endpoints and drop the blank.
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri(S);
-        let p1 = b.intern_iri("https://e/p1");
-        let o1 = b.intern_iri("https://e/o1");
-        let p2 = b.intern_iri("https://e/p2");
-        let blank = b.intern_blank("bo", crate::BlankScope::DEFAULT);
+        let s = b.intern_iri(S).unwrap();
+        let p1 = b.intern_iri("https://e/p1").unwrap();
+        let o1 = b.intern_iri("https://e/o1").unwrap();
+        let p2 = b.intern_iri("https://e/p2").unwrap();
+        let blank = b.intern_blank("bo", crate::BlankScope::DEFAULT).unwrap();
         // Only the first triple is asserted as a plain quad; the second exists solely as
         // a reified statement.
-        b.push_quad(s, p1, o1, None);
-        let t1 = b.intern_triple(s, p1, o1);
-        let t2 = b.intern_triple(s, p2, blank);
-        let reifier = b.intern_blank("stmt", crate::BlankScope::DEFAULT);
-        b.push_reifier(reifier, t1);
-        b.push_reifier(reifier, t2);
+        b.push_quad(s, p1, o1, None).unwrap();
+        let t1 = b.intern_triple(s, p1, o1).unwrap();
+        let t2 = b.intern_triple(s, p2, blank).unwrap();
+        let reifier = b.intern_blank("stmt", crate::BlankScope::DEFAULT).unwrap();
+        b.push_reifier(reifier, t1).unwrap();
+        b.push_reifier(reifier, t2).unwrap();
         // The blank object of the second reified triple carries its own describing triple.
-        let deep = b.intern_iri("https://e/deep");
-        let val = b.intern_iri("https://e/val");
-        b.push_quad(blank, deep, val, None);
+        let deep = b.intern_iri("https://e/deep").unwrap();
+        let val = b.intern_iri("https://e/val").unwrap();
+        b.push_quad(blank, deep, val, None).unwrap();
         let ds = b.freeze().unwrap();
 
         let scbd = describe(&ds, S).unwrap();
@@ -1037,9 +1044,9 @@ mod term_walk_tests {
                 TermShape::WellFormed,
             );
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let dataset = builder.freeze().expect("a generated term freezes");
             let object = dataset.quads().next().expect("one quad").o;
             assert_eq!(

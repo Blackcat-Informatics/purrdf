@@ -79,25 +79,29 @@ pub(crate) enum PlanSeam {
 /// A [`plan_query`]/[`plan_where_pattern`] admission failure, tagged with the
 /// [`PlanSeam`] that raised it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PlanError {
-    pub(crate) seam: PlanSeam,
-    pub(crate) error: EvalError,
+pub(crate) enum PlanError {
+    PropertyFunction(EvalError),
+    Aggregate(EvalError),
 }
 
 impl PlanError {
-    /// Tag `error` as a property-function admission failure.
-    fn property_function(error: EvalError) -> Self {
-        Self {
-            seam: PlanSeam::PropertyFunction,
-            error,
+    const fn new(seam: PlanSeam, error: EvalError) -> Self {
+        match seam {
+            PlanSeam::PropertyFunction => Self::PropertyFunction(error),
+            PlanSeam::Aggregate => Self::Aggregate(error),
         }
     }
 
-    /// Tag `error` as a custom-aggregate admission failure.
-    fn aggregate(error: EvalError) -> Self {
-        Self {
-            seam: PlanSeam::Aggregate,
-            error,
+    const fn seam(&self) -> PlanSeam {
+        match self {
+            Self::PropertyFunction(_) => PlanSeam::PropertyFunction,
+            Self::Aggregate(_) => PlanSeam::Aggregate,
+        }
+    }
+
+    const fn error(&self) -> &EvalError {
+        match self {
+            Self::PropertyFunction(error) | Self::Aggregate(error) => error,
         }
     }
 
@@ -107,7 +111,7 @@ impl PlanError {
     /// `crate::update::delete_insert` read, so the two admission call sites can never
     /// again drift into hard-coding the wrong seam's code.
     pub(crate) fn diagnostic_code(&self) -> &str {
-        self.error.code().unwrap_or(match self.seam {
+        self.error().code().unwrap_or_else(|| match self.seam() {
             PlanSeam::PropertyFunction => "native-sparql-property-function",
             PlanSeam::Aggregate => "native-sparql-aggregate-function",
         })
@@ -116,7 +120,7 @@ impl PlanError {
 
 impl core::fmt::Display for PlanError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Display::fmt(&self.error, f)
+        core::fmt::Display::fmt(self.error(), f)
     }
 }
 
@@ -125,7 +129,35 @@ mod diagnostic_code_tests {
     use purrdf_core::RdfDiagnostic;
     use purrdf_core::xsd_regex::xpath::{Error, Resource};
 
-    use super::{EvalError, PlanError};
+    use super::{
+        EvalError, LexicalFrame, Memory, PlanError, PlanSeam, PreparationError, WorkspaceCapability,
+    };
+
+    #[test]
+    fn preparation_seam_roundtrip_preserves_exact_capacity_and_dataset_causes() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        let capacity = CapacityError::new(
+            CapacitySpace::GlobalTerms,
+            u128::from(u64::MAX) + 1,
+            u128::from(u64::MAX),
+        );
+        let workspace = WorkspaceCapability::resident();
+        let mut frame = LexicalFrame::new(&workspace);
+        let mut memory = Memory::new(&mut frame);
+        for seam in [PlanSeam::PropertyFunction, PlanSeam::Aggregate] {
+            for error in [
+                EvalError::Capacity(capacity),
+                EvalError::Dataset(StorageError::Capacity(capacity).into()),
+                EvalError::function("invalid declaration"),
+            ] {
+                let original = PlanError::new(seam, error);
+                let restored = PreparationError::from(original.clone()).into_plan(&mut memory);
+                assert_eq!(restored, original);
+                assert_eq!(restored.diagnostic_code(), original.diagnostic_code());
+            }
+        }
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
 
     #[test]
     fn admission_keeps_operational_codes_and_ordinary_seam_fallbacks() {
@@ -137,17 +169,17 @@ mod diagnostic_code_tests {
                 units: 1,
             }),
         ] {
-            let property = PlanError::property_function(error.clone());
-            let aggregate = PlanError::aggregate(error.clone());
+            let property = PlanError::PropertyFunction(error.clone());
+            let aggregate = PlanError::Aggregate(error.clone());
             assert_eq!(Some(property.diagnostic_code()), error.code());
             assert_eq!(Some(aggregate.diagnostic_code()), error.code());
         }
         assert_eq!(
-            PlanError::property_function(EvalError::function("wrong arity")).diagnostic_code(),
+            PlanError::PropertyFunction(EvalError::function("wrong arity")).diagnostic_code(),
             "native-sparql-property-function"
         );
         assert_eq!(
-            PlanError::aggregate(EvalError::function("missing registration")).diagnostic_code(),
+            PlanError::Aggregate(EvalError::function("missing registration")).diagnostic_code(),
             "native-sparql-aggregate-function"
         );
     }
@@ -155,7 +187,7 @@ mod diagnostic_code_tests {
     #[test]
     fn a_borrowed_dataset_code_becomes_an_owned_diagnostic() {
         let diagnostic = {
-            let error = PlanError::property_function(EvalError::Dataset(RdfDiagnostic::error(
+            let error = PlanError::PropertyFunction(EvalError::Dataset(RdfDiagnostic::error(
                 String::from("caller-storage-failed"),
                 "source refused",
             )));
@@ -168,11 +200,19 @@ mod diagnostic_code_tests {
 /// Native preparation preserves the seam, operational cause and physical refusal.
 #[derive(Debug)]
 pub(crate) enum PreparationError {
-    Plan(PlanError),
+    PropertyFunction(EvalError),
+    Aggregate(EvalError),
     Evaluation(EvalError),
     Storage(StorageError),
 }
-purrdf_lex::variant_from!(PreparationError { Plan(PlanError) });
+impl From<PlanError> for PreparationError {
+    fn from(error: PlanError) -> Self {
+        match error {
+            PlanError::PropertyFunction(error) => Self::PropertyFunction(error),
+            PlanError::Aggregate(error) => Self::Aggregate(error),
+        }
+    }
+}
 purrdf_lex::variant_from!(PreparationError { Evaluation(EvalError) });
 purrdf_lex::variant_from!(PreparationError { Storage(StorageError) });
 pub(crate) type PrepResult<T> = Result<T, PreparationError>;
@@ -189,10 +229,11 @@ impl PreparationError {
                     .storage_error(error, "query preparation"),
             ),
             Self::Evaluation(error) => crate::engine::EvaluationFailure::Evaluation(error),
-            Self::Plan(error) => {
+            plan @ (Self::PropertyFunction(_) | Self::Aggregate(_)) => {
                 if let Some(cause) = memory.admission_mut().take_failure() {
                     return crate::engine::EvaluationFailure::Evaluation(cause);
                 }
+                let error = plan.into_plan(memory);
                 crate::engine::EvaluationFailure::native_diagnostic(
                     error.diagnostic_code(),
                     &error,
@@ -203,9 +244,10 @@ impl PreparationError {
     }
     fn into_plan(self, memory: &mut Memory<'_, LexicalFrame>) -> PlanError {
         match self {
-            Self::Plan(error) => error,
-            Self::Evaluation(error) => PlanError::property_function(error),
-            Self::Storage(error) => PlanError::property_function(
+            Self::PropertyFunction(error) => PlanError::PropertyFunction(error),
+            Self::Aggregate(error) => PlanError::Aggregate(error),
+            Self::Evaluation(error) => PlanError::PropertyFunction(error),
+            Self::Storage(error) => PlanError::PropertyFunction(
                 memory
                     .admission_mut()
                     .storage_error(error, "query preparation"),
@@ -224,7 +266,7 @@ fn plan_message(
         message,
         workspace,
     );
-    PlanError { seam, error }
+    PlanError::new(seam, error)
 }
 
 /// The promised-parameter set [`plan_query`] and [`plan_where_pattern`] take, built
@@ -385,7 +427,7 @@ pub(crate) fn plan_where_pattern(
     let mut frame = LexicalFrame::new(&workspace);
     let mut memory = Memory::new(&mut frame);
     let promised = VarSchema::from_vars_admitted(parameters.iter().cloned(), &workspace)
-        .map_err(PlanError::property_function)?;
+        .map_err(PlanError::PropertyFunction)?;
     plan_where_pattern_native(
         pattern,
         relations,
@@ -577,11 +619,11 @@ fn plan_pattern(
     let mut frame = LexicalFrame::new(&workspace);
     let mut memory = Memory::new(&mut frame);
     let outer = VarSchema::from_vars_admitted(outer.iter().cloned(), &workspace)
-        .map_err(PlanError::property_function)?;
+        .map_err(PlanError::PropertyFunction)?;
     let promised = match promise.for_calls() {
         None => VarSchema::default(),
         Some(values) => VarSchema::from_vars_admitted(values.iter().cloned(), &workspace)
-            .map_err(PlanError::property_function)?,
+            .map_err(PlanError::PropertyFunction)?,
     };
     plan_pattern_native(
         pattern,
@@ -1138,7 +1180,7 @@ fn admitted_row_bound_native(
         || relation.arity(),
         &workspace,
     )
-    .map_err(PlanError::property_function)?;
+    .map_err(PlanError::PropertyFunction)?;
     check_arity_native(call, arity, &workspace)?;
     let mode = invocation_mode_with_memory(call, bound, memory)?;
     let admitted = crate::contain::declaration_contained_admitted(
@@ -1153,7 +1195,7 @@ fn admitted_row_bound_native(
         },
         &workspace,
     )
-    .map_err(PlanError::property_function)?;
+    .map_err(PlanError::PropertyFunction)?;
     if !admitted {
         return Ok(None);
     }
@@ -1164,7 +1206,7 @@ fn admitted_row_bound_native(
         || relation.rows_per_invocation(mode),
         &workspace,
     )
-    .map_err(PlanError::property_function)?;
+    .map_err(PlanError::PropertyFunction)?;
     Ok(Some(rows))
 }
 
@@ -1701,7 +1743,8 @@ impl<'a> Planner<'a, '_, '_, '_> {
             // for exactly the projected variables — so the correlation set is narrowed
             // to them on the way in. A prepared execution's parameters are written past
             // the projection, so the promise passes unchanged.
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = node.projected_names().expect("projection names");
                 let narrowed =
                     narrowed_to_admitted(scope.get(&self.scopes), variables, &self.workspace)?;
                 let narrowed = self.own(narrowed)?;
@@ -1864,7 +1907,7 @@ impl<'a> Planner<'a, '_, '_, '_> {
                 || custom.arity(),
                 &self.workspace,
             )
-            .map_err(PlanError::aggregate)?;
+            .map_err(PlanError::Aggregate)?;
             let supplied = aggregate.args().len();
             if !declared.accepts(supplied) {
                 return Err(plan_message(PlanSeam::Aggregate, format_args!(
@@ -1878,14 +1921,14 @@ impl<'a> Planner<'a, '_, '_, '_> {
                 || custom.scalarvals(),
                 &self.workspace,
             )
-            .map_err(PlanError::aggregate)?;
+            .map_err(PlanError::Aggregate)?;
             validate_scalarvals_native(
                 iri_str,
                 aggregate.scalarvals(),
                 declared_scalarvals,
                 &self.workspace,
             )
-            .map_err(PlanError::aggregate)?;
+            .map_err(PlanError::Aggregate)?;
         }
         self.steps
             .push(Step::Assemble(Assemble::Aggregate(aggregate)))?;
@@ -2111,6 +2154,10 @@ impl<'a> Planner<'a, '_, '_, '_> {
             GraphPattern::Project { variables, .. } => GraphPattern::Project {
                 inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
                 variables: self.memory.collect(variables.iter().cloned())?,
+            },
+            GraphPattern::ProjectStar { variables, .. } => GraphPattern::ProjectStar {
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+                variables: variables.clone(),
             },
             GraphPattern::Distinct { .. } => GraphPattern::Distinct {
                 inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
@@ -2777,7 +2824,9 @@ pub(crate) fn collect_bound_admitted(
                     // The context reaches a sub-`SELECT`'s inner pattern only through the
                     // variables the projection names; what the SHACL pre-binding rewrite
                     // writes is written past the projection too.
-                    GraphPattern::Project { inner, variables } => {
+                    GraphPattern::Project { inner, .. }
+                    | GraphPattern::ProjectStar { inner, .. } => {
+                        let variables = node.projected_names().expect("projection names");
                         let narrowed = narrowed_to_admitted(
                             resolve(ctx, context, &arena),
                             variables,
@@ -2955,7 +3004,8 @@ pub(crate) fn collect_bound_admitted(
                     }
                     // Only what the projection keeps escapes, and only if the inner
                     // pattern bound it certainly.
-                    GraphPattern::Project { variables, .. } => {
+                    GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                        let variables = node.projected_names().expect("projection names");
                         let inner_bound = values.pop().expect("the inner pattern is bound");
                         VarSchema::from_vars_admitted(
                             variables
@@ -3098,7 +3148,10 @@ fn aggregate_certainly_binds_admitted(
 /// pattern: an enclosing binding is substituted into it only for a variable it
 /// projects.
 #[cfg(test)]
-fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
+fn narrowed_to(
+    context: &DetHashSet<Variable>,
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
+) -> DetHashSet<Variable> {
     let workspace = WorkspaceCapability::default();
     let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
         .expect("resident projected certainty context");
@@ -3112,7 +3165,7 @@ fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHas
 
 fn narrowed_to_admitted(
     context: &VarSchema,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     workspace: &WorkspaceCapability,
 ) -> Result<VarSchema, EvalError> {
     VarSchema::from_vars_admitted(
@@ -3130,7 +3183,11 @@ fn intersection_admitted(
     right: &VarSchema,
     workspace: &WorkspaceCapability,
 ) -> Result<VarSchema, EvalError> {
-    narrowed_to_admitted(left, right.vars(), workspace)
+    narrowed_to_admitted(
+        left,
+        purrdf_sparql_algebra::ProjectionNames::Explicit(right.vars()),
+        workspace,
+    )
 }
 
 /// Whether `expr` can be left without a value only by the data it reads — never
@@ -4812,6 +4869,7 @@ mod pushdown_reach_tests {
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -4838,7 +4896,8 @@ mod pushdown_reach_tests {
             }
         }
         fn strip(pattern: &mut GraphPattern) -> usize {
-            if let GraphPattern::Project { inner, .. } = pattern
+            if let GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } =
+                pattern
                 && over_group(inner)
             {
                 let inner = std::mem::replace(
@@ -4863,6 +4922,7 @@ mod pushdown_reach_tests {
                 | GraphPattern::Unfold { inner, .. }
                 | GraphPattern::OrderBy { inner, .. }
                 | GraphPattern::Project { inner, .. }
+                | GraphPattern::ProjectStar { inner, .. }
                 | GraphPattern::Distinct { inner }
                 | GraphPattern::Reduced { inner }
                 | GraphPattern::Slice { inner, .. }
@@ -5623,7 +5683,25 @@ mod iterative_walk_tests {
             // restricting the inner rows restricts the output the same way. A parameter it
             // does not project is a different variable inside, and nothing is promised for it.
             GraphPattern::Project { inner, variables } => GraphPattern::Project {
-                inner: recurse(inner, &narrowed_to(outer, variables), promise)?,
+                inner: recurse(
+                    inner,
+                    &narrowed_to(
+                        outer,
+                        purrdf_sparql_algebra::ProjectionNames::Explicit(variables),
+                    ),
+                    promise,
+                )?,
+                variables: variables.clone(),
+            },
+            GraphPattern::ProjectStar { inner, variables } => GraphPattern::ProjectStar {
+                inner: recurse(
+                    inner,
+                    &narrowed_to(
+                        outer,
+                        purrdf_sparql_algebra::ProjectionNames::Star(variables),
+                    ),
+                    promise,
+                )?,
                 variables: variables.clone(),
             },
             // Row-for-row wrappers the pushdown enters beneath the core as well as above it.
@@ -5791,23 +5869,23 @@ mod iterative_walk_tests {
         if let AggregateFunction::Custom(iri) = aggregate.function() {
             let iri_str = iri.as_str();
             let Some(custom) = agg_registry.resolve(iri_str) else {
-                return Err(PlanError::aggregate(EvalError::function(format!(
+                return Err(PlanError::Aggregate(EvalError::function(format!(
                     "no custom aggregate is registered for <{iri_str}>"
                 ))));
             };
             let declared = crate::agg_fn::arity_contained(custom.as_ref(), iri_str)
-                .map_err(PlanError::aggregate)?;
+                .map_err(PlanError::Aggregate)?;
             let supplied = aggregate.args().len();
             if !declared.accepts(supplied) {
-                return Err(PlanError::aggregate(EvalError::function(format!(
+                return Err(PlanError::Aggregate(EvalError::function(format!(
                     "custom aggregate <{iri_str}> is declared with {declared} argument(s); the call \
                      site supplies {supplied}"
                 ))));
             }
             let declared_scalarvals = crate::agg_fn::scalarvals_contained(custom.as_ref(), iri_str)
-                .map_err(PlanError::aggregate)?;
+                .map_err(PlanError::Aggregate)?;
             validate_scalarvals(iri_str, aggregate.scalarvals(), &declared_scalarvals)
-                .map_err(PlanError::aggregate)?;
+                .map_err(PlanError::Aggregate)?;
         }
         let args = aggregate
             .args()
@@ -6003,7 +6081,8 @@ mod iterative_walk_tests {
             // it certainly. The context reaches the inner pattern only through the
             // variables the projection names; what the SHACL pre-binding rewrite writes is
             // written past the projection too.
-            GraphPattern::Project { inner, variables } => {
+            GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
+                let variables = pattern.projected_names().expect("projection names");
                 let inner_context = narrowed_to(context, variables);
                 let mut inner_bound = DetHashSet::default();
                 reference_collect_bound(inner, &inner_context, written, &mut inner_bound);
@@ -6898,7 +6977,7 @@ mod iterative_walk_tests {
                 "seed {seed}, {promise:?}: the planner and its reference rebuild the same plan"
             ),
             (Err(planned), Err(reference)) => {
-                assert_eq!(planned.seam, reference.seam, "seed {seed}, {promise:?}");
+                assert_eq!(planned.seam(), reference.seam(), "seed {seed}, {promise:?}");
                 assert_eq!(
                     planned.to_string(),
                     reference.to_string(),

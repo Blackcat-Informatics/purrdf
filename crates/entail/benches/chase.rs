@@ -39,14 +39,14 @@ const EX: &str = "http://example.org/";
 /// `C{i} subClassOf C{i+1}` for i in 0..n, plus `x{i} a C{i}`.
 fn hierarchy(n: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let sco = b.intern_iri(SUBCLASSOF);
-    let ty = b.intern_iri(TYPE);
+    let sco = b.intern_iri(SUBCLASSOF).unwrap();
+    let ty = b.intern_iri(TYPE).unwrap();
     for i in 0..n {
-        let ci = b.intern_iri(&format!("{EX}C{i}"));
-        let cj = b.intern_iri(&format!("{EX}C{}", i + 1));
-        b.push_quad(ci, sco, cj, None);
-        let xi = b.intern_iri(&format!("{EX}x{i}"));
-        b.push_quad(xi, ty, ci, None);
+        let ci = b.intern_iri(&format!("{EX}C{i}")).unwrap();
+        let cj = b.intern_iri(&format!("{EX}C{}", i + 1)).unwrap();
+        b.push_quad(ci, sco, cj, None).unwrap();
+        let xi = b.intern_iri(&format!("{EX}x{i}")).unwrap();
+        b.push_quad(xi, ty, ci, None).unwrap();
     }
     b.freeze().expect("freeze")
 }
@@ -60,18 +60,18 @@ fn hierarchy(n: usize) -> Arc<RdfDataset> {
 /// comparable.
 fn dataset_hierarchy(n: usize, graphs: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let sco = b.intern_iri(SUBCLASSOF);
-    let ty = b.intern_iri(TYPE);
+    let sco = b.intern_iri(SUBCLASSOF).unwrap();
+    let ty = b.intern_iri(TYPE).unwrap();
     let names: Vec<_> = (0..graphs)
-        .map(|g| b.intern_iri(&format!("{EX}g{g}")))
+        .map(|g| b.intern_iri(&format!("{EX}g{g}")).unwrap())
         .collect();
     for i in 0..n {
-        let ci = b.intern_iri(&format!("{EX}C{i}"));
-        let cj = b.intern_iri(&format!("{EX}C{}", i + 1));
-        b.push_quad(ci, sco, cj, None);
-        let xi = b.intern_iri(&format!("{EX}x{i}"));
+        let ci = b.intern_iri(&format!("{EX}C{i}")).unwrap();
+        let cj = b.intern_iri(&format!("{EX}C{}", i + 1)).unwrap();
+        b.push_quad(ci, sco, cj, None).unwrap();
+        let xi = b.intern_iri(&format!("{EX}x{i}")).unwrap();
         let g = names.get(i % graphs.max(1)).copied();
-        b.push_quad(xi, ty, ci, g);
+        b.push_quad(xi, ty, ci, g).unwrap();
     }
     b.freeze().expect("freeze")
 }

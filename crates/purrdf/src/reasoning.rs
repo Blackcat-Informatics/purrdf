@@ -480,7 +480,7 @@ pub fn query_with_entailment<D: DatasetView>(
         .transpose()?;
     let plan = restricted.as_ref().unwrap_or(&prepared_query);
     let mut result = engine.query_prepared(&prepared, plan, request.substitutions, options)?;
-    let _ = withhold_surrogate_triples(&mut result, &surrogates);
+    withhold_surrogate_triples(&mut result, &surrogates)?;
     Ok((result, report))
 }
 
@@ -1072,7 +1072,7 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
         governors,
     )?;
     Ok(GovernedEntailment::Answered {
-        outcome: withhold_surrogates_from_outcome(outcome, &surrogates),
+        outcome: withhold_surrogates_from_outcome(outcome, &surrogates)?,
         report,
     })
 }
@@ -1084,17 +1084,17 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
 fn withhold_surrogates_from_outcome(
     outcome: GovernedOutcome,
     surrogates: &BTreeSet<String>,
-) -> GovernedOutcome {
+) -> Result<GovernedOutcome, RdfDiagnostic> {
     if surrogates.is_empty() {
-        return outcome;
+        return Ok(outcome);
     }
-    match outcome {
+    Ok(match outcome {
         GovernedOutcome::Complete {
             mut result,
             evidence,
             relations,
         } => {
-            withhold_surrogate_triples(&mut result, surrogates);
+            withhold_surrogate_triples(&mut result, surrogates)?;
             GovernedOutcome::Complete {
                 result,
                 evidence,
@@ -1105,11 +1105,11 @@ fn withhold_surrogates_from_outcome(
             GovernedOutcome::BudgetExhausted(BudgetExhausted {
                 partial: exhausted
                     .partial
-                    .withholding_blank_nodes(|label| label_is_surrogate(label, surrogates)),
+                    .withholding_blank_nodes(|label| label_is_surrogate(label, surrogates))?,
                 ..exhausted
             })
         }
-    }
+    })
 }
 
 /// The query's OBSERVABLE variable names — the ones whose binding a caller can read off, or
@@ -1190,8 +1190,15 @@ fn observable_variables(query: &Query) -> BTreeSet<String> {
 fn find_projection(mut pattern: &GraphPattern) -> Option<BTreeSet<String>> {
     loop {
         match pattern {
-            GraphPattern::Project { variables, .. } => {
-                return Some(variables.iter().map(|v| v.as_str().to_owned()).collect());
+            GraphPattern::Project { .. } | GraphPattern::ProjectStar { .. } => {
+                return Some(
+                    pattern
+                        .projected_names()
+                        .expect("projection names")
+                        .iter()
+                        .map(|v| v.as_str().to_owned())
+                        .collect(),
+                );
             }
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Graph { inner, .. }
@@ -1273,6 +1280,7 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
             | GraphPattern::Service { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. } => pending.push(inner),
@@ -1364,6 +1372,10 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
                 if let GraphPattern::Project { inner, .. } = pattern {
                     pending.push(inner);
                 }
+            }
+            GraphPattern::ProjectStar { inner, variables } => {
+                names.extend(variables.iter().map(|v| v.as_str().to_owned()));
+                pending.push(inner);
             }
             GraphPattern::Join { left, right }
             | GraphPattern::Minus { left, right }
@@ -1622,6 +1634,10 @@ fn restrict_pattern(
             inner: recurse(inner),
             variables: variables.clone(),
         },
+        GraphPattern::ProjectStar { inner, variables } => GraphPattern::ProjectStar {
+            inner: recurse(inner),
+            variables: variables.clone(),
+        },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
             inner: recurse(inner),
         },
@@ -1690,12 +1706,15 @@ fn exclude_witnesses<'a>(
 /// The graph is rebuilt only if a witness is actually present, so the ordinary case pays
 /// nothing and the RDF 1.2 statement-layer overlay of an untouched result is carried through
 /// by identity rather than by a copy.
-fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<String>) -> bool {
+fn withhold_surrogate_triples(
+    result: &mut SparqlResult,
+    surrogates: &BTreeSet<String>,
+) -> Result<bool, RdfDiagnostic> {
     if surrogates.is_empty() {
-        return false;
+        return Ok(false);
     }
     let SparqlResult::Graph(graph) = result else {
-        return false;
+        return Ok(false);
     };
     let mentions = |term: &RdfTerm| term_mentions_surrogate(term, surrogates);
     let quad_offends = |quad: &RdfQuad| {
@@ -1718,35 +1737,32 @@ fn withhold_surrogate_triples(result: &mut SparqlResult, surrogates: &BTreeSet<S
         || graph.owned_reifiers().any(|r| reifier_offends(&r))
         || graph.owned_annotations().any(|a| annotation_offends(&a));
     if !offends {
-        return false;
+        return Ok(false);
     }
     let mut builder = RdfDatasetBuilder::new();
     for quad in graph.owned_quads() {
         if !quad_offends(&quad) {
-            builder.push_owned_quad(&quad);
+            builder.push_owned_quad(&quad)?;
         }
     }
     for reifier in graph.owned_reifiers() {
         if !reifier_offends(&reifier) {
-            builder.push_owned_reifier(&reifier);
+            builder.push_owned_reifier(&reifier)?;
         }
     }
     for annotation in graph.owned_annotations() {
         if !annotation_offends(&annotation) {
-            builder.push_owned_annotation(&annotation);
+            builder.push_owned_annotation(&annotation)?;
         }
     }
     for name in graph.owned_named_graphs() {
         if !mentions(&name) {
-            let id = builder.intern_owned_term(&name);
-            builder.declare_named_graph(id);
+            let id = builder.intern_owned_term(&name)?;
+            builder.declare_named_graph(id)?;
         }
     }
-    *graph = builder
-        .freeze()
-        .expect("a subset of an already-frozen dataset's quads is itself a valid dataset")
-        .into();
-    true
+    *graph = builder.freeze()?.into();
+    Ok(true)
 }
 
 /// Whether an owned-model blank label denotes a chase-minted witness.
@@ -1851,6 +1867,7 @@ fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
             | GraphPattern::Service { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -2126,13 +2143,13 @@ mod tests {
 
     fn hierarchy() -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let cat = builder.intern_iri("https://example.org/Cat");
-        let animal = builder.intern_iri("https://example.org/Animal");
-        let mittens = builder.intern_iri("https://example.org/mittens");
-        let rdf_type = builder.intern_iri(RDF_TYPE);
-        let subclass = builder.intern_iri(RDFS_SUBCLASS);
-        builder.push_quad(cat, subclass, animal, None);
-        builder.push_quad(mittens, rdf_type, cat, None);
+        let cat = builder.intern_iri("https://example.org/Cat").unwrap();
+        let animal = builder.intern_iri("https://example.org/Animal").unwrap();
+        let mittens = builder.intern_iri("https://example.org/mittens").unwrap();
+        let rdf_type = builder.intern_iri(RDF_TYPE).unwrap();
+        let subclass = builder.intern_iri(RDFS_SUBCLASS).unwrap();
+        builder.push_quad(cat, subclass, animal, None).unwrap();
+        builder.push_quad(mittens, rdf_type, cat, None).unwrap();
         builder.freeze().unwrap()
     }
 
@@ -2431,24 +2448,26 @@ mod tests {
     /// element is.
     fn some_values_from_ontology() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE);
-        let class = b.intern_iri(OWL_CLASS);
-        let subclass_of = b.intern_iri(RDFS_SUBCLASS);
-        let a = b.intern_iri(&format!("{COMBINED_NS}A"));
-        let big_b = b.intern_iri(&format!("{COMBINED_NS}B"));
-        let r = b.intern_iri(&format!("{COMBINED_NS}r"));
-        let little_a = b.intern_iri(&format!("{COMBINED_NS}a"));
-        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
-        let restriction_class = b.intern_iri(OWL_RESTRICTION);
-        let on_property = b.intern_iri(OWL_ON_PROPERTY);
-        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM);
-        b.push_quad(a, ty, class, None);
-        b.push_quad(big_b, ty, class, None);
-        b.push_quad(restriction, ty, restriction_class, None);
-        b.push_quad(restriction, on_property, r, None);
-        b.push_quad(restriction, some_values_from, big_b, None);
-        b.push_quad(a, subclass_of, restriction, None);
-        b.push_quad(little_a, ty, a, None);
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let subclass_of = b.intern_iri(RDFS_SUBCLASS).unwrap();
+        let a = b.intern_iri(&format!("{COMBINED_NS}A")).unwrap();
+        let big_b = b.intern_iri(&format!("{COMBINED_NS}B")).unwrap();
+        let r = b.intern_iri(&format!("{COMBINED_NS}r")).unwrap();
+        let little_a = b.intern_iri(&format!("{COMBINED_NS}a")).unwrap();
+        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
+        let restriction_class = b.intern_iri(OWL_RESTRICTION).unwrap();
+        let on_property = b.intern_iri(OWL_ON_PROPERTY).unwrap();
+        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM).unwrap();
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(big_b, ty, class, None).unwrap();
+        b.push_quad(restriction, ty, restriction_class, None)
+            .unwrap();
+        b.push_quad(restriction, on_property, r, None).unwrap();
+        b.push_quad(restriction, some_values_from, big_b, None)
+            .unwrap();
+        b.push_quad(a, subclass_of, restriction, None).unwrap();
+        b.push_quad(little_a, ty, a, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -2533,16 +2552,18 @@ mod tests {
     #[test]
     fn an_ontology_outside_the_horn_fragment_still_uses_the_whole_vocabulary_augmentation() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE);
-        let class = b.intern_iri(OWL_CLASS);
-        let equiv = b.intern_iri("http://www.w3.org/2002/07/owl#equivalentClass");
-        let a = b.intern_iri(&format!("{COMBINED_NS}A"));
-        let big_b = b.intern_iri(&format!("{COMBINED_NS}B"));
-        let little_a = b.intern_iri(&format!("{COMBINED_NS}a"));
-        b.push_quad(a, ty, class, None);
-        b.push_quad(big_b, ty, class, None);
-        b.push_quad(a, equiv, big_b, None);
-        b.push_quad(little_a, ty, a, None);
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let equiv = b
+            .intern_iri("http://www.w3.org/2002/07/owl#equivalentClass")
+            .unwrap();
+        let a = b.intern_iri(&format!("{COMBINED_NS}A")).unwrap();
+        let big_b = b.intern_iri(&format!("{COMBINED_NS}B")).unwrap();
+        let little_a = b.intern_iri(&format!("{COMBINED_NS}a")).unwrap();
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(big_b, ty, class, None).unwrap();
+        b.push_quad(a, equiv, big_b, None).unwrap();
+        b.push_quad(little_a, ty, a, None).unwrap();
         let dataset = b.freeze().expect("freeze");
 
         let query = format!("ASK {{ <{COMBINED_NS}a> a <{COMBINED_NS}B> }}");
@@ -2573,28 +2594,30 @@ mod tests {
     /// under both lanes, and a superset property over two empty sets proves nothing.
     fn combined_corpus_ontology() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE);
-        let class = b.intern_iri(OWL_CLASS);
-        let subclass_of = b.intern_iri(RDFS_SUBCLASS);
-        let a = b.intern_iri(&format!("{COMBINED_NS}A"));
-        let big_b = b.intern_iri(&format!("{COMBINED_NS}B"));
-        let r = b.intern_iri(&format!("{COMBINED_NS}r"));
-        let s = b.intern_iri(&format!("{COMBINED_NS}s"));
-        let little_a = b.intern_iri(&format!("{COMBINED_NS}a"));
-        let little_c = b.intern_iri(&format!("{COMBINED_NS}c"));
-        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
-        let restriction_class = b.intern_iri(OWL_RESTRICTION);
-        let on_property = b.intern_iri(OWL_ON_PROPERTY);
-        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM);
-        b.push_quad(a, ty, class, None);
-        b.push_quad(big_b, ty, class, None);
-        b.push_quad(restriction, ty, restriction_class, None);
-        b.push_quad(restriction, on_property, r, None);
-        b.push_quad(restriction, some_values_from, big_b, None);
-        b.push_quad(a, subclass_of, restriction, None);
-        b.push_quad(little_a, ty, a, None);
-        b.push_quad(little_c, ty, big_b, None);
-        b.push_quad(little_a, s, little_c, None);
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let subclass_of = b.intern_iri(RDFS_SUBCLASS).unwrap();
+        let a = b.intern_iri(&format!("{COMBINED_NS}A")).unwrap();
+        let big_b = b.intern_iri(&format!("{COMBINED_NS}B")).unwrap();
+        let r = b.intern_iri(&format!("{COMBINED_NS}r")).unwrap();
+        let s = b.intern_iri(&format!("{COMBINED_NS}s")).unwrap();
+        let little_a = b.intern_iri(&format!("{COMBINED_NS}a")).unwrap();
+        let little_c = b.intern_iri(&format!("{COMBINED_NS}c")).unwrap();
+        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT).unwrap();
+        let restriction_class = b.intern_iri(OWL_RESTRICTION).unwrap();
+        let on_property = b.intern_iri(OWL_ON_PROPERTY).unwrap();
+        let some_values_from = b.intern_iri(OWL_SOME_VALUES_FROM).unwrap();
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(big_b, ty, class, None).unwrap();
+        b.push_quad(restriction, ty, restriction_class, None)
+            .unwrap();
+        b.push_quad(restriction, on_property, r, None).unwrap();
+        b.push_quad(restriction, some_values_from, big_b, None)
+            .unwrap();
+        b.push_quad(a, subclass_of, restriction, None).unwrap();
+        b.push_quad(little_a, ty, a, None).unwrap();
+        b.push_quad(little_c, ty, big_b, None).unwrap();
+        b.push_quad(little_a, s, little_c, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -2898,16 +2921,16 @@ mod tests {
     #[test]
     fn a_disqualified_ontology_reports_the_non_horn_tbox_boundary() {
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri(RDF_TYPE);
-        let class = b.intern_iri(OWL_CLASS);
-        let equiv = b.intern_iri(OWL_EQUIVALENT_CLASS);
-        let a = b.intern_iri(&format!("{COMBINED_NS}A"));
-        let big_b = b.intern_iri(&format!("{COMBINED_NS}B"));
-        let little_a = b.intern_iri(&format!("{COMBINED_NS}a"));
-        b.push_quad(a, ty, class, None);
-        b.push_quad(big_b, ty, class, None);
-        b.push_quad(a, equiv, big_b, None);
-        b.push_quad(little_a, ty, a, None);
+        let ty = b.intern_iri(RDF_TYPE).unwrap();
+        let class = b.intern_iri(OWL_CLASS).unwrap();
+        let equiv = b.intern_iri(OWL_EQUIVALENT_CLASS).unwrap();
+        let a = b.intern_iri(&format!("{COMBINED_NS}A")).unwrap();
+        let big_b = b.intern_iri(&format!("{COMBINED_NS}B")).unwrap();
+        let little_a = b.intern_iri(&format!("{COMBINED_NS}a")).unwrap();
+        b.push_quad(a, ty, class, None).unwrap();
+        b.push_quad(big_b, ty, class, None).unwrap();
+        b.push_quad(a, equiv, big_b, None).unwrap();
+        b.push_quad(little_a, ty, a, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = format!("ASK {{ <{COMBINED_NS}a> a <{COMBINED_NS}B> }}");
@@ -2953,13 +2976,13 @@ mod tests {
     #[test]
     fn the_sub_property_certain_answer_arrives_through_the_fallback() {
         let mut b = RdfDatasetBuilder::new();
-        let r = b.intern_iri(&format!("{COMBINED_NS}r"));
-        let q = b.intern_iri(&format!("{COMBINED_NS}q"));
-        let sub_property = b.intern_iri(RDFS_SUBPROPERTY);
-        let little_a = b.intern_iri(&format!("{COMBINED_NS}a"));
-        let little_b = b.intern_iri(&format!("{COMBINED_NS}b"));
-        b.push_quad(r, sub_property, q, None);
-        b.push_quad(little_a, r, little_b, None);
+        let r = b.intern_iri(&format!("{COMBINED_NS}r")).unwrap();
+        let q = b.intern_iri(&format!("{COMBINED_NS}q")).unwrap();
+        let sub_property = b.intern_iri(RDFS_SUBPROPERTY).unwrap();
+        let little_a = b.intern_iri(&format!("{COMBINED_NS}a")).unwrap();
+        let little_b = b.intern_iri(&format!("{COMBINED_NS}b")).unwrap();
+        b.push_quad(r, sub_property, q, None).unwrap();
+        b.push_quad(little_a, r, little_b, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = format!("SELECT ?x WHERE {{ ?x <{COMBINED_NS}q> ?y }}");

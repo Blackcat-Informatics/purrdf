@@ -146,7 +146,7 @@ fn assert_error(value: &Value, class: &str, code: Option<&str>) {
 }
 
 fn check_record(record: &Value, class: &str, mode: Option<bool>) {
-    let remembered = mode == Some(true);
+    let remembered = mode != Some(false);
     assert_eq!(record["class"].as_str(), Some(class));
     assert_eq!(record["mode"], mode.map_or(Value::Null, Value::Bool));
     assert_eq!(record["initial"], names(&[], false));

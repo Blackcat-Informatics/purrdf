@@ -28,15 +28,17 @@ const EX: &str = "https://example.org/sha3#";
 /// recorded one.
 fn dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri(&format!("{EX}s"));
-    let message = b.intern_iri(&format!("{EX}message"));
-    let abc = b.intern_literal(RdfLiteral {
-        lexical_form: "abc".to_owned(),
-        datatype: Some("http://www.w3.org/2001/XMLSchema#string".to_owned()),
-        language: None,
-        direction: None,
-    });
-    b.push_quad(s, message, abc, None);
+    let s = b.intern_iri(&format!("{EX}s")).unwrap();
+    let message = b.intern_iri(&format!("{EX}message")).unwrap();
+    let abc = b
+        .intern_literal(RdfLiteral {
+            lexical_form: "abc".to_owned(),
+            datatype: Some("http://www.w3.org/2001/XMLSchema#string".to_owned()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    b.push_quad(s, message, abc, None).unwrap();
     b.freeze().expect("freeze the fixture")
 }
 

@@ -48,10 +48,10 @@ fn apply(
 
 fn repeated_cached_document_load_has_fresh_identities() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank("b0", BlankScope::DEFAULT);
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(s, p, o, None);
+    let s = b.intern_blank("b0", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let engine =
         NativeSparqlEngine::new().with_resolver(Arc::new(CachedDocument(b.freeze().unwrap())));
     for mode in MODES {
@@ -88,14 +88,14 @@ fn repeated_cached_document_load_has_fresh_identities() {
 fn annotation_copy(overlap: bool) {
     for mode in MODES {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s");
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_iri("https://example.org/o");
-        let g = b.intern_iri("https://example.org/source");
+        let s = b.intern_iri("https://example.org/s").unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b.intern_iri("https://example.org/o").unwrap();
+        let g = b.intern_iri("https://example.org/source").unwrap();
         if overlap {
-            b.push_quad(s, p, o, Some(g));
+            b.push_quad(s, p, o, Some(g)).unwrap();
         }
-        b.push_annotation_in_graph(s, p, o, Some(g));
+        b.push_annotation_in_graph(s, p, o, Some(g)).unwrap();
         let mut ds = b.freeze().unwrap();
         let engine = NativeSparqlEngine::new();
         apply(
@@ -139,18 +139,18 @@ fn request(query: &str) -> SparqlRequest<'_> {
 
 fn physical_source(graph: Option<&str>) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank("source", BlankScope(7));
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    let g = graph.map(|name| b.intern_iri(name));
-    b.push_quad(s, p, o, g);
-    b.push_annotation_in_graph(s, p, o, g);
-    let triple = b.intern_triple(s, p, o);
-    let reifier = b.intern_iri("https://example.org/r");
-    let reifies = b.intern_iri(purrdf_iri::vocab::rdf::REIFIES);
-    b.push_reifier_in_graph(reifier, triple, g);
+    let s = b.intern_blank("source", BlankScope(7)).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    let g = graph.map(|name| b.intern_iri(name).unwrap());
+    b.push_quad(s, p, o, g).unwrap();
+    b.push_annotation_in_graph(s, p, o, g).unwrap();
+    let triple = b.intern_triple(s, p, o).unwrap();
+    let reifier = b.intern_iri("https://example.org/r").unwrap();
+    let reifies = b.intern_iri(purrdf_iri::vocab::rdf::REIFIES).unwrap();
+    b.push_reifier_in_graph(reifier, triple, g).unwrap();
     // Exact ordinary role, even though its positions could denote a reifier.
-    b.push_quad(reifier, reifies, triple, g);
+    b.push_quad(reifier, reifies, triple, g).unwrap();
     b.freeze().unwrap()
 }
 
@@ -255,17 +255,17 @@ fn transfers_charge_physical_attempts_even_when_add_deduplicates() {
 fn load_freshens_scoped_bare_triple_and_nested_composite_identities_together() {
     use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let root = b.intern_iri("https://example.org/root");
-    let a = b.intern_blank("same", BlankScope(2));
-    let other = b.intern_blank("same", BlankScope(3));
-    let discarded = b.intern_blank("graph-only", BlankScope(4));
-    b.push_quad(a, p, other, Some(discarded));
-    let mut triple = b.intern_triple(a, p, other);
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let root = b.intern_iri("https://example.org/root").unwrap();
+    let a = b.intern_blank("same", BlankScope(2)).unwrap();
+    let other = b.intern_blank("same", BlankScope(3)).unwrap();
+    let discarded = b.intern_blank("graph-only", BlankScope(4)).unwrap();
+    b.push_quad(a, p, other, Some(discarded)).unwrap();
+    let mut triple = b.intern_triple(a, p, other).unwrap();
     for _ in 0..7 {
-        triple = b.intern_triple(a, p, triple);
+        triple = b.intern_triple(a, p, triple).unwrap();
     }
-    b.push_quad(root, p, triple, Some(discarded));
+    b.push_quad(root, p, triple, Some(discarded)).unwrap();
     let token = encode_blank_label("same", BlankScope(2), LabelAlphabet::BlankNodeLabel);
     for (datatype, lexical) in [
         (
@@ -279,11 +279,15 @@ fn load_freshens_scoped_bare_triple_and_nested_composite_identities_together() {
             format!("{{'key': _:{token}}}"),
         ),
     ] {
-        let literal = b.intern_literal(RdfLiteral::typed(lexical, datatype));
-        b.push_quad(a, p, literal, Some(discarded));
+        let literal = b
+            .intern_literal(RdfLiteral::typed(lexical, datatype))
+            .unwrap();
+        b.push_quad(a, p, literal, Some(discarded)).unwrap();
     }
-    let opaque = b.intern_literal(RdfLiteral::simple("_:same [untouched]"));
-    b.push_quad(root, p, opaque, Some(discarded));
+    let opaque = b
+        .intern_literal(RdfLiteral::simple("_:same [untouched]"))
+        .unwrap();
+    b.push_quad(root, p, opaque, Some(discarded)).unwrap();
     let source = b.freeze().unwrap();
     let original = purrdf_core::ir::import::record_values(source.as_ref()).unwrap();
     let engine =
@@ -354,10 +358,10 @@ fn load_freshens_scoped_bare_triple_and_nested_composite_identities_together() {
 
 fn load_shares_request_mints_with_data_templates_and_bnode() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank("b0", BlankScope::DEFAULT);
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(s, p, o, None);
+    let s = b.intern_blank("b0", BlankScope::DEFAULT).unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let engine =
         NativeSparqlEngine::new().with_resolver(Arc::new(CachedDocument(b.freeze().unwrap())));
     for mode in MODES {
@@ -382,20 +386,22 @@ fn load_shares_request_mints_with_data_templates_and_bnode() {
 fn check_collision_inventory(engine: &NativeSparqlEngine, mode: GraphExistenceMode) {
     for kind in 0..3 {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_iri("https://example.org/o");
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b.intern_iri("https://example.org/o").unwrap();
         if kind == 2 {
             // No bare blank term: the only identity is embedded in a CDT value.
-            let s = b.intern_iri("https://example.org/composite");
-            let literal = b.intern_literal(RdfLiteral::typed(
-                "[_:c1]",
-                "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List",
-            ));
-            b.push_quad(s, p, literal, None);
+            let s = b.intern_iri("https://example.org/composite").unwrap();
+            let literal = b
+                .intern_literal(RdfLiteral::typed(
+                    "[_:c1]",
+                    "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List",
+                ))
+                .unwrap();
+            b.push_quad(s, p, literal, None).unwrap();
         } else {
-            let blank = b.intern_blank("c1", BlankScope::DEFAULT);
+            let blank = b.intern_blank("c1", BlankScope::DEFAULT).unwrap();
             if kind == 1 {
-                b.push_quad(blank, p, o, None);
+                b.push_quad(blank, p, o, None).unwrap();
             }
         }
         let mut ds = b.freeze().unwrap();
@@ -414,26 +420,30 @@ fn check_collision_inventory(engine: &NativeSparqlEngine, mode: GraphExistenceMo
 
 fn load_avoids_unused_suppressed_and_composite_only_destination_blanks() {
     let mut document = RdfDatasetBuilder::new();
-    let blank = document.intern_blank("incoming", BlankScope::DEFAULT);
-    let p = document.intern_iri("https://example.org/p");
-    let o = document.intern_iri("https://example.org/o");
-    document.push_quad(blank, p, o, None);
+    let blank = document
+        .intern_blank("incoming", BlankScope::DEFAULT)
+        .unwrap();
+    let p = document.intern_iri("https://example.org/p").unwrap();
+    let o = document.intern_iri("https://example.org/o").unwrap();
+    document.push_quad(blank, p, o, None).unwrap();
     let engine = NativeSparqlEngine::new()
         .with_resolver(Arc::new(CachedDocument(document.freeze().unwrap())));
     for mode in MODES {
         check_collision_inventory(&engine, mode);
         let mut b = RdfDatasetBuilder::new();
-        b.intern_blank("chosen_c1", BlankScope::DEFAULT); // Unused dictionary identity.
-        let s = b.intern_blank("c1", BlankScope::DEFAULT);
-        let p = b.intern_iri("https://example.org/p");
-        let o = b.intern_iri("https://example.org/o");
-        b.push_quad(s, p, o, None);
-        let subject = b.intern_iri("https://example.org/composite");
-        let lit = b.intern_literal(RdfLiteral::typed(
-            "[_:c2]",
-            "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List",
-        ));
-        b.push_quad(subject, p, lit, None);
+        b.intern_blank("chosen_c1", BlankScope::DEFAULT).unwrap(); // Unused dictionary identity.
+        let s = b.intern_blank("c1", BlankScope::DEFAULT).unwrap();
+        let p = b.intern_iri("https://example.org/p").unwrap();
+        let o = b.intern_iri("https://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        let subject = b.intern_iri("https://example.org/composite").unwrap();
+        let lit = b
+            .intern_literal(RdfLiteral::typed(
+                "[_:c2]",
+                "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List",
+            ))
+            .unwrap();
+        b.push_quad(subject, p, lit, None).unwrap();
         let mut ds = b.freeze().unwrap();
         engine.update_with_options(&mut ds, request("DELETE WHERE { ?s <https://example.org/p> <https://example.org/o> }; LOAD <https://example.org/doc>"), QueryOptions::new().with_graph_existence(mode).with_bnode_mint_prefix(Some("chosen_"))).unwrap();
         let source = ds
@@ -514,11 +524,11 @@ fn load_preserves_physical_roles_and_charges_each_original_record() {
 
 fn load_charges_original_physical_records_when_destination_deduplicates() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("https://example.org/s");
-    let p = b.intern_iri("https://example.org/p");
-    let o = b.intern_iri("https://example.org/o");
-    b.push_quad(s, p, o, None);
-    b.push_annotation_in_graph(s, p, o, None);
+    let s = b.intern_iri("https://example.org/s").unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let o = b.intern_iri("https://example.org/o").unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    b.push_annotation_in_graph(s, p, o, None).unwrap();
     let engine =
         NativeSparqlEngine::new().with_resolver(Arc::new(CachedDocument(b.freeze().unwrap())));
     for mode in MODES {

@@ -1250,14 +1250,14 @@ mod serialize_to_format_tests {
     /// A star-free dataset: 1 default-graph quad + 1 named-graph quad.
     fn star_free_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri_value("https://example.org/s");
-        let p = b.intern_iri_value("https://example.org/p");
-        let o = b.intern_iri_value("https://example.org/o");
-        let g = b.intern_iri_value("https://example.org/g");
-        let s2 = b.intern_iri_value("https://example.org/s2");
-        let o2 = b.intern_iri_value("https://example.org/o2");
-        b.push_quad(s, p, o, None);
-        b.push_quad(s2, p, o2, Some(g));
+        let s = b.intern_iri_value("https://example.org/s").unwrap();
+        let p = b.intern_iri_value("https://example.org/p").unwrap();
+        let o = b.intern_iri_value("https://example.org/o").unwrap();
+        let g = b.intern_iri_value("https://example.org/g").unwrap();
+        let s2 = b.intern_iri_value("https://example.org/s2").unwrap();
+        let o2 = b.intern_iri_value("https://example.org/o2").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s2, p, o2, Some(g)).unwrap();
         b.freeze().expect("star_free_dataset freeze")
     }
 
@@ -1446,11 +1446,13 @@ mod build_residency {
         let mut builder = RdfDatasetBuilder::new();
         for i in 0..40_000 {
             let subject = builder
-                .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")));
-            let predicate = builder.intern_iri("https://example.org/predicate");
-            let object =
-                builder.intern_literal(RdfLiteral::simple(format!("value {i} padded out a bit")));
-            builder.push_quad(subject, predicate, object, None);
+                .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")))
+                .unwrap();
+            let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+            let object = builder
+                .intern_literal(RdfLiteral::simple(format!("value {i} padded out a bit")))
+                .unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
         }
         let dataset = builder.freeze().expect("dataset freezes");
 
@@ -1539,9 +1541,9 @@ mod term_walk_tests {
             );
             nested += usize::from(budget < 7);
             let mut builder = RdfDatasetBuilder::new();
-            let object = builder.intern_value(&value);
-            let holder = builder.intern_iri("http://example.org/holder");
-            builder.push_quad(holder, holder, object, None);
+            let object = builder.intern_value(&value).unwrap();
+            let holder = builder.intern_iri("http://example.org/holder").unwrap();
+            builder.push_quad(holder, holder, object, None).unwrap();
             let dataset = builder.freeze().expect("a generated term freezes");
             let object = dataset.quads().next().expect("one quad").o;
             let mut interned = SerGraphInterner::with_capacity(0, LabelAlphabet::BlankNodeLabel);

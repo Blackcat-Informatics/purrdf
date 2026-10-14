@@ -23,7 +23,7 @@ use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 /// The shapes graph `prefixes` + `shapes_ttl` reads as, or the load error's text.
 pub fn load(prefixes: &str, shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{prefixes}{shapes_ttl}"), None).map_err(String::from)
+    parse_shapes(&format!("{prefixes}{shapes_ttl}"), None).map_err(|error| error.to_string())
 }
 
 /// The shapes graph `prefixes` + `shapes_ttl` reads as; a load error fails the test.

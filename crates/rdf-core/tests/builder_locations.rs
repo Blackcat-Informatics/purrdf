@@ -13,14 +13,18 @@ fn assert_owned_duplicate_location(append_another_row: bool) {
         RdfTerm::iri("https://example.org/value"),
     );
     let location = RdfLocation::file("duplicate.ttl").with_line(7);
-    builder.push_owned_quad(&quad);
-    builder.push_owned_quad_scoped(&quad.with_location(location.clone()), BlankScope::DEFAULT);
+    builder.push_owned_quad(&quad).unwrap();
+    builder
+        .push_owned_quad_scoped(&quad.with_location(location.clone()), BlankScope::DEFAULT)
+        .unwrap();
     if append_another_row {
-        builder.push_owned_quad(&RdfQuad::new(
-            RdfTerm::iri("https://example.org/next"),
-            "https://example.org/p",
-            RdfTerm::iri("https://example.org/value"),
-        ));
+        builder
+            .push_owned_quad(&RdfQuad::new(
+                RdfTerm::iri("https://example.org/next"),
+                "https://example.org/p",
+                RdfTerm::iri("https://example.org/value"),
+            ))
+            .unwrap();
     }
     let graph = builder.freeze().expect("valid graph");
     assert_eq!(graph.quad_count(), if append_another_row { 2 } else { 1 });
@@ -51,15 +55,15 @@ fn owned_duplicate_location_does_not_move_to_the_next_row() {
 #[test]
 fn unrealized_location_handle_cannot_alias_a_later_row() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri("https://example.org/first");
-    let p = builder.intern_iri("https://example.org/p");
-    let o = builder.intern_iri("https://example.org/value");
-    builder.push_quad(s, p, o, None);
-    let stale = builder.next_quad_handle();
-    builder.push_quad(s, p, o, None);
+    let s = builder.intern_iri("https://example.org/first").unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
+    let o = builder.intern_iri("https://example.org/value").unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
+    let stale = builder.next_quad_handle().unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
     builder.attach_location(stale, RdfLocation::file("duplicate.ttl").with_line(7));
-    let next = builder.intern_iri("https://example.org/next");
-    builder.push_quad(next, p, o, None);
+    let next = builder.intern_iri("https://example.org/next").unwrap();
+    builder.push_quad(next, p, o, None).unwrap();
     let graph = builder.freeze().expect("valid graph");
     assert_eq!(graph.quad_count(), 2);
     assert!(graph.owned_quads().all(|quad| quad.location.is_none()));
@@ -68,13 +72,13 @@ fn unrealized_location_handle_cannot_alias_a_later_row() {
 #[test]
 fn returned_handles_follow_deduplicated_graph_qualified_rows() {
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri("https://example.org/s");
-    let p = builder.intern_iri("https://example.org/p");
-    let o = builder.intern_iri("https://example.org/value");
-    let g = builder.intern_iri("https://example.org/g");
-    let first = builder.push_quad_with_handle(s, p, o, None);
-    let duplicate = builder.push_quad_with_handle(s, p, o, None);
-    let named = builder.push_quad_with_handle(s, p, o, Some(g));
+    let s = builder.intern_iri("https://example.org/s").unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
+    let o = builder.intern_iri("https://example.org/value").unwrap();
+    let g = builder.intern_iri("https://example.org/g").unwrap();
+    let first = builder.push_quad_with_handle(s, p, o, None).unwrap();
+    let duplicate = builder.push_quad_with_handle(s, p, o, None).unwrap();
+    let named = builder.push_quad_with_handle(s, p, o, Some(g)).unwrap();
     assert_eq!(first, duplicate);
     assert_ne!(first, named);
     let default_location = RdfLocation::file("default.ttl").with_line(3);

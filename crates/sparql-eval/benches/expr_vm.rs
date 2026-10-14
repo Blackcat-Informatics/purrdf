@@ -58,19 +58,23 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// dependence.
 fn dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p_v = b.intern_iri(&format!("{EX}v"));
-    let p_name = b.intern_iri(&format!("{EX}name"));
-    let p_ref = b.intern_iri(&format!("{EX}ref"));
+    let p_v = b.intern_iri(&format!("{EX}v")).unwrap();
+    let p_name = b.intern_iri(&format!("{EX}name")).unwrap();
+    let p_ref = b.intern_iri(&format!("{EX}ref")).unwrap();
     let refs: Vec<_> = (0..100)
-        .map(|r| b.intern_iri(&format!("{EX}ref{r}")))
+        .map(|r| b.intern_iri(&format!("{EX}ref{r}")).unwrap())
         .collect();
     for i in 0..ROWS {
-        let s = b.intern_iri(&format!("{EX}s{i}"));
-        let v = b.intern_literal(RdfLiteral::typed((i % 1000).to_string(), XSD_INTEGER));
-        b.push_quad(s, p_v, v, None);
-        let name = b.intern_literal(RdfLiteral::simple(format!("Name{i}")));
-        b.push_quad(s, p_name, name, None);
-        b.push_quad(s, p_ref, refs[i % 100], None);
+        let s = b.intern_iri(&format!("{EX}s{i}")).unwrap();
+        let v = b
+            .intern_literal(RdfLiteral::typed((i % 1000).to_string(), XSD_INTEGER))
+            .unwrap();
+        b.push_quad(s, p_v, v, None).unwrap();
+        let name = b
+            .intern_literal(RdfLiteral::simple(format!("Name{i}")))
+            .unwrap();
+        b.push_quad(s, p_name, name, None).unwrap();
+        b.push_quad(s, p_ref, refs[i % 100], None).unwrap();
     }
     b.freeze().expect("freeze the expression dataset")
 }

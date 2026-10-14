@@ -894,6 +894,8 @@ function jobFailure(job, signal) {
       break;
   }
   error.code = code;
+  const diagnosticJson = job.errorDiagnosticJson;
+  if (diagnosticJson !== undefined) error.diagnostic = JSON.parse(diagnosticJson);
   const presentation = job.errorPresentation;
   if (presentation !== undefined) error.presentation = JSON.parse(presentation);
   error.evidence = evidence;

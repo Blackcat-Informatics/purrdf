@@ -48,11 +48,15 @@ impl Fixture {
     fn analyzed(rows: &[(String, String, Option<String>, bool)], analyzer: Analyzer) -> Self {
         let mut builder = RdfDatasetBuilder::new();
         for (subject, text, graph, other) in rows {
-            let s = builder.intern_iri(subject);
-            let p = builder.intern_iri(if *other { OTHER } else { NOTE });
-            let o = builder.intern_literal(RdfLiteral::simple(text));
-            let g = graph.as_ref().map(|graph| builder.intern_iri(graph));
-            builder.push_quad(s, p, o, g);
+            let s = builder.intern_iri(subject).unwrap();
+            let p = builder
+                .intern_iri(if *other { OTHER } else { NOTE })
+                .unwrap();
+            let o = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+            let g = graph
+                .as_ref()
+                .map(|graph| builder.intern_iri(graph).unwrap());
+            builder.push_quad(s, p, o, g).unwrap();
         }
         let dataset = builder.freeze().expect("valid original RDF fixture");
         Self::over(dataset, analyzer)
@@ -474,8 +478,10 @@ pub(crate) fn dictionary_projection_and_aliases() {
     let result = scoped.equal(&phrase_query(&["lana audley".into()]));
     assert_eq!(rows(&result).len(), 2);
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/multilingual");
-    let predicate = builder.intern_iri(NOTE);
+    let subject = builder
+        .intern_iri("https://example.org/multilingual")
+        .unwrap();
+    let predicate = builder.intern_iri(NOTE).unwrap();
     for (language, direction, text) in [
         ("EN", None, "lana audley"),
         ("fr", None, "lana stone"),
@@ -488,8 +494,8 @@ pub(crate) fn dictionary_projection_and_aliases() {
     ] {
         let mut literal = RdfLiteral::language_tagged(text, language);
         literal.direction = direction;
-        let object = builder.intern_literal(literal);
-        builder.push_quad(subject, predicate, object, None);
+        let object = builder.intern_literal(literal).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     let tagged = Fixture::over(builder.freeze().unwrap(), Analyzer::empty_lexicon());
     let query = phrase_query(&["lana audley".into(), "stone".into(), "中文".into()]);
@@ -651,18 +657,25 @@ pub(crate) fn positions(values: &[String]) -> Arc<RdfDataset> {
 fn positions_with_breakers(values: &[String], breakers: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for (at, value) in values.iter().enumerate() {
-        let s = builder.intern_iri(&format!("https://example.org/token/{at}"));
-        let p = builder.intern_iri(POS);
-        let o = builder.intern_literal(RdfLiteral::typed(value, purrdf_xsd::datatype::XSD_INTEGER));
-        builder.push_quad(s, p, o, None);
-        let p = builder.intern_iri(SEQUENCE);
-        let o = builder.intern_iri(&format!("https://example.org/sequence/{}", at % 2));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("https://example.org/token/{at}"))
+            .unwrap();
+        let p = builder.intern_iri(POS).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::typed(value, purrdf_xsd::datatype::XSD_INTEGER))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
+        let p = builder.intern_iri(SEQUENCE).unwrap();
+        let o = builder
+            .intern_iri(&format!("https://example.org/sequence/{}", at % 2))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
         if breakers && at % 3 == 1 {
-            let p = builder.intern_iri("https://example.org/breaker");
+            let p = builder.intern_iri("https://example.org/breaker").unwrap();
             let o = builder
-                .intern_literal(RdfLiteral::typed("true", purrdf_xsd::datatype::XSD_BOOLEAN));
-            builder.push_quad(s, p, o, None);
+                .intern_literal(RdfLiteral::typed("true", purrdf_xsd::datatype::XSD_BOOLEAN))
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
         }
     }
     builder.freeze().unwrap()
@@ -782,18 +795,24 @@ pub(crate) fn window_property() {
         previous = Some((measured.allocations, work.transitions));
     }
     let mut builder = RdfDatasetBuilder::new();
-    let sequence = builder.intern_iri("https://example.org/shared-sequence");
+    let sequence = builder
+        .intern_iri("https://example.org/shared-sequence")
+        .unwrap();
     for subject in ["https://example.org/multi-a", "https://example.org/multi-b"] {
-        let subject = builder.intern_iri(subject);
-        let predicate = builder.intern_iri(SEQUENCE);
-        builder.push_quad(subject, predicate, sequence, None);
+        let subject = builder.intern_iri(subject).unwrap();
+        let predicate = builder.intern_iri(SEQUENCE).unwrap();
+        builder
+            .push_quad(subject, predicate, sequence, None)
+            .unwrap();
         for lexical in ["0", "1", "invalid"] {
-            let predicate = builder.intern_iri(POS);
-            let value = builder.intern_literal(RdfLiteral::typed(
-                lexical,
-                purrdf_xsd::datatype::XSD_INTEGER,
-            ));
-            builder.push_quad(subject, predicate, value, None);
+            let predicate = builder.intern_iri(POS).unwrap();
+            let value = builder
+                .intern_literal(RdfLiteral::typed(
+                    lexical,
+                    purrdf_xsd::datatype::XSD_INTEGER,
+                ))
+                .unwrap();
+            builder.push_quad(subject, predicate, value, None).unwrap();
         }
     }
     let ambiguous = builder.freeze().unwrap();
@@ -881,19 +900,25 @@ pub(crate) fn series() -> Arc<RdfDataset> {
     .iter()
     .enumerate()
     {
-        let s = builder.intern_iri(&format!("https://example.org/event/{index}"));
-        let p = builder.intern_iri(TIME);
-        let o = builder.intern_literal(RdfLiteral::typed(
-            *lexical,
-            purrdf_xsd::datatype::XSD_DATE_TIME,
-        ));
-        builder.push_quad(s, p, o, None);
-        let p = builder.intern_iri(POS);
-        let o = builder.intern_literal(RdfLiteral::typed(
-            index.to_string(),
-            purrdf_xsd::datatype::XSD_INTEGER,
-        ));
-        builder.push_quad(s, p, o, None);
+        let s = builder
+            .intern_iri(&format!("https://example.org/event/{index}"))
+            .unwrap();
+        let p = builder.intern_iri(TIME).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::typed(
+                *lexical,
+                purrdf_xsd::datatype::XSD_DATE_TIME,
+            ))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
+        let p = builder.intern_iri(POS).unwrap();
+        let o = builder
+            .intern_literal(RdfLiteral::typed(
+                index.to_string(),
+                purrdf_xsd::datatype::XSD_INTEGER,
+            ))
+            .unwrap();
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().unwrap()
 }
@@ -1264,7 +1289,8 @@ pub(crate) fn dictionary_long_phrase_and_determinism() {
 pub(crate) fn segmented(dataset: &RdfDataset) -> purrdf_core::SegmentedImage {
     let mut builder = purrdf_core::SegmentedBuilder::new(
         purrdf_core::SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap(),
-    );
+    )
+    .unwrap();
     for quad in dataset.quads() {
         let mut values = vec![
             dataset.term_value(quad.s),
@@ -2329,44 +2355,64 @@ pub(crate) fn original_evidence_and_empty_barriers() {
 
 pub(crate) fn scoped_streams_and_update_where() {
     let mut builder = RdfDatasetBuilder::new();
-    let position = builder.intern_iri(POS);
-    let sequence = builder.intern_iri(SEQUENCE);
-    let reifies = builder.intern_iri(purrdf_core::vocab::rdf::REIFIES);
+    let position = builder.intern_iri(POS).unwrap();
+    let sequence = builder.intern_iri(SEQUENCE).unwrap();
+    let reifies = builder
+        .intern_iri(purrdf_core::vocab::rdf::REIFIES)
+        .unwrap();
     let graphs = [
         None,
-        Some(builder.intern_iri("https://example.org/g1")),
-        Some(builder.intern_iri("https://example.org/g2")),
+        Some(builder.intern_iri("https://example.org/g1").unwrap()),
+        Some(builder.intern_iri("https://example.org/g2").unwrap()),
     ];
     for (index, graph) in graphs.iter().enumerate() {
-        let s = builder.intern_iri(&format!("https://example.org/token/{index}"));
-        let number = builder.intern_literal(RdfLiteral::typed(
-            index.to_string(),
-            purrdf_xsd::datatype::XSD_INTEGER,
-        ));
-        let group = builder.intern_iri("https://example.org/common-sequence");
-        builder.push_quad(s, position, number, *graph);
-        builder.push_quad(s, sequence, group, *graph);
+        let s = builder
+            .intern_iri(&format!("https://example.org/token/{index}"))
+            .unwrap();
+        let number = builder
+            .intern_literal(RdfLiteral::typed(
+                index.to_string(),
+                purrdf_xsd::datatype::XSD_INTEGER,
+            ))
+            .unwrap();
+        let group = builder
+            .intern_iri("https://example.org/common-sequence")
+            .unwrap();
+        builder.push_quad(s, position, number, *graph).unwrap();
+        builder.push_quad(s, sequence, group, *graph).unwrap();
         if graph.is_some() {
-            let first = builder.intern_iri("https://example.org/token/shared");
-            builder.push_quad(first, position, number, *graph);
-            builder.push_quad(first, sequence, group, *graph);
+            let first = builder
+                .intern_iri("https://example.org/token/shared")
+                .unwrap();
+            builder.push_quad(first, position, number, *graph).unwrap();
+            builder.push_quad(first, sequence, group, *graph).unwrap();
         }
     }
     // The position and sequence are native virtual annotation rows, not quads.
     for index in 0..3 {
-        let subject = builder.intern_iri(&format!("https://example.org/statement/{index}"));
-        let predicate = builder.intern_iri(NOTE);
-        let object = builder.intern_literal(RdfLiteral::simple("original"));
-        let triple = builder.intern_triple(subject, predicate, object);
-        let reifier = builder.intern_iri(&format!("https://example.org/reifier/{index}"));
-        builder.push_reifier(reifier, triple);
-        let number = builder.intern_literal(RdfLiteral::typed(
-            index.to_string(),
-            purrdf_xsd::datatype::XSD_INTEGER,
-        ));
-        let group = builder.intern_iri("https://example.org/virtual-sequence");
-        builder.push_annotation(reifier, position, number);
-        builder.push_annotation(reifier, sequence, group);
+        let subject = builder
+            .intern_iri(&format!("https://example.org/statement/{index}"))
+            .unwrap();
+        let predicate = builder.intern_iri(NOTE).unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::simple("original"))
+            .unwrap();
+        let triple = builder.intern_triple(subject, predicate, object).unwrap();
+        let reifier = builder
+            .intern_iri(&format!("https://example.org/reifier/{index}"))
+            .unwrap();
+        builder.push_reifier(reifier, triple).unwrap();
+        let number = builder
+            .intern_literal(RdfLiteral::typed(
+                index.to_string(),
+                purrdf_xsd::datatype::XSD_INTEGER,
+            ))
+            .unwrap();
+        let group = builder
+            .intern_iri("https://example.org/virtual-sequence")
+            .unwrap();
+        builder.push_annotation(reifier, position, number).unwrap();
+        builder.push_annotation(reifier, sequence, group).unwrap();
     }
     let _ = reifies;
     let dataset = builder.freeze().unwrap();

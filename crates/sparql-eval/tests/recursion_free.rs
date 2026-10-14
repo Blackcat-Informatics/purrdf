@@ -56,22 +56,24 @@ fn dataset() -> Arc<RdfDataset> {
 /// [`dataset`], with `:q :o{n}` on exactly the named subjects.
 fn subjects_with_q(with_q: &[&str]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let p = builder.intern_iri(&format!("{EX}p"));
-    let q = builder.intern_iri(&format!("{EX}q"));
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    let q = builder.intern_iri(&format!("{EX}q")).unwrap();
     for n in 1..=4 {
         let name = format!("s{n}");
-        let s = builder.intern_iri(&format!("{EX}{name}"));
-        let value = builder.intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER));
-        builder.push_quad(s, p, value, None);
+        let s = builder.intern_iri(&format!("{EX}{name}")).unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER))
+            .unwrap();
+        builder.push_quad(s, p, value, None).unwrap();
         if with_q.contains(&name.as_str()) {
-            let o = builder.intern_iri(&format!("{EX}o{n}"));
-            builder.push_quad(s, q, o, None);
+            let o = builder.intern_iri(&format!("{EX}o{n}")).unwrap();
+            builder.push_quad(s, q, o, None).unwrap();
         }
     }
-    let link = builder.intern_iri(&format!("{EX}link"));
-    let a = builder.intern_iri(&format!("{EX}a"));
-    let b = builder.intern_iri(&format!("{EX}b"));
-    builder.push_quad(a, link, b, None);
+    let link = builder.intern_iri(&format!("{EX}link")).unwrap();
+    let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let b = builder.intern_iri(&format!("{EX}b")).unwrap();
+    builder.push_quad(a, link, b, None).unwrap();
     builder.freeze().expect("the fixture dataset")
 }
 

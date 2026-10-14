@@ -91,11 +91,11 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
     ];
     for (datatype, lexical) in fixtures {
         let expected = purrdf_xsd::parse(lexical, datatype).unwrap();
-        let mut account = ParseAccount {
+        let mut allocation_budget = ParseAccount {
             limit: 1_000_000,
             ..Default::default()
         };
-        let mut memory = Memory::new(&mut account);
+        let mut memory = Memory::new(&mut allocation_budget);
         let (parsed, measured) =
             measured(|| try_parse_with_memory(lexical, datatype, false, &mut memory));
         let ParsedValue::Value(value) = parsed.unwrap() else {
@@ -112,9 +112,9 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         );
         drop(value);
         memory.release_bytes(live).unwrap();
-        assert_eq!(account.live, 0);
+        assert_eq!(allocation_budget.live, 0);
         assert!(
-            usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak,
+            usize::try_from(measured.peak_working_bytes).unwrap() <= allocation_budget.peak,
             "{datatype:?}"
         );
     }
@@ -126,27 +126,32 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::Integer, zero_integer.as_str()),
         (D::Decimal, padded_fraction.as_str()),
     ] {
-        let mut account = ParseAccount::default();
+        let mut allocation_budget = ParseAccount::default();
         let (answer, measurement) = measured(|| {
-            try_parse_with_memory(lexical, datatype, false, &mut Memory::new(&mut account))
+            try_parse_with_memory(
+                lexical,
+                datatype,
+                false,
+                &mut Memory::new(&mut allocation_budget),
+            )
         });
         assert!(matches!(answer, Ok(ParsedValue::Value(_))));
         assert_eq!(measurement.allocations, 0, "{datatype:?} {lexical}");
-        assert_eq!(account.peak, 0);
+        assert_eq!(allocation_budget.peak, 0);
     }
     let invalid_suffix = format!("{zero_integer}x");
-    let mut account = ParseAccount::default();
+    let mut allocation_budget = ParseAccount::default();
     let (answer, measurement) = measured(|| {
         try_parse_with_memory(
             &invalid_suffix,
             D::Integer,
             false,
-            &mut Memory::new(&mut account),
+            &mut Memory::new(&mut allocation_budget),
         )
     });
     assert!(matches!(answer, Ok(ParsedValue::Invalid(_))));
     assert_eq!(measurement.allocations, 0);
-    assert_eq!(account.peak, 0);
+    assert_eq!(allocation_budget.peak, 0);
     for (datatype, lexical) in [
         (D::Integer, "invalid"),
         (D::Decimal, "invalid"),
@@ -157,16 +162,21 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::DateTimeStamp, "2024-02-29T12:34:56"),
         (D::DateTimeStamp, "2024-02-29T12:34:56+15:00"),
     ] {
-        let mut account = ParseAccount::default();
+        let mut allocation_budget = ParseAccount::default();
         let (answer, measured) = measured(|| {
-            try_parse_with_memory(lexical, datatype, false, &mut Memory::new(&mut account))
+            try_parse_with_memory(
+                lexical,
+                datatype,
+                false,
+                &mut Memory::new(&mut allocation_budget),
+            )
         });
         assert!(matches!(
             answer,
             Ok(ParsedValue::Invalid(Some(purrdf_xsd::ErrorCode::Forg0001)))
         ));
         assert_eq!(measured.allocations, 0);
-        assert_eq!(account.live, 0);
+        assert_eq!(allocation_budget.live, 0);
     }
     for (datatype, lexical) in [
         (D::Integer, huge_integer.as_str()),
@@ -175,13 +185,18 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::String, "owned"),
         (D::HexBinary, "abcd"),
     ] {
-        let mut account = ParseAccount::default();
+        let mut allocation_budget = ParseAccount::default();
         let (answer, measured) = measured(|| {
-            try_parse_with_memory(lexical, datatype, false, &mut Memory::new(&mut account))
+            try_parse_with_memory(
+                lexical,
+                datatype,
+                false,
+                &mut Memory::new(&mut allocation_budget),
+            )
         });
         assert!(matches!(answer, Err(StorageError::AdmissionFailed)));
         assert_eq!(measured.allocations, 0);
-        assert_eq!(account.live, 0);
+        assert_eq!(allocation_budget.live, 0);
     }
 }
 
@@ -191,12 +206,12 @@ fn wide_temporal_parse_admits_native_peak_and_releases_retained_owner() {
     use purrdf_xsd::value::{ParsedValue, try_parse_with_memory};
 
     #[derive(Default)]
-    struct Account {
+    struct ScratchBudget {
         live: usize,
         peak: usize,
         limit: usize,
     }
-    impl Admission for Account {
+    impl Admission for ScratchBudget {
         fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
             if bytes > self.limit {
                 return Err(StorageError::AdmissionFailed);
@@ -232,12 +247,12 @@ fn wide_temporal_parse_admits_native_peak_and_releases_retained_owner() {
         ),
     ];
     for (datatype, lexical) in samples {
-        let mut account = Account {
+        let mut allocation_budget = ScratchBudget {
             limit: 1_000_000,
-            ..Account::default()
+            ..ScratchBudget::default()
         };
         let measurement = {
-            let mut memory = Memory::new(&mut account);
+            let mut memory = Memory::new(&mut allocation_budget);
             let (result, measurement) =
                 measured(|| try_parse_with_memory(&lexical, datatype, false, &mut memory));
             let ParsedValue::Value(value) = result.unwrap() else {
@@ -253,17 +268,17 @@ fn wide_temporal_parse_admits_native_peak_and_releases_retained_owner() {
             memory.release_bytes(retained).unwrap();
             measurement
         };
-        let admitted = account.peak;
+        let admitted = allocation_budget.peak;
         assert!(
             admitted >= usize::try_from(measurement.peak_working_bytes).unwrap(),
             "{datatype:?}: admitted {admitted}, measured {}",
             measurement.peak_working_bytes
         );
-        assert_eq!(account.live, 0);
+        assert_eq!(allocation_budget.live, 0);
 
-        let mut refused = Account {
+        let mut refused = ScratchBudget {
             limit: admitted - 1,
-            ..Account::default()
+            ..ScratchBudget::default()
         };
         let (answer, measurement) = measured(|| {
             try_parse_with_memory(&lexical, datatype, false, &mut Memory::new(&mut refused))
@@ -282,16 +297,21 @@ fn wide_temporal_parse_admits_native_peak_and_releases_retained_owner() {
         (XsdDatatype::Time, format!("12:34:56.{}1x", "0".repeat(999))),
         (XsdDatatype::Duration, format!("P{wide}Dx")),
     ] {
-        let mut account = Account::default();
+        let mut allocation_budget = ScratchBudget::default();
         let (answer, measurement) = measured(|| {
-            try_parse_with_memory(&lexical, datatype, false, &mut Memory::new(&mut account))
+            try_parse_with_memory(
+                &lexical,
+                datatype,
+                false,
+                &mut Memory::new(&mut allocation_budget),
+            )
         });
         assert!(
             matches!(answer, Ok(ParsedValue::Invalid(_))),
             "{datatype:?}: {answer:?}"
         );
         assert_eq!(measurement.allocations, 0, "{datatype:?}");
-        assert_eq!(account.peak, 0);
+        assert_eq!(allocation_budget.peak, 0);
     }
 }
 

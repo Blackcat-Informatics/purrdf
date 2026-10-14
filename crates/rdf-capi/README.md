@@ -133,7 +133,7 @@ the IRI failure without parsing English. The error message and the record's
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.10.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.11.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -229,6 +229,18 @@ the IRI failure without parsing English. The error message and the record's
   Existing query/update functions keep their prototypes and caller policy;
   the new entry points carry the caller's selected geo session into the same
   native evaluator.
+
+  `0.10.0` → `0.11.0` changes four prototypes: `purrdf_graph_from_dataset`
+  takes `int32_t graph_existence` before `out_graph`; `purrdf_update_governed`
+  and `purrdf_update_governed_xpath_regex` and `purrdf_update_governed_with_geo`
+  take it before `governors`. Recompile
+  callers and choose `PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` (0) to preserve
+  named slots through CLEAR and last-row deletion until DROP, or explicitly
+  select `PURRDF_GRAPH_EXISTENCE_IMPLICIT` (1) for row-driven lifetime. C has no
+  omitted argument here. Invalid selectors return `INVALID_ARGUMENT` without
+  publishing an output or changing the input dataset. The underlying native
+  graph policy is shared with Rust, Python and WASM; no struct layout or existing
+  status value changes.
 
 ## Shapes-graph tools
 

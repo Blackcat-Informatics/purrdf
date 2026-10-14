@@ -1020,7 +1020,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.10.0` is pinned in tests/abi.rs. */
+     * literal `0.11.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -1598,7 +1598,7 @@ int main(int argc, char **argv) {
     rc = purrdf_update_governed(
         dataset,
         "INSERT DATA { <http://new> <http://predicate> <http://value> }", NULL,
-        NULL, &governors, &update_outcome, &update_evidence, &error);
+        NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, &update_outcome, &update_evidence, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed update outcome");
     CHECK(update_outcome == PURRDF_UPDATE_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed update is typed exhaustion");
@@ -1609,6 +1609,86 @@ int main(int argc, char **argv) {
                   PURRDF_STATUS_OK &&
               after_update_count == 1,
           "exhausted update applied no mutation");
+
+    /* All three governed UPDATE doors carry the explicit graph lifetime. These calls
+     * compile against the generated public header and use the shared library. */
+    const char *lifetime_document =
+        "<http://example.org/s> <http://example.org/p> <http://example.org/o> <http://example.org/g> .";
+    const int32_t lifetime_modes[] = {
+        PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY, PURRDF_GRAPH_EXISTENCE_IMPLICIT
+    };
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "lifetime governor initializer");
+    for (size_t mode_index = 0; mode_index < 2; ++mode_index) {
+        for (int entry = 0; entry < 3; ++entry) {
+            PurrdfDataset *lifetime_dataset = NULL;
+            CHECK(purrdf_parse((const uint8_t *)lifetime_document,
+                               strlen(lifetime_document), "application/n-quads",
+                               NULL, NULL, &lifetime_dataset, &error) == PURRDF_STATUS_OK,
+                  "lifetime source");
+            PurrdfGraph *branch = NULL;
+            CHECK(purrdf_graph_from_dataset(lifetime_dataset, -1, &branch) ==
+                      PURRDF_STATUS_INVALID_ARGUMENT && branch == NULL,
+                  "invalid graph selector publishes no branch");
+            CHECK(purrdf_graph_from_dataset(lifetime_dataset,
+                                           lifetime_modes[mode_index], &branch) ==
+                      PURRDF_STATUS_OK && branch != NULL,
+                  "explicit graph selector constructs branch");
+            purrdf_graph_free(branch);
+            update_outcome = -1;
+            if (entry == 2) {
+                rc = purrdf_update_governed_with_geo(
+                    NULL, lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
+                    NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
+                    &governors, &update_outcome, &update_evidence, &error);
+            } else if (entry == 1) {
+                rc = purrdf_update_governed_xpath_regex(
+                    lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
+                    NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
+                    &governors, &update_outcome, &update_evidence, &error);
+            } else {
+                rc = purrdf_update_governed(
+                    lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
+                    NULL, NULL, lifetime_modes[mode_index], &governors,
+                    &update_outcome, &update_evidence, &error);
+            }
+            CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
+                      update_outcome == PURRDF_UPDATE_OUTCOME_KIND_APPLIED,
+                  "selected lifetime CLEAR applied");
+            PurrdfCapabilities lifetime_caps;
+            CHECK(purrdf_capabilities(lifetime_dataset, &lifetime_caps) == PURRDF_STATUS_OK &&
+                      lifetime_caps.named_graphs == (mode_index == 0),
+                  "remembered CLEAR retains slot and explicit implicit removes it");
+            PurrdfGovernorEvidence evidence_before = update_evidence;
+            update_outcome = -1;
+            if (entry == 2) {
+                rc = purrdf_update_governed_with_geo(
+                    NULL, lifetime_dataset, "DELETE WHERE {", NULL, NULL,
+                    "xpath-3.1-2017-03-21", 2, &governors,
+                    &update_outcome, &update_evidence, &error);
+            } else if (entry == 1) {
+                rc = purrdf_update_governed_xpath_regex(
+                    lifetime_dataset, "DELETE WHERE {", NULL, NULL,
+                    "xpath-3.1-2017-03-21", 2, &governors,
+                    &update_outcome, &update_evidence, &error);
+            } else {
+                rc = purrdf_update_governed(
+                    lifetime_dataset, "DELETE WHERE {", NULL, NULL, 2,
+                    &governors, &update_outcome, &update_evidence, &error);
+            }
+            CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT && error != NULL &&
+                      update_outcome == -1 &&
+                      update_evidence.consumed.fuel == evidence_before.consumed.fuel &&
+                      update_evidence.trip.kind == evidence_before.trip.kind,
+                  "invalid UPDATE selector precedes parse and preserves outputs");
+            purrdf_error_free(error);
+            error = NULL;
+            CHECK(purrdf_capabilities(lifetime_dataset, &lifetime_caps) == PURRDF_STATUS_OK &&
+                      lifetime_caps.named_graphs == (mode_index == 0),
+                  "invalid UPDATE selector preserves slots");
+            purrdf_dataset_free(lifetime_dataset);
+        }
+    }
 
     /* error path: malformed input produces a readable error, no abort */
     const char *bad = "<http://a> <http://b> @@@";
@@ -1681,7 +1761,7 @@ int main(int argc, char **argv) {
     int32_t parse_outcome = -1;
     PurrdfGovernorEvidence parse_evidence;
     bad_error = NULL;
-    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, &governors,
+    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors,
                                 &parse_outcome, &parse_evidence, &bad_error);
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "malformed governed update refused");

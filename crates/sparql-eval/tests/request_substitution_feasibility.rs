@@ -190,38 +190,40 @@ impl PfCursor for Rows {
 /// blank node is one the dataset knows.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let holds = builder.intern_iri(&format!("{EX}holds"));
-    let a = builder.intern_iri(&format!("{EX}a"));
-    let r = builder.intern_iri(&format!("{EX}r"));
+    let holds = builder.intern_iri(&format!("{EX}holds")).unwrap();
+    let a = builder.intern_iri(&format!("{EX}a")).unwrap();
+    let r = builder.intern_iri(&format!("{EX}r")).unwrap();
     for kind in KINDS {
         for name in NAMES {
             let label = format!("{}-{name}", kind.tag());
             let value = match kind {
-                Kind::Iri => builder.intern_iri(&format!("{EX}{name}")),
-                Kind::Literal => builder.intern_literal(RdfLiteral::simple(name)),
-                Kind::Blank => builder.intern_blank(&label, BlankScope::DEFAULT),
+                Kind::Iri => builder.intern_iri(&format!("{EX}{name}")).unwrap(),
+                Kind::Literal => builder.intern_literal(RdfLiteral::simple(name)).unwrap(),
+                Kind::Blank => builder.intern_blank(&label, BlankScope::DEFAULT).unwrap(),
                 Kind::Quoted => {
-                    let object = builder.intern_iri(&format!("{EX}{name}"));
-                    builder.intern_triple(a, r, object)
+                    let object = builder.intern_iri(&format!("{EX}{name}")).unwrap();
+                    builder.intern_triple(a, r, object).unwrap()
                 }
                 Kind::QuotedWithBlank => {
-                    let object = builder.intern_blank(&label, BlankScope::DEFAULT);
-                    builder.intern_triple(a, r, object)
+                    let object = builder.intern_blank(&label, BlankScope::DEFAULT).unwrap();
+                    builder.intern_triple(a, r, object).unwrap()
                 }
                 Kind::QuotedWithLiteral => {
-                    let object = builder.intern_literal(RdfLiteral::simple(name));
-                    builder.intern_triple(a, r, object)
+                    let object = builder.intern_literal(RdfLiteral::simple(name)).unwrap();
+                    builder.intern_triple(a, r, object).unwrap()
                 }
             };
-            let subject = builder.intern_iri(&format!("{EX}s-{label}"));
-            builder.push_quad(subject, holds, value, None);
+            let subject = builder.intern_iri(&format!("{EX}s-{label}")).unwrap();
+            builder.push_quad(subject, holds, value, None).unwrap();
         }
     }
     // One named graph, so a call written inside `GRAPH ?g { … }` is evaluated once. Its
     // predicate is no other pattern's, so nothing else reads it.
-    let graph = builder.intern_iri(&format!("{EX}g"));
-    let marker = builder.intern_iri(&format!("{EX}marker"));
-    builder.push_quad(graph, marker, graph, Some(graph));
+    let graph = builder.intern_iri(&format!("{EX}g")).unwrap();
+    let marker = builder.intern_iri(&format!("{EX}marker")).unwrap();
+    builder
+        .push_quad(graph, marker, graph, Some(graph))
+        .unwrap();
     builder.freeze().expect("the fixture dataset freezes")
 }
 

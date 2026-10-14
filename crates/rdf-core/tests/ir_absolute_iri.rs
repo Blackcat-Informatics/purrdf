@@ -27,7 +27,7 @@ const RELATIVE: &str = "iri-relative-no-base";
 
 /// Intern an absolute IRI, for the surrounding structure the cases need.
 fn abs(b: &mut RdfDatasetBuilder, name: &str) -> purrdf_core::ir::TermId {
-    b.intern_iri(&format!("http://example.org/{name}"))
+    b.intern_iri(&format!("http://example.org/{name}")).unwrap()
 }
 
 /// The plainest non-codec ingress there is: intern a relative reference directly on
@@ -35,10 +35,10 @@ fn abs(b: &mut RdfDatasetBuilder, name: &str) -> purrdf_core::ir::TermId {
 #[test]
 fn builder_refuses_to_freeze_a_relative_iri() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("foo");
+    let s = b.intern_iri("foo").unwrap();
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
-    b.push_quad(s, p, o, None);
+    b.push_quad(s, p, o, None).unwrap();
 
     let err = b.freeze().expect_err("a relative IRI cannot enter the IR");
     assert_eq!(err.code, RELATIVE);
@@ -62,10 +62,10 @@ fn builder_refuses_to_freeze_a_relative_iri() {
 #[test]
 fn builder_refuses_the_empty_iri() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("");
+    let s = b.intern_iri("").unwrap();
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
-    b.push_quad(s, p, o, None);
+    b.push_quad(s, p, o, None).unwrap();
 
     let err = b
         .freeze()
@@ -82,8 +82,8 @@ fn an_unreferenced_relative_iri_is_still_fatal() {
     let s = abs(&mut b, "s");
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
-    b.push_quad(s, p, o, None);
-    let _orphan = b.intern_iri("../up");
+    b.push_quad(s, p, o, None).unwrap();
+    let _orphan = b.intern_iri("../up").unwrap();
 
     assert_eq!(
         b.freeze().expect_err("interned, therefore checked").code,
@@ -99,9 +99,9 @@ fn every_iri_position_is_covered() {
     // Predicate.
     let mut b = RdfDatasetBuilder::new();
     let s = abs(&mut b, "s");
-    let p = b.intern_iri("relativePredicate");
+    let p = b.intern_iri("relativePredicate").unwrap();
     let o = abs(&mut b, "o");
-    b.push_quad(s, p, o, None);
+    b.push_quad(s, p, o, None).unwrap();
     assert_eq!(b.freeze().expect_err("predicate").code, RELATIVE);
 
     // Graph name.
@@ -109,16 +109,18 @@ fn every_iri_position_is_covered() {
     let s = abs(&mut b, "s");
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
-    let g = b.intern_iri("/graphs/1");
-    b.push_quad(s, p, o, Some(g));
+    let g = b.intern_iri("/graphs/1").unwrap();
+    b.push_quad(s, p, o, Some(g)).unwrap();
     assert_eq!(b.freeze().expect_err("graph name").code, RELATIVE);
 
     // Literal datatype — interned as an IRI term like any other.
     let mut b = RdfDatasetBuilder::new();
     let s = abs(&mut b, "s");
     let p = abs(&mut b, "p");
-    let o = b.intern_literal(RdfLiteral::typed("42", "myDatatype"));
-    b.push_quad(s, p, o, None);
+    let o = b
+        .intern_literal(RdfLiteral::typed("42", "myDatatype"))
+        .unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     assert_eq!(b.freeze().expect_err("datatype").code, RELATIVE);
 
     // A quoted triple's own predicate (RDF 1.2 statement layer).
@@ -126,9 +128,9 @@ fn every_iri_position_is_covered() {
     let s = abs(&mut b, "s");
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
-    let inner_p = b.intern_iri("quotedPredicate");
-    let triple = b.intern_triple(s, inner_p, o);
-    b.push_quad(s, p, triple, None);
+    let inner_p = b.intern_iri("quotedPredicate").unwrap();
+    let triple = b.intern_triple(s, inner_p, o).unwrap();
+    b.push_quad(s, p, triple, None).unwrap();
     assert_eq!(b.freeze().expect_err("quoted predicate").code, RELATIVE);
 }
 
@@ -144,7 +146,8 @@ fn the_owned_model_boundary_is_covered() {
         object: RdfTerm::Iri("http://example.org/o".to_owned()),
         graph_name: None,
         location: None,
-    });
+    })
+    .unwrap();
     assert_eq!(b.freeze().expect_err("owned ingress").code, RELATIVE);
 }
 
@@ -183,7 +186,7 @@ fn absolute_base() -> std::sync::Arc<purrdf_core::ir::RdfDataset> {
     let s = abs(&mut b, "s");
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
-    b.push_quad(s, p, o, None);
+    b.push_quad(s, p, o, None).unwrap();
     b.freeze().expect("the base dataset is absolute")
 }
 
@@ -308,8 +311,8 @@ fn absolute_iris_of_every_shape_still_freeze() {
         "did:example:123",
         "tag:example.org,2026:x",
     ] {
-        let o = b.intern_iri(iri);
-        b.push_quad(s, p, o, None);
+        let o = b.intern_iri(iri).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     let ds = b.freeze().expect("every absolute IRI is admissible");
     assert_eq!(ds.quad_count(), 8);
@@ -337,17 +340,18 @@ fn the_gate_never_normalizes_the_iri_it_admits() {
     let p = abs(&mut b, "p");
     let s = abs(&mut b, "s");
     for iri in hostile {
-        let o = b.intern_iri(iri);
-        b.push_quad(s, p, o, None);
+        let o = b.intern_iri(iri).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
     }
     let ds = b.freeze().expect("all absolute, all admissible");
 
     // Read every IRI back out of the frozen term table and compare byte for byte.
     let mut seen: Vec<&str> = Vec::new();
     for raw in 0..ds.term_count() {
-        if let purrdf_core::ir::TermRef::Iri(iri) =
-            ds.resolve(purrdf_core::ir::TermId::from_index(raw as u32))
-        {
+        if let purrdf_core::ir::TermRef::Iri(iri) = ds.resolve(
+            purrdf_core::ir::TermId::from_index(raw as u32)
+                .expect("stored term index is representable"),
+        ) {
             seen.push(iri);
         }
     }
@@ -364,10 +368,10 @@ fn the_gate_never_normalizes_the_iri_it_admits() {
 #[test]
 fn skolem_minted_iris_satisfy_the_invariant() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_blank("b0", BlankScope::DEFAULT);
+    let s = b.intern_blank("b0", BlankScope::DEFAULT).unwrap();
     let p = abs(&mut b, "p");
-    let o = b.intern_blank("b1", BlankScope::DEFAULT);
-    b.push_quad(s, p, o, None);
+    let o = b.intern_blank("b1", BlankScope::DEFAULT).unwrap();
+    b.push_quad(s, p, o, None).unwrap();
     let ds = b.freeze().expect("blank-only dataset freezes");
 
     let skolemized = skolemize(&ds, "http://example.org").expect("skolemize");
@@ -381,10 +385,10 @@ fn skolem_minted_iris_satisfy_the_invariant() {
 #[test]
 fn a_malformed_iri_is_not_reported_as_a_missing_base() {
     let mut b = RdfDatasetBuilder::new();
-    let s = b.intern_iri("http://example.org/a b");
+    let s = b.intern_iri("http://example.org/a b").unwrap();
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
-    b.push_quad(s, p, o, None);
+    b.push_quad(s, p, o, None).unwrap();
 
     let err = b.freeze().expect_err("a space is not an IRI character");
     assert_eq!(err.code, "iri-disallowed-char");
@@ -398,14 +402,18 @@ fn a_malformed_iri_is_not_reported_as_a_missing_base() {
 #[test]
 fn only_the_first_violation_is_recorded_however_often_it_is_re_interned() {
     let mut b = RdfDatasetBuilder::new();
-    let first = b.intern_iri("firstRelative");
+    let first = b.intern_iri("firstRelative").unwrap();
     for _ in 0..1_000 {
-        assert_eq!(b.intern_iri("firstRelative"), first, "hit path is stable");
+        assert_eq!(
+            b.intern_iri("firstRelative").unwrap(),
+            first,
+            "hit path is stable"
+        );
     }
-    let _second = b.intern_iri("secondRelative");
+    let _second = b.intern_iri("secondRelative").unwrap();
     let p = abs(&mut b, "p");
     let o = abs(&mut b, "o");
-    b.push_quad(first, p, o, None);
+    b.push_quad(first, p, o, None).unwrap();
 
     let err = b.freeze().expect_err("still fatal");
     assert_eq!(err.code, RELATIVE);

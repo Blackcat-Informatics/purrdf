@@ -84,8 +84,9 @@ fn call_of(query: &Query) -> &purrdf_sparql_algebra::PropertyFunctionCall {
     let Query::Select { pattern, .. } = query else {
         panic!("the acceptance query is a SELECT");
     };
-    let GraphPattern::Project { inner, .. } = pattern else {
-        panic!("a SELECT's algebra root is a Project, got {pattern:?}");
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+    else {
+        panic!("a SELECT's algebra root is a projection, got {pattern:?}");
     };
     let GraphPattern::Lateral { left, right } = &**inner else {
         panic!("a call joins through a Lateral, got {inner:?}");
@@ -171,8 +172,9 @@ fn the_call_serializes_and_re_parses_byte_exactly() {
     let Query::Select { pattern, .. } = &query else {
         panic!("the acceptance query is a SELECT");
     };
-    let GraphPattern::Project { inner, .. } = pattern else {
-        panic!("a SELECT's algebra root is a Project");
+    let (GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. }) = pattern
+    else {
+        panic!("a SELECT's algebra root is a projection");
     };
 
     let serialized = pattern_to_select_query(inner);
@@ -192,12 +194,16 @@ fn the_call_serializes_and_re_parses_byte_exactly() {
     else {
         panic!("the serialized text is a SELECT");
     };
-    let GraphPattern::Project {
+    let (GraphPattern::Project {
         inner: reparsed_inner,
         ..
-    } = reparsed_pattern
+    }
+    | GraphPattern::ProjectStar {
+        inner: reparsed_inner,
+        ..
+    }) = reparsed_pattern
     else {
-        panic!("a SELECT's algebra root is a Project");
+        panic!("a SELECT's algebra root is a projection");
     };
     assert_eq!(
         &**reparsed_inner, &**inner,
@@ -290,10 +296,10 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
     // The dataset holds an ordinary triple under the LONGER, unregistered IRI —
     // it merely shares the short IRI's characters as a prefix.
     let mut builder = RdfDatasetBuilder::new();
-    let s = builder.intern_iri(&format!("{EX}subject"));
-    let p = builder.intern_iri(&long_predicate);
-    let o = builder.intern_iri(&format!("{EX}object"));
-    builder.push_quad(s, p, o, None);
+    let s = builder.intern_iri(&format!("{EX}subject")).unwrap();
+    let p = builder.intern_iri(&long_predicate).unwrap();
+    let o = builder.intern_iri(&format!("{EX}object")).unwrap();
+    builder.push_quad(s, p, o, None).unwrap();
     let dataset = builder.freeze().expect("freeze fixture");
 
     let query = format!("SELECT ?s ?o WHERE {{ ?s <{long_predicate}> ?o }}");

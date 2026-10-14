@@ -12,20 +12,18 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use super::io::{
-    PyRdfFormat, dataset_from_quads_verbatim, declare_loaded_graphs, parse_quads_and_prefixes,
-    read_input,
-};
+use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
+use super::load::insert_loaded_document;
 use super::quad_store::PyQuadStore;
 use super::term::{
-    PyQuad, extract_graph_name, extract_term, rdf_quad_to_values, rdf_quad_to_values_scoped,
-    rdf_term_to_value, values_to_rdf_quad,
+    PyQuad, extract_graph_name, extract_term, rdf_quad_to_values, rdf_term_to_value,
+    values_to_rdf_quad,
 };
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
-use crate::py_store::iri_value_error;
+use crate::py_store::iri_read_value_error;
 use crate::{
-    BlankScope, DatasetMut, GraphMatchValue, RdfQuad, SerializeGraph, SerializeOptions,
-    StatementLayer, TermValue, serialize_dataset_with,
+    DatasetMut, GraphMatchValue, RdfQuad, SerializeGraph, SerializeOptions, StatementLayer,
+    TermValue, serialize_dataset_with,
 };
 
 /// A COW mutable RDF dataset over the native `purrdf-core` IR.
@@ -33,17 +31,18 @@ use crate::{
 /// The query, UPDATE, iteration and validation-capsule surface is the
 /// [`PyQuadStore`] base class's, shared with `Store`.
 /// The keyword-only `remember_empty_graphs=True` selects native remembered
-/// graph slots; the 3.x default is false. Compaction and UPDATE retain the choice.
+/// graph slots by default; false selects row-driven lifetime. Compaction and
+/// UPDATE retain the choice.
 #[pyclass(name = "MutableDataset", extends = PyQuadStore)]
 #[derive(Debug)]
 pub struct PyMutableDataset {
-    next_blank_scope: u32,
+    next_blank_scope: u64,
 }
 
 #[pymethods]
 impl PyMutableDataset {
     #[new]
-    #[pyo3(signature = (*, remember_empty_graphs=false))]
+    #[pyo3(signature = (*, remember_empty_graphs=true))]
     fn new(remember_empty_graphs: bool) -> PyResult<PyClassInitializer<Self>> {
         Ok(
             PyClassInitializer::from(PyQuadStore::empty(remember_empty_graphs)?).add_subclass(
@@ -68,22 +67,22 @@ impl PyMutableDataset {
     ) -> PyResult<Vec<(String, String)>> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
-        let blank_scope = slf.allocate_blank_scope();
+        let mut next_scope = slf.next_blank_scope;
+        let next_scope_ref = &mut next_scope;
         let inner = &mut slf.as_super().inner;
         // Parse + insert run detached (GIL released); only plain Rust data is touched.
-        py.detach(move || {
+        let result = py.detach(move || {
             let base_ref = base.as_deref();
             let (quads, prefixes, declared) =
-                parse_quads_and_prefixes(&data, format.to_native(), base_ref)
-                    .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?;
-            for quad in quads {
-                inner
-                    .insert(rdf_quad_to_values_scoped(&quad, blank_scope))
-                    .map_err(|e| iri_value_error(&e))?;
-            }
-            declare_loaded_graphs(inner, declared, blank_scope)?;
+                parse_quads_and_prefixes(&data, format.to_native(), base_ref).map_err(|e| {
+                    super::presentation::value_error(format!("load parse error: {e}"), &e)
+                })?;
+            insert_loaded_document(inner, &quads, declared, next_scope_ref)
+                .map_err(super::load_value_error)?;
             Ok(prefixes)
-        })
+        });
+        slf.next_blank_scope = next_scope;
+        result
     }
 
     /// Add a single quad. Returns whether the effective set changed.
@@ -96,7 +95,7 @@ impl PyMutableDataset {
         slf.as_super()
             .inner
             .insert(rdf_quad_to_values(&quad.inner))
-            .map_err(|e| iri_value_error(&e))
+            .map_err(|e| iri_read_value_error(&e))
     }
 
     /// Remove a single quad. Returns whether the effective set changed.
@@ -210,7 +209,7 @@ impl PyMutableDataset {
         let buf: Vec<u8> = py.detach(move || {
             let quads = store.collect_all_quads();
             let dataset = dataset_from_quads_verbatim(&quads, &store.declared_graphs())
-                .map_err(PyValueError::new_err)?;
+                .map_err(|e| super::presentation::value_error(e.to_string(), &e))?;
             let selection = match (&graph_filter, explicit_from_graph) {
                 (Some(name), _) => SerializeGraph::Named(name),
                 // An explicit default-graph (`from_graph=DefaultGraph`) selection.
@@ -232,7 +231,7 @@ impl PyMutableDataset {
                 },
             )
             .map(|outcome| outcome.bytes)
-            .map_err(|e| PyValueError::new_err(format!("dump error: {e}")))
+            .map_err(|e| super::presentation::value_error(format!("dump error: {e}"), &e))
         })?;
         match output {
             Some(output) => {
@@ -249,18 +248,10 @@ impl PyMutableDataset {
         let store: &mut PyQuadStore = slf.as_super();
         let frozen = py
             .detach(|| store.inner.freeze())
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(|e| super::presentation::value_error(e.to_string(), &e))?;
         store.inner =
             MutableDataset::new_with_graph_existence(frozen, store.inner.graph_existence());
         Ok(())
-    }
-}
-
-impl PyMutableDataset {
-    fn allocate_blank_scope(&mut self) -> BlankScope {
-        let scope = BlankScope(self.next_blank_scope);
-        self.next_blank_scope = self.next_blank_scope.checked_add(1).unwrap_or(1);
-        scope
     }
 }
 

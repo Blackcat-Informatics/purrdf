@@ -271,7 +271,7 @@ macro_rules! eval_project_sequence {
 pub(crate) fn eval_project<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let workspace = ctx.growth.clone();
@@ -280,7 +280,14 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
             VarSchema::from_vars_admitted(variables.iter().cloned(), &workspace)?
                 .shared_admitted(&workspace)
         } else {
-            Ok(VarSchema::interned(variables))
+            Ok(match variables {
+                purrdf_sparql_algebra::ProjectionNames::Explicit(names) => {
+                    VarSchema::interned(names)
+                }
+                purrdf_sparql_algebra::ProjectionNames::Star(names) => {
+                    VarSchema::from_vars(names.iter().cloned()).shared_resident()
+                }
+            })
         }
     };
     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
@@ -300,7 +307,7 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
 pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     node: &GraphPattern,
     inner: &GraphPattern,
-    variables: &[Variable],
+    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
     delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
@@ -310,11 +317,18 @@ pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelive
             inner,
             delivery,
             |seq, ctx| {
-                let out = if ctx.dataset.storage_live_budget().is_some() {
+                let out = if ctx.growth.is_bounded() {
                     VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
                         .shared_admitted(&ctx.growth)?
                 } else {
-                    VarSchema::interned(variables)
+                    match variables {
+                        purrdf_sparql_algebra::ProjectionNames::Explicit(names) => {
+                            VarSchema::interned(names)
+                        }
+                        purrdf_sparql_algebra::ProjectionNames::Star(names) => {
+                            VarSchema::from_vars(names.iter().cloned()).shared_resident()
+                        }
+                    }
                 };
                 let lift = Lift::at_admitted(node, &ctx.growth)?;
                 let projected =
@@ -494,8 +508,23 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
     length: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
+    let child = eval_evaluated(inner, ctx)?;
+    finish_slice(node, start, length, lift, child, ctx)
+}
+
+/// Complete the original slice after its child returns. The ordinary node
+/// worklist retains `lift` and the local cap while that child is suspended.
+pub(crate) fn finish_slice<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    start: usize,
+    length: Option<usize>,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = lift.attach(node);
+    let Some(seq) = lift.absorb(0, child) else {
         return Ok(lift.withheld());
     };
     let mut rows = RowsBuilder::new(&ctx.growth);
@@ -655,8 +684,9 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     }
     let mut values = AdmittedVec::with_capacity(cells, &ctx.growth)?;
     for row in &seq.rows {
-        for key in linked.as_mut_slice() {
-            let term = key.term(row, &schema, ctx)?;
+        for (key, order) in linked.as_mut_slice().iter_mut().zip(exprs) {
+            let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
+            let term = key.term(Some(expression), row, &schema, ctx)?;
             values.push(
                 term.map(|t| {
                     ctx.scratch
@@ -1032,6 +1062,7 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
                     inner,
                     variables: _,
                 }
+                | GraphPattern::ProjectStar { inner, .. }
                 | GraphPattern::Distinct { inner }
                 | GraphPattern::Reduced { inner }
                 | GraphPattern::OrderBy {
@@ -2904,11 +2935,13 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                                 agg.args().len(),
                                 &ctx.growth.clone(),
                                 |probe| {
-                                    for (slot, link) in probe
+                                    for ((slot, link), expression) in probe
                                         .iter_mut()
                                         .zip(&mut links.as_mut_slice()[..agg.args().len()])
+                                        .zip(agg.args())
                                     {
-                                        *slot = link.term(row, &seq.schema, ctx)?;
+                                        *slot =
+                                            link.term(Some(expression), row, &seq.schema, ctx)?;
                                     }
                                     Ok(())
                                 },
@@ -2922,11 +2955,12 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                         identity(row)?
                     } else {
                         RetainedRow::try_build(agg.args().len(), &ctx.growth.clone(), |terms| {
-                            for (slot, link) in terms
+                            for ((slot, link), expression) in terms
                                 .iter_mut()
                                 .zip(&mut links.as_mut_slice()[..agg.args().len()])
+                                .zip(agg.args())
                             {
-                                *slot = link.term(row, &seq.schema, ctx)?;
+                                *slot = link.term(Some(expression), row, &seq.schema, ctx)?;
                             }
                             Ok(())
                         })?
@@ -3470,7 +3504,7 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
             ChargePoint::AggregateAccumulation,
         );
         for &i in idxs {
-            let Some(term) = first_arg.term(&rows[i], schema, ctx)? else {
+            let Some(term) = first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)? else {
                 continue;
             };
             if let Err(tripped) = checkpoint.pass(ctx) {
@@ -3832,8 +3866,8 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     for &i in idxs {
         let mut tuple = AggregateSurvivors::new(&ctx.growth);
         let mut every_position_bound = true;
-        for argument in &mut links[..agg.args().len()] {
-            let Some(term) = argument.term(&rows[i], schema, ctx)? else {
+        for (argument, expression) in links[..agg.args().len()].iter_mut().zip(agg.args()) {
+            let Some(term) = argument.term(Some(expression), &rows[i], schema, ctx)? else {
                 every_position_bound = false;
                 break;
             };
@@ -4237,7 +4271,9 @@ impl NumericFold {
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         self.sum_value(workspace)?
-            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .map(|value| {
+                crate::expr::xsd_workspace_value(&value, workspace, value.datatype().iri())
+            })
             .transpose()
     }
 
@@ -4248,7 +4284,9 @@ impl NumericFold {
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         self.avg_value(division, absorb, workspace)?
-            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .map(|value| {
+                crate::expr::xsd_workspace_value(&value, workspace, value.datatype().iri())
+            })
             .transpose()
     }
 
@@ -5428,6 +5466,59 @@ mod tests {
         )
     }
 
+    #[test]
+    fn streamed_star_schema_retains_its_query_workspace_grant() {
+        use crate::workspace::owned_row_regressions::account;
+        use std::sync::atomic::Ordering;
+
+        let names = (0..256)
+            .map(|index| format!("?v{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&format!("SELECT * WHERE {{ VALUES ({names}) {{}} }}"))
+            .expect("valid wide star projection");
+        let GraphPattern::ProjectStar { variables, .. } = query.pattern() else {
+            panic!("star query retains its shared projection");
+        };
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        assert!(dataset.storage_live_budget().is_none());
+        let (workspace, ledger, base) = account(1 << 20);
+        let mut ctx = EvalCtx::new(dataset.as_ref());
+        ctx.growth = workspace.capability();
+        let inner = GraphPattern::empty_bgp();
+        let node = GraphPattern::ProjectStar {
+            inner: Child::new(inner.clone()),
+            variables: variables.clone(),
+        };
+        let mut delivered = 0;
+        let mut consume = |rows: &SolutionSeq, _: &mut EvalCtx<'_, RdfDataset>| {
+            delivered += 1;
+            assert_eq!(rows.schema.len(), 256);
+            assert_eq!(rows.rows.len(), 1);
+            assert!(
+                ledger.live.load(Ordering::Relaxed)
+                    >= base + u64::try_from(rows.schema.retained_size_bytes()).unwrap(),
+                "the delivered schema remains covered by the query reservation"
+            );
+            Ok(std::ops::ControlFlow::Continue(()))
+        };
+        let outcome = eval_project_with(
+            &node,
+            &inner,
+            purrdf_sparql_algebra::ProjectionNames::Star(variables),
+            &mut crate::eval::RowConsumer::new(&mut consume),
+            &mut ctx,
+        )
+        .expect("streamed projection fits its workspace");
+        assert_eq!(delivered, 1);
+        drop(outcome);
+        drop(ctx);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
     fn eval_slice<D: DatasetView<Id = purrdf_core::TermId> + Sync>(
         inner: &GraphPattern,
         start: usize,
@@ -5452,16 +5543,18 @@ mod tests {
     fn ages() -> Arc<RdfDataset> {
         // :a :age 30 ; :b :age 17 ; :c :age 30  (duplicate age 30)
         let mut b = RdfDatasetBuilder::new();
-        let age = b.intern_iri("http://ex/age");
+        let age = b.intern_iri("http://ex/age").unwrap();
         for (s, n) in [("a", "30"), ("b", "17"), ("c", "30")] {
-            let subj = b.intern_iri(&format!("http://ex/{s}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: n.to_owned(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, age, val, None);
+            let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: n.to_owned(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, age, val, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -5764,25 +5857,27 @@ mod tests {
         // :c :type :T ; :age 17
         // :d :type :U ; :age 42
         let mut b = RdfDatasetBuilder::new();
-        let age = b.intern_iri("http://ex/age");
-        let ty = b.intern_iri("http://ex/type");
-        let t = b.intern_iri("http://ex/T");
-        let u = b.intern_iri("http://ex/U");
+        let age = b.intern_iri("http://ex/age").unwrap();
+        let ty = b.intern_iri("http://ex/type").unwrap();
+        let t = b.intern_iri("http://ex/T").unwrap();
+        let u = b.intern_iri("http://ex/U").unwrap();
         for (s, n, g) in [
             ("a", "30", t),
             ("b", "30", t),
             ("c", "17", t),
             ("d", "42", u),
         ] {
-            let subj = b.intern_iri(&format!("http://ex/{s}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: n.to_owned(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, ty, g, None);
-            b.push_quad(subj, age, val, None);
+            let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: n.to_owned(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, ty, g, None).unwrap();
+            b.push_quad(subj, age, val, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -6146,16 +6241,18 @@ mod tests {
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/v");
+        let p = b.intern_iri("http://ex/v").unwrap();
         for (s, lex, dt) in [("a", "1", XINT), ("b", "0.5", XDEC)] {
-            let subj = b.intern_iri(&format!("http://ex/{s}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: lex.to_owned(),
-                datatype: Some(dt.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, p, val, None);
+            let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: lex.to_owned(),
+                    datatype: Some(dt.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, p, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
@@ -6225,10 +6322,10 @@ mod tests {
         // SUM over a string value → unbound (Ok(None) in the aggregate output).
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/label");
-        let subj = b.intern_iri("http://ex/x");
-        let val = b.intern_literal(RdfLiteral::simple("hello"));
-        b.push_quad(subj, p, val, None);
+        let p = b.intern_iri("http://ex/label").unwrap();
+        let subj = b.intern_iri("http://ex/x").unwrap();
+        let val = b.intern_literal(RdfLiteral::simple("hello")).unwrap();
+        b.push_quad(subj, p, val, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
         let bgp = GraphPattern::Bgp {
@@ -6268,16 +6365,18 @@ mod tests {
         // AVG(?n) over {2, 4} → 3.0 (decimal, NOT integer).
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/v");
+        let p = b.intern_iri("http://ex/v").unwrap();
         for (s, n) in [("a", "2"), ("b", "4")] {
-            let subj = b.intern_iri(&format!("http://ex/{s}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: n.to_owned(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, p, val, None);
+            let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: n.to_owned(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, p, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
@@ -6346,18 +6445,20 @@ mod tests {
         // GROUP BY ?s, SUM(?n) per group: dataset has two subjects each with two values.
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/score");
+        let p = b.intern_iri("http://ex/score").unwrap();
         // :alice → 10, 20 ; :bob → 5, 15
         for (s, vals) in [("alice", vec!["10", "20"]), ("bob", vec!["5", "15"])] {
             for v in vals {
-                let subj = b.intern_iri(&format!("http://ex/{s}"));
-                let val = b.intern_literal(RdfLiteral {
-                    lexical_form: v.to_owned(),
-                    datatype: Some(XINT.to_owned()),
-                    language: None,
-                    direction: None,
-                });
-                b.push_quad(subj, p, val, None);
+                let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+                let val = b
+                    .intern_literal(RdfLiteral {
+                        lexical_form: v.to_owned(),
+                        datatype: Some(XINT.to_owned()),
+                        language: None,
+                        direction: None,
+                    })
+                    .unwrap();
+                b.push_quad(subj, p, val, None).unwrap();
             }
         }
         let ds = b.freeze().expect("freeze");
@@ -6421,16 +6522,18 @@ mod tests {
     fn numeric_fold_dataset(values: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/v");
+        let p = b.intern_iri("http://ex/v").unwrap();
         for (s, lex, dt) in values {
-            let subj = b.intern_iri(&format!("http://ex/{s}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: (*lex).to_owned(),
-                datatype: Some((*dt).to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, p, val, None);
+            let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: (*lex).to_owned(),
+                    datatype: Some((*dt).to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, p, val, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -6515,19 +6618,14 @@ mod tests {
         );
     }
 
-    /// `AVG` over a total that genuinely exceeds `i128`, where the scale-18
-    /// quotient mantissa ALSO exceeds `i128` (`bigint_avg_decimal` alone would
-    /// answer `None` here — see `purrdf_xsd::numeric`'s doc on it): must still
-    /// answer exactly rather than go unbound.
+    /// `AVG` over a total that exceeds `i128` must answer through the exact
+    /// numeric division home rather than go unbound.
     /// `AVG({i128::MAX, i128::MAX})` = `i128::MAX` exactly (the two `i128::MAX`
-    /// values sum to `2 × i128::MAX`, divided by a count of 2), rendered through
-    /// [`purrdf_xsd::bigint_avg_decimal_lexical`]'s TEXT bypass — the same shape
+    /// values sum to `2 × i128::MAX`, divided by a count of 2) — the same shape
     /// [`sum_overflow_exceeding_i128_answers_exact_total`] pins for `SUM`. This
-    /// is the exact fixture the crate's public rustdoc worked example describes
-    /// (`(i128::MAX + i128::MAX) / 2 == i128::MAX`); before the lexical-text
-    /// fallback existed this answered unbound instead, because `Decimal`'s own
-    /// `i128`-mantissa bound rejects the scale-18 quotient even though the
-    /// value itself is an ordinary integer.
+    /// is the exact fixture `(i128::MAX + i128::MAX) / 2 == i128::MAX`.
+    /// The historical bounded representation rejected its scale-18 coefficient
+    /// even though the value itself is an ordinary integer.
     #[test]
     fn avg_overflow_exceeding_i128_answers_exact_total() {
         let max = i128::MAX.to_string();
@@ -7098,16 +7196,18 @@ mod tests {
     /// a chosen literal set through the real `ORDER BY` operator.
     fn typed_values(values: &[(&str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/v");
+        let p = b.intern_iri("http://ex/v").unwrap();
         for (i, (lexical, local)) in values.iter().enumerate() {
-            let s = b.intern_iri(&format!("http://ex/s{i}"));
-            let o = b.intern_literal(RdfLiteral {
-                lexical_form: (*lexical).to_owned(),
-                datatype: Some(format!("http://www.w3.org/2001/XMLSchema#{local}")),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let o = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: (*lexical).to_owned(),
+                    datatype: Some(format!("http://www.w3.org/2001/XMLSchema#{local}")),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -7315,24 +7415,28 @@ mod tests {
         const ROWS: i64 = 260;
 
         let mut b = RdfDatasetBuilder::new();
-        let cat_pred = b.intern_iri("http://ex/cat");
-        let val_pred = b.intern_iri("http://ex/val");
+        let cat_pred = b.intern_iri("http://ex/cat").unwrap();
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..ROWS {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
-            let cat = b.intern_literal(RdfLiteral {
-                lexical_form: format!("cat{}", i % GROUPS),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: i.to_string(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, cat_pred, cat, None);
-            b.push_quad(subj, val_pred, val, None);
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let cat = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: format!("cat{}", i % GROUPS),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: i.to_string(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, cat_pred, cat, None).unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -7435,16 +7539,18 @@ mod tests {
         const ROWS: i64 = 3000;
 
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..ROWS {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: i.to_string(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, val_pred, val, None);
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: i.to_string(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -7530,9 +7636,9 @@ mod tests {
         const ROWS: i64 = 3000;
 
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..ROWS {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
             // Row 5 and row 2900 (far apart — different chunks under any
             // reasonable chunk size) share the SAME value "5"; every other row
             // is unique. The DISTINCT-kept representative must be row 5's
@@ -7542,13 +7648,15 @@ mod tests {
             } else {
                 i.to_string()
             };
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: lex,
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, val_pred, val, None);
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: lex,
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -7794,13 +7902,15 @@ mod tests {
     fn group_concat_poisons_on_a_blank_node_value() {
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/v");
-        let s1 = b.intern_iri("http://ex/s1");
-        let v1 = b.intern_literal(RdfLiteral::simple("first"));
-        b.push_quad(s1, p, v1, None);
-        let s2 = b.intern_iri("http://ex/s2");
-        let blank = b.intern_blank("b0", purrdf_core::BlankScope::DEFAULT);
-        b.push_quad(s2, p, blank, None);
+        let p = b.intern_iri("http://ex/v").unwrap();
+        let s1 = b.intern_iri("http://ex/s1").unwrap();
+        let v1 = b.intern_literal(RdfLiteral::simple("first")).unwrap();
+        b.push_quad(s1, p, v1, None).unwrap();
+        let s2 = b.intern_iri("http://ex/s2").unwrap();
+        let blank = b
+            .intern_blank("b0", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        b.push_quad(s2, p, blank, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
         let bgp = GraphPattern::Bgp {
@@ -7845,22 +7955,24 @@ mod tests {
     fn aggregates_skip_unbound_argument_rows_but_count_star_does_not() {
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let ty = b.intern_iri("http://ex/type");
-        let thing = b.intern_iri("http://ex/Thing");
-        let n = b.intern_iri("http://ex/n");
+        let ty = b.intern_iri("http://ex/type").unwrap();
+        let thing = b.intern_iri("http://ex/Thing").unwrap();
+        let n = b.intern_iri("http://ex/n").unwrap();
         for s in ["a", "b", "c"] {
-            let subj = b.intern_iri(&format!("http://ex/{s}"));
-            b.push_quad(subj, ty, thing, None);
+            let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+            b.push_quad(subj, ty, thing, None).unwrap();
         }
         for (s, lex) in [("a", "30"), ("b", "17")] {
-            let subj = b.intern_iri(&format!("http://ex/{s}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: lex.to_owned(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, n, val, None);
+            let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: lex.to_owned(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, n, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
@@ -7978,16 +8090,18 @@ mod tests {
         use purrdf_core::RdfLiteral;
         const ROWS: i64 = 2000;
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..ROWS {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: i.to_string(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, val_pred, val, None);
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: i.to_string(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -8110,11 +8224,11 @@ mod tests {
         const ROWS: i64 = 3000;
 
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..ROWS {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
-            let val = b.intern_literal(RdfLiteral::simple(i.to_string()));
-            b.push_quad(subj, val_pred, val, None);
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let val = b.intern_literal(RdfLiteral::simple(i.to_string())).unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -8177,11 +8291,11 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..ROWS {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
-            let val = b.intern_literal(RdfLiteral::simple(i.to_string()));
-            b.push_quad(subj, val_pred, val, None);
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let val = b.intern_literal(RdfLiteral::simple(i.to_string())).unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -8237,16 +8351,18 @@ mod tests {
         use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..rows {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: i.to_string(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, val_pred, val, None);
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: i.to_string(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -8333,16 +8449,18 @@ mod tests {
         use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION;
 
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..rows {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: format!("P{}D", 2 * i),
-                datatype: Some(XSD_DAY_TIME_DURATION.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, val_pred, val, None);
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: format!("P{}D", 2 * i),
+                    datatype: Some(XSD_DAY_TIME_DURATION.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -8419,17 +8537,19 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         for i in 0..ROWS {
-            let subj = b.intern_iri(&format!("http://ex/s{i}"));
+            let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
             let v = if i < REPEATED_UP_TO { 7 } else { i };
-            let val = b.intern_literal(RdfLiteral {
-                lexical_form: v.to_string(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, val_pred, val, None);
+            let val = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: v.to_string(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, val_pred, val, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -8465,18 +8585,20 @@ mod tests {
         const NS: &str = "http://example.org/agg/";
 
         let mut b = RdfDatasetBuilder::new();
-        let val_pred = b.intern_iri("http://ex/val");
+        let val_pred = b.intern_iri("http://ex/val").unwrap();
         let mut i = 0i64;
         for _ in 0..REPEATS {
             for &v in &KNOWN {
-                let subj = b.intern_iri(&format!("http://ex/s{i}"));
-                let val = b.intern_literal(RdfLiteral {
-                    lexical_form: v.to_string(),
-                    datatype: Some(XINT.to_owned()),
-                    language: None,
-                    direction: None,
-                });
-                b.push_quad(subj, val_pred, val, None);
+                let subj = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+                let val = b
+                    .intern_literal(RdfLiteral {
+                        lexical_form: v.to_string(),
+                        datatype: Some(XINT.to_owned()),
+                        language: None,
+                        direction: None,
+                    })
+                    .unwrap();
+                b.push_quad(subj, val_pred, val, None).unwrap();
                 i += 1;
             }
         }
@@ -9130,6 +9252,7 @@ mod emptiness_proof_tests {
             | GraphPattern::Extend { inner, .. }
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::OrderBy { inner, .. }

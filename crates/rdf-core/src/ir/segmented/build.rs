@@ -84,21 +84,20 @@ pub struct SegmentedBuilder {
 }
 impl SegmentedBuilder {
     /// Reserve the resident fixture capacities before accepting input.
-    #[must_use]
-    pub fn new(limits: SegmentedBuildLimits) -> Self {
+    pub fn new(limits: SegmentedBuildLimits) -> Result<Self, SegmentedError> {
         let mut builder = RdfDatasetBuilder::new();
         builder.reserve_for_replay(
             usize::try_from(limits.terms).expect("u32 capacity fits supported pointer widths"),
             usize::try_from(limits.term_bytes).expect("u32 capacity fits supported pointer widths"),
             usize::try_from(limits.rows).expect("u32 capacity fits supported pointer widths"),
-        );
-        Self {
+        )?;
+        Ok(Self {
             builder,
             limits,
             admitted_terms: 0,
             admitted_bytes: 0,
             admitted_rows: 0,
-        }
+        })
     }
 
     fn global(&self, id: TermId) -> GlobalTermId {
@@ -106,18 +105,22 @@ impl SegmentedBuilder {
             self.limits.first_term_index
                 + u64::try_from(id.index()).expect("resident term index fits u64"),
         )
+        .expect("stored term index is representable")
     }
     fn local(&self, id: GlobalTermId) -> Result<TermId, SegmentedError> {
         let index = id
             .index()
             .checked_sub(self.limits.first_term_index)
             .ok_or(SegmentedError::Corrupt("foreign constructor term ID"))?;
-        if index >= self.admitted_terms {
+        let stored = u64::try_from(self.builder.term_count())
+            .map_err(|_| SegmentedError::AddressExhausted)?;
+        if index >= stored {
             return Err(SegmentedError::Corrupt("foreign constructor term ID"));
         }
-        Ok(TermId::from_index(
-            u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?,
-        ))
+        Ok(
+            TermId::from_index(u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?)
+                .expect("stored term index is representable"),
+        )
     }
 
     /// Intern a batch through one normalization authority, without allocating a batch
@@ -148,15 +151,15 @@ impl SegmentedBuilder {
             }
             // The conservative bound includes dependency IRIs and composite blank
             // labels. It is intentionally independent of whether interning hits.
+            let id = self.builder.intern_value(value)?;
             self.admitted_terms = next_terms;
             self.admitted_bytes = next_bytes;
-            let id = self.builder.intern_value(value);
             visit(value, self.global(id));
         }
         Ok(())
     }
 
-    fn admit_row(&mut self) -> Result<(), SegmentedError> {
+    fn next_row_count(&self) -> Result<u64, SegmentedError> {
         let next = self
             .admitted_rows
             .checked_add(1)
@@ -164,8 +167,7 @@ impl SegmentedBuilder {
         if next > u64::from(self.limits.rows) {
             return Err(SegmentedError::ConstructionLimit);
         }
-        self.admitted_rows = next;
-        Ok(())
+        Ok(next)
     }
     /// Add a primary quad. Duplicate rows are normalized by the shared IR freeze.
     ///
@@ -178,8 +180,9 @@ impl SegmentedBuilder {
             self.local(quad.o)?,
         );
         let g = quad.g.map(|id| self.local(id)).transpose()?;
-        self.admit_row()?;
-        self.builder.push_quad(s, p, o, g);
+        let rows = self.next_row_count()?;
+        self.builder.push_quad(s, p, o, g)?;
+        self.admitted_rows = rows;
         Ok(())
     }
     /// Add a scoped RDF 1.2 reifier binding.
@@ -208,10 +211,11 @@ impl SegmentedBuilder {
         if terms > u64::from(self.limits.terms) || bytes > u64::from(self.limits.term_bytes) {
             return Err(SegmentedError::ConstructionLimit);
         }
-        self.admit_row()?;
+        let rows = self.next_row_count()?;
+        self.builder.push_reifier_in_graph(r, t, g)?;
         self.admitted_terms = terms;
         self.admitted_bytes = bytes;
-        self.builder.push_reifier_in_graph(r, t, g);
+        self.admitted_rows = rows;
         Ok(())
     }
     /// Add a scoped RDF 1.2 statement annotation.
@@ -225,8 +229,9 @@ impl SegmentedBuilder {
             self.local(quad.o)?,
         );
         let g = quad.g.map(|id| self.local(id)).transpose()?;
-        self.admit_row()?;
-        self.builder.push_annotation_in_graph(s, p, o, g);
+        let rows = self.next_row_count()?;
+        self.builder.push_annotation_in_graph(s, p, o, g)?;
+        self.admitted_rows = rows;
         Ok(())
     }
     /// Preserve an explicit named graph, including a graph with no rows.
@@ -235,8 +240,9 @@ impl SegmentedBuilder {
     /// Refuses foreign IDs and the same resident row/declaration ceiling.
     pub fn declare_named_graph(&mut self, graph: GlobalTermId) -> Result<(), SegmentedError> {
         let graph = self.local(graph)?;
-        self.admit_row()?;
-        self.builder.declare_named_graph(graph);
+        let rows = self.next_row_count()?;
+        self.builder.declare_named_graph(graph)?;
+        self.admitted_rows = rows;
         Ok(())
     }
     /// Validate RDF, encode the versioned blocks and certify their complete index law.
@@ -245,10 +251,9 @@ impl SegmentedBuilder {
     /// Returns structural RDF validation, format-capacity or complete certification
     /// errors. No usable receipt is minted for a partial or invalid image.
     pub fn seal(self) -> Result<SegmentedImage, SegmentedError> {
-        let dataset = self
-            .builder
-            .freeze()
-            .map_err(|_| SegmentedError::Corrupt("resident RDF freeze rejected the fixture"))?;
+        let dataset = self.builder.freeze().map_err(|error| {
+            SegmentedError::from_rdf(error, "resident RDF freeze rejected the fixture")
+        })?;
         encode_dataset(dataset.as_ref(), self.limits)
     }
 }
@@ -476,8 +481,11 @@ impl SegmentedImage {
         {
             return Err(SegmentedError::ConstructionLimit);
         }
-        let mut builder = SegmentedBuilder::new(limits);
-        super::super::import::DatasetImporter::new(&mut builder.builder, source.as_ref()).append();
+        let mut builder = SegmentedBuilder::new(limits)?;
+        super::super::import::DatasetImporter::new(&mut builder.builder, source.as_ref())
+            .map_err(purrdf_lex::allocation::StorageError::from)?
+            .append()
+            .map_err(purrdf_lex::allocation::StorageError::from)?;
         builder.admitted_terms = terms;
         builder.admitted_bytes = term_bytes;
         builder.admitted_rows = rows;
@@ -500,6 +508,7 @@ impl SegmentedImage {
 
 fn map_id(id: TermId, first: u64) -> GlobalTermId {
     GlobalTermId::from_index(first + u64::try_from(id.index()).expect("local term index fits u64"))
+        .expect("stored term index is representable")
 }
 fn map_quad(q: QuadIds, first: u64) -> QuadIds<GlobalTermId> {
     QuadIds {
@@ -523,7 +532,8 @@ fn encode_dataset(
     let mut footprints = Vec::with_capacity(dataset.term_count());
     for index in 0..dataset.term_count() {
         let local =
-            TermId::from_index(u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?);
+            TermId::from_index(u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?)
+                .expect("stored term index is representable");
         let mut key = Vec::new();
         format::encode_term(
             dataset
@@ -532,7 +542,7 @@ fn encode_dataset(
             &mut key,
         )?;
         footprints.push(expanded_footprint(
-            format::decode_term(&key)?,
+            format::decode_term(&key)?.map_ids(GlobalTermId::index),
             limits.first_term_index,
             &footprints,
         )?);
@@ -893,7 +903,7 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
     for (index, key) in keys.iter().enumerate() {
         let term = format::decode_term(key)?;
         footprints.push(expanded_footprint(
-            term,
+            term.map_ids(GlobalTermId::index),
             header.first_term_index,
             &footprints,
         )?);
@@ -934,7 +944,7 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
                 quoted = true;
                 builder.intern_triple(reference(s)?, reference(p)?, reference(o)?)
             }
-        };
+        }?;
         if id.index() != index {
             return Err(SegmentedError::Corrupt(
                 "dictionary duplicates or non-normalized RDF values",
@@ -982,10 +992,10 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
                                 "reifier stream predicate is not rdf:reifies",
                             ));
                         }
-                        builder.push_reifier_in_graph(s, o, g);
+                        builder.push_reifier_in_graph(s, o, g)
                     }
                     _ => builder.push_annotation_in_graph(s, p, o, g),
-                }
+                }?;
             }
             expected_summaries.push(summary(&rows, slot, table as u8)?);
         }
@@ -1018,7 +1028,7 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
             }
             previous = Some(id);
             graphs.insert(id);
-            builder.declare_named_graph(native_id(id)?);
+            builder.declare_named_graph(native_id(id)?)?;
         }
     }
     if u64::try_from(graphs.len()).map_err(|_| SegmentedError::AddressExhausted)?
@@ -1094,7 +1104,7 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
     }
     builder
         .freeze()
-        .map_err(|_| SegmentedError::Corrupt("RDF reference/role validation failed"))?;
+        .map_err(|error| SegmentedError::from_rdf(error, "RDF reference/role validation failed"))?;
     Ok(())
 }
 pub(super) fn fixed_records(bytes: &[u8], kind: u8, width: usize) -> Result<&[u8], SegmentedError> {
@@ -1115,14 +1125,13 @@ pub(super) fn fixed_records(bytes: &[u8], kind: u8, width: usize) -> Result<&[u8
 }
 
 fn expanded_footprint(
-    term: TermRef<'_, GlobalTermId>,
+    term: TermRef<'_, u64>,
     first: u64,
     previous: &[(u64, u32)],
 ) -> Result<(u64, u32), SegmentedError> {
     let base = OWNED_TERM_NODE_BYTES;
-    let reference = |id: GlobalTermId| -> Result<(u64, u32), SegmentedError> {
-        id.index()
-            .checked_sub(first)
+    let reference = |id: u64| -> Result<(u64, u32), SegmentedError> {
+        id.checked_sub(first)
             .and_then(|v| usize::try_from(v).ok())
             .and_then(|v| previous.get(v).copied())
             .ok_or(SegmentedError::Corrupt(
@@ -1176,13 +1185,116 @@ fn expanded_footprint(
     ))
 }
 
+/// Compute the same certified expansion law once when a resident carrier is
+/// frozen into a publication, never when a query opens or a snapshot is cloned.
+pub(super) fn resident_owned_term_bound(dataset: &RdfDataset) -> Result<u64, SegmentedError> {
+    use purrdf_lex::allocation::{Memory, Resident, StorageError};
+    let mut footprints = Vec::new();
+    Memory::new(&mut Resident).reserve(&mut footprints, dataset.term_count())?;
+    let mut widest = 0;
+    for index in 0..dataset.term_count() {
+        let id =
+            TermId::from_index(u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?)
+                .map_err(StorageError::from)?;
+        let footprint = expanded_footprint(
+            dataset.resolve(id).map_ids(|id| u64::from(id.raw() - 1)),
+            0,
+            &footprints,
+        )?;
+        widest = widest.max(footprint.0);
+        footprints.push(footprint);
+    }
+    Ok(widest)
+}
+
 #[cfg(test)]
 mod certification_tests {
     use super::*;
 
+    #[test]
+    fn freeze_storage_refusal_stays_distinct_from_malformed_rdf() {
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+
+        struct Ceiling<'a>(&'a core::cell::Cell<usize>);
+        impl Admission for Ceiling<'_> {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                if bytes > self.0.get() {
+                    Err(StorageError::AdmissionFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let ceiling = core::cell::Cell::new(usize::MAX);
+        let mut grant = Ceiling(&ceiling);
+        let mut memory = Memory::new(&mut grant);
+        let mut native = RdfDatasetBuilder::new();
+        native
+            .intern_iri_with_memory("http://example.org/graph", &mut memory)
+            .unwrap();
+        ceiling.set(memory.admitted_bytes());
+        let refusal = native.freeze_with_memory(&mut memory).unwrap_err();
+        let diagnostic = crate::RdfDiagnostic::from(refusal);
+        assert_eq!(
+            diagnostic.storage_error(),
+            Some(StorageError::AdmissionFailed)
+        );
+        assert_eq!(memory.admitted_bytes(), 0);
+        for boundary in [
+            "resident RDF freeze rejected the fixture",
+            "RDF reference/role validation failed",
+        ] {
+            assert_eq!(
+                SegmentedError::from_rdf(diagnostic.clone(), boundary),
+                SegmentedError::Storage(StorageError::AdmissionFailed)
+            );
+        }
+
+        let limits = SegmentedBuildLimits::new(2, 1024, 1, 512, 2).unwrap();
+        let mut invalid = SegmentedBuilder::new(limits).unwrap();
+        let graph = invalid
+            .builder
+            .intern_literal(crate::RdfLiteral::simple("literal"))
+            .unwrap();
+        invalid.builder.declare_named_graph(graph).unwrap();
+        assert!(matches!(
+            invalid.seal(),
+            Err(SegmentedError::Corrupt(
+                "resident RDF freeze rejected the fixture"
+            ))
+        ));
+    }
+
+    #[test]
+    fn conservative_term_admission_does_not_authorize_unminted_ids() {
+        let first = 1_u64 << 40;
+        let limits = SegmentedBuildLimits::new(2, 1024, 1, 512, 2)
+            .unwrap()
+            .with_first_term_index(first)
+            .unwrap();
+        let mut builder = SegmentedBuilder::new(limits).unwrap();
+        let value = TermValue::iri("http://example.org/graph");
+        let mut id = None;
+        builder
+            .intern_batch(&[value.clone(), value], |_, term| id = Some(term))
+            .unwrap();
+        assert_eq!(builder.admitted_terms, 2);
+        assert_eq!(builder.builder.term_count(), 1);
+        let foreign = GlobalTermId::from_index(first + 1).unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                builder.declare_named_graph(foreign),
+                Err(SegmentedError::Corrupt("foreign constructor term ID"))
+            ));
+            assert_eq!(builder.admitted_rows, 0);
+        }
+        builder.declare_named_graph(id.unwrap()).unwrap();
+        assert_eq!(builder.admitted_rows, 1);
+    }
+
     fn image() -> SegmentedImage {
         let limits = SegmentedBuildLimits::new(100, 20_000, 100, 1024, 4).unwrap();
-        let mut builder = SegmentedBuilder::new(limits);
+        let mut builder = SegmentedBuilder::new(limits).unwrap();
         let values = (0..13)
             .map(|n| TermValue::iri(format!("http://example.org/{n:02}")))
             .collect::<Vec<_>>();

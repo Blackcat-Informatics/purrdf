@@ -1045,7 +1045,7 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
             .get(&id)
             .or_else(|| self.extra.get(&id))
             .expect("every blank node holds a canonical or continuation label");
-        Ok(builder.intern_blank(label, BlankScope::DEFAULT))
+        Ok(builder.intern_blank(label, BlankScope::DEFAULT)?)
     }
 
     fn map_iri(
@@ -1054,7 +1054,7 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
         iri: &str,
         _iri_only: bool,
     ) -> Result<TermId, CanonError> {
-        Ok(builder.intern_iri(iri))
+        Ok(builder.intern_iri(iri)?)
     }
 
     fn record_term(&mut self, source: TermId, target: TermId) {
@@ -2016,6 +2016,10 @@ impl std::error::Error for ReservedVocabulary {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CanonError {
+    /// The rewritten dataset could not be frozen with its original diagnostic.
+    Invalid(crate::RdfDiagnostic),
+    /// Logical capacity or physical storage refusal during the rewrite.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The n-degree search's call/permutation budget was exhausted.
     BudgetExceeded(BudgetExceeded),
     /// The input carries an IRI in the profile's reserved namespace.
@@ -2027,6 +2031,8 @@ pub enum CanonError {
 impl std::fmt::Display for CanonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Invalid(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
             Self::BudgetExceeded(err) => err.fmt(f),
             Self::ReservedVocabulary(err) => err.fmt(f),
             Self::Read(error) => write!(f, "dataset read failed: {error}"),
@@ -2037,12 +2043,19 @@ impl std::fmt::Display for CanonError {
 impl std::error::Error for CanonError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Invalid(error) => Some(error),
+            Self::Storage(error) => Some(error),
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
             Self::Read(_) => None,
         }
     }
 }
+
+purrdf_lex::variant_from!(CanonError {
+    Storage(purrdf_lex::allocation::StorageError),
+    Invalid(crate::RdfDiagnostic)
+});
 
 impl From<BudgetExceeded> for CanonError {
     fn from(err: BudgetExceeded) -> Self {
@@ -2866,7 +2879,7 @@ mod tests {
     use std::sync::Arc;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     fn canon(ds: &RdfDataset) -> String {
@@ -2882,8 +2895,8 @@ mod tests {
             iri(&mut b, "o1"),
             iri(&mut b, "o2"),
         );
-        b.push_quad(s, p, o2, None);
-        b.push_quad(s, p, o1, None);
+        b.push_quad(s, p, o2, None).unwrap();
+        b.push_quad(s, p, o1, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(
             canon(&ds),
@@ -2924,8 +2937,8 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
-        b.push_reifier(r, triple);
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        b.push_reifier(r, triple).unwrap();
         let genuine = b.freeze().expect("valid");
         let lowered = canon(&genuine);
         assert!(
@@ -2937,9 +2950,9 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, o, r) = (iri(&mut b, "s"), iri(&mut b, "o"), iri(&mut b, "r"));
         let pred = iri(&mut b, "p");
-        let sentinel = b.intern_iri(SENTINEL_REIFIES);
-        let triple = b.intern_triple(s, pred, o);
-        b.push_quad(r, sentinel, triple, None);
+        let sentinel = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        b.push_quad(r, sentinel, triple, None).unwrap();
         let spelled = b.freeze().expect("valid");
         assert_eq!(
             spelled.reifier_quads().count(),
@@ -2963,10 +2976,10 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
-        let sentinel = b.intern_iri(SENTINEL_REIFIES);
-        b.push_reifier(r, triple);
-        b.push_quad(r, sentinel, triple, None);
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        let sentinel = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_quad(r, sentinel, triple, None).unwrap();
         let both = b.freeze().expect("valid");
         assert_eq!(
             try_canonicalize(&both)
@@ -2984,8 +2997,10 @@ mod tests {
     fn any_iri_in_the_reserved_namespace_is_refused_not_only_the_two_sentinels() {
         let mut b = RdfDatasetBuilder::new();
         let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
-        let unminted = b.intern_iri("urn:purrdf:rdfc:no-such-sentinel-exists-yet");
-        b.push_quad(s, unminted, o, None);
+        let unminted = b
+            .intern_iri("urn:purrdf:rdfc:no-such-sentinel-exists-yet")
+            .unwrap();
+        b.push_quad(s, unminted, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
@@ -3026,12 +3041,12 @@ mod tests {
                 iri(&mut b, "o"),
                 iri(&mut b, "g"),
             );
-            let bad = b.intern_iri(probe);
+            let bad = b.intern_iri(probe).unwrap();
             match position {
-                TermPosition::Subject => b.push_quad(bad, pred, o, None),
-                TermPosition::Predicate => b.push_quad(s, bad, o, None),
-                TermPosition::Object => b.push_quad(s, pred, bad, None),
-                TermPosition::Graph => b.push_quad(s, pred, o, Some(bad)),
+                TermPosition::Subject => b.push_quad(bad, pred, o, None).unwrap(),
+                TermPosition::Predicate => b.push_quad(s, bad, o, None).unwrap(),
+                TermPosition::Object => b.push_quad(s, pred, bad, None).unwrap(),
+                TermPosition::Graph => b.push_quad(s, pred, o, Some(bad)).unwrap(),
             }
             let _ = g;
             let ds = b.freeze().expect("valid");
@@ -3047,9 +3062,9 @@ mod tests {
         // Nested inside a triple term: reported at the slot the triple term occupies.
         let mut b = RdfDatasetBuilder::new();
         let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let bad = b.intern_iri(sentinel);
-        let quoted = b.intern_triple(s, bad, o);
-        b.push_quad(s, pred, quoted, None);
+        let bad = b.intern_iri(sentinel).unwrap();
+        let quoted = b.intern_triple(s, bad, o).unwrap();
+        b.push_quad(s, pred, quoted, None).unwrap();
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
@@ -3065,8 +3080,8 @@ mod tests {
         // can audit, and tomorrow's overlay may not leave it harmless.
         let mut b = RdfDatasetBuilder::new();
         let (s, pred) = (iri(&mut b, "s"), iri(&mut b, "p"));
-        let lit = b.intern_literal(RdfLiteral::typed("5", sentinel));
-        b.push_quad(s, pred, lit, None);
+        let lit = b.intern_literal(RdfLiteral::typed("5", sentinel)).unwrap();
+        b.push_quad(s, pred, lit, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
@@ -3085,14 +3100,14 @@ mod tests {
         let build = |reverse: bool| {
             let mut b = RdfDatasetBuilder::new();
             let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let bad_subject = b.intern_iri("urn:purrdf:rdfc:zzz");
-            let bad_object = b.intern_iri("urn:purrdf:rdfc:aaa");
+            let bad_subject = b.intern_iri("urn:purrdf:rdfc:zzz").unwrap();
+            let bad_object = b.intern_iri("urn:purrdf:rdfc:aaa").unwrap();
             let rows: [(TermId, TermId, TermId); 2] =
                 [(bad_subject, pred, o), (s, pred, bad_object)];
             let order: [usize; 2] = if reverse { [1, 0] } else { [0, 1] };
             for i in order {
                 let (a, c, d) = rows[i];
-                b.push_quad(a, c, d, None);
+                b.push_quad(a, c, d, None).unwrap();
             }
             b.freeze().expect("valid")
         };
@@ -3122,17 +3137,18 @@ mod tests {
     fn reserved_vocabulary_is_reported_ahead_of_the_poison_budget() {
         let mut b = RdfDatasetBuilder::new();
         let pred = iri(&mut b, "p");
-        let bad = b.intern_iri(SENTINEL_REIFIES);
+        let bad = b.intern_iri(SENTINEL_REIFIES).unwrap();
         // A wide symmetric blank ring: every blank has identical first-degree
         // structure, which is what drives the n-degree search.
         let blanks: Vec<TermId> = (0..24)
-            .map(|i| b.intern_blank(&format!("b{i}"), BlankScope(0)))
+            .map(|i| b.intern_blank(&format!("b{i}"), BlankScope(0)).unwrap())
             .collect();
         for w in blanks.windows(2) {
-            b.push_quad(w[0], pred, w[1], None);
+            b.push_quad(w[0], pred, w[1], None).unwrap();
         }
-        b.push_quad(blanks[blanks.len() - 1], pred, blanks[0], None);
-        b.push_quad(blanks[0], bad, blanks[1], None);
+        b.push_quad(blanks[blanks.len() - 1], pred, blanks[0], None)
+            .unwrap();
+        b.push_quad(blanks[0], bad, blanks[1], None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
@@ -3149,15 +3165,15 @@ mod tests {
     fn check_admissible_agrees_with_the_canonicalizer_on_both_answers() {
         let mut b = RdfDatasetBuilder::new();
         let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        b.push_quad(s, pred, o, None);
+        b.push_quad(s, pred, o, None).unwrap();
         let clean = b.freeze().expect("valid");
         assert!(check_admissible(&clean).is_ok());
         assert!(try_canonicalize(&clean).is_ok());
 
         let mut b = RdfDatasetBuilder::new();
         let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
-        let bad = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(s, bad, o, None);
+        let bad = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(s, bad, o, None).unwrap();
         let dirty = b.freeze().expect("valid");
         let screened = check_admissible(&dirty).expect_err("inadmissible");
         match try_canonicalize(&dirty) {
@@ -3178,8 +3194,8 @@ mod tests {
     fn the_trusted_entry_point_panics_on_reserved_vocabulary() {
         let mut b = RdfDatasetBuilder::new();
         let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
-        let bad = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(s, bad, o, None);
+        let bad = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(s, bad, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         let _ = canonicalize(&ds);
     }
@@ -3196,9 +3212,9 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
-        b.push_reifier(r, triple);
-        b.push_annotation(r, pred, o);
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, pred, o).unwrap();
         let ds = b.freeze().expect("valid");
         let out = try_canonicalize(&ds).expect("a genuine overlay must canonicalize");
         assert!(out.nquads.contains("<urn:purrdf:rdfc:reifies>"));
@@ -3239,25 +3255,28 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (p, q, o) = (iri(&mut b, "p"), iri(&mut b, "q"), iri(&mut b, "o"));
         let g = iri(&mut b, "g");
-        let shared = b.intern_blank("n", BlankScope::DEFAULT);
-        let scoped = b.intern_blank("n", BlankScope(4));
-        b.push_quad(shared, p, o, None);
-        b.push_quad(scoped, p, o, Some(g));
-        let triple = b.intern_triple(shared, p, o);
-        let blank_reifier = b.intern_blank("r", BlankScope(7));
+        let shared = b.intern_blank("n", BlankScope::DEFAULT).unwrap();
+        let scoped = b.intern_blank("n", BlankScope(4)).unwrap();
+        b.push_quad(shared, p, o, None).unwrap();
+        b.push_quad(scoped, p, o, Some(g)).unwrap();
+        let triple = b.intern_triple(shared, p, o).unwrap();
+        let blank_reifier = b.intern_blank("r", BlankScope(7)).unwrap();
         let iri_reifier = iri(&mut b, "nr");
         match spelling {
             Spelling::Native => {
-                b.push_reifier_in_graph(blank_reifier, triple, None);
-                b.push_reifier_in_graph(iri_reifier, triple, Some(g));
-                b.push_annotation_in_graph(blank_reifier, q, o, None);
+                b.push_reifier_in_graph(blank_reifier, triple, None)
+                    .unwrap();
+                b.push_reifier_in_graph(iri_reifier, triple, Some(g))
+                    .unwrap();
+                b.push_annotation_in_graph(blank_reifier, q, o, None)
+                    .unwrap();
             }
             Spelling::Lowered => {
-                let reifies = b.intern_iri(SENTINEL_REIFIES);
-                let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
-                b.push_quad(blank_reifier, reifies, triple, None);
-                b.push_quad(iri_reifier, reifies, triple, Some(g));
-                b.push_quad(blank_reifier, q, o, Some(annotation));
+                let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
+                let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH).unwrap();
+                b.push_quad(blank_reifier, reifies, triple, None).unwrap();
+                b.push_quad(iri_reifier, reifies, triple, Some(g)).unwrap();
+                b.push_quad(blank_reifier, q, o, Some(annotation)).unwrap();
             }
         }
         b.freeze().expect("valid")
@@ -3321,14 +3340,14 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (p, q, o) = (iri(&mut b, "p"), iri(&mut b, "q"), iri(&mut b, "o"));
         let g = iri(&mut b, "g");
-        let member = b.intern_blank("m", BlankScope(2));
-        b.push_quad(member, p, o, Some(g));
-        let triple = b.intern_triple(member, p, o);
+        let member = b.intern_blank("m", BlankScope(2)).unwrap();
+        b.push_quad(member, p, o, Some(g)).unwrap();
+        let triple = b.intern_triple(member, p, o).unwrap();
         let reifier = iri(&mut b, "r");
-        b.push_reifier_in_graph(reifier, triple, Some(g));
-        b.push_annotation_in_graph(reifier, q, o, Some(g));
+        b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+        b.push_annotation_in_graph(reifier, q, o, Some(g)).unwrap();
         // A neighbouring default-graph row that the scope must not admit.
-        b.push_quad(o, p, o, None);
+        b.push_quad(o, p, o, None).unwrap();
         let native = b.freeze().expect("valid");
 
         let scoped = canonicalize_graph_view(&*native, "http://example.org/g", CanonHash::Sha256);
@@ -3343,14 +3362,14 @@ mod tests {
         // layer spelled as the plain quads those lines are.
         let mut b = RdfDatasetBuilder::new();
         let (p, q, o) = (iri(&mut b, "p"), iri(&mut b, "q"), iri(&mut b, "o"));
-        let member = b.intern_blank("m", BlankScope::DEFAULT);
-        let triple = b.intern_triple(member, p, o);
+        let member = b.intern_blank("m", BlankScope::DEFAULT).unwrap();
+        let triple = b.intern_triple(member, p, o).unwrap();
         let reifier = iri(&mut b, "r");
-        let reifies = b.intern_iri(SENTINEL_REIFIES);
-        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
-        b.push_quad(member, p, o, None);
-        b.push_quad(reifier, reifies, triple, None);
-        b.push_quad(reifier, q, o, Some(annotation));
+        let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH).unwrap();
+        b.push_quad(member, p, o, None).unwrap();
+        b.push_quad(reifier, reifies, triple, None).unwrap();
+        b.push_quad(reifier, q, o, Some(annotation)).unwrap();
         let reread = b.freeze().expect("valid");
         assert_eq!(
             reread.quads().count(),
@@ -3430,8 +3449,8 @@ mod tests {
         // no reifier binding, because a reifier binds a triple term and nothing else.
         let mut b = RdfDatasetBuilder::new();
         let (r, o) = (iri(&mut b, "r"), iri(&mut b, "o"));
-        let reifies = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(r, reifies, o, None);
+        let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(r, reifies, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
@@ -3445,9 +3464,9 @@ mod tests {
         // over the namespace, and only the two lowered shapes are folded.
         let mut b = RdfDatasetBuilder::new();
         let (r, p, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let unminted = b.intern_iri("urn:purrdf:rdfc:reifies-ish");
-        let triple = b.intern_triple(r, p, o);
-        b.push_quad(r, unminted, triple, None);
+        let unminted = b.intern_iri("urn:purrdf:rdfc:reifies-ish").unwrap();
+        let triple = b.intern_triple(r, p, o).unwrap();
+        b.push_quad(r, unminted, triple, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
@@ -3460,8 +3479,8 @@ mod tests {
         // The sentinel in OBJECT position: no lowered row ever puts it there.
         let mut b = RdfDatasetBuilder::new();
         let (r, p) = (iri(&mut b, "r"), iri(&mut b, "p"));
-        let reifies = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(r, p, reifies, None);
+        let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(r, p, reifies, None).unwrap();
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
@@ -3473,8 +3492,8 @@ mod tests {
         // The annotation sentinel as a PREDICATE rather than as a lone graph slot.
         let mut b = RdfDatasetBuilder::new();
         let (r, o) = (iri(&mut b, "r"), iri(&mut b, "o"));
-        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
-        b.push_quad(r, annotation, o, None);
+        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH).unwrap();
+        b.push_quad(r, annotation, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
@@ -3488,10 +3507,10 @@ mod tests {
         // fold does NOT consume: the triple term is still swept.
         let mut b = RdfDatasetBuilder::new();
         let (r, p) = (iri(&mut b, "r"), iri(&mut b, "p"));
-        let reifies = b.intern_iri(SENTINEL_REIFIES);
-        let hidden = b.intern_iri("urn:purrdf:rdfc:hidden");
-        let triple = b.intern_triple(r, p, hidden);
-        b.push_quad(r, reifies, triple, None);
+        let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        let hidden = b.intern_iri("urn:purrdf:rdfc:hidden").unwrap();
+        let triple = b.intern_triple(r, p, hidden).unwrap();
+        b.push_quad(r, reifies, triple, None).unwrap();
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
@@ -3504,9 +3523,9 @@ mod tests {
         // Same for the annotation fold's predicate and object slots.
         let mut b = RdfDatasetBuilder::new();
         let r = iri(&mut b, "r");
-        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
-        let hidden = b.intern_iri("urn:purrdf:rdfc:hidden");
-        b.push_quad(r, hidden, r, Some(annotation));
+        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH).unwrap();
+        let hidden = b.intern_iri("urn:purrdf:rdfc:hidden").unwrap();
+        b.push_quad(r, hidden, r, Some(annotation)).unwrap();
         let ds = b.freeze().expect("valid");
         match try_canonicalize(&ds) {
             Err(CanonError::ReservedVocabulary(err)) => {
@@ -3546,11 +3565,13 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
         // A typed literal whose lexical form MUST NOT be normalized (0.70 != 0.7).
-        let lit = b.intern_literal(RdfLiteral::typed(
-            "0.70",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_quad(s, p, lit, None);
+        let lit = b
+            .intern_literal(RdfLiteral::typed(
+                "0.70",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_quad(s, p, lit, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
             canon(&ds).contains("\"0.70\"^^<http://www.w3.org/2001/XMLSchema#decimal>"),
@@ -3563,15 +3584,17 @@ mod tests {
     fn xsd_string_is_bare_and_directional_literal_renders() {
         let mut b = RdfDatasetBuilder::new();
         let (s, p, q) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "q"));
-        let plain = b.intern_literal(RdfLiteral::simple("hi"));
-        let rtl = b.intern_literal(RdfLiteral {
-            lexical_form: "مرحبا".to_owned(),
-            datatype: None,
-            language: Some("ar".to_owned()),
-            direction: Some(RdfTextDirection::Rtl),
-        });
-        b.push_quad(s, p, plain, None);
-        b.push_quad(s, q, rtl, None);
+        let plain = b.intern_literal(RdfLiteral::simple("hi")).unwrap();
+        let rtl = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "مرحبا".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        b.push_quad(s, p, plain, None).unwrap();
+        b.push_quad(s, q, rtl, None).unwrap();
         let out = canon(&ds_of(b));
         assert!(out.contains("\"hi\" ."), "xsd:string bare: {out}");
         assert!(
@@ -3591,8 +3614,8 @@ mod tests {
             let mut b = RdfDatasetBuilder::new();
             let p = iri(&mut b, "p");
             let o = iri(&mut b, "o");
-            let blank = b.intern_blank(l, BlankScope(scope));
-            b.push_quad(blank, p, o, None);
+            let blank = b.intern_blank(l, BlankScope(scope)).unwrap();
+            b.push_quad(blank, p, o, None).unwrap();
             b.freeze().expect("valid")
         };
         let a = build("x", 0);
@@ -3612,10 +3635,10 @@ mod tests {
         let build = |l1: &str, l2: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (p, q) = (iri(&mut b, "p"), iri(&mut b, "q"));
-            let x = b.intern_blank(l1, BlankScope(0));
-            let y = b.intern_blank(l2, BlankScope(0));
-            b.push_quad(x, p, y, None);
-            b.push_quad(y, q, x, None);
+            let x = b.intern_blank(l1, BlankScope(0)).unwrap();
+            let y = b.intern_blank(l2, BlankScope(0)).unwrap();
+            b.push_quad(x, p, y, None).unwrap();
+            b.push_quad(y, q, x, None).unwrap();
             b.freeze().expect("valid")
         };
         let a = build("x", "y");
@@ -3637,8 +3660,8 @@ mod tests {
         use super::super::term::BlankScope;
         let mut b = RdfDatasetBuilder::new();
         let p = iri(&mut b, "p");
-        let x = b.intern_blank("x", BlankScope::DEFAULT);
-        b.push_quad(x, p, x, None);
+        let x = b.intern_blank("x", BlankScope::DEFAULT).unwrap();
+        b.push_quad(x, p, x, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(canon(&ds), "_:c14n0 <http://example.org/p> _:c14n0 .\n");
     }
@@ -3650,10 +3673,10 @@ mod tests {
         let build = |neighbour: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (p, link, s) = (iri(&mut b, "p"), iri(&mut b, "link"), iri(&mut b, "s"));
-            let blank = b.intern_blank("b", BlankScope::DEFAULT);
+            let blank = b.intern_blank("b", BlankScope::DEFAULT).unwrap();
             let nb = iri(&mut b, neighbour);
-            b.push_quad(s, p, blank, None);
-            b.push_quad(blank, link, nb, None);
+            b.push_quad(s, p, blank, None).unwrap();
+            b.push_quad(blank, link, nb, None).unwrap();
             b.freeze().expect("valid")
         };
         assert_ne!(canon(&build("o1")), canon(&build("o2")));
@@ -3665,11 +3688,11 @@ mod tests {
         let build = |reifiers: &[&str]| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let triple = b.intern_triple(s, p, o);
-            b.push_quad(s, p, o, None);
+            let triple = b.intern_triple(s, p, o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
             for r in reifiers {
                 let rid = iri(&mut b, r);
-                b.push_reifier(rid, triple);
+                b.push_reifier(rid, triple).unwrap();
             }
             b.freeze().expect("valid")
         };
@@ -3694,13 +3717,13 @@ mod tests {
         let build = |annotated: bool| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-            let triple = b.intern_triple(s, p, o);
+            let triple = b.intern_triple(s, p, o).unwrap();
             let r = iri(&mut b, "r");
-            b.push_quad(s, p, o, None);
-            b.push_reifier(r, triple);
+            b.push_quad(s, p, o, None).unwrap();
+            b.push_reifier(r, triple).unwrap();
             if annotated {
                 let (ap, ao) = (iri(&mut b, "ap"), iri(&mut b, "ao"));
-                b.push_annotation(r, ap, ao);
+                b.push_annotation(r, ap, ao).unwrap();
             }
             b.freeze().expect("valid")
         };
@@ -3718,10 +3741,10 @@ mod tests {
         use super::super::term::BlankScope;
         let mut b = RdfDatasetBuilder::new();
         let p = iri(&mut b, "p");
-        let x = b.intern_blank("x", BlankScope::DEFAULT);
-        let y = b.intern_blank("y", BlankScope::DEFAULT);
-        b.push_quad(x, p, y, None);
-        b.push_quad(y, p, x, None);
+        let x = b.intern_blank("x", BlankScope::DEFAULT).unwrap();
+        let y = b.intern_blank("y", BlankScope::DEFAULT).unwrap();
+        b.push_quad(x, p, y, None).unwrap();
+        b.push_quad(y, p, x, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(blank_count(&ds), 2);
     }
@@ -3751,12 +3774,12 @@ mod tests {
         let build = |l1: &str, l2: &str| -> Arc<RdfDataset> {
             let mut b = RdfDatasetBuilder::new();
             let (base, refp, link) = (iri(&mut b, "base"), iri(&mut b, "ref"), iri(&mut b, "link"));
-            let x = b.intern_blank(l1, BlankScope(0));
-            let y = b.intern_blank(l2, BlankScope(0));
-            let t1 = b.intern_triple(x, link, y);
-            let t2 = b.intern_triple(y, link, x);
-            b.push_quad(base, refp, t1, None);
-            b.push_quad(base, refp, t2, None);
+            let x = b.intern_blank(l1, BlankScope(0)).unwrap();
+            let y = b.intern_blank(l2, BlankScope(0)).unwrap();
+            let t1 = b.intern_triple(x, link, y).unwrap();
+            let t2 = b.intern_triple(y, link, x).unwrap();
+            b.push_quad(base, refp, t1, None).unwrap();
+            b.push_quad(base, refp, t2, None).unwrap();
             b.freeze().expect("valid")
         };
         let ca = canon(&build("x", "y"));
@@ -3781,14 +3804,14 @@ mod tests {
                 iri(&mut b, "link"),
                 iri(&mut b, "tag"),
             );
-            let x = b.intern_blank("x", BlankScope(0));
-            let y = b.intern_blank("y", BlankScope(0));
-            let t1 = b.intern_triple(x, link, y);
-            let t2 = b.intern_triple(y, link, x);
-            let t3 = b.intern_triple(x, link, tag);
-            b.push_quad(base, refp, t1, None);
-            b.push_quad(base, refp, t2, None);
-            b.push_quad(base, refp, t3, None);
+            let x = b.intern_blank("x", BlankScope(0)).unwrap();
+            let y = b.intern_blank("y", BlankScope(0)).unwrap();
+            let t1 = b.intern_triple(x, link, y).unwrap();
+            let t2 = b.intern_triple(y, link, x).unwrap();
+            let t3 = b.intern_triple(x, link, tag).unwrap();
+            b.push_quad(base, refp, t1, None).unwrap();
+            b.push_quad(base, refp, t2, None).unwrap();
+            b.push_quad(base, refp, t3, None).unwrap();
             b.freeze().expect("valid")
         };
         assert_ne!(
@@ -3805,9 +3828,13 @@ mod tests {
     /// The blank `(label, scope)` pairs the dataset's TERM TABLE carries.
     fn output_blanks(ds: &RdfDataset) -> BTreeSet<(String, BlankScope)> {
         (0..ds.term_count())
-            .filter_map(|i| match ds.resolve(TermId::from_index(i as u32)) {
-                TermRef::Blank { label, scope } => Some((label.to_owned(), scope)),
-                _ => None,
+            .filter_map(|i| {
+                match ds.resolve(
+                    TermId::from_index(i as u32).expect("stored term index is representable"),
+                ) {
+                    TermRef::Blank { label, scope } => Some((label.to_owned(), scope)),
+                    _ => None,
+                }
             })
             .collect()
     }
@@ -3819,18 +3846,20 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let p = iri(&mut b, "p");
         let o = iri(&mut b, "o");
-        let bad = b.intern_blank("bad label", BlankScope::DEFAULT);
-        let ctl = b.intern_blank("ctl\u{1}byte", BlankScope::DEFAULT);
-        let uni = b.intern_blank("日本 空白", BlankScope(3));
-        let bg = b.intern_blank("graph blank", BlankScope(2));
-        b.push_quad(bad, p, ctl, None);
-        b.push_quad(uni, p, o, Some(bg));
-        let qs = b.intern_blank("quoted subject", BlankScope::DEFAULT);
-        let triple = b.intern_triple(qs, p, o);
-        b.push_quad(bad, p, triple, None);
-        let r = b.intern_blank("reifier blank", BlankScope(5));
-        b.push_reifier(r, triple);
-        b.push_annotation(r, p, ctl);
+        let bad = b.intern_blank("bad label", BlankScope::DEFAULT).unwrap();
+        let ctl = b.intern_blank("ctl\u{1}byte", BlankScope::DEFAULT).unwrap();
+        let uni = b.intern_blank("日本 空白", BlankScope(3)).unwrap();
+        let bg = b.intern_blank("graph blank", BlankScope(2)).unwrap();
+        b.push_quad(bad, p, ctl, None).unwrap();
+        b.push_quad(uni, p, o, Some(bg)).unwrap();
+        let qs = b
+            .intern_blank("quoted subject", BlankScope::DEFAULT)
+            .unwrap();
+        let triple = b.intern_triple(qs, p, o).unwrap();
+        b.push_quad(bad, p, triple, None).unwrap();
+        let r = b.intern_blank("reifier blank", BlankScope(5)).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, p, ctl).unwrap();
         b.freeze().expect("valid")
     }
 
@@ -3899,13 +3928,13 @@ mod tests {
         use crate::blank_label::{LabelAlphabet, is_valid_label};
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let seen = b.intern_blank("seen blank", BlankScope::DEFAULT);
-        b.push_quad(seen, p, o, None);
+        let seen = b.intern_blank("seen blank", BlankScope::DEFAULT).unwrap();
+        b.push_quad(seen, p, o, None).unwrap();
         let _ = s;
         // A blank named graph that owns no quads: invisible to canonicalization,
         // still relabeled (continuation numbering).
-        let empty_graph = b.intern_blank("empty graph blank", BlankScope(4));
-        b.declare_named_graph(empty_graph);
+        let empty_graph = b.intern_blank("empty graph blank", BlankScope(4)).unwrap();
+        b.declare_named_graph(empty_graph).unwrap();
         let ds = b.freeze().expect("valid");
         let out = canonical_relabel(&ds).expect("relabel");
         let got = output_blanks(&out);
@@ -3933,21 +3962,23 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (p, q, o) = (iri(&mut b, "p"), iri(&mut b, "q"), iri(&mut b, "o"));
         let g = iri(&mut b, "g");
-        let shared = b.intern_blank("n", BlankScope::DEFAULT);
-        let scoped = b.intern_blank("n", BlankScope(4));
-        b.push_quad(shared, p, o, None);
-        b.push_quad(shared, q, o, None);
-        b.push_quad(scoped, p, o, Some(g));
-        let triple = b.intern_triple(shared, p, o);
-        b.push_quad(scoped, q, triple, Some(g));
-        let reifier = b.intern_blank("r", BlankScope(7));
-        b.push_reifier_in_graph(reifier, triple, Some(g));
-        b.push_annotation_in_graph(reifier, q, o, Some(g));
+        let shared = b.intern_blank("n", BlankScope::DEFAULT).unwrap();
+        let scoped = b.intern_blank("n", BlankScope(4)).unwrap();
+        b.push_quad(shared, p, o, None).unwrap();
+        b.push_quad(shared, q, o, None).unwrap();
+        b.push_quad(scoped, p, o, Some(g)).unwrap();
+        let triple = b.intern_triple(shared, p, o).unwrap();
+        b.push_quad(scoped, q, triple, Some(g)).unwrap();
+        let reifier = b.intern_blank("r", BlankScope(7)).unwrap();
+        b.push_reifier_in_graph(reifier, triple, Some(g)).unwrap();
+        b.push_annotation_in_graph(reifier, q, o, Some(g)).unwrap();
         let default_reifier = iri(&mut b, "dr");
-        b.push_reifier_in_graph(default_reifier, triple, None);
-        b.push_annotation_in_graph(default_reifier, q, o, None);
-        let declared_only = b.intern_blank("declared only", BlankScope(9));
-        b.declare_named_graph(declared_only);
+        b.push_reifier_in_graph(default_reifier, triple, None)
+            .unwrap();
+        b.push_annotation_in_graph(default_reifier, q, o, None)
+            .unwrap();
+        let declared_only = b.intern_blank("declared only", BlankScope(9)).unwrap();
+        b.declare_named_graph(declared_only).unwrap();
         b.freeze().expect("valid")
     }
 
@@ -3992,7 +4023,7 @@ mod tests {
     fn graph_scoped_canonicalization_matches_the_named_graph_projection() {
         let ds = seam_dataset();
         let graph = "http://example.org/g";
-        let projected = canonicalize(&ds.project_named_graph(graph)).nquads;
+        let projected = canonicalize(&ds.project_named_graph(graph).unwrap()).nquads;
         assert!(!projected.is_empty(), "the graph must hold content");
         assert_eq!(
             canonicalize_graph_view(&*ds, graph, CanonHash::Sha256).nquads,
@@ -4011,7 +4042,10 @@ mod tests {
         // A graph the dataset never names selects nothing, exactly as projecting
         // it flat does.
         let absent = "http://example.org/no-such-graph";
-        assert_eq!(canonicalize(&ds.project_named_graph(absent)).nquads, "");
+        assert_eq!(
+            canonicalize(&ds.project_named_graph(absent).unwrap()).nquads,
+            ""
+        );
         assert_eq!(
             canonicalize_graph_view(&*ds, absent, CanonHash::Sha256).nquads,
             ""
@@ -4027,9 +4061,9 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
         let (dirty, clean) = (iri(&mut b, "dirty"), iri(&mut b, "clean"));
-        let bad = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(o, bad, o, Some(dirty));
-        b.push_quad(o, p, o, Some(clean));
+        let bad = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(o, bad, o, Some(dirty)).unwrap();
+        b.push_quad(o, p, o, Some(clean)).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(matches!(
             try_canonicalize_graph_view(&*ds, "http://example.org/dirty", CanonHash::Sha256),
@@ -4040,7 +4074,7 @@ mod tests {
                 .expect("a clean graph must still canonicalize");
         assert_eq!(
             neighbour.nquads,
-            canonicalize(&ds.project_named_graph("http://example.org/clean")).nquads
+            canonicalize(&ds.project_named_graph("http://example.org/clean").unwrap()).nquads
         );
         // The whole dataset IS refused, because the offending row is in it.
         assert!(matches!(
@@ -4053,8 +4087,8 @@ mod tests {
     fn canonical_relabel_propagates_canonicalization_refusals() {
         let mut b = RdfDatasetBuilder::new();
         let (s, o) = (iri(&mut b, "s"), iri(&mut b, "o"));
-        let bad = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(s, bad, o, None);
+        let bad = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(s, bad, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(
             matches!(
@@ -4078,17 +4112,19 @@ mod tests {
     fn presentation_fixture() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let reifier = b.intern_blank("r", BlankScope::DEFAULT);
-        let triple = b.intern_triple(s, pred, o);
-        b.push_reifier(reifier, triple);
+        let reifier = b.intern_blank("r", BlankScope::DEFAULT).unwrap();
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        b.push_reifier(reifier, triple).unwrap();
         let conf = iri(&mut b, "confidence");
-        let score = b.intern_literal(RdfLiteral::typed(
-            "0.9",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_annotation(reifier, conf, score);
+        let score = b
+            .intern_literal(RdfLiteral::typed(
+                "0.9",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_annotation(reifier, conf, score).unwrap();
         let (os, op, oo) = (iri(&mut b, "os"), iri(&mut b, "op"), iri(&mut b, "oo"));
-        b.push_quad(os, op, oo, None);
+        b.push_quad(os, op, oo, None).unwrap();
         b.freeze().expect("valid")
     }
 
@@ -4163,6 +4199,7 @@ mod tests {
         /// test can assert the dedup law folds both spellings into one component.
         fn reifies_iri(b: &mut RdfDatasetBuilder) -> TermId {
             b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies")
+                .unwrap()
         }
         /// How many distinct components the flat presentation emits for `ds` — a raw
         /// [`collect_components`] walk at the id level, counting every callback
@@ -4187,9 +4224,9 @@ mod tests {
             iri(&mut once, "p"),
             iri(&mut once, "o"),
         );
-        let r = once.intern_blank("r", BlankScope::DEFAULT);
-        let triple = once.intern_triple(s, pred, o);
-        once.push_reifier(r, triple);
+        let r = once.intern_blank("r", BlankScope::DEFAULT).unwrap();
+        let triple = once.intern_triple(s, pred, o).unwrap();
+        once.push_reifier(r, triple).unwrap();
         let once = once.freeze().expect("valid");
 
         let mut twice = RdfDatasetBuilder::new();
@@ -4198,11 +4235,11 @@ mod tests {
             iri(&mut twice, "p"),
             iri(&mut twice, "o"),
         );
-        let r = twice.intern_blank("r", BlankScope::DEFAULT);
-        let triple = twice.intern_triple(s, pred, o);
-        twice.push_reifier(r, triple);
+        let r = twice.intern_blank("r", BlankScope::DEFAULT).unwrap();
+        let triple = twice.intern_triple(s, pred, o).unwrap();
+        twice.push_reifier(r, triple).unwrap();
         let reifies = reifies_iri(&mut twice);
-        twice.push_quad(r, reifies, triple, None);
+        twice.push_quad(r, reifies, triple, None).unwrap();
         let twice = twice.freeze().expect("valid");
 
         assert_eq!(
@@ -4238,10 +4275,10 @@ mod tests {
             iri(&mut once_g, "p"),
             iri(&mut once_g, "o"),
         );
-        let r = once_g.intern_blank("r", BlankScope::DEFAULT);
-        let triple = once_g.intern_triple(s, pred, o);
+        let r = once_g.intern_blank("r", BlankScope::DEFAULT).unwrap();
+        let triple = once_g.intern_triple(s, pred, o).unwrap();
         let g = iri(&mut once_g, "g");
-        once_g.push_reifier_in_graph(r, triple, Some(g));
+        once_g.push_reifier_in_graph(r, triple, Some(g)).unwrap();
         let once_g = once_g.freeze().expect("valid");
 
         let mut twice_g = RdfDatasetBuilder::new();
@@ -4250,12 +4287,12 @@ mod tests {
             iri(&mut twice_g, "p"),
             iri(&mut twice_g, "o"),
         );
-        let r = twice_g.intern_blank("r", BlankScope::DEFAULT);
-        let triple = twice_g.intern_triple(s, pred, o);
+        let r = twice_g.intern_blank("r", BlankScope::DEFAULT).unwrap();
+        let triple = twice_g.intern_triple(s, pred, o).unwrap();
         let g = iri(&mut twice_g, "g");
-        twice_g.push_reifier_in_graph(r, triple, Some(g));
+        twice_g.push_reifier_in_graph(r, triple, Some(g)).unwrap();
         let reifies = reifies_iri(&mut twice_g);
-        twice_g.push_quad(r, reifies, triple, Some(g));
+        twice_g.push_quad(r, reifies, triple, Some(g)).unwrap();
         let twice_g = twice_g.freeze().expect("valid");
 
         assert_eq!(
@@ -4316,8 +4353,8 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
-        b.push_reifier(r, triple);
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        b.push_reifier(r, triple).unwrap();
         let genuine = b.freeze().expect("valid");
         let lowered = flat_canon(&genuine);
         assert!(
@@ -4334,9 +4371,9 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let (s, o, r) = (iri(&mut b, "s"), iri(&mut b, "o"), iri(&mut b, "r"));
         let pred = iri(&mut b, "p");
-        let sentinel = b.intern_iri(SENTINEL_REIFIES);
-        let triple = b.intern_triple(s, pred, o);
-        b.push_quad(r, sentinel, triple, None);
+        let sentinel = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        b.push_quad(r, sentinel, triple, None).unwrap();
         let spelled = b.freeze().expect("valid");
         assert_eq!(
             spelled.reifier_quads().count(),
@@ -4365,10 +4402,10 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
-        let sentinel = b.intern_iri(SENTINEL_REIFIES);
-        b.push_reifier(r, triple);
-        b.push_quad(r, sentinel, triple, None);
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        let sentinel = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_quad(r, sentinel, triple, None).unwrap();
         let both = b.freeze().expect("valid");
         assert_eq!(
             flat_canon(&both),
@@ -4389,7 +4426,7 @@ mod tests {
         // A: a genuine (native) annotation.
         let mut b = RdfDatasetBuilder::new();
         let (r, pred, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
-        b.push_annotation(r, pred, o);
+        b.push_annotation(r, pred, o).unwrap();
         let genuine = b.freeze().expect("valid");
         let lowered = flat_canon(&genuine);
         assert_eq!(
@@ -4403,8 +4440,8 @@ mod tests {
         // demonstration spells it).
         let mut b = RdfDatasetBuilder::new();
         let (r, pred, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let sentinel = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
-        b.push_quad(r, pred, o, Some(sentinel));
+        let sentinel = b.intern_iri(SENTINEL_ANNOTATION_GRAPH).unwrap();
+        b.push_quad(r, pred, o, Some(sentinel)).unwrap();
         let spelled = b.freeze().expect("valid");
         assert_eq!(
             spelled.annotation_quads().count(),
@@ -4424,9 +4461,9 @@ mod tests {
         // C: both ways at once.
         let mut b = RdfDatasetBuilder::new();
         let (r, pred, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let sentinel = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
-        b.push_annotation(r, pred, o);
-        b.push_quad(r, pred, o, Some(sentinel));
+        let sentinel = b.intern_iri(SENTINEL_ANNOTATION_GRAPH).unwrap();
+        b.push_annotation(r, pred, o).unwrap();
+        b.push_quad(r, pred, o, Some(sentinel)).unwrap();
         let both = b.freeze().expect("valid");
         assert_eq!(
             flat_canon(&both),
@@ -4452,11 +4489,11 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
+        let triple = b.intern_triple(s, pred, o).unwrap();
         // Intern the real predicate too, so the `Slot::Term` rendering has a genuine
         // id to resolve — proving the comparison, not merely a vacuous one where the
         // id path was never exercised.
-        let real_reifies = b.intern_iri(RDF_REIFIES);
+        let real_reifies = b.intern_iri(RDF_REIFIES).unwrap();
         let ds = b.freeze().expect("valid");
 
         let state = CanonState::new(
@@ -4513,11 +4550,11 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
-        let sentinel = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(r, sentinel, triple, None);
-        let real = b.intern_iri(RDF_REIFIES);
-        b.push_quad(r, real, triple, None);
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        let sentinel = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(r, sentinel, triple, None).unwrap();
+        let real = b.intern_iri(RDF_REIFIES).unwrap();
+        b.push_quad(r, real, triple, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(
             ds.reifier_quads().count(),
@@ -4538,9 +4575,9 @@ mod tests {
         // Annotation.
         let mut b = RdfDatasetBuilder::new();
         let (r, pred, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let sentinel = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
-        b.push_quad(r, pred, o, Some(sentinel));
-        b.push_quad(r, pred, o, None);
+        let sentinel = b.intern_iri(SENTINEL_ANNOTATION_GRAPH).unwrap();
+        b.push_quad(r, pred, o, Some(sentinel)).unwrap();
+        b.push_quad(r, pred, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(
             ds.annotation_quads().count(),
@@ -4572,12 +4609,12 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
+        let triple = b.intern_triple(s, pred, o).unwrap();
         let g = iri(&mut b, "g");
-        let sentinel = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(r, sentinel, triple, Some(g));
-        let real = b.intern_iri(RDF_REIFIES);
-        b.push_quad(r, real, triple, Some(g));
+        let sentinel = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(r, sentinel, triple, Some(g)).unwrap();
+        let real = b.intern_iri(RDF_REIFIES).unwrap();
+        b.push_quad(r, real, triple, Some(g)).unwrap();
         let ds = b.freeze().expect("valid");
 
         let scoped =
@@ -4618,12 +4655,12 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
-        b.push_reifier(r, triple);
-        let sentinel = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(r, sentinel, triple, None);
-        let real = b.intern_iri(RDF_REIFIES);
-        b.push_quad(r, real, triple, None);
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        let sentinel = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(r, sentinel, triple, None).unwrap();
+        let real = b.intern_iri(RDF_REIFIES).unwrap();
+        b.push_quad(r, real, triple, None).unwrap();
         let all_three = b.freeze().expect("valid");
 
         let mut solo = RdfDatasetBuilder::new();
@@ -4633,8 +4670,8 @@ mod tests {
             iri(&mut solo, "o"),
             iri(&mut solo, "r"),
         );
-        let triple = solo.intern_triple(s, pred, o);
-        solo.push_reifier(r, triple);
+        let triple = solo.intern_triple(s, pred, o).unwrap();
+        solo.push_reifier(r, triple).unwrap();
         let solo = solo.freeze().expect("valid");
 
         assert_eq!(
@@ -4667,10 +4704,10 @@ mod tests {
         // Annotation.
         let mut b = RdfDatasetBuilder::new();
         let (r, pred, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
-        b.push_annotation(r, pred, o);
-        let sentinel = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
-        b.push_quad(r, pred, o, Some(sentinel));
-        b.push_quad(r, pred, o, None);
+        b.push_annotation(r, pred, o).unwrap();
+        let sentinel = b.intern_iri(SENTINEL_ANNOTATION_GRAPH).unwrap();
+        b.push_quad(r, pred, o, Some(sentinel)).unwrap();
+        b.push_quad(r, pred, o, None).unwrap();
         let all_three_ann = b.freeze().expect("valid");
 
         let mut solo_ann = RdfDatasetBuilder::new();
@@ -4679,7 +4716,7 @@ mod tests {
             iri(&mut solo_ann, "p"),
             iri(&mut solo_ann, "o"),
         );
-        solo_ann.push_annotation(r, pred, o);
+        solo_ann.push_annotation(r, pred, o).unwrap();
         let solo_ann = solo_ann.freeze().expect("valid");
 
         assert_eq!(
@@ -4700,8 +4737,8 @@ mod tests {
         // Invalid: the reifies sentinel over a NON-triple object — refused under both.
         let mut b = RdfDatasetBuilder::new();
         let (r, o) = (iri(&mut b, "r"), iri(&mut b, "o"));
-        let reifies = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(r, reifies, o, None);
+        let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(r, reifies, o, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert!(matches!(
             try_canonicalize(&ds),
@@ -4721,9 +4758,9 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "r"),
         );
-        let triple = b.intern_triple(s, pred, o);
-        let reifies = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(r, reifies, triple, None);
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        let reifies = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(r, reifies, triple, None).unwrap();
         let ds = b.freeze().expect("valid");
         let flat = try_canonicalize_flat_view(&*ds, CanonHash::Sha256)
             .expect("the exact folded shape must be admitted under flat, too");
@@ -4747,8 +4784,8 @@ mod tests {
     fn flat_entry_points_refuse_reserved_vocabulary_typed_and_admit_a_neighbouring_iri() {
         let mut b = RdfDatasetBuilder::new();
         let (r, o) = (iri(&mut b, "r"), iri(&mut b, "o"));
-        let bad = b.intern_iri(SENTINEL_REIFIES);
-        b.push_quad(r, bad, o, None);
+        let bad = b.intern_iri(SENTINEL_REIFIES).unwrap();
+        b.push_quad(r, bad, o, None).unwrap();
         let ds = b.freeze().expect("valid");
 
         match try_canonicalize_flat_view(&*ds, CanonHash::Sha256) {
@@ -4769,8 +4806,8 @@ mod tests {
         // though it shares two path segments with it.
         let mut b = RdfDatasetBuilder::new();
         let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let neighbour_graph = b.intern_iri("urn:purrdf:other:annotation");
-        b.push_quad(s, p, o, Some(neighbour_graph));
+        let neighbour_graph = b.intern_iri("urn:purrdf:other:annotation").unwrap();
+        b.push_quad(s, p, o, Some(neighbour_graph)).unwrap();
         let ds = b.freeze().expect("valid");
 
         let admitted = try_canonicalize_flat_view(&*ds, CanonHash::Sha256)
@@ -4796,11 +4833,14 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         let p = iri(&mut b, "p");
         let blanks: Vec<TermId> = (0..n)
-            .map(|i| b.intern_blank(&format!("e{i}"), BlankScope::DEFAULT))
+            .map(|i| {
+                b.intern_blank(&format!("e{i}"), BlankScope::DEFAULT)
+                    .unwrap()
+            })
             .collect();
         for &a in &blanks {
             for &c in &blanks {
-                b.push_quad(a, p, c, None);
+                b.push_quad(a, p, c, None).unwrap();
             }
         }
         b.freeze().expect("valid")
@@ -4820,12 +4860,16 @@ mod tests {
         let link = iri(&mut b, "link");
         for i in 0..pairs {
             let anchor = iri(&mut b, &format!("anchor{i}"));
-            let x = b.intern_blank(&format!("x{i}"), BlankScope::DEFAULT);
-            let y = b.intern_blank(&format!("y{i}"), BlankScope::DEFAULT);
-            b.push_quad(anchor, link, x, None);
-            b.push_quad(anchor, link, y, None);
-            b.push_quad(x, link, y, None);
-            b.push_quad(y, link, x, None);
+            let x = b
+                .intern_blank(&format!("x{i}"), BlankScope::DEFAULT)
+                .unwrap();
+            let y = b
+                .intern_blank(&format!("y{i}"), BlankScope::DEFAULT)
+                .unwrap();
+            b.push_quad(anchor, link, x, None).unwrap();
+            b.push_quad(anchor, link, y, None).unwrap();
+            b.push_quad(x, link, y, None).unwrap();
+            b.push_quad(y, link, x, None).unwrap();
         }
         b.freeze().expect("valid")
     }
@@ -4880,19 +4924,22 @@ mod tests {
         let ga = iri(&mut b, "gA");
         let gb = iri(&mut b, "gB");
         let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
-        let reifier = b.intern_blank("r", BlankScope::DEFAULT);
-        let triple = b.intern_triple(s, pred, o);
-        b.push_reifier_in_graph(reifier, triple, Some(ga));
+        let reifier = b.intern_blank("r", BlankScope::DEFAULT).unwrap();
+        let triple = b.intern_triple(s, pred, o).unwrap();
+        b.push_reifier_in_graph(reifier, triple, Some(ga)).unwrap();
         let conf = iri(&mut b, "confidence");
-        let score = b.intern_literal(RdfLiteral::typed(
-            "0.9",
-            "http://www.w3.org/2001/XMLSchema#decimal",
-        ));
-        b.push_annotation_in_graph(reifier, conf, score, Some(ga));
+        let score = b
+            .intern_literal(RdfLiteral::typed(
+                "0.9",
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ))
+            .unwrap();
+        b.push_annotation_in_graph(reifier, conf, score, Some(ga))
+            .unwrap();
         let (os, op, oo) = (iri(&mut b, "os"), iri(&mut b, "op"), iri(&mut b, "oo"));
-        b.push_quad(os, op, oo, Some(ga));
+        b.push_quad(os, op, oo, Some(ga)).unwrap();
         let (bs, bp, bo) = (iri(&mut b, "bs"), iri(&mut b, "bp"), iri(&mut b, "bo"));
-        b.push_quad(bs, bp, bo, Some(gb));
+        b.push_quad(bs, bp, bo, Some(gb)).unwrap();
         b.freeze().expect("valid")
     }
 
@@ -4905,7 +4952,7 @@ mod tests {
     fn flat_graph_scope_is_flat_dataset_scope_composed_with_projection() {
         let ds = two_graph_flat_fixture();
         let graph = "http://example.org/gA";
-        let projected = ds.project_named_graph(graph);
+        let projected = ds.project_named_graph(graph).unwrap();
         let via_projection =
             try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
         let via_graph_scope =

@@ -4,7 +4,8 @@
 //! Draining a graph declared on a `MutableDataset` row by row stays linear.
 //!
 //! Each removal decides whether it emptied the graph, because the removal of a
-//! declared graph's last row withdraws the declaration. That decision reads the
+//! declared graph's last row withdraws the declaration in explicit implicit mode.
+//! That decision reads the
 //! graph's live row count; it must never re-walk the dataset, which would make the
 //! drain quadratic. The proof is operational: the drain runs inside a counting
 //! allocator window, and a re-walk of the delta's rows allocates its replay order on
@@ -31,13 +32,13 @@ const EX: &str = "http://example.org/";
 /// would also pay for rows the drained graph does not own.
 fn base() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri(&format!("{EX}p"));
-    let g = b.intern_iri(&format!("{EX}base-graph"));
+    let p = b.intern_iri(&format!("{EX}p")).unwrap();
+    let g = b.intern_iri(&format!("{EX}base-graph")).unwrap();
     for n in 0..256 {
-        let s = b.intern_iri(&format!("{EX}s{n}"));
-        let o = b.intern_iri(&format!("{EX}o{n}"));
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, p, o, Some(g));
+        let s = b.intern_iri(&format!("{EX}s{n}")).unwrap();
+        let o = b.intern_iri(&format!("{EX}o{n}")).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
     }
     b.freeze().expect("drain base")
 }
@@ -84,7 +85,10 @@ fn draining_a_declared_graph_does_not_rewalk_the_dataset_per_removal() {
     const ROWS: usize = 2048;
     let base = base();
     for graph in [iri("declared"), TermValue::blank("declared")] {
-        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let mut mutable = MutableDataset::new_with_graph_existence(
+            Arc::clone(&base),
+            GraphExistenceMode::Implicit,
+        );
         assert_eq!(mutable.declare_named_graph(graph.clone()), Ok(true));
         let quads = rows_in(&graph, ROWS);
         for quad in &quads {
@@ -103,7 +107,8 @@ fn draining_a_declared_graph_does_not_rewalk_the_dataset_per_removal() {
 #[test]
 fn emptiness_is_decided_per_graph_and_by_the_graphs_own_rows() {
     let base = base();
-    let mut mutable = MutableDataset::new(Arc::clone(&base));
+    let mut mutable =
+        MutableDataset::new_with_graph_existence(Arc::clone(&base), GraphExistenceMode::Implicit);
     let declared = iri("declared");
     let other = iri("other");
     assert_eq!(mutable.declare_named_graph(declared.clone()), Ok(true));
@@ -198,8 +203,8 @@ fn named_graph_capability_reads_do_not_allocate_the_registry() {
     const BASE_GRAPHS: usize = 512;
     let mut builder = RdfDatasetBuilder::new();
     for index in 0..BASE_GRAPHS {
-        let graph = builder.intern_iri(&format!("{EX}cap-{index}"));
-        builder.declare_named_graph(graph);
+        let graph = builder.intern_iri(&format!("{EX}cap-{index}")).unwrap();
+        builder.declare_named_graph(graph).unwrap();
     }
     let mut mutable = MutableDataset::new_with_graph_existence(
         builder.freeze().expect("empty base graph declarations"),
@@ -273,8 +278,8 @@ fn bulk_declaration_checkpoints_preserve_unvisited_entries_and_snapshots() {
         let TermValue::Iri(name) = name else {
             unreachable!("the fixture declares only IRIs")
         };
-        let id = builder.intern_iri(name);
-        builder.declare_named_graph(id);
+        let id = builder.intern_iri(name).unwrap();
+        builder.declare_named_graph(id).unwrap();
     }
     let base = builder.freeze().expect("declared-empty base");
     assert_eq!(

@@ -93,15 +93,19 @@ fn promoted_products_and_unrestricted_fields_keep_exact_rounding() {
 fn actual_two_to_the_twenty_fifth_token_field_builds_and_scores() {
     let tokens_per_literal = 1_usize << 20;
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/large-document");
-    let predicate = builder.intern_iri(cases::NOTE);
+    let subject = builder
+        .intern_iri("https://example.org/large-document")
+        .unwrap();
+    let predicate = builder.intern_iri(cases::NOTE).unwrap();
     for at in 0..32 {
         // One unique final term makes all source literals distinct RDF rows.
         // The normal analyzer sees 2^20 terms and one punctuation-bearing span.
         let mut lexical = "a,".repeat(tokens_per_literal - 1);
         write!(lexical, "chunk{at:02}").expect("write to String");
-        let object = builder.intern_literal(RdfLiteral::simple(&lexical));
-        builder.push_quad(subject, predicate, object, None);
+        let object = builder
+            .intern_literal(RdfLiteral::simple(&lexical))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     let dataset = builder.freeze().expect("actual dataset");
     let index = TextIndex::from_dataset(
@@ -140,12 +144,17 @@ fn actual_two_to_the_twenty_fifth_token_field_builds_and_scores() {
     assert!(
         index
             .surface_index()
+            .expect("default surface index")
             .words()
             .iter()
             .any(|term| term.text() == "a")
     );
     assert_eq!(
-        index.surface_index().spans().len(),
+        index
+            .surface_index()
+            .expect("default surface index")
+            .spans()
+            .len(),
         1,
         "the bounded span spelling is shared without suppressing the surface projection"
     );

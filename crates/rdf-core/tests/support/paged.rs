@@ -19,10 +19,10 @@ pub fn page(subject: &str, object: &str) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let subject_iri = format!("http://example.org/{subject}");
     let object_iri = format!("http://example.org/{object}");
-    let subject = builder.intern_iri(&subject_iri);
-    let predicate = builder.intern_iri("http://example.org/p");
-    let object = builder.intern_iri(&object_iri);
-    builder.push_quad(subject, predicate, object, None);
+    let subject = builder.intern_iri(&subject_iri).unwrap();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    let object = builder.intern_iri(&object_iri).unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
     builder.freeze().expect("valid page")
 }
 

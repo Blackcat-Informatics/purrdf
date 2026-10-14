@@ -5757,7 +5757,8 @@ pub struct QueryOptions<'a> {
     pub candidate_scope: Option<&'a dyn crate::CandidateScope>,
     /// The named-graph lifetime policy for this request's UPDATE branch.
     /// Queries read the existing graph registry independently of this policy.
-    /// [`purrdf_core::GraphExistenceMode::Implicit`] preserves the default behavior.
+    /// [`purrdf_core::GraphExistenceMode::RememberEmpty`] is the default;
+    /// select [`purrdf_core::GraphExistenceMode::Implicit`] for row-driven lifetime.
     pub graph_existence: purrdf_core::GraphExistenceMode,
     /// The pre-binding lane the request names (see [`ShaclPrebinding`]); every lane
     /// takes the same rewrite.
@@ -5947,9 +5948,11 @@ impl QueryOptions<'_> {
     /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
     /// depth, no `SERVICE` source, and the engine's own `LOAD` resolver. What every
     /// entry did before it took options.
+    /// UPDATE remembers empty named graphs; explicitly select
+    /// [`purrdf_core::GraphExistenceMode::Implicit`] for row-driven lifetime.
     pub const EMPTY: Self = Self {
         candidate_scope: None,
-        graph_existence: purrdf_core::GraphExistenceMode::Implicit,
+        graph_existence: purrdf_core::GraphExistenceMode::RememberEmpty,
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::BoundFunctionRegistry::EMPTY,
         user_function_admission: None,
@@ -6010,8 +6013,8 @@ impl<'a> QueryOptions<'a> {
 
     /// Select the named-graph lifetime policy used by either UPDATE entry point.
     /// Frozen graph presence and ordinary query evaluation remain unchanged.
-    /// [`Self::EMPTY`] selects `GraphExistenceMode::Implicit` in 3.x; remembered
-    /// empty graphs are expected to become the default in v4.0.
+    /// [`Self::EMPTY`] selects [`purrdf_core::GraphExistenceMode::RememberEmpty`].
+    /// Select [`purrdf_core::GraphExistenceMode::Implicit`] to opt out explicitly.
     #[must_use]
     pub const fn with_graph_existence(
         mut self,
@@ -6626,21 +6629,6 @@ fn check_plan_matches_registries(
         .map_err(EvaluationFailure::into_diagnostic)
 }
 
-/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
-/// registry fingerprint — validated against `relations` by
-/// [`check_plan_matches_relations`] at every call site before this runs, so it is safe to
-/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
-/// taken over, sorted.
-///
-/// Called once per governed execution rather than per outcome arm, so the refusal path
-/// ([`NativeSparqlEngine::admit`]), the complete path, and the truncated path all carry
-/// the SAME identity for the SAME execution — there is exactly one place this is computed
-/// and every [`GovernedOutcome`] arm reads from it.
-///
-/// # Errors
-///
-/// The host's execution diagnostic if a registered relation's declaration
-/// methods panic.
 /// A governed visitor result retaining its original registry identity buffers.
 /// Native callers borrow the outcome; only legacy egress transfers caller storage.
 pub struct AdmittedInternedGoverned<R> {
@@ -6696,6 +6684,21 @@ struct AdmittedRelationIdentity {
     frame: crate::workspace::LexicalFrame,
 }
 
+/// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
+/// registry fingerprint — validated by the preparation and registry admission
+/// checks before this runs, so it is safe to
+/// reuse rather than re-derive — paired with the registered IRIs the fingerprint was
+/// taken over, sorted.
+///
+/// Called once per governed execution rather than per outcome arm, so the refusal path
+/// (`NativeSparqlEngine::admit_refusal`), the complete path, and the truncated path all carry
+/// the SAME identity for the SAME execution — there is exactly one place this is computed
+/// and every [`GovernedOutcome`] arm reads from it.
+///
+/// # Errors
+///
+/// The host's execution diagnostic if a registered relation's declaration
+/// methods panic, or the original admission failure while retaining the identity.
 fn relation_identity(
     prepared: &PreparedQuery,
     relations: &crate::property_fn::PropertyFunctionRegistry,
@@ -7215,13 +7218,13 @@ mod tests {
     fn neq_on_distinct_iris_is_true_not_error() {
         // A→B→C plus the forbidden transitive A→C, all purrdf:counterpartOf.
         let mut b = RdfDatasetBuilder::new();
-        let cp = b.intern_iri("http://ex/cp");
-        let a = b.intern_iri("http://ex/a");
-        let bn = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
-        b.push_quad(a, cp, bn, None);
-        b.push_quad(bn, cp, c, None);
-        b.push_quad(a, cp, c, None);
+        let cp = b.intern_iri("http://ex/cp").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bn = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        b.push_quad(a, cp, bn, None).unwrap();
+        b.push_quad(bn, cp, c, None).unwrap();
+        b.push_quad(a, cp, c, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let q = "PREFIX ex: <http://ex/>\n\
                  SELECT ?a ?b ?c WHERE {\n\
@@ -7255,13 +7258,13 @@ mod tests {
     fn social() -> Arc<RdfDataset> {
         // :a :knows :b ; :a :name "Ann" .
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let name = b.intern_iri("http://ex/name");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let ann = b.intern_literal(RdfLiteral::simple("Ann"));
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(a, name, ann, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let name = b.intern_iri("http://ex/name").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let ann = b.intern_literal(RdfLiteral::simple("Ann")).unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(a, name, ann, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -7288,16 +7291,16 @@ mod tests {
     ///   _:bn :p  :z    (blank-node subject — a SHACL blank focus)
     fn subst_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
-        let z = b.intern_iri("http://ex/z");
-        let bn = b.intern_blank("bn", BlankScope::DEFAULT);
-        b.push_quad(a, p, x, None);
-        b.push_quad(bb, p, y, None);
-        b.push_quad(bn, p, z, None);
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        let y = b.intern_iri("http://ex/y").unwrap();
+        let z = b.intern_iri("http://ex/z").unwrap();
+        let bn = b.intern_blank("bn", BlankScope::DEFAULT).unwrap();
+        b.push_quad(a, p, x, None).unwrap();
+        b.push_quad(bb, p, y, None).unwrap();
+        b.push_quad(bn, p, z, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -7863,20 +7866,20 @@ mod tests {
     /// from, so the tests below read a term rather than a row count.
     fn graph_name_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let g1 = b.intern_iri("http://ex/g1");
-        let g2 = b.intern_iri("http://ex/g2");
-        let s = b.intern_iri("http://ex/s");
-        let p = b.intern_iri("http://ex/p");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
-        let q = b.intern_iri("http://ex/q");
-        b.push_quad(s, p, x, Some(g1));
-        b.push_quad(s, p, y, Some(g2));
+        let g1 = b.intern_iri("http://ex/g1").unwrap();
+        let g2 = b.intern_iri("http://ex/g2").unwrap();
+        let s = b.intern_iri("http://ex/s").unwrap();
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        let y = b.intern_iri("http://ex/y").unwrap();
+        let q = b.intern_iri("http://ex/q").unwrap();
+        b.push_quad(s, p, x, Some(g1)).unwrap();
+        b.push_quad(s, p, y, Some(g2)).unwrap();
         // One quad in the DEFAULT graph, so the query below can put a second
         // operand beside its sub-`SELECT` — see [`GRAPH_NAME_QUERY`] for why that
         // matters. Exactly one, so it multiplies the inner answer by one and the
         // row count below reads the sub-`SELECT` alone.
-        b.push_quad(s, q, x, None);
+        b.push_quad(s, q, x, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -8002,20 +8005,24 @@ mod tests {
     #[test]
     fn the_id_door_and_the_value_door_substitute_the_identical_plan() {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p");
-        let iri = b.intern_iri("http://ex/a");
-        let blank = b.intern_blank("bn", BlankScope::DEFAULT);
-        let plain = b.intern_literal(RdfLiteral::typed(
-            "hello",
-            "http://www.w3.org/2001/XMLSchema#string",
-        ));
-        let tagged = b.intern_literal(RdfLiteral::language_tagged("bonjour", "fr"));
-        let quoted = b.intern_triple(iri, p, plain);
-        b.push_quad(iri, p, plain, None);
-        b.push_quad(blank, p, tagged, None);
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let iri = b.intern_iri("http://ex/a").unwrap();
+        let blank = b.intern_blank("bn", BlankScope::DEFAULT).unwrap();
+        let plain = b
+            .intern_literal(RdfLiteral::typed(
+                "hello",
+                "http://www.w3.org/2001/XMLSchema#string",
+            ))
+            .unwrap();
+        let tagged = b
+            .intern_literal(RdfLiteral::language_tagged("bonjour", "fr"))
+            .unwrap();
+        let quoted = b.intern_triple(iri, p, plain).unwrap();
+        b.push_quad(iri, p, plain, None).unwrap();
+        b.push_quad(blank, p, tagged, None).unwrap();
         // A quoted triple is an OBJECT: an asserted statement cannot have one as
         // its subject, and the id only has to exist for the doors to resolve it.
-        b.push_quad(blank, p, quoted, None);
+        b.push_quad(blank, p, quoted, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let engine = NativeSparqlEngine::new();
@@ -8739,15 +8746,15 @@ mod tests {
         // value properties or neither. The pre-bound focus must be visible inside
         // FILTER/EXISTS; otherwise the EXISTS probes become whole-dataset globals.
         let mut b = RdfDatasetBuilder::new();
-        let iri_prop = b.intern_iri("http://ex/cellValueIri");
-        let lit_prop = b.intern_iri("http://ex/cellValueLiteral");
-        let one = b.intern_iri("http://ex/one");
-        let both = b.intern_iri("http://ex/both");
-        let value = b.intern_iri("http://ex/value");
-        let lit = b.intern_literal(RdfLiteral::simple("literal"));
-        b.push_quad(one, iri_prop, value, None);
-        b.push_quad(both, iri_prop, value, None);
-        b.push_quad(both, lit_prop, lit, None);
+        let iri_prop = b.intern_iri("http://ex/cellValueIri").unwrap();
+        let lit_prop = b.intern_iri("http://ex/cellValueLiteral").unwrap();
+        let one = b.intern_iri("http://ex/one").unwrap();
+        let both = b.intern_iri("http://ex/both").unwrap();
+        let value = b.intern_iri("http://ex/value").unwrap();
+        let lit = b.intern_literal(RdfLiteral::simple("literal")).unwrap();
+        b.push_quad(one, iri_prop, value, None).unwrap();
+        b.push_quad(both, iri_prop, value, None).unwrap();
+        b.push_quad(both, lit_prop, lit, None).unwrap();
         let ds = Arc::new(b.freeze().expect("freeze"));
         let engine = NativeSparqlEngine::new();
         let q = "SELECT ?this WHERE { \
@@ -8829,19 +8836,19 @@ mod tests {
     ///   ex:g2:   (a,p,y), (a,p,shared)
     fn multigraph() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p");
-        let a = b.intern_iri("http://ex/a");
-        let dflt = b.intern_iri("http://ex/dflt");
-        let x = b.intern_iri("http://ex/x");
-        let y = b.intern_iri("http://ex/y");
-        let shared = b.intern_iri("http://ex/shared");
-        let g1 = b.intern_iri("http://ex/g1");
-        let g2 = b.intern_iri("http://ex/g2");
-        b.push_quad(a, p, dflt, None);
-        b.push_quad(a, p, x, Some(g1));
-        b.push_quad(a, p, shared, Some(g1));
-        b.push_quad(a, p, y, Some(g2));
-        b.push_quad(a, p, shared, Some(g2));
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let dflt = b.intern_iri("http://ex/dflt").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        let y = b.intern_iri("http://ex/y").unwrap();
+        let shared = b.intern_iri("http://ex/shared").unwrap();
+        let g1 = b.intern_iri("http://ex/g1").unwrap();
+        let g2 = b.intern_iri("http://ex/g2").unwrap();
+        b.push_quad(a, p, dflt, None).unwrap();
+        b.push_quad(a, p, x, Some(g1)).unwrap();
+        b.push_quad(a, p, shared, Some(g1)).unwrap();
+        b.push_quad(a, p, y, Some(g2)).unwrap();
+        b.push_quad(a, p, shared, Some(g2)).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -8868,17 +8875,23 @@ mod tests {
     #[test]
     fn order_by_adjust_orders_by_the_adjusted_instant() {
         let mut b = RdfDatasetBuilder::new();
-        let dt = b.intern_iri("http://ex/dt");
-        let a = b.intern_iri("http://ex/a"); // 09:00-05:00 = 14:00Z (latest)
-        let bb = b.intern_iri("http://ex/b"); // 09:00+05:00 = 04:00Z (earliest)
-        let c = b.intern_iri("http://ex/c"); // 09:00Z (middle)
+        let dt = b.intern_iri("http://ex/dt").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap(); // 09:00-05:00 = 14:00Z (latest)
+        let bb = b.intern_iri("http://ex/b").unwrap(); // 09:00+05:00 = 04:00Z (earliest)
+        let c = b.intern_iri("http://ex/c").unwrap(); // 09:00Z (middle)
         let xsd_datetime = "http://www.w3.org/2001/XMLSchema#dateTime";
-        let a_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00-05:00", xsd_datetime));
-        let b_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00+05:00", xsd_datetime));
-        let c_dt = b.intern_literal(RdfLiteral::typed("2024-01-01T09:00:00Z", xsd_datetime));
-        b.push_quad(a, dt, a_dt, None);
-        b.push_quad(bb, dt, b_dt, None);
-        b.push_quad(c, dt, c_dt, None);
+        let a_dt = b
+            .intern_literal(RdfLiteral::typed("2024-01-01T09:00:00-05:00", xsd_datetime))
+            .unwrap();
+        let b_dt = b
+            .intern_literal(RdfLiteral::typed("2024-01-01T09:00:00+05:00", xsd_datetime))
+            .unwrap();
+        let c_dt = b
+            .intern_literal(RdfLiteral::typed("2024-01-01T09:00:00Z", xsd_datetime))
+            .unwrap();
+        b.push_quad(a, dt, a_dt, None).unwrap();
+        b.push_quad(bb, dt, b_dt, None).unwrap();
+        b.push_quad(c, dt, c_dt, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let query = "SELECT ?s WHERE { ?s <http://ex/dt> ?dt } \
                      ORDER BY ADJUST(?dt, \"PT0H\"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration>)";
@@ -9125,10 +9138,10 @@ mod tests {
     fn loadable() -> Arc<RdfDataset> {
         // :loaded :p "v" .
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("http://ex/loaded");
-        let p = b.intern_iri("http://ex/p");
-        let o = b.intern_literal(RdfLiteral::simple("v"));
-        b.push_quad(s, p, o, None);
+        let s = b.intern_iri("http://ex/loaded").unwrap();
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let o = b.intern_literal(RdfLiteral::simple("v")).unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         b.freeze().expect("freeze loadable")
     }
 
@@ -9595,18 +9608,18 @@ mod tests {
     /// (via `gmeow:accordingTo`), and `:T1 gmeow:sharpens :T2`.
     fn gmeow_standpoint_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let r = b.intern_iri("http://ex/r");
-        let s = b.intern_iri("http://ex/s");
-        let p = b.intern_iri("http://ex/p");
-        let o = b.intern_iri("http://ex/o");
-        let t1 = b.intern_iri("http://ex/T1");
-        let t2 = b.intern_iri("http://ex/T2");
-        let according_to = b.intern_iri(&format!("{GMEOW_NS}accordingTo"));
-        let sharpens = b.intern_iri(&format!("{GMEOW_NS}sharpens"));
-        let triple = b.intern_triple(s, p, o);
-        b.push_reifier(r, triple);
-        b.push_annotation(r, according_to, t1);
-        b.push_quad(t1, sharpens, t2, None);
+        let r = b.intern_iri("http://ex/r").unwrap();
+        let s = b.intern_iri("http://ex/s").unwrap();
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let o = b.intern_iri("http://ex/o").unwrap();
+        let t1 = b.intern_iri("http://ex/T1").unwrap();
+        let t2 = b.intern_iri("http://ex/T2").unwrap();
+        let according_to = b.intern_iri(&format!("{GMEOW_NS}accordingTo")).unwrap();
+        let sharpens = b.intern_iri(&format!("{GMEOW_NS}sharpens")).unwrap();
+        let triple = b.intern_triple(s, p, o).unwrap();
+        b.push_reifier(r, triple).unwrap();
+        b.push_annotation(r, according_to, t1).unwrap();
+        b.push_quad(t1, sharpens, t2, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -10261,17 +10274,18 @@ mod tests {
     /// `:r1 :a 1 ; :b 2`, `:r2 :a 1 ; :b 2`, `:r3 :a 2 ; :b 3`.
     fn numbers() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let pa = b.intern_iri("http://ex/a");
-        let pb = b.intern_iri("http://ex/b");
+        let pa = b.intern_iri("http://ex/a").unwrap();
+        let pb = b.intern_iri("http://ex/b").unwrap();
         let int = |b: &mut RdfDatasetBuilder, n: &str| {
             b.intern_literal(RdfLiteral::typed(n.to_owned(), XSD_INT.to_owned()))
+                .unwrap()
         };
         for (subj, a, bv) in [("r1", "1", "2"), ("r2", "1", "2"), ("r3", "2", "3")] {
-            let s = b.intern_iri(&format!("http://ex/{subj}"));
+            let s = b.intern_iri(&format!("http://ex/{subj}")).unwrap();
             let av = int(&mut b, a);
-            b.push_quad(s, pa, av, None);
+            b.push_quad(s, pa, av, None).unwrap();
             let bvv = int(&mut b, bv);
-            b.push_quad(s, pb, bvv, None);
+            b.push_quad(s, pb, bvv, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -10392,10 +10406,10 @@ mod tests {
     fn group_concat_multi_group_exact_order() {
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri("http://ex/cat");
-        let item = b.intern_iri("http://ex/item");
-        let a = b.intern_iri("http://ex/A");
-        let bb = b.intern_iri("http://ex/B");
+        let cat = b.intern_iri("http://ex/cat").unwrap();
+        let item = b.intern_iri("http://ex/item").unwrap();
+        let a = b.intern_iri("http://ex/A").unwrap();
+        let bb = b.intern_iri("http://ex/B").unwrap();
         // Row order: (A,"x"),(B,"p"),(A,"y"),(B,"q"),(A,"z").
         for (subj, catv, val) in [
             ("s1", a, "x"),
@@ -10404,10 +10418,10 @@ mod tests {
             ("s4", bb, "q"),
             ("s5", a, "z"),
         ] {
-            let s = b.intern_iri(&format!("http://ex/{subj}"));
-            b.push_quad(s, cat, catv, None);
-            let v = b.intern_literal(RdfLiteral::simple(val));
-            b.push_quad(s, item, v, None);
+            let s = b.intern_iri(&format!("http://ex/{subj}")).unwrap();
+            b.push_quad(s, cat, catv, None).unwrap();
+            let v = b.intern_literal(RdfLiteral::simple(val)).unwrap();
+            b.push_quad(s, item, v, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
         let r = run_on(
@@ -10452,12 +10466,12 @@ mod tests {
     fn group_concat_over_blank_node_poisons_to_unbound() {
         use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral};
         let mut b = RdfDatasetBuilder::new();
-        let item = b.intern_iri("http://ex/item");
-        let s = b.intern_iri("http://ex/s");
-        let lit = b.intern_literal(RdfLiteral::simple("lit1"));
-        let bn = b.intern_blank("bn", BlankScope::DEFAULT);
-        b.push_quad(s, item, lit, None);
-        b.push_quad(s, item, bn, None);
+        let item = b.intern_iri("http://ex/item").unwrap();
+        let s = b.intern_iri("http://ex/s").unwrap();
+        let lit = b.intern_literal(RdfLiteral::simple("lit1")).unwrap();
+        let bn = b.intern_blank("bn", BlankScope::DEFAULT).unwrap();
+        b.push_quad(s, item, lit, None).unwrap();
+        b.push_quad(s, item, bn, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let r = run_on(
             &ds,
@@ -10614,15 +10628,15 @@ mod tests {
     /// count (3 vs 2) so a different `stats_fingerprint`.
     fn social_plus() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let name = b.intern_iri("http://ex/name");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
-        let ann = b.intern_literal(RdfLiteral::simple("Ann"));
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(a, knows, c, None);
-        b.push_quad(a, name, ann, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let name = b.intern_iri("http://ex/name").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        let ann = b.intern_literal(RdfLiteral::simple("Ann")).unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(a, knows, c, None).unwrap();
+        b.push_quad(a, name, ann, None).unwrap();
         b.freeze().expect("freeze")
     }
 

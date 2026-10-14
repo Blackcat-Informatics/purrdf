@@ -299,23 +299,21 @@ fn emit_mapped_dcat(
     };
     emitter.emit_dataset(model)?;
     for agent in &model.agents {
-        emitter.emit_agent(agent);
+        emitter.emit_agent(agent)?;
     }
     for resource in &model.resources {
         emitter.emit_resource(resource)?;
     }
     for activity in &model.activities {
-        emitter.emit_activity(activity);
+        emitter.emit_activity(activity)?;
     }
     for record_set in &model.record_sets {
         emitter.emit_record_set(record_set)?;
         for field in &record_set.fields {
-            emitter.emit_field(field);
+            emitter.emit_field(field)?;
         }
     }
-    let dataset = emitter.builder.freeze().map_err(|error| {
-        ProjectionError::integrity(format!("freeze mapped DCAT RDF dataset: {error}"))
-    })?;
+    let dataset = emitter.builder.freeze().map_err(ProjectionError::from)?;
     let records = dataset
         .quads()
         .count()
@@ -339,21 +337,21 @@ struct DcatEmitter<'a> {
 impl DcatEmitter<'_> {
     fn emit_dataset(&mut self, model: &ResearchObjectModel) -> Result<(), ProjectionError> {
         let dataset = &model.dataset;
-        self.push_type(&dataset.id, DcatRole::DatasetClass);
+        self.push_type(&dataset.id, DcatRole::DatasetClass)?;
         self.push_iri(
             &dataset.id,
             DcatRole::ConformsTo,
             self.config.dcat().profile_iri(),
-        );
-        self.push_texts(&dataset.id, DcatRole::Title, &dataset.titles);
-        self.push_texts(&dataset.id, DcatRole::Description, &dataset.descriptions);
-        self.push_values(&dataset.id, DcatRole::Identifier, &dataset.identifiers);
-        self.push_texts(&dataset.id, DcatRole::Version, &dataset.versions);
-        self.push_texts(&dataset.id, DcatRole::Issued, &dataset.issued);
-        self.push_texts(&dataset.id, DcatRole::Modified, &dataset.modified);
-        self.push_values(&dataset.id, DcatRole::LandingPage, &dataset.landing_pages);
-        self.push_texts(&dataset.id, DcatRole::Keyword, &dataset.keywords);
-        self.push_values(&dataset.id, DcatRole::License, &dataset.licenses);
+        )?;
+        self.push_texts(&dataset.id, DcatRole::Title, &dataset.titles)?;
+        self.push_texts(&dataset.id, DcatRole::Description, &dataset.descriptions)?;
+        self.push_values(&dataset.id, DcatRole::Identifier, &dataset.identifiers)?;
+        self.push_texts(&dataset.id, DcatRole::Version, &dataset.versions)?;
+        self.push_texts(&dataset.id, DcatRole::Issued, &dataset.issued)?;
+        self.push_texts(&dataset.id, DcatRole::Modified, &dataset.modified)?;
+        self.push_values(&dataset.id, DcatRole::LandingPage, &dataset.landing_pages)?;
+        self.push_texts(&dataset.id, DcatRole::Keyword, &dataset.keywords)?;
+        self.push_values(&dataset.id, DcatRole::License, &dataset.licenses)?;
         for (role, values) in [
             (DcatRole::Creator, &dataset.creators),
             (DcatRole::Publisher, &dataset.publishers),
@@ -362,31 +360,33 @@ impl DcatEmitter<'_> {
             (DcatRole::RecordSet, &dataset.record_sets),
         ] {
             for value in values {
-                self.push_iri(&dataset.id, role, value);
+                self.push_iri(&dataset.id, role, value)?;
             }
         }
         Ok(())
     }
 
-    fn emit_agent(&mut self, agent: &ResearchAgent) {
-        self.push_type(&agent.id, DcatRole::AgentClass);
-        self.push_texts(&agent.id, DcatRole::AgentName, &agent.names);
+    fn emit_agent(&mut self, agent: &ResearchAgent) -> Result<(), ProjectionError> {
+        self.push_type(&agent.id, DcatRole::AgentClass)?;
+        self.push_texts(&agent.id, DcatRole::AgentName, &agent.names)?;
+
+        Ok(())
     }
 
     fn emit_resource(&mut self, resource: &ResearchResource) -> Result<(), ProjectionError> {
-        self.push_type(&resource.id, DcatRole::DistributionClass);
-        self.push_texts(&resource.id, DcatRole::Title, &resource.names);
-        self.push_texts(&resource.id, DcatRole::Description, &resource.descriptions);
+        self.push_type(&resource.id, DcatRole::DistributionClass)?;
+        self.push_texts(&resource.id, DcatRole::Title, &resource.names)?;
+        self.push_texts(&resource.id, DcatRole::Description, &resource.descriptions)?;
         for path in &resource.paths {
             self.push_literal(
                 &resource.id,
                 DcatRole::Path,
                 RdfLiteral::typed(path, self.config.xsd_string()),
-            );
+            )?;
         }
-        self.push_values(&resource.id, DcatRole::DownloadUrl, &resource.urls);
-        self.push_texts(&resource.id, DcatRole::MediaType, &resource.media_types);
-        self.push_values(&resource.id, DcatRole::Format, &resource.formats);
+        self.push_values(&resource.id, DcatRole::DownloadUrl, &resource.urls)?;
+        self.push_texts(&resource.id, DcatRole::MediaType, &resource.media_types)?;
+        self.push_values(&resource.id, DcatRole::Format, &resource.formats)?;
         if let Some(byte_size) = resource.byte_size {
             self.push_literal(
                 &resource.id,
@@ -399,12 +399,12 @@ impl DcatEmitter<'_> {
                         .roles()
                         .iri(ResearchRole::XsdNonNegativeInteger),
                 ),
-            );
+            )?;
         }
         for (index, checksum) in resource.checksums.iter().enumerate() {
             let checksum_iri = self.checksum_iri(resource, index, checksum)?;
-            self.push_iri(&resource.id, DcatRole::Checksum, &checksum_iri);
-            self.emit_checksum(&checksum_iri, checksum);
+            self.push_iri(&resource.id, DcatRole::Checksum, &checksum_iri)?;
+            self.emit_checksum(&checksum_iri, checksum)?;
         }
         Ok(())
     }
@@ -430,39 +430,47 @@ impl DcatEmitter<'_> {
         Ok(iri)
     }
 
-    fn emit_checksum(&mut self, id: &str, checksum: &ResearchChecksum) {
-        self.push_type(id, DcatRole::ChecksumClass);
-        self.push_value(id, DcatRole::ChecksumAlgorithm, &checksum.algorithm);
-        self.push_text(id, DcatRole::ChecksumValue, &checksum.value);
+    fn emit_checksum(
+        &mut self,
+        id: &str,
+        checksum: &ResearchChecksum,
+    ) -> Result<(), ProjectionError> {
+        self.push_type(id, DcatRole::ChecksumClass)?;
+        self.push_value(id, DcatRole::ChecksumAlgorithm, &checksum.algorithm)?;
+        self.push_text(id, DcatRole::ChecksumValue, &checksum.value)?;
+
+        Ok(())
     }
 
-    fn emit_activity(&mut self, activity: &ResearchActivity) {
-        self.push_type(&activity.id, DcatRole::ActivityClass);
-        self.push_texts(&activity.id, DcatRole::Title, &activity.names);
-        self.push_values(&activity.id, DcatRole::Instrument, &activity.instruments);
+    fn emit_activity(&mut self, activity: &ResearchActivity) -> Result<(), ProjectionError> {
+        self.push_type(&activity.id, DcatRole::ActivityClass)?;
+        self.push_texts(&activity.id, DcatRole::Title, &activity.names)?;
+        self.push_values(&activity.id, DcatRole::Instrument, &activity.instruments)?;
         for (role, values) in [
             (DcatRole::Agent, &activity.actors),
             (DcatRole::Object, &activity.objects),
             (DcatRole::Result, &activity.results),
         ] {
             for value in values {
-                self.push_iri(&activity.id, role, value);
+                self.push_iri(&activity.id, role, value)?;
             }
         }
-        self.push_texts(&activity.id, DcatRole::EndTime, &activity.end_times);
-        self.push_values(&activity.id, DcatRole::Workflow, &activity.workflows);
+        self.push_texts(&activity.id, DcatRole::EndTime, &activity.end_times)?;
+        self.push_values(&activity.id, DcatRole::Workflow, &activity.workflows)?;
+
+        Ok(())
     }
 
     fn emit_record_set(&mut self, record_set: &ResearchRecordSet) -> Result<(), ProjectionError> {
-        self.push_type(&record_set.id, DcatRole::RecordSetClass);
-        self.push_texts(&record_set.id, DcatRole::Title, &record_set.names);
+        self.push_type(&record_set.id, DcatRole::RecordSetClass)?;
+        self.push_texts(&record_set.id, DcatRole::Title, &record_set.names)?;
         self.push_texts(
             &record_set.id,
             DcatRole::Description,
             &record_set.descriptions,
-        );
+        )?;
         for field in &record_set.fields {
-            self.push_iri(&record_set.id, DcatRole::Field, &field.id);
+            self.push_iri(&record_set.id, DcatRole::Field, &field.id)?;
         }
         for row in &record_set.rows {
             let bytes = canonical_json_bounded(
@@ -484,60 +492,113 @@ impl DcatEmitter<'_> {
                         .roles()
                         .iri(ResearchRole::JsonDatatype),
                 ),
-            );
+            )?;
         }
         Ok(())
     }
 
-    fn emit_field(&mut self, field: &ResearchField) {
-        self.push_type(&field.id, DcatRole::FieldClass);
-        self.push_texts(&field.id, DcatRole::Title, &field.names);
-        self.push_values(&field.id, DcatRole::DataType, &field.data_types);
+    fn emit_field(&mut self, field: &ResearchField) -> Result<(), ProjectionError> {
+        self.push_type(&field.id, DcatRole::FieldClass)?;
+        self.push_texts(&field.id, DcatRole::Title, &field.names)?;
+        self.push_values(&field.id, DcatRole::DataType, &field.data_types)?;
+
+        Ok(())
     }
 
-    fn push_type(&mut self, subject: &str, class: DcatRole) {
+    fn push_type(&mut self, subject: &str, class: DcatRole) -> Result<(), ProjectionError> {
         let class = self.role_iri(class).to_owned();
-        self.push_iri_predicate(subject, self.config.rdf_type(), &class);
+        self.push_iri_predicate(subject, self.config.rdf_type(), &class)?;
+
+        Ok(())
     }
 
-    fn push_iri(&mut self, subject: &str, predicate: DcatRole, object: &str) {
+    fn push_iri(
+        &mut self,
+        subject: &str,
+        predicate: DcatRole,
+        object: &str,
+    ) -> Result<(), ProjectionError> {
         let predicate = self.role_iri(predicate).to_owned();
-        self.push_iri_predicate(subject, &predicate, object);
+        self.push_iri_predicate(subject, &predicate, object)?;
+
+        Ok(())
     }
 
-    fn push_iri_predicate(&mut self, subject: &str, predicate: &str, object: &str) {
-        push_iri_triple(&mut self.builder, subject, predicate, object);
+    fn push_iri_predicate(
+        &mut self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+    ) -> Result<(), ProjectionError> {
+        push_iri_triple(&mut self.builder, subject, predicate, object)?;
+
+        Ok(())
     }
 
-    fn push_texts(&mut self, subject: &str, predicate: DcatRole, values: &[ResearchText]) {
+    fn push_texts(
+        &mut self,
+        subject: &str,
+        predicate: DcatRole,
+        values: &[ResearchText],
+    ) -> Result<(), ProjectionError> {
         for value in values {
-            self.push_text(subject, predicate, value);
+            self.push_text(subject, predicate, value)?;
         }
+
+        Ok(())
     }
 
-    fn push_text(&mut self, subject: &str, predicate: DcatRole, value: &ResearchText) {
-        self.push_literal(subject, predicate, rdf_literal(value));
+    fn push_text(
+        &mut self,
+        subject: &str,
+        predicate: DcatRole,
+        value: &ResearchText,
+    ) -> Result<(), ProjectionError> {
+        self.push_literal(subject, predicate, rdf_literal(value))?;
+
+        Ok(())
     }
 
-    fn push_values(&mut self, subject: &str, predicate: DcatRole, values: &[ResearchValue]) {
+    fn push_values(
+        &mut self,
+        subject: &str,
+        predicate: DcatRole,
+        values: &[ResearchValue],
+    ) -> Result<(), ProjectionError> {
         for value in values {
-            self.push_value(subject, predicate, value);
+            self.push_value(subject, predicate, value)?;
         }
+
+        Ok(())
     }
 
-    fn push_value(&mut self, subject: &str, predicate: DcatRole, value: &ResearchValue) {
+    fn push_value(
+        &mut self,
+        subject: &str,
+        predicate: DcatRole,
+        value: &ResearchValue,
+    ) -> Result<(), ProjectionError> {
         match value {
-            ResearchValue::Iri { value } => self.push_iri(subject, predicate, value),
-            ResearchValue::Text(value) => self.push_text(subject, predicate, value),
+            ResearchValue::Iri { value } => self.push_iri(subject, predicate, value)?,
+            ResearchValue::Text(value) => self.push_text(subject, predicate, value)?,
         }
+
+        Ok(())
     }
 
-    fn push_literal(&mut self, subject: &str, predicate: DcatRole, value: RdfLiteral) {
+    fn push_literal(
+        &mut self,
+        subject: &str,
+        predicate: DcatRole,
+        value: RdfLiteral,
+    ) -> Result<(), ProjectionError> {
         let predicate = self.role_iri(predicate).to_owned();
-        let subject = self.builder.intern_iri(subject);
-        let predicate = self.builder.intern_iri(&predicate);
-        let object = self.builder.intern_literal(value);
-        self.builder.push_quad(subject, predicate, object, None);
+        let subject = self.builder.intern_iri(subject)?;
+        let predicate = self.builder.intern_iri(&predicate)?;
+        let object = self.builder.intern_literal(value)?;
+        self.builder.push_quad(subject, predicate, object, None)?;
+
+        Ok(())
     }
 
     fn role_iri(&self, role: DcatRole) -> &str {
@@ -584,17 +645,28 @@ mod tests {
 
     fn minimal_source(config: &DcatConfig) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let subject = builder.intern_iri(config.common().identity().dataset_iri());
-        let rdf_type = builder.intern_iri(config.common().roles().iri(ResearchRole::RdfType));
-        let dataset_class =
-            builder.intern_iri(config.common().roles().iri(ResearchRole::DatasetClass));
-        builder.push_quad(subject, rdf_type, dataset_class, None);
-        let title = builder.intern_iri(config.common().roles().iri(ResearchRole::Title));
-        let value = builder.intern_literal(RdfLiteral::typed(
-            "Minimal dataset",
-            config.common().roles().iri(ResearchRole::XsdString),
-        ));
-        builder.push_quad(subject, title, value, None);
+        let subject = builder
+            .intern_iri(config.common().identity().dataset_iri())
+            .unwrap();
+        let rdf_type = builder
+            .intern_iri(config.common().roles().iri(ResearchRole::RdfType))
+            .unwrap();
+        let dataset_class = builder
+            .intern_iri(config.common().roles().iri(ResearchRole::DatasetClass))
+            .unwrap();
+        builder
+            .push_quad(subject, rdf_type, dataset_class, None)
+            .unwrap();
+        let title = builder
+            .intern_iri(config.common().roles().iri(ResearchRole::Title))
+            .unwrap();
+        let value = builder
+            .intern_literal(RdfLiteral::typed(
+                "Minimal dataset",
+                config.common().roles().iri(ResearchRole::XsdString),
+            ))
+            .unwrap();
+        builder.push_quad(subject, title, value, None).unwrap();
         builder.freeze().expect("source")
     }
 

@@ -654,6 +654,8 @@ impl SkolemRegistry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ChaseError {
+    /// The original logical capacity or physical storage refusal.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The complete existential rule bundle violates a declaration.
     NeverDerive(crate::admission::AdmissionRefusal),
     /// [`certify`] could not prove the program terminating.
@@ -756,6 +758,7 @@ pub enum ChaseError {
 impl fmt::Display for ChaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
             Self::NonTerminating { violations } => {
                 write!(
@@ -822,7 +825,9 @@ impl fmt::Display for ChaseError {
     }
 }
 
-impl std::error::Error for ChaseError {}
+purrdf_lex::error_source!(ChaseError { Storage });
+
+purrdf_lex::variant_from!(ChaseError { Storage(purrdf_lex::allocation::StorageError) });
 
 // ── The chase ───────────────────────────────────────────────────────────────────
 
@@ -1506,7 +1511,7 @@ pub fn chase_with(
             let fact = &derivation.fact;
             state
                 .store
-                .insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph);
+                .insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph)?;
             state.derivations.push(derivation);
         }
         state.check_budget()?;
@@ -1565,12 +1570,14 @@ mod tests {
     fn store_of(triples: &[(&str, &str, &str)]) -> RelationStore {
         let mut store = RelationStore::new();
         for &(subject, predicate, object) in triples {
-            store.insert(
-                &iri(subject),
-                &iri(predicate),
-                &iri(object),
-                RelationStore::DEFAULT_GRAPH,
-            );
+            store
+                .insert(
+                    &iri(subject),
+                    &iri(predicate),
+                    &iri(object),
+                    RelationStore::DEFAULT_GRAPH,
+                )
+                .unwrap();
         }
         store
     }

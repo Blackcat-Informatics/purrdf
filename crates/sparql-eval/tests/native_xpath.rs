@@ -624,11 +624,15 @@ fn explain_evaluates_under_the_requests_dated_law() {
 /// `ex:{subject} ex:v "{text}"` for each named text.
 fn texts(values: &[(&str, &str)]) -> Arc<purrdf_core::RdfDataset> {
     let mut builder = purrdf_core::RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("http://example.org/v");
+    let predicate = builder.intern_iri("http://example.org/v").unwrap();
     for &(subject, text) in values {
-        let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
-        let value = builder.intern_literal(purrdf_core::RdfLiteral::simple(text));
-        builder.push_quad(subject, predicate, value, None);
+        let subject = builder
+            .intern_iri(&format!("http://example.org/{subject}"))
+            .unwrap();
+        let value = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple(text))
+            .unwrap();
+        builder.push_quad(subject, predicate, value, None).unwrap();
     }
     builder.freeze().unwrap()
 }

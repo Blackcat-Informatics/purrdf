@@ -211,15 +211,15 @@ fn asserted_triples() -> Vec<Triple> {
 fn dataset_of(triples: &[Triple]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for entry in triples {
-        let subject = builder.intern_iri(&entry.subject);
-        let predicate = builder.intern_iri(&entry.predicate);
+        let subject = builder.intern_iri(&entry.subject).unwrap();
+        let predicate = builder.intern_iri(&entry.predicate).unwrap();
         let object = match &entry.object {
-            Object::Iri(iri) => builder.intern_iri(iri),
-            Object::Literal { lexical, datatype } => {
-                builder.intern_literal(RdfLiteral::typed(lexical, datatype))
-            }
+            Object::Iri(iri) => builder.intern_iri(iri).unwrap(),
+            Object::Literal { lexical, datatype } => builder
+                .intern_literal(RdfLiteral::typed(lexical, datatype))
+                .unwrap(),
         };
-        builder.push_quad(subject, predicate, object, None);
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
     builder
         .freeze()

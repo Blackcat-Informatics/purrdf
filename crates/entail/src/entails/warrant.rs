@@ -733,21 +733,21 @@ fn replay(
 /// use purrdf_entail::{EntailmentOutcome, ImportMap, Regime, entails, verify};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// let tom = b.intern_iri("http://example.org/tom");
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// b.push_quad(cat, sub, animal, None);
-/// b.push_quad(tom, ty, cat, None);
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// let tom = b.intern_iri("http://example.org/tom")?;
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// b.push_quad(cat, sub, animal, None)?;
+/// b.push_quad(tom, ty, cat, None)?;
 /// let premise = b.freeze().expect("freeze");
 ///
 /// // `tom a Animal` is not asserted; `cax-sco` derives it.
 /// let mut c = RdfDatasetBuilder::new();
-/// let tom = c.intern_iri("http://example.org/tom");
-/// let ty = c.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// let animal = c.intern_iri("http://example.org/Animal");
-/// c.push_quad(tom, ty, animal, None);
+/// let tom = c.intern_iri("http://example.org/tom")?;
+/// let ty = c.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// let animal = c.intern_iri("http://example.org/Animal")?;
+/// c.push_quad(tom, ty, animal, None)?;
 /// let conclusion = c.freeze().expect("freeze");
 ///
 /// let certificate =
@@ -761,6 +761,7 @@ fn replay(
 ///     panic!("an ordinary conclusion is reached by matching");
 /// };
 /// assert_eq!(mapped.witnesses(&conclusion).expect("covered").len(), 1);
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
 pub fn verify(w: &EntailmentWarrant, premise: &RdfDataset, conclusion: &RdfDataset) -> bool {

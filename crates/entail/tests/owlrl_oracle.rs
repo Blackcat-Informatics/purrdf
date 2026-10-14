@@ -840,10 +840,10 @@ const CORPUS: &[Fixture] = &[
 /// Intern one fixture object term into `builder`.
 fn intern_object(builder: &mut RdfDatasetBuilder, term: Term) -> TermId {
     match term {
-        Term::Iri(iri) => builder.intern_iri(iri),
-        Term::Literal { lexical, datatype } => {
-            builder.intern_literal(RdfLiteral::typed(lexical, datatype))
-        }
+        Term::Iri(iri) => builder.intern_iri(iri).unwrap(),
+        Term::Literal { lexical, datatype } => builder
+            .intern_literal(RdfLiteral::typed(lexical, datatype))
+            .unwrap(),
     }
 }
 
@@ -851,10 +851,10 @@ fn intern_object(builder: &mut RdfDatasetBuilder, term: Term) -> TermId {
 fn build(fixture: &Fixture) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for quad in fixture.quads {
-        let s = builder.intern_iri(quad.s);
-        let p = builder.intern_iri(quad.p);
+        let s = builder.intern_iri(quad.s).unwrap();
+        let p = builder.intern_iri(quad.p).unwrap();
         let o = intern_object(&mut builder, quad.o);
-        builder.push_quad(s, p, o, None);
+        builder.push_quad(s, p, o, None).unwrap();
     }
     builder.freeze().expect("fixture dataset freezes")
 }

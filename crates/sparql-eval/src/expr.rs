@@ -57,7 +57,9 @@ use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trai
 
 use crate::DetHashSet;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, LanguageStringEquality, eval_evaluated};
+use crate::eval::{
+    EvalCtx, LanguageStringEquality, ResidentAbort, ResidentPending, eval_evaluated,
+};
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
@@ -79,7 +81,7 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let program = Arc::new(crate::vm::ExprProgram::compile(expr));
-    crate::vm::Linked::link(program, expr, schema, ctx).term(row, schema, ctx)
+    crate::vm::Linked::link(program, expr, schema, ctx).term(Some(expr), row, schema, ctx)
 }
 
 /// Evaluate `expr` and reduce it to an effective boolean value (`Ok(None)` =
@@ -92,7 +94,7 @@ pub(crate) fn eval_ebv<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<bool>, EvalError> {
     let program = Arc::new(crate::vm::ExprProgram::compile(expr));
-    crate::vm::Linked::link(program, expr, schema, ctx).ebv(row, schema, ctx)
+    crate::vm::Linked::link(program, expr, schema, ctx).ebv(Some(expr), row, schema, ctx)
 }
 
 /// `Filter(expr, inner)`: keep solutions whose `expr` has effective boolean value
@@ -124,11 +126,67 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-        return Ok(lift.withheld());
+    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
+    let child = eval_evaluated(inner, ctx)?;
+    finish_filter_child(node, expr, lift, child, ctx)
+}
+
+/// The ordinary FILTER continuation after its graph child returns. Its
+/// expression row cursor is entered only after this child has been absorbed.
+pub(crate) fn finish_filter_child<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expr: &Expression,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    match begin_filter_child(node, expr, lift, child, ctx)? {
+        FilterStart::Complete(done) => Ok(done),
+        FilterStart::Sequence(sequence) => sequence.run_recursive(node, expr, ctx),
+    }
+}
+
+// An ordinary row remains inline until the existing admitted suspension owner
+// is needed; boxing this transfer result would add a default-path allocation.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "FILTER suspension has an existing admitted owner"
+)]
+pub(crate) enum FilterStart<'e, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(FilterSequence<'e, I>),
+}
+
+/// Enter the existing FILTER computation once. An ordinary graph worklist can
+/// retain the sequential cursor instead of recursively resolving its VM row.
+pub(crate) fn begin_filter_child<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expr: &'e Expression,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<FilterStart<'e, D::Id>, EvalError> {
+    begin_filter_child_with_owner(node, expr, FilterLink::Borrowed(expr), lift, child, ctx)
+}
+
+pub(crate) enum FilterLink<'e> {
+    Borrowed(&'e Expression),
+    Copied(PreparedPattern),
+}
+
+pub(crate) fn begin_filter_child_with_owner<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expr: &Expression,
+    owner: FilterLink<'e>,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<FilterStart<'e, D::Id>, EvalError> {
+    let mut lift = lift.attach(node);
+    let Some(seq) = lift.absorb(0, child) else {
+        return Ok(FilterStart::Complete(lift.withheld()));
     };
-    eval_filter_sequence(node, expr, seq, lift, ctx)
+    begin_filter_sequence(node, expr, owner, seq, lift, ctx)
 }
 
 // Erase the static delivery wrapper; the native operator retains its call boundary.
@@ -218,16 +276,179 @@ pub(crate) fn filter_evidence<D: DatasetView + Sync>(
     Ok((value == Some(true) || undecided).then_some(evidence))
 }
 
+/// The one sequential FILTER loop, movable while its current VM row waits for
+/// an EXISTS child. The input iterator releases before final row materialization.
+pub(crate) struct FilterSequence<'e, I: ViewTermId> {
+    schema: crate::solution::SharedSchema,
+    input: Option<crate::solution::RowBagIntoIter<I>>,
+    output: RowsBuilder<I>,
+    checkpoint: crate::row_checkpoint::RowCheckpoint,
+    linked: Option<crate::vm::Linked<'e, I>>,
+    active: Option<crate::vm::FilterRowFrame<'e, I>>,
+    lift: crate::governor::lift::DetachedLift,
+}
+
+// The sequence moves into the admitted suspended row only for a real child.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "avoid an extra box for each FILTER VM step"
+)]
+pub(crate) enum FilterSequenceStep<'e, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Exists(FilterSequence<'e, I>, u32),
+}
+
+impl<'e, I: ViewTermId> FilterSequence<'e, I> {
+    pub(crate) fn suspended_row(&self) -> &RetainedRow<I> {
+        self.active
+            .as_ref()
+            .expect("one suspended FILTER row")
+            .row()
+    }
+
+    pub(crate) fn schema(&self) -> &VarSchema {
+        &self.schema
+    }
+
+    pub(crate) fn prepare_exists<D: DatasetView<Id = I> + Sync>(
+        &self,
+        site: u32,
+        expression: &Expression,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<(ExistsDecision<I>, Option<crate::evidence_exec::RowEvidence>), EvalError> {
+        self.active
+            .as_ref()
+            .expect("one suspended FILTER row")
+            .prepare_exists(site, expression, &self.schema, ctx)
+    }
+
+    fn new(
+        seq: SolutionSeq<I>,
+        checkpoint: crate::row_checkpoint::RowCheckpoint,
+        linked: crate::vm::Linked<'e, I>,
+        lift: crate::governor::lift::DetachedLift,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Self {
+        Self {
+            schema: seq.schema,
+            input: Some(seq.rows.into_iter()),
+            output: RowsBuilder::new(workspace),
+            checkpoint,
+            linked: Some(linked),
+            active: None,
+            lift,
+        }
+    }
+
+    pub(crate) fn resume<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        value: Option<SolutionTerm<I>>,
+        record: Option<crate::evidence_exec::RowEvidence>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        self.active
+            .as_mut()
+            .expect("one suspended FILTER row")
+            .resume(value, record, ctx)
+    }
+
+    pub(crate) fn step<D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        expression: &Expression,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<FilterSequenceStep<'e, I>, EvalError> {
+        loop {
+            let frame = if let Some(frame) = self.active.take() {
+                frame
+            } else {
+                let Some(row) = self.input.as_mut().and_then(Iterator::next) else {
+                    break;
+                };
+                if self.checkpoint.pass(ctx).is_err() {
+                    break;
+                }
+                crate::vm::FilterRowFrame::begin(
+                    self.linked.take().expect("one sequential FILTER link"),
+                    row,
+                    ctx,
+                )?
+            };
+            match frame.step(expression, &self.schema, ctx)? {
+                crate::vm::FilterRowStep::Complete((linked, row, keep, evidence)) => {
+                    self.linked = Some(linked);
+                    if keep {
+                        self.output
+                            .push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
+                    }
+                }
+                crate::vm::FilterRowStep::Exists(frame, site) => {
+                    self.active = Some(frame);
+                    return Ok(FilterSequenceStep::Exists(self, site));
+                }
+            }
+        }
+        drop(self.input.take());
+        let rows = self.output.finish()?;
+        if let Some(tripped) = ctx.expression_barrier.observed() {
+            return Ok(FilterSequenceStep::Complete(Evaluated::Truncated(
+                Truncation::barred_at(node, tripped, self.schema),
+            )));
+        }
+        Ok(FilterSequenceStep::Complete(self.lift.attach(node).finish(
+            SolutionSeq {
+                schema: self.schema,
+                rows,
+            },
+        )))
+    }
+
+    pub(crate) fn run_recursive<D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        expression: &Expression,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Evaluated<I>, EvalError> {
+        let mut frame_stack = crate::AdmittedVec::new(&ctx.growth);
+        loop {
+            match self.step(node, expression, ctx)? {
+                FilterSequenceStep::Complete(done) => return Ok(done),
+                FilterSequenceStep::Exists(mut pending, site) => {
+                    let frame = pending.active.take().expect("one suspended FILTER row");
+                    frame_stack.push(frame)?;
+                    let resolved: Result<_, EvalError> = (|| {
+                        let frame = frame_stack.last().expect("one admitted FILTER row");
+                        let (decision, mut record) =
+                            frame.prepare_exists(site, expression, &pending.schema, ctx)?;
+                        let found = decision.run_recursive(
+                            frame.row(),
+                            &pending.schema,
+                            record.as_mut(),
+                            ctx,
+                        )?;
+                        Ok((Some(intern_boolean(ctx, found)?), record))
+                    })();
+                    pending.active = Some(frame_stack.pop().expect("one admitted FILTER row"));
+                    let (value, record) = resolved?;
+                    pending.resume(value, record, ctx)?;
+                    self = pending;
+                }
+            }
+        }
+    }
+}
+
 // Share the sequence loop without a second call boundary or native result copy.
 #[allow(clippy::inline_always)]
 #[inline(always)]
-fn eval_filter_sequence<D: DatasetView + Sync>(
+fn begin_filter_sequence<'e, D: DatasetView + Sync>(
     node: &GraphPattern,
     expr: &Expression,
+    owner: FilterLink<'e>,
     seq: SolutionSeq<D::Id>,
     lift: Lift<'_>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
+) -> Result<FilterStart<'e, D::Id>, EvalError> {
     let schema = seq.schema.clone();
     // The `row-expression-evaluation` charge point, charged **per row** rather than per
     // sub-expression so that the cost of a `FILTER` is a property of the data it sees
@@ -245,10 +466,20 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
     let forked =
         !ctx.growth.is_bounded() && ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
-    let mut checkpoint =
+    let checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let program = crate::vm::program_at(ctx, node, expr)?;
-    let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
+    let mut linked = match owner {
+        FilterLink::Borrowed(expression) => {
+            if !std::ptr::eq(expression, expr) {
+                return Err(EvalError::internal("FILTER changed its expression owner"));
+            }
+            crate::vm::Linked::link_filter_admitted(program, expression, &schema, ctx)?
+        }
+        FilterLink::Copied(pattern) => crate::vm::Linked::link_copied_filter_owner_admitted(
+            program, expr, pattern, &schema, ctx,
+        )?,
+    };
     let rows = if forked {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
         // Harvesting, not plain: a predicate can reach a property function through an
@@ -323,26 +554,35 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
         )
         .finish()?
     } else {
-        let mut rows = RowsBuilder::new(&ctx.growth);
-        for row in seq.rows {
-            if checkpoint.pass(ctx).is_err() {
-                break;
-            }
-            let (keep, evidence) = linked.filter(expr, &row, &schema, ctx)?;
-            if keep {
-                rows.push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
-            }
-        }
-        rows.finish()?
+        return Ok(FilterStart::Sequence(FilterSequence::new(
+            seq,
+            checkpoint,
+            linked,
+            lift.detach(),
+            &ctx.growth,
+        )));
     };
     if let Some(tripped) = ctx.expression_barrier.observed() {
-        return Ok(Evaluated::Truncated(Truncation::barred_at(
-            node,
-            tripped,
-            schema.clone(),
+        return Ok(FilterStart::Complete(Evaluated::Truncated(
+            Truncation::barred_at(node, tripped, schema.clone()),
         )));
     }
-    Ok(lift.finish(SolutionSeq { schema, rows }))
+    Ok(FilterStart::Complete(
+        lift.finish(SolutionSeq { schema, rows }),
+    ))
+}
+
+fn eval_filter_sequence<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expr: &Expression,
+    seq: SolutionSeq<D::Id>,
+    lift: Lift<'_>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    match begin_filter_sequence(node, expr, FilterLink::Borrowed(expr), seq, lift, ctx)? {
+        FilterStart::Complete(done) => Ok(done),
+        FilterStart::Sequence(sequence) => sequence.run_recursive(node, expr, ctx),
+    }
 }
 
 /// `Extend(inner, var, expr)` (BIND): add `var` bound to `expr`'s value for each
@@ -474,7 +714,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                     })?;
                 row.extend_from_slice(in_row);
                 row.resize(width, None);
-                let value = linked.term(&row, &schema, child)?;
+                let value = linked.term(Some(expr), &row, &schema, child)?;
                 row[col] = value;
                 let row = RetainedRow::from_resident(row).with_optional_evidence(
                     extend_evidence(in_row, linked.result_evidence()?, expr, var)?,
@@ -525,7 +765,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 }
                 let row = RetainedRow::try_build(width, &growth, |row| {
                     row[..in_row.len()].copy_from_slice(in_row);
-                    row[col] = linked.term(row, &schema, ctx)?;
+                    row[col] = linked.term(Some(expr), row, &schema, ctx)?;
                     Ok(())
                 })?;
                 rows.push(row.with_optional_evidence(
@@ -549,7 +789,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
             ctx.current_row = idx as u64;
             let row = RetainedRow::try_build(width, &growth, |row| {
                 row[..in_row.len()].copy_from_slice(&in_row);
-                row[col] = linked.term(row, &schema, ctx)?;
+                row[col] = linked.term(Some(expr), row, &schema, ctx)?;
                 Ok(())
             })?;
             rows.push_row(row.with_optional_evidence(
@@ -1085,6 +1325,16 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
         (Some(ax), Some(bx)) => {
             if !numeric_step_admitted(ctx, numeric_cost(&ax, &bx, CostOp::Compare)) {
                 return Ok(None);
+            }
+            if let (SolutionTerm::Existing(left), SolutionTerm::Existing(right)) = (ta, tb) {
+                let certified = ctx
+                    .dataset
+                    .checked_read(|dataset| dataset.certified_value_order(left, right))
+                    .map_err(|error| ctx.workspace.source_error(error))?
+                    .map_err(|error| ctx.workspace.source_error(error))?;
+                if let Some(order) = certified {
+                    return Ok(Some(intern_boolean(ctx, keep(order))?));
+                }
             }
             let mut frame = crate::native_numeric::NumericFrame::new(&ctx.growth);
             let compared =
@@ -1797,6 +2047,10 @@ fn collect_vars_admitted<'a>(
                         out.try_extend(variables.iter().cloned())?;
                         pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
+                    GraphPattern::ProjectStar { inner, variables } => {
+                        out.try_extend(variables.iter().cloned())?;
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
+                    }
                 }
             }
         }
@@ -2142,7 +2396,7 @@ fn exists_use_probe(
 /// # Inside a substituted copy
 ///
 /// A nested `EXISTS` the substitution walk left as a placeholder is answered by
-/// [`exists_deferred`], which substitutes the body it stands for — once, for this row —
+/// [`exists_deferred_decide`], which substitutes the body it stands for — once, for this row —
 /// rather than by preparing the placeholder: see `crate::deferred_exists`.
 pub(crate) fn exists<D: DatasetView + Sync>(
     pattern: &GraphPattern,
@@ -2175,8 +2429,19 @@ fn exists_recorded<D: DatasetView + Sync>(
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
-    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+    mut evidence: Option<&mut crate::evidence_exec::RowEvidence>,
 ) -> Result<bool, EvalError> {
+    exists_recorded_decide(pattern, row, schema, ctx, evidence.as_deref_mut())?
+        .run_recursive(row, schema, evidence, ctx)
+}
+
+pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+) -> Result<ExistsDecision<D::Id>, EvalError> {
     // Before the site is prepared: preparing it walks its whole inner pattern, and
     // evaluating it recurses into that pattern. See `crate::stack`.
     crate::stack::check("EXISTS")?;
@@ -2188,7 +2453,7 @@ fn exists_recorded<D: DatasetView + Sync>(
         .and_then(crate::deferred_exists::Deferred::exists)
         .cloned()
     {
-        return exists_deferred(&slot, row, schema, ctx, evidence);
+        return exists_deferred_decide(&slot, row, schema, ctx, evidence);
     }
     if crate::deferred_exists::is_placeholder(pattern) {
         return Err(crate::NativeDiagnostic::error(
@@ -2200,13 +2465,14 @@ fn exists_recorded<D: DatasetView + Sync>(
     }
     let prepared = ctx.prepared_exists(pattern)?;
     let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
-        return Ok(false);
+        return Ok(ExistsDecision::Complete(false));
     };
-    exists_prepared(
+    exists_prepared_decide(
         PreparedSite {
             key: address,
-            prepared: &prepared,
-            plan_map: ledger_source,
+            plan_map: ledger_source.clone(),
+            prepared,
+            source_owner: None,
         },
         row,
         schema,
@@ -2217,58 +2483,488 @@ fn exists_recorded<D: DatasetView + Sync>(
 
 /// One `EXISTS` site ready to answer: its preparation and what its evaluation needs to
 /// know about where the preparation came from.
-#[derive(Clone, Copy)]
-struct PreparedSite<'s> {
+#[derive(Clone)]
+pub(crate) struct PreparedSite {
     /// The address the site's definition-path memo is keyed by.
     key: usize,
     /// The site's preparation, which also keeps the sites of the `EXISTS` bodies nested in
     /// it.
-    prepared: &'s crate::eval::PreparedExists,
+    prepared: crate::workspace::SharedWorkspace<crate::eval::PreparedExists>,
     /// The preparation's nodes mapped one hop to the plan nodes the ledger indexes (the
     /// preparation's own `ledger_source` for a site of the plan).
-    plan_map: &'s crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
+    plan_map: crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
+    /// Layered deferral prepares an ad-hoc copied body. Its original site key
+    /// points into this immutable owner, which must survive child suspension.
+    source_owner: Option<PreparedPattern>,
+}
+
+/// The per-row definition work that must wait for one copied child result.
+/// Its memo key owns the restricted row and its original admission, so a
+/// suspended evaluator can retain this value without borrowing that row.
+pub(crate) struct ExistsDefinitionResume<I: ViewTermId> {
+    memo_key: Option<crate::eval::ExistsDefinitionMemoKey<I>>,
+}
+
+/// The one uncached probe's work after its graph child has returned. A suspended
+/// caller retains this small key while the child runs; the same completion body
+/// serves the immediate caller below.
+pub(crate) struct ExistsProbeResume<I: ViewTermId> {
+    key: (usize, (u8, Option<I>), u64),
+    cache: bool,
+}
+
+/// One graph child the strategy decision actually needs. The site retains the
+/// immutable ENF body and its source map while a caller suspends this row.
+pub(crate) enum ExistsChild<I: ViewTermId> {
+    Probe {
+        site: PreparedSite,
+        resume: ExistsProbeResume<I>,
+    },
+    Definition {
+        site: PreparedSite,
+        first_witness: bool,
+        resume: ExistsDefinitionResume<I>,
+    },
+    Deferred {
+        slot: crate::deferred_exists::DeferredExists,
+        substitution: SubstitutionRow,
+        probe: bool,
+        first_witness: bool,
+    },
+}
+
+/// A site whose answer is already known or whose one graph child must be
+/// entered before the answer can be completed. Both the resident adapter and
+/// a suspended FILTER row use this same strategy decision.
+pub(crate) enum ExistsDecision<I: ViewTermId> {
+    Complete(bool),
+    Child(ExistsChild<I>),
+}
+
+impl<I: ViewTermId> ExistsDecision<I> {
+    pub(crate) fn run_recursive<D: DatasetView<Id = I> + Sync>(
+        self,
+        row: &[Option<SolutionTerm<I>>],
+        schema: &VarSchema,
+        evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        match self {
+            Self::Complete(answer) => Ok(answer),
+            Self::Child(child) => child.run_recursive(row, schema, evidence, ctx),
+        }
+    }
+}
+
+// Pending children are already held by the admitted row owner at the caller.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "avoid a second allocation for an EXISTS child"
+)]
+pub(crate) enum ExistsEntered<I: ViewTermId> {
+    Complete(bool),
+    Child(ExistsPending<I>),
+}
+
+enum ExistsCompletion<I: ViewTermId> {
+    Probe(ExistsProbeResume<I>),
+    Definition(ExistsDefinitionResume<I>),
+    DeferredProbe,
+}
+
+/// One admitted child interval. The graph owner remains live until the copied
+/// substitution and correlated-map scopes have been restored in that order.
+pub(crate) struct ExistsPending<I: ViewTermId> {
+    owner: PreparedPattern,
+    _site: Option<PreparedSite>,
+    _deferred: Option<crate::deferred_exists::DeferredExists>,
+    substitution: Option<crate::binop::SubstitutionFrames>,
+    correlated: Option<crate::eval::ScopeRestore>,
+    completion: Option<ExistsCompletion<I>>,
+}
+
+impl<I: ViewTermId> ExistsPending<I> {
+    pub(crate) fn owner(&self) -> PreparedPattern {
+        self.owner.clone()
+    }
+
+    pub(crate) fn pattern(&self) -> &GraphPattern {
+        &self.owner
+    }
+
+    pub(crate) fn finish<D: DatasetView<Id = I> + Sync>(
+        mut self,
+        evaluated: Result<Evaluated<I>, EvalError>,
+        row: &[Option<SolutionTerm<I>>],
+        schema: &VarSchema,
+        evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        self.abort(ctx);
+        let evaluated = evaluated?;
+        match self.completion.take().expect("one EXISTS child completion") {
+            ExistsCompletion::Probe(resume) => resume.finish(evaluated, row, schema, evidence, ctx),
+            ExistsCompletion::Definition(resume) => resume.finish(evaluated, evidence, ctx),
+            ExistsCompletion::DeferredProbe => {
+                finish_deferred_probe(evaluated, row, schema, evidence, ctx)
+            }
+        }
+    }
+}
+
+impl<I: ViewTermId, D: DatasetView<Id = I> + Sync> ResidentAbort<D> for ExistsPending<I> {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        if let Some(substitution) = &mut self.substitution {
+            substitution.unwind(ctx);
+        }
+        self.substitution = None;
+        if let Some(restore) = self.correlated.take() {
+            restore.restore(ctx);
+        }
+    }
+}
+
+impl<I: ViewTermId> ExistsChild<I> {
+    /// Decide the one graph child and install its lexical interval before the
+    /// graph worklist enters that child. The resident adapter below consumes
+    /// this same entry and completion route.
+    pub(crate) fn enter<D: DatasetView<Id = I> + Sync>(
+        self,
+        row: &[Option<SolutionTerm<I>>],
+        schema: &VarSchema,
+        evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<ExistsEntered<I>, EvalError> {
+        match self {
+            Self::Probe { site, resume } => {
+                let crate::eval::PreparedExists::Pattern { normalized, .. } =
+                    site.prepared.as_ref()
+                else {
+                    return Err(EvalError::internal(
+                        "a probe child lost its prepared pattern",
+                    ));
+                };
+                let owner = normalized.clone();
+                let ledger_scope = ctx.enter_correlated_map_scope(&site.plan_map)?;
+                Ok(ExistsEntered::Child(ExistsPending {
+                    owner,
+                    _site: Some(site),
+                    _deferred: None,
+                    substitution: None,
+                    correlated: ledger_scope.into_restore(),
+                    completion: Some(ExistsCompletion::Probe(resume)),
+                }))
+            }
+            Self::Definition {
+                site,
+                first_witness,
+                resume,
+            } => {
+                let crate::eval::PreparedExists::Pattern {
+                    normalized,
+                    witness_wrapped,
+                    witness_sites,
+                    normalized_sites,
+                    ..
+                } = site.prepared.as_ref()
+                else {
+                    return Err(EvalError::internal(
+                        "a definition child lost its prepared pattern",
+                    ));
+                };
+                let (to_evaluate, sites) = if first_witness {
+                    (witness_wrapped.as_ref(), witness_sites)
+                } else {
+                    (normalized.as_ref(), normalized_sites)
+                };
+                let mut ledger_scope = ctx.enter_correlated_map_scope(&site.plan_map)?;
+                let source = crate::deferred_exists::CorrelatedSource {
+                    sites: crate::deferred_exists::SiteSlot::Prepared(sites),
+                    plan_map: Some(site.plan_map.as_ref()),
+                };
+                let barrier = crate::shapes::barrier::inner(
+                    site.key,
+                    normalized,
+                    site.plan_map.as_ref(),
+                    row,
+                    schema,
+                    &mut ledger_scope,
+                )?;
+                if let Some(inner) = barrier {
+                    drop(ledger_scope);
+                    return resume
+                        .finish(inner, evidence, ctx)
+                        .map(ExistsEntered::Complete);
+                }
+                crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+                let substitution = outer_bindings_for_substitution(row, schema, &ledger_scope)?;
+                crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+                let prepared = crate::binop::prepare_substituted::<D, false, false>(
+                    to_evaluate,
+                    &substitution,
+                    source,
+                    &mut ledger_scope,
+                )?;
+                let frames = crate::binop::SubstitutionFrames::enter(
+                    prepared.body,
+                    prepared.ledger_map,
+                    prepared.placeholders,
+                    &mut ledger_scope,
+                )?;
+                let owner = frames.owner();
+                Ok(ExistsEntered::Child(ExistsPending {
+                    owner,
+                    _site: Some(site),
+                    _deferred: None,
+                    substitution: Some(frames),
+                    correlated: ledger_scope.into_restore(),
+                    completion: Some(ExistsCompletion::Definition(resume)),
+                }))
+            }
+            Self::Deferred {
+                slot,
+                substitution,
+                probe,
+                first_witness,
+            } => {
+                let site = &slot.site;
+                let crate::eval::PreparedExists::Pattern {
+                    normalized,
+                    witness_wrapped,
+                    witness_sites,
+                    normalized_sites,
+                    ..
+                } = site.prepared.as_ref()
+                else {
+                    return Err(EvalError::internal(
+                        "a deferred child lost its prepared pattern",
+                    ));
+                };
+                let (to_evaluate, sites) = if first_witness {
+                    (witness_wrapped.as_ref(), witness_sites)
+                } else {
+                    (normalized.as_ref(), normalized_sites)
+                };
+                let source = crate::deferred_exists::CorrelatedSource {
+                    sites: crate::deferred_exists::SiteSlot::Prepared(sites),
+                    plan_map: Some(site.plan_map.as_ref()),
+                };
+                let mut ledger_scope = ctx.enter_correlated_map_scope(&site.plan_map)?;
+                crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+                let prepared = crate::binop::prepare_substituted::<D, false, false>(
+                    to_evaluate,
+                    &substitution,
+                    source,
+                    &mut ledger_scope,
+                )?;
+                let frames = crate::binop::SubstitutionFrames::enter(
+                    prepared.body,
+                    prepared.ledger_map,
+                    prepared.placeholders,
+                    &mut ledger_scope,
+                )?;
+                let owner = frames.owner();
+                let completion = if probe {
+                    ExistsCompletion::DeferredProbe
+                } else {
+                    ExistsCompletion::Definition(ExistsDefinitionResume { memo_key: None })
+                };
+                Ok(ExistsEntered::Child(ExistsPending {
+                    owner,
+                    _site: None,
+                    _deferred: Some(slot),
+                    substitution: Some(frames),
+                    correlated: ledger_scope.into_restore(),
+                    completion: Some(completion),
+                }))
+            }
+        }
+    }
+
+    /// Resident callers retain the original RAII unwind behavior while sharing
+    /// the child's entry and completion with the movable worklist.
+    fn run_recursive<D: DatasetView<Id = I> + Sync>(
+        self,
+        row: &[Option<SolutionTerm<I>>],
+        schema: &VarSchema,
+        mut evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        match self.enter(row, schema, evidence.as_deref_mut(), ctx)? {
+            ExistsEntered::Complete(answer) => Ok(answer),
+            ExistsEntered::Child(child) => {
+                let mut guard = ResidentPending {
+                    child: Some(child),
+                    ctx,
+                };
+                let evaluated = eval_evaluated(
+                    guard
+                        .child
+                        .as_ref()
+                        .expect("one entered EXISTS child")
+                        .pattern(),
+                    guard.ctx,
+                );
+                guard
+                    .child
+                    .take()
+                    .expect("one entered EXISTS child")
+                    .finish(evaluated, row, schema, evidence, guard.ctx)
+            }
+        }
+    }
+}
+
+impl<I: ViewTermId> ExistsProbeResume<I> {
+    fn finish<D: DatasetView<Id = I> + Sync>(
+        self,
+        evaluated: Evaluated<I>,
+        row: &[Option<SolutionTerm<I>>],
+        schema: &VarSchema,
+        evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        if let Evaluated::Truncated(truncation) = &evaluated {
+            ctx.record_barrier(truncation.tripped());
+            return Ok(false);
+        }
+        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
+            return Ok(false);
+        }
+        let inner = crate::workspace::SharedWorkspace::new_admitted(
+            evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
+                unreachable!("a non-truncated result is complete by construction")
+            }),
+            &ctx.growth,
+        )?;
+        let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
+        let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
+        let entry = crate::workspace::SharedWorkspace::new_admitted(
+            crate::eval::ExistsInner {
+                inner,
+                shared,
+                keyed,
+                wild,
+            },
+            &ctx.growth,
+        )?;
+        if self.cache {
+            ctx.exists_inner_cache
+                .insert_admitted(self.key, entry.clone(), &ctx.growth)?;
+        }
+        answer_probe_entry(row, &entry, evidence, ctx)
+    }
+}
+
+fn answer_probe_entry<D: DatasetView + Sync>(
+    row: &[Option<SolutionTerm<D::Id>>],
+    entry: &crate::workspace::SharedWorkspace<crate::eval::ExistsInner<D::Id>>,
+    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    if let Some(output) = evidence {
+        let (found, record) = crate::binop::probe_evidence(row, entry, ctx)?;
+        *output = record;
+        return Ok(found);
+    }
+    crate::binop::probe_has_match(
+        row,
+        &entry.shared,
+        &entry.keyed,
+        &entry.wild,
+        &entry.inner.rows,
+        &ctx.growth,
+    )
+}
+
+impl<I: ViewTermId> ExistsDefinitionResume<I> {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "completion owns the child until evidence and memo publication finish"
+    )]
+    fn finish<D: DatasetView<Id = I> + Sync>(
+        self,
+        inner: Evaluated<I>,
+        evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        if let Evaluated::Truncated(truncation) = &inner {
+            ctx.record_barrier(truncation.tripped());
+            return Ok(false);
+        }
+        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
+            return Ok(false);
+        }
+        let consumed = inner.rows().len();
+        for _ in 0..consumed {
+            if charge_exists_evidence(
+                ctx,
+                crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
+            ) {
+                return Ok(false);
+            }
+        }
+        let answer = if evidence.is_some() {
+            inner
+                .rows()
+                .rows
+                .iter()
+                .any(|row| !row.evidence().is_undecided())
+        } else {
+            !inner.rows().is_empty()
+        };
+        if evidence.is_some() {
+            let record = ctx.existential_evidence(
+                inner.rows().rows.iter().map(RetainedRow::evidence),
+                inner.rows().rows.search_evidence(),
+            )?;
+            if !record.is_virtual()
+                && let Some(key) = &self.memo_key
+            {
+                ctx.exists_evidence_memo.insert_admitted(
+                    (key.0, key.1, key.2, key.3.clone_admitted(&ctx.growth)?),
+                    record.clone(),
+                    &ctx.growth,
+                )?;
+            }
+            if let Some(output) = evidence {
+                *output = record;
+            }
+        }
+        if let Some(key) = self.memo_key {
+            ctx.exists_definition_memo
+                .insert_admitted(key, answer, &ctx.growth)?;
+        }
+        Ok(answer)
+    }
 }
 
 /// Answer an `EXISTS` for the current row from its preparation: the strategy decision,
 /// the memoized probe and the per-row definition, as [`exists`] documents them.
-fn exists_prepared<D: DatasetView + Sync>(
-    site: PreparedSite<'_>,
+fn exists_prepared_decide<D: DatasetView + Sync>(
+    site: PreparedSite,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
     evidence: Option<&mut crate::evidence_exec::RowEvidence>,
-) -> Result<bool, EvalError> {
-    let ledger_source = site.plan_map;
-    let (
-        normalized,
-        witness_wrapped,
-        analysis,
-        free_vars,
-        stateful,
-        witness_sites,
-        normalized_sites,
-    ) = match site.prepared {
+) -> Result<ExistsDecision<D::Id>, EvalError> {
+    let PreparedSite {
+        key,
+        prepared,
+        plan_map: ledger_source,
+        source_owner,
+    } = site;
+    let (normalized, analysis, free_vars, stateful) = match prepared.as_ref() {
         // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
         // every μ — the whole EXISTS is constant `false`, no evaluation needed.
-        crate::eval::PreparedExists::FoldedFalse => return Ok(false),
+        crate::eval::PreparedExists::FoldedFalse => return Ok(ExistsDecision::Complete(false)),
         crate::eval::PreparedExists::Pattern {
             normalized,
-            witness_wrapped,
             analysis,
             free_vars,
             stateful,
-            witness_sites,
-            normalized_sites,
             ..
-        } => (
-            normalized,
-            witness_wrapped,
-            analysis,
-            free_vars,
-            *stateful,
-            witness_sites,
-            normalized_sites,
-        ),
+        } => (normalized, analysis, free_vars, *stateful),
     };
 
     // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
@@ -2304,7 +3000,7 @@ fn exists_prepared<D: DatasetView + Sync>(
     // in `crate::exists_admission_gate` (the W3C `exists04`/`exists05`
     // shape — nested `FILTER EXISTS`/`FILTER NOT EXISTS`, correlated only
     // through the DEFINITION path). The same holds for a nested site the substitution
-    // deferred ([`exists_deferred`]) and that reaches this function with nothing owed:
+    // deferred ([`exists_deferred_decide`]) and that reaches this function with nothing owed:
     // it is the body the eager copy would have been, reached inside the same window,
     // and skipped exactly as that copy was.
     if !ctx.in_substituted_exists {
@@ -2355,17 +3051,10 @@ fn exists_prepared<D: DatasetView + Sync>(
     let native_positive =
         native_positive && FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get).is_none();
     if native_positive
-        && let Some(answer) = exists_positive_seeded(
-            site.key,
-            normalized,
-            free_vars,
-            ledger_source,
-            row,
-            schema,
-            ctx,
-        )?
+        && let Some(answer) =
+            exists_positive_seeded(key, normalized, free_vars, &ledger_source, row, schema, ctx)?
     {
-        return Ok(answer);
+        return Ok(ExistsDecision::Complete(answer));
     }
 
     if exists_use_probe(
@@ -2386,99 +3075,37 @@ fn exists_prepared<D: DatasetView + Sync>(
         // `ctx.in_substituted_exists` is already set means `pattern` is itself part
         // of an outer per-row substituted temporary, so skip both the cache get and
         // the insert and build the entry fresh, unshared.
-        let key = (
+        let cache_key = (
             std::ptr::from_ref::<GraphPattern>(normalized.as_ref()) as usize,
             ctx.graph_key(),
             crate::eval::schema_fingerprint(schema),
         );
         let cached = if ctx.options.exists_memo && !ctx.in_substituted_exists {
-            ctx.exists_inner_cache.get(&key).cloned()
+            ctx.exists_inner_cache.get(&cache_key).cloned()
         } else {
             None
         };
-        let entry = match cached {
-            Some(entry) => entry,
+        match cached {
+            Some(entry) => {
+                answer_probe_entry(row, &entry, evidence, ctx).map(ExistsDecision::Complete)
+            }
             None => {
-                // Push this site's ledger-source correspondence around the ONE evaluation
-                // this arm ever runs, same mechanism and same reason the definition path
-                // pushes it around its own (per-row) `eval_correlated` call below: without
-                // it, every node `eval_evaluated` walks below `normalized` resolves to no
-                // real plan address at all (`normalized` is a fresh ENF clone, never a
-                // plan node itself), so `EvalCtx::resolve_ledger_ordinal` falls through to
-                // `None` and every charge folds into the enclosing `FILTER`/`BIND` instead
-                // of attributing to the inner's own nodes — even though the probe path
-                // evaluates `normalized` UNSUBSTITUTED (no per-row copy, hence no
-                // `eval_correlated`/`enter_substituted_exists` push of its own). Gated
-                // identically to the definition path's push: nothing to resolve against
-                // without a ledger, and `ledger_source_map` may have declined to track a
-                // `Project`/`Union`-shaped site (see its doc), leaving nothing to push.
-                // Popped manually (not via a guard) because the only fallible call in this
-                // scope is the one line below, and its `?` is applied after the pop — the
-                // probe runs exactly once per site, so these charges attribute once, which
-                // is correct: this is scoped to a single evaluation of the definition path,
-                // not to every outer row the probe later serves.
-                let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
-                if track_ledger {
-                    ctx.correlated_node_maps
-                        .push(ledger_source.clone(), &ctx.growth)?;
-                }
-                let evaluated = eval_evaluated(normalized, ctx);
-                if track_ledger {
-                    ctx.correlated_node_maps.pop();
-                }
-                let evaluated = evaluated?;
-                if let Evaluated::Truncated(truncation) = &evaluated {
-                    ctx.record_barrier(truncation.tripped());
-                    return Ok(false);
-                }
-                if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
-                    return Ok(false);
-                }
-                let inner = crate::workspace::SharedWorkspace::new_admitted(
-                    evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
-                        unreachable!("a non-truncated result is complete by construction")
-                    }),
-                    &ctx.growth,
-                )?;
-                // `shared` is computed against the FULL outer schema (not just the
-                // row's bound vars), so one index serves every row: an outer var
-                // unbound in a given row is `None` in the probe and matches anything
-                // via `compatible`, exactly as the definition path's substitution would.
-                let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
-                let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
-                let entry = crate::workspace::SharedWorkspace::new_admitted(
-                    crate::eval::ExistsInner {
-                        inner,
-                        shared,
-                        keyed,
-                        wild,
+                // The normalized child is entered under this site's ledger map,
+                // once per site; its full outer schema is used for the index.
+                Ok(ExistsDecision::Child(ExistsChild::Probe {
+                    site: PreparedSite {
+                        key,
+                        plan_map: ledger_source,
+                        prepared,
+                        source_owner,
                     },
-                    &ctx.growth,
-                )?;
-                if ctx.options.exists_memo && !ctx.in_substituted_exists {
-                    ctx.exists_inner_cache
-                        .insert_admitted(key, entry.clone(), &ctx.growth)?;
-                }
-                entry
+                    resume: ExistsProbeResume {
+                        key: cache_key,
+                        cache: ctx.options.exists_memo && !ctx.in_substituted_exists,
+                    },
+                }))
             }
-        };
-
-        // Existence-only probe of the full outer row against the reused index.
-        if evidence.is_some() {
-            let (found, record) = crate::binop::probe_evidence(row, &entry, ctx)?;
-            if let Some(output) = evidence {
-                *output = record;
-            }
-            return Ok(found);
         }
-        crate::binop::probe_has_match(
-            row,
-            &entry.shared,
-            &entry.keyed,
-            &entry.wild,
-            &entry.inner.rows,
-            &ctx.growth,
-        )
     } else {
         // ---- Per-row definition path, with the μ-restriction memo ----
         //
@@ -2498,7 +3125,7 @@ fn exists_prepared<D: DatasetView + Sync>(
         let memo_key = if use_memo {
             let restriction = definition_restriction_key(row, schema, free_vars, &ctx.growth)?;
             Some((
-                site.key,
+                key,
                 ctx.graph_key(),
                 crate::eval::schema_fingerprint(schema),
                 restriction,
@@ -2516,7 +3143,7 @@ fn exists_prepared<D: DatasetView + Sync>(
                     .cloned()
                     .unwrap_or_default();
             }
-            return Ok(answer);
+            return Ok(ExistsDecision::Complete(answer));
         }
 
         // `witness_wrapped` is `normalized` wrapped in `Slice{0, Some(1)}` — the ENF
@@ -2525,12 +3152,7 @@ fn exists_prepared<D: DatasetView + Sync>(
         // Ordinary queries use this in production. Evidence queries retain all
         // witnesses: emptiness preservation does not preserve information joins.
         // [`suppress_first_witness_wrap_for_test`] compares ordinary consumption.
-        let (to_evaluate, sites): (&GraphPattern, _) =
-            if evidence.is_none() && exists_apply_first_witness_wrap() {
-                (witness_wrapped, witness_sites)
-            } else {
-                (normalized, normalized_sites)
-            };
+        let first_witness = evidence.is_none() && exists_apply_first_witness_wrap();
         // Push this site's ledger-source correspondence (`PreparedExists::Pattern::
         // ledger_source` — `crate::enf::ledger_source_map`) as the enclosing window
         // `eval_correlated` reads BEFORE pushing its own per-row map: that is what makes
@@ -2541,81 +3163,18 @@ fn exists_prepared<D: DatasetView + Sync>(
         // a plan address. Gated on a ledger actually being installed (nothing to resolve
         // against otherwise) and on the map being non-empty (`ledger_source_map` declines to
         // track a `Project`/`Union`-shaped site — see its doc — so there is nothing to push).
-        // Popped manually, not via a guard, because the only fallible call in this scope is
-        // the one line below and its `?` is applied AFTER the pop.
-        let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
-        if track_ledger {
-            ctx.correlated_node_maps
-                .push(ledger_source.clone(), &ctx.growth)?;
-        }
-        let source = crate::deferred_exists::CorrelatedSource {
-            sites: crate::deferred_exists::SiteSlot::Prepared(sites),
-            plan_map: Some(ledger_source.as_ref()),
-        };
-        let inner_result = match crate::shapes::barrier::inner(
-            site.key,
-            normalized,
-            ledger_source.as_ref(),
-            row,
-            schema,
-            ctx,
-        ) {
-            Ok(Some(inner)) => Ok(inner),
-            Ok(None) => crate::binop::eval_correlated(to_evaluate, row, schema, source, ctx),
-            Err(error) => Err(error),
-        };
-        if track_ledger {
-            ctx.correlated_node_maps.pop();
-        }
-        let inner = inner_result?;
-        if let Evaluated::Truncated(truncation) = &inner {
-            ctx.record_barrier(truncation.tripped());
-            return Ok(false);
-        }
-        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
-            return Ok(false);
-        }
-        let consumed = inner.rows().len();
-        for _ in 0..consumed {
-            if charge_exists_evidence(
-                ctx,
-                crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
-            ) {
-                return Ok(false);
-            }
-        }
-        let answer = if evidence.is_some() {
-            inner
-                .rows()
-                .rows
-                .iter()
-                .any(|row| !row.evidence().is_undecided())
-        } else {
-            !inner.rows().is_empty()
-        };
-        if evidence.is_some() {
-            let record = ctx.existential_evidence(
-                inner.rows().rows.iter().map(RetainedRow::evidence),
-                inner.rows().rows.search_evidence(),
-            )?;
-            if !record.is_virtual()
-                && let Some(key) = &memo_key
-            {
-                ctx.exists_evidence_memo.insert_admitted(
-                    (key.0, key.1, key.2, key.3.clone_admitted(&ctx.growth)?),
-                    record.clone(),
-                    &ctx.growth,
-                )?;
-            }
-            if let Some(output) = evidence {
-                *output = record;
-            }
-        }
-        if let Some(key) = memo_key {
-            ctx.exists_definition_memo
-                .insert_admitted(key, answer, &ctx.growth)?;
-        }
-        Ok(answer)
+        // The layer belongs to this child interval. A suspended parent retains
+        // the same restoration token and pops it after the child completes.
+        Ok(ExistsDecision::Child(ExistsChild::Definition {
+            site: PreparedSite {
+                key,
+                plan_map: ledger_source,
+                prepared,
+                source_owner,
+            },
+            first_witness,
+            resume: ExistsDefinitionResume { memo_key },
+        }))
     }
 }
 
@@ -2727,50 +3286,65 @@ fn exists_positive_seeded<D: DatasetView + Sync>(
     Ok(Some(answer))
 }
 
-/// Answer a nested `EXISTS` the substitution walk left as a placeholder, for the current
-/// row: the body the placeholder stands for (`slot.site`), owed the substitution the walk
-/// would have applied to it (`slot.env`) and then this row — see `crate::deferred_exists`.
-///
-/// What is decided here, and why each choice answers what the eager copy answered:
-///
-/// * **Nothing owed.** No layer binds a variable of the body, so the eager copy was the
-///   body as written: the site's own preparation is answered exactly as [`exists`] answers
-///   any other `EXISTS` reached inside a substituted window.
-/// * **One merged row owed.** The layers agree, so substituting their union once builds
-///   the eager copy up to redundant one-row joins. The body is answered by its per-row
-///   definition over that union and this row — which is the answer both strategies give
-///   (`crate::enf`'s one-definition theorem): the memoized probe the eager copy might
-///   have been admitted to was evaluated per row there too (a window caches nothing), so
-///   it was never cheaper than the definition. The `cfg(test)` strategy override is still
-///   honoured, so a test forcing the probe sees what the probe sees.
-/// * **Layers that disagree.** Reachable only through a rebinding SEP-0007 leaves
-///   undefined: the body is substituted one layer at a time, in full, and answered as
-///   [`exists`] answers the copy — exactly the eager evaluation.
-fn exists_deferred<D: DatasetView + Sync>(
+/// Finish the test-only forced probe without changing its original admission
+/// sequence or constructing the site-cache owner used by the normal probe.
+fn finish_deferred_probe<D: DatasetView + Sync>(
+    evaluated: Evaluated<D::Id>,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    if let Evaluated::Truncated(truncation) = &evaluated {
+        ctx.record_barrier(truncation.tripped());
+        return Ok(false);
+    }
+    if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
+        return Ok(false);
+    }
+    let inner = evaluated
+        .into_complete(|_| ())
+        .unwrap_or_else(|()| unreachable!("a non-truncated result is complete by construction"));
+    let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
+    let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
+    if evidence.is_some() {
+        let entry = crate::eval::ExistsInner {
+            inner: crate::workspace::SharedWorkspace::new_admitted(inner, &ctx.growth)?,
+            shared,
+            keyed,
+            wild,
+        };
+        let (found, record) = crate::binop::probe_evidence(row, &entry, ctx)?;
+        if let Some(output) = evidence {
+            *output = record;
+        }
+        return Ok(found);
+    }
+    crate::binop::probe_has_match(row, &shared, &keyed, &wild, &inner.rows, &ctx.growth)
+}
+
+/// Decide a nested `EXISTS` left as a placeholder. Empty layers use the site's
+/// original preparation; merged layers suspend one substituted child; disagreeing
+/// layers prepare the same sequential copy as the eager evaluation.
+fn exists_deferred_decide<D: DatasetView + Sync>(
     slot: &crate::deferred_exists::DeferredExists,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
     evidence: Option<&mut crate::evidence_exec::RowEvidence>,
-) -> Result<bool, EvalError> {
+) -> Result<ExistsDecision<D::Id>, EvalError> {
     let site = &slot.site;
-    let crate::eval::PreparedExists::Pattern {
-        normalized,
-        witness_wrapped,
-        witness_sites,
-        normalized_sites,
-        ..
-    } = site.prepared.as_ref()
-    else {
-        return Ok(false);
+    let crate::eval::PreparedExists::Pattern { normalized, .. } = site.prepared.as_ref() else {
+        return Ok(ExistsDecision::Complete(false));
     };
     let env = match slot.env.state() {
         crate::deferred_exists::EnvState::Empty => {
-            return exists_prepared(
+            return exists_prepared_decide(
                 PreparedSite {
                     key: std::ptr::from_ref(normalized.as_ref()) as usize,
-                    prepared: &site.prepared,
-                    plan_map: &site.plan_map,
+                    prepared: site.prepared.clone(),
+                    plan_map: site.plan_map.clone(),
+                    source_owner: None,
                 },
                 row,
                 schema,
@@ -2779,65 +3353,20 @@ fn exists_deferred<D: DatasetView + Sync>(
             );
         }
         crate::deferred_exists::EnvState::Layered => {
-            return exists_layered(slot, row, schema, ctx, evidence);
+            return exists_layered_decide(slot, row, schema, ctx, evidence);
         }
         crate::deferred_exists::EnvState::Merged(env) => env,
     };
-    let source = |sites| crate::deferred_exists::CorrelatedSource {
-        sites: crate::deferred_exists::SiteSlot::Prepared(sites),
-        plan_map: Some(site.plan_map.as_ref()),
-    };
-    // The site's map, pushed as the window the substitution resolves through, exactly as
-    // `exists_prepared` pushes a plan site's `ledger_source`.
-    let track_ledger = ctx.ledger.is_some() && !site.plan_map.is_empty();
-
     #[cfg(test)]
     if FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) == Some(ForcedExistsStrategy::Probe) {
         // The probe the eager copy would have run: the body with the carried substitution
         // only, evaluated unconstrained, then probed with the row.
-        if track_ledger {
-            ctx.correlated_node_maps
-                .push(site.plan_map.clone(), &ctx.growth)?;
-        }
-        let evaluated =
-            crate::binop::eval_substituted(normalized, env, source(normalized_sites), ctx);
-        if track_ledger {
-            ctx.correlated_node_maps.pop();
-        }
-        let evaluated = evaluated?;
-        if let Evaluated::Truncated(truncation) = &evaluated {
-            ctx.record_barrier(truncation.tripped());
-            return Ok(false);
-        }
-        if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
-            return Ok(false);
-        }
-        let inner = evaluated.into_complete(|_| ()).unwrap_or_else(|()| {
-            unreachable!("a non-truncated result is complete by construction")
-        });
-        let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
-        let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
-        if evidence.is_some() {
-            let entry = crate::eval::ExistsInner {
-                inner: crate::workspace::SharedWorkspace::new_admitted(inner, &ctx.growth)?,
-                shared,
-                keyed,
-                wild,
-            };
-            let (found, record) = crate::binop::probe_evidence(row, &entry, ctx)?;
-            if let Some(output) = evidence {
-                *output = record;
-            }
-            return Ok(found);
-        }
-        return crate::binop::probe_has_match(
-            row,
-            &shared,
-            &keyed,
-            &wild,
-            &inner.rows,
-            &ctx.growth,
-        );
+        return Ok(ExistsDecision::Child(ExistsChild::Deferred {
+            slot: slot.clone(),
+            substitution: env.clone(),
+            probe: true,
+            first_witness: false,
+        }));
     }
 
     // The per-row definition over the carried substitution and this row, as one row.
@@ -2846,94 +3375,56 @@ fn exists_deferred<D: DatasetView + Sync>(
         crate::deferred_exists::with_row(env, &current, &site.vars, &ctx.growth)?
     else {
         // This row disagrees with a carried layer: the layers are applied one at a time.
-        return exists_layered(slot, row, schema, ctx, evidence);
+        return exists_layered_decide(slot, row, schema, ctx, evidence);
     };
-    let (to_evaluate, sites): (&GraphPattern, _) =
-        if evidence.is_none() && exists_apply_first_witness_wrap() {
-            (witness_wrapped, witness_sites)
-        } else {
-            (normalized, normalized_sites)
-        };
-    if track_ledger {
-        ctx.correlated_node_maps
-            .push(site.plan_map.clone(), &ctx.growth)?;
-    }
-    let inner_result =
-        crate::binop::eval_substituted(to_evaluate, &substitution, source(sites), ctx);
-    if track_ledger {
-        ctx.correlated_node_maps.pop();
-    }
-    let inner = inner_result?;
-    if let Evaluated::Truncated(truncation) = &inner {
-        ctx.record_barrier(truncation.tripped());
-        return Ok(false);
-    }
-    if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
-        return Ok(false);
-    }
-    let consumed = inner.rows().len();
-    for _ in 0..consumed {
-        if charge_exists_evidence(
-            ctx,
-            crate::governor::ChargePoint::ExistsInnerSolutionsConsumed,
-        ) {
-            return Ok(false);
-        }
-    }
-    let answer = if evidence.is_some() {
-        inner
-            .rows()
-            .rows
-            .iter()
-            .any(|row| !row.evidence().is_undecided())
-    } else {
-        !inner.rows().is_empty()
-    };
-    if evidence.is_some() {
-        let record = ctx.existential_evidence(
-            inner.rows().rows.iter().map(RetainedRow::evidence),
-            inner.rows().rows.search_evidence(),
-        )?;
-        if let Some(output) = evidence {
-            *output = record;
-        }
-    }
-    Ok(answer)
+    Ok(ExistsDecision::Child(ExistsChild::Deferred {
+        slot: slot.clone(),
+        substitution,
+        probe: false,
+        first_witness: evidence.is_none() && exists_apply_first_witness_wrap(),
+    }))
 }
 
-/// [`exists_deferred`] for layers that disagree: substitute them into the body one at a
+/// [`exists_deferred_decide`] for layers that disagree: substitute them into the body one at a
 /// time, in full, and answer the copy as [`exists`] answers any `EXISTS` reached inside a
 /// substituted window.
-fn exists_layered<D: DatasetView + Sync>(
+fn exists_layered_decide<D: DatasetView + Sync>(
     slot: &crate::deferred_exists::DeferredExists,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
     evidence: Option<&mut crate::evidence_exec::RowEvidence>,
-) -> Result<bool, EvalError> {
+) -> Result<ExistsDecision<D::Id>, EvalError> {
     let crate::eval::PreparedExists::Pattern { normalized, .. } = slot.site.prepared.as_ref()
     else {
-        return Ok(false);
+        return Ok(ExistsDecision::Complete(false));
     };
     let mut copy: Option<CorrelatedPattern> = None;
     for layer in slot.env.layers(&ctx.growth)? {
         let from: &GraphPattern = copy.as_deref().unwrap_or(normalized);
         copy = Some(substitute_pattern_admitted(from, layer, &ctx.growth)?);
     }
-    let body: &GraphPattern = copy.as_deref().unwrap_or(normalized);
-    let prepared = crate::eval::PreparedExists::build_with_evidence_admitted(
-        body,
-        ctx.may_have_evidence(),
+    let source_owner = copy
+        .map(|body| PreparedPattern::new(body, &ctx.growth))
+        .transpose()?;
+    let body: &GraphPattern = source_owner.as_deref().unwrap_or(normalized);
+    let prepared = crate::workspace::SharedWorkspace::new_admitted(
+        crate::eval::PreparedExists::build_with_evidence_admitted(
+            body,
+            ctx.may_have_evidence(),
+            &ctx.growth,
+        )?,
         &ctx.growth,
     )?;
-    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = &prepared else {
-        return Ok(false);
+    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
+        return Ok(ExistsDecision::Complete(false));
     };
-    exists_prepared(
+    exists_prepared_decide(
         PreparedSite {
             key: std::ptr::from_ref(body) as usize,
-            prepared: &prepared,
-            plan_map: ledger_source,
+            plan_map: ledger_source.clone(),
+            prepared,
+            source_owner,
         },
         row,
         schema,
@@ -3232,7 +3723,7 @@ impl SubstitutionRow {
 
     fn narrow_to(
         &self,
-        variables: &[Variable],
+        variables: purrdf_sparql_algebra::ProjectionNames<'_>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
         self.filtered(workspace, |v| variables.contains(v))
@@ -4293,7 +4784,10 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
             let inner_sub = if PRESERVE {
                 substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?
             } else {
-                let narrowed = row.narrow_to(variables, memory.admission_mut().workspace())?;
+                let narrowed = row.narrow_to(
+                    purrdf_sparql_algebra::ProjectionNames::Explicit(variables),
+                    memory.admission_mut().workspace(),
+                )?;
                 substitute_pattern_impl::<PRESERVE>(inner, &narrowed, map, defer, memory)?
             };
             boxed_and_mapped(
@@ -4302,6 +4796,26 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                     variables: memory
                         .collect(variables.iter().cloned())
                         .map_err(|e| correlated_storage_error(memory, e))?,
+                },
+                pattern,
+                map,
+                memory,
+            )?
+        }
+        GraphPattern::ProjectStar { inner, variables } => {
+            let inner_sub = if PRESERVE {
+                substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?
+            } else {
+                let narrowed = row.narrow_to(
+                    purrdf_sparql_algebra::ProjectionNames::Star(variables),
+                    memory.admission_mut().workspace(),
+                )?;
+                substitute_pattern_impl::<PRESERVE>(inner, &narrowed, map, defer, memory)?
+            };
+            boxed_and_mapped(
+                GraphPattern::ProjectStar {
+                    inner: inner_sub.into(),
+                    variables: variables.clone(),
                 },
                 pattern,
                 map,
@@ -5299,7 +5813,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                     let value = frame
                         .finish_value(Ok(value))?
                         .expect("timezone adjustment has no numeric value-space error");
-                    governed_xsd_to_term(ctx, &value)
+                    governed_xsd_to_term(ctx, &value, value.datatype().iri())
                 }
                 Err(purrdf_xsd::XsdError::Storage(error)) => {
                     frame.finish_scalar::<()>(Err(error))?;
@@ -5589,7 +6103,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                 frame.admit(layout)
             });
             return match frame.finish_cast(cast)? {
-                Some(cast) => governed_xsd_to_term(ctx, &cast),
+                Some(cast) => governed_xsd_to_term(ctx, &cast, cast.datatype().iri()),
                 None => {
                     ctx.record_expression_error(Some(cast_error_code(&value)));
                     Ok(None)
@@ -5629,7 +6143,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                     }
                     Err(_) => return Ok(None),
                 };
-                return governed_xsd_to_term(ctx, &value);
+                return governed_xsd_to_term(ctx, &value, target.iri());
             }
             // A string's spelling is what it casts by: the lexical path below.
             CalendarSource::Lexical => {}
@@ -5664,8 +6178,8 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // One native parser; malformed lexical and physical refusal stay separate.
     let result =
         match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
-            Ok(value) if target.is_calendar() => governed_xsd_to_term(ctx, &value),
-            Ok(value) => governed_xsd_to_term(ctx, &value),
+            Ok(value) if target.is_calendar() => governed_xsd_to_term(ctx, &value, target.iri()),
+            Ok(value) => governed_xsd_to_term(ctx, &value, value.datatype().iri()),
             Err(code) => {
                 if target.is_numeric() {
                     ctx.record_expression_error(code);
@@ -6928,7 +7442,7 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     v: &XsdValue,
 ) -> Result<SolutionTerm<D::Id>, EvalError> {
-    let value = xsd_workspace_value(v, &ctx.growth)?;
+    let value = xsd_workspace_value(v, &ctx.growth, v.datatype().iri())?;
     ctx.intern_workspace_term(value)?
         .ok_or(EvalError::WorkspaceBoundOverflow)
 }
@@ -6938,19 +7452,20 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
 pub(crate) fn xsd_workspace_value(
     value: &XsdValue,
     workspace: &crate::WorkspaceCapability,
+    datatype: &str,
 ) -> Result<crate::WorkspaceTerm, EvalError> {
     let mut frame = crate::native_numeric::NumericFrame::new(workspace);
     let prepared =
         purrdf_xsd::numeric::prepare_numeric_text(value, &mut |layout| frame.admit(layout));
     match frame.finish_text(prepared)? {
-        Some(text) => numeric_text_value(text, value.datatype().iri(), workspace),
+        Some(text) => numeric_text_value(text, datatype, workspace),
         None => {
             let mut frame = crate::native_numeric::NumericFrame::new(workspace);
             let prepared = purrdf_xsd::temporal::prepare_calendar_text(value, &mut |layout| {
                 frame.admit(layout)
             });
             if let Some(text) = frame.finish_calendar_text(prepared)? {
-                return workspace.literal(text, value.datatype().iri());
+                return workspace.literal(text, datatype);
             }
             if let XsdValue::Duration(duration) = value {
                 let mut frame = crate::native_numeric::NumericFrame::new(workspace);
@@ -6959,11 +7474,11 @@ pub(crate) fn xsd_workspace_value(
                         frame.admit(layout)
                     });
                 let text = frame.finish_duration_text(prepared)?;
-                return workspace.literal(text, value.datatype().iri());
+                return workspace.literal(text, datatype);
             }
             let text = purrdf_xsd::value::canonical_non_numeric(value)
                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
-            workspace.literal(text, value.datatype().iri())
+            workspace.literal(text, datatype)
         }
     }
 }
@@ -7115,7 +7630,7 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
             frame.admit(layout)
         });
     match frame.finish_value(computed)? {
-        Ok(result) => governed_xsd_to_term(ctx, &result),
+        Ok(result) => governed_xsd_to_term(ctx, &result, result.datatype().iri()),
         Err(code) => {
             ctx.record_expression_error(code);
             Ok(None)
@@ -7160,11 +7675,15 @@ fn charge_numeric_step<D: DatasetView + Sync>(
 pub(crate) fn governed_xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: &XsdValue,
+    datatype: &str,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     if !numeric_step_admitted(ctx, numeric_render_cost(value)) {
         return Ok(None);
     }
-    xsd_to_term(ctx, value).map(Some)
+    let value = xsd_workspace_value(value, &ctx.growth, datatype)?;
+    ctx.intern_workspace_term(value)?
+        .ok_or(EvalError::WorkspaceBoundOverflow)
+        .map(Some)
 }
 
 /// A unary numeric operator (`+` / `-`) over its evaluated operand: resolve it to an XSD
@@ -7214,14 +7733,14 @@ fn apply_unary_numeric<D: DatasetView + Sync>(
     }
     // Identity keeps the same immutable parsed allocation, including its subtype.
     if op == purrdf_xsd::numeric::NumericUnaryOperator::Plus && value.is_numeric() {
-        return governed_xsd_to_term(ctx, value);
+        return governed_xsd_to_term(ctx, value, value.datatype().iri());
     }
     let capability = ctx.growth.clone();
     let mut frame = crate::native_numeric::NumericFrame::new(&capability);
     let computed =
         purrdf_xsd::numeric::numeric_unary_admitted(value, op, &mut |layout| frame.admit(layout));
     match frame.finish_value(computed)? {
-        Ok(value) => governed_xsd_to_term(ctx, &value),
+        Ok(value) => governed_xsd_to_term(ctx, &value, value.datatype().iri()),
         Err(code) => {
             ctx.record_expression_error(code);
             Ok(None)
@@ -7570,12 +8089,33 @@ mod tests {
     }
 
     #[test]
+    fn node_entry_releases_local_slice_cap_on_latched_source_failure() {
+        let view = FaultView {
+            inner: RdfDatasetBuilder::new().freeze().expect("empty dataset"),
+            refused: None,
+            refuse_reverse: false,
+            failed: std::sync::atomic::AtomicBool::new(true),
+        };
+        let slice = GraphPattern::Slice {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            start: 0,
+            length: Some(1),
+        };
+        let mut ctx = EvalCtx::new(&view);
+        assert!(eval_evaluated(&slice, &mut ctx).is_err());
+        assert!(ctx.cap_pushdown.is_none());
+    }
+
+    #[test]
     fn operational_expression_reads_fail_instead_of_becoming_unbound() {
         let mut builder = RdfDatasetBuilder::new();
-        let integer =
-            builder.intern_literal(RdfLiteral::typed("7", purrdf_xsd::datatype::XSD_INTEGER));
-        let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_INTEGER);
-        let ordinary = builder.intern_iri("https://example.org/ordinary");
+        let integer = builder
+            .intern_literal(RdfLiteral::typed("7", purrdf_xsd::datatype::XSD_INTEGER))
+            .unwrap();
+        let datatype = builder
+            .intern_iri(purrdf_xsd::datatype::XSD_INTEGER)
+            .unwrap();
+        let ordinary = builder.intern_iri("https://example.org/ordinary").unwrap();
         let mut view = FaultView {
             inner: builder.freeze().unwrap(),
             refused: None,
@@ -7777,12 +8317,14 @@ mod tests {
                         else {
                             panic!("literal fixture");
                         };
-                        builder.intern_literal(RdfLiteral {
-                            lexical_form: lexical_form.clone(),
-                            datatype: Some(datatype.clone()),
-                            language: language.clone(),
-                            direction: *direction,
-                        });
+                        builder
+                            .intern_literal(RdfLiteral {
+                                lexical_form: lexical_form.clone(),
+                                datatype: Some(datatype.clone()),
+                                language: language.clone(),
+                                direction: *direction,
+                            })
+                            .unwrap();
                     }
                 }
                 let ds = builder.freeze().unwrap();
@@ -8594,29 +9136,33 @@ mod tests {
         // :a :member :club .   (a is a member; b is not)
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let age = b.intern_iri("http://ex/age");
-        let name = b.intern_iri("http://ex/name");
-        let member = b.intern_iri("http://ex/member");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let club = b.intern_iri("http://ex/club");
-        let i30 = b.intern_literal(RdfLiteral {
-            lexical_form: "30".to_owned(),
-            datatype: Some(XINT.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let i17 = b.intern_literal(RdfLiteral {
-            lexical_form: "17".to_owned(),
-            datatype: Some(XINT.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let ann = b.intern_literal(RdfLiteral::simple("Ann"));
-        b.push_quad(a, age, i30, None);
-        b.push_quad(a, name, ann, None);
-        b.push_quad(bb, age, i17, None);
-        b.push_quad(a, member, club, None);
+        let age = b.intern_iri("http://ex/age").unwrap();
+        let name = b.intern_iri("http://ex/name").unwrap();
+        let member = b.intern_iri("http://ex/member").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let club = b.intern_iri("http://ex/club").unwrap();
+        let i30 = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "30".to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let i17 = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "17".to_owned(),
+                datatype: Some(XINT.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let ann = b.intern_literal(RdfLiteral::simple("Ann")).unwrap();
+        b.push_quad(a, age, i30, None).unwrap();
+        b.push_quad(a, name, ann, None).unwrap();
+        b.push_quad(bb, age, i17, None).unwrap();
+        b.push_quad(a, member, club, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -8644,71 +9190,87 @@ mod tests {
         use purrdf_xsd::datatype::XSD_DATE_TIME as XDATETIME;
         use purrdf_xsd::datatype::XSD_DURATION as XDURATION;
         let mut b = RdfDatasetBuilder::new();
-        let start = b.intern_iri("http://ex/start");
-        let end = b.intern_iri("http://ex/end");
-        let period = b.intern_iri("http://ex/period");
-        let e1 = b.intern_iri("http://ex/e1");
-        let e2 = b.intern_iri("http://ex/e2");
-        let e3 = b.intern_iri("http://ex/e3");
-        let p1 = b.intern_iri("http://ex/p1");
-        let p2 = b.intern_iri("http://ex/p2");
-        let e1_start = b.intern_literal(RdfLiteral {
-            lexical_form: "2024-03-01T00:00:00Z".to_owned(),
-            datatype: Some(XDATETIME.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let e1_end = b.intern_literal(RdfLiteral {
-            lexical_form: "2024-03-10T00:00:00Z".to_owned(),
-            datatype: Some(XDATETIME.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let e2_start = b.intern_literal(RdfLiteral {
-            lexical_form: "2024-03-01T00:00:00Z".to_owned(),
-            datatype: Some(XDATETIME.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let e2_end = b.intern_literal(RdfLiteral {
-            lexical_form: "2024-03-03T00:00:00Z".to_owned(),
-            datatype: Some(XDATETIME.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let e3_start = b.intern_literal(RdfLiteral {
-            lexical_form: "2024-03-01T00:00:00Z".to_owned(),
-            datatype: Some(XDATETIME.to_owned()),
-            language: None,
-            direction: None,
-        });
+        let start = b.intern_iri("http://ex/start").unwrap();
+        let end = b.intern_iri("http://ex/end").unwrap();
+        let period = b.intern_iri("http://ex/period").unwrap();
+        let e1 = b.intern_iri("http://ex/e1").unwrap();
+        let e2 = b.intern_iri("http://ex/e2").unwrap();
+        let e3 = b.intern_iri("http://ex/e3").unwrap();
+        let p1 = b.intern_iri("http://ex/p1").unwrap();
+        let p2 = b.intern_iri("http://ex/p2").unwrap();
+        let e1_start = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "2024-03-01T00:00:00Z".to_owned(),
+                datatype: Some(XDATETIME.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let e1_end = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "2024-03-10T00:00:00Z".to_owned(),
+                datatype: Some(XDATETIME.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let e2_start = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "2024-03-01T00:00:00Z".to_owned(),
+                datatype: Some(XDATETIME.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let e2_end = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "2024-03-03T00:00:00Z".to_owned(),
+                datatype: Some(XDATETIME.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let e3_start = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "2024-03-01T00:00:00Z".to_owned(),
+                datatype: Some(XDATETIME.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
         // No timezone — the row whose instant difference must be indeterminate.
-        let e3_end = b.intern_literal(RdfLiteral {
-            lexical_form: "2024-03-10T00:00:00".to_owned(),
-            datatype: Some(XDATETIME.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let p1_period = b.intern_literal(RdfLiteral {
-            lexical_form: "P1M".to_owned(),
-            datatype: Some(XDURATION.to_owned()),
-            language: None,
-            direction: None,
-        });
-        let p2_period = b.intern_literal(RdfLiteral {
-            lexical_form: "P30D".to_owned(),
-            datatype: Some(XDURATION.to_owned()),
-            language: None,
-            direction: None,
-        });
-        b.push_quad(e1, start, e1_start, None);
-        b.push_quad(e1, end, e1_end, None);
-        b.push_quad(e2, start, e2_start, None);
-        b.push_quad(e2, end, e2_end, None);
-        b.push_quad(e3, start, e3_start, None);
-        b.push_quad(e3, end, e3_end, None);
-        b.push_quad(p1, period, p1_period, None);
-        b.push_quad(p2, period, p2_period, None);
+        let e3_end = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "2024-03-10T00:00:00".to_owned(),
+                datatype: Some(XDATETIME.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let p1_period = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "P1M".to_owned(),
+                datatype: Some(XDURATION.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let p2_period = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "P30D".to_owned(),
+                datatype: Some(XDURATION.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        b.push_quad(e1, start, e1_start, None).unwrap();
+        b.push_quad(e1, end, e1_end, None).unwrap();
+        b.push_quad(e2, start, e2_start, None).unwrap();
+        b.push_quad(e2, end, e2_end, None).unwrap();
+        b.push_quad(e3, start, e3_start, None).unwrap();
+        b.push_quad(e3, end, e3_end, None).unwrap();
+        b.push_quad(p1, period, p1_period, None).unwrap();
+        b.push_quad(p2, period, p2_period, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -9815,6 +10377,12 @@ mod tests {
             ),
             (D::DateTime, "2026-10-04T12:00:00", D::DateTimeStamp, None),
             (
+                D::DateTime,
+                "2026-10-04T12:00:00.123456789012345678901Z",
+                D::DateTimeStamp,
+                Some("2026-10-04T12:00:00.123456789012345678901Z"),
+            ),
+            (
                 D::DateTimeStamp,
                 "2026-10-04T12:00:00+05:30",
                 D::DateTime,
@@ -10150,15 +10718,15 @@ mod tests {
     /// subjects (`:a`) so a per-row EXISTS would re-evaluate the inner repeatedly.
     fn knows_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let member = b.intern_iri("http://ex/member");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
-        let club = b.intern_iri("http://ex/club");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(a, knows, c, None);
-        b.push_quad(bb, member, club, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let member = b.intern_iri("http://ex/member").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        let club = b.intern_iri("http://ex/club").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(a, knows, c, None).unwrap();
+        b.push_quad(bb, member, club, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -10298,10 +10866,10 @@ mod tests {
     fn definition_memo_ds() -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let q = b.intern_iri("http://example.org/q");
-        let x = b.intern_iri("http://example.org/x");
-        let w1 = b.intern_literal(RdfLiteral::simple("w1"));
-        b.push_quad(x, q, w1, None);
+        let q = b.intern_iri("http://example.org/q").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let w1 = b.intern_literal(RdfLiteral::simple("w1")).unwrap();
+        b.push_quad(x, q, w1, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -10341,13 +10909,13 @@ mod tests {
         // memoized answer as the first.
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let q = b.intern_iri("http://example.org/q");
-        let x1 = b.intern_iri("http://example.org/x1");
-        let x2 = b.intern_iri("http://example.org/x2");
-        let one = b.intern_literal(RdfLiteral::simple("1"));
-        let three = b.intern_literal(RdfLiteral::simple("3"));
-        b.push_quad(x1, q, one, None);
-        b.push_quad(x2, q, three, None);
+        let q = b.intern_iri("http://example.org/q").unwrap();
+        let x1 = b.intern_iri("http://example.org/x1").unwrap();
+        let x2 = b.intern_iri("http://example.org/x2").unwrap();
+        let one = b.intern_literal(RdfLiteral::simple("1")).unwrap();
+        let three = b.intern_literal(RdfLiteral::simple("3")).unwrap();
+        b.push_quad(x1, q, one, None).unwrap();
+        b.push_quad(x2, q, three, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = "PREFIX : <http://example.org/> \
@@ -10426,16 +10994,16 @@ mod tests {
         // (same reasoning as the memo tests above), so this is the definition path.
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let q = b.intern_iri("http://example.org/q");
-        let x1 = b.intern_iri("http://example.org/x1");
-        let x2 = b.intern_iri("http://example.org/x2");
-        let x3 = b.intern_iri("http://example.org/x3");
-        let one = b.intern_literal(RdfLiteral::simple("1"));
-        let two = b.intern_literal(RdfLiteral::simple("2"));
-        let three = b.intern_literal(RdfLiteral::simple("3"));
-        b.push_quad(x1, q, one, None);
-        b.push_quad(x2, q, two, None);
-        b.push_quad(x3, q, three, None);
+        let q = b.intern_iri("http://example.org/q").unwrap();
+        let x1 = b.intern_iri("http://example.org/x1").unwrap();
+        let x2 = b.intern_iri("http://example.org/x2").unwrap();
+        let x3 = b.intern_iri("http://example.org/x3").unwrap();
+        let one = b.intern_literal(RdfLiteral::simple("1")).unwrap();
+        let two = b.intern_literal(RdfLiteral::simple("2")).unwrap();
+        let three = b.intern_literal(RdfLiteral::simple("3")).unwrap();
+        b.push_quad(x1, q, one, None).unwrap();
+        b.push_quad(x2, q, two, None).unwrap();
+        b.push_quad(x3, q, three, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = "PREFIX : <http://example.org/> \
@@ -10527,12 +11095,12 @@ mod tests {
     #[test]
     fn exists_inner_charges_attribute_to_real_plan_nodes() {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://example.org/p");
-        let a = b.intern_iri("http://example.org/a");
-        let x = b.intern_iri("http://example.org/x1");
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let a = b.intern_iri("http://example.org/a").unwrap();
+        let x = b.intern_iri("http://example.org/x1").unwrap();
         // `?s :p ?o` has a match; `MINUS { ?s :q ?o }` removes nothing (no `:q` triple at
         // all), so the EXISTS inner is non-empty for the outer row `?outer = :a`.
-        b.push_quad(a, p, x, None);
+        b.push_quad(a, p, x, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         // `FILTER(?a = ?outer)` inside the inner (correlated on `?outer`, not certainly
@@ -10597,14 +11165,14 @@ mod tests {
     fn uncorrelated_stateful_exists_takes_the_definition_path() {
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let tag = b.intern_iri("http://example.org/tag");
-        let anything = b.intern_literal(RdfLiteral::simple("x"));
-        let s1 = b.intern_iri("http://example.org/s1");
-        let s2 = b.intern_iri("http://example.org/s2");
-        let s3 = b.intern_iri("http://example.org/s3");
-        b.push_quad(s1, tag, anything, None);
-        b.push_quad(s2, tag, anything, None);
-        b.push_quad(s3, tag, anything, None);
+        let tag = b.intern_iri("http://example.org/tag").unwrap();
+        let anything = b.intern_literal(RdfLiteral::simple("x")).unwrap();
+        let s1 = b.intern_iri("http://example.org/s1").unwrap();
+        let s2 = b.intern_iri("http://example.org/s2").unwrap();
+        let s3 = b.intern_iri("http://example.org/s3").unwrap();
+        b.push_quad(s1, tag, anything, None).unwrap();
+        b.push_quad(s2, tag, anything, None).unwrap();
+        b.push_quad(s3, tag, anything, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = "PREFIX : <http://example.org/> \
@@ -10658,23 +11226,23 @@ mod tests {
     #[test]
     fn nested_exists_prepare_is_cached_across_rows() {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://example.org/p");
-        let q = b.intern_iri("http://example.org/q");
-        let s1 = b.intern_iri("http://example.org/s1");
-        let s2 = b.intern_iri("http://example.org/s2");
-        let s3 = b.intern_iri("http://example.org/s3");
-        let o1 = b.intern_iri("http://example.org/o1");
-        let o2 = b.intern_iri("http://example.org/o2");
-        let o3 = b.intern_iri("http://example.org/o3");
-        let x = b.intern_iri("http://example.org/x");
-        let y = b.intern_iri("http://example.org/y");
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let q = b.intern_iri("http://example.org/q").unwrap();
+        let s1 = b.intern_iri("http://example.org/s1").unwrap();
+        let s2 = b.intern_iri("http://example.org/s2").unwrap();
+        let s3 = b.intern_iri("http://example.org/s3").unwrap();
+        let o1 = b.intern_iri("http://example.org/o1").unwrap();
+        let o2 = b.intern_iri("http://example.org/o2").unwrap();
+        let o3 = b.intern_iri("http://example.org/o3").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let y = b.intern_iri("http://example.org/y").unwrap();
         // One `:p` triple per outer value, so every one of the 3 distinct `?a` restrictions
         // reaches the nested `EXISTS` (rather than being filtered out by `?s :p ?o` before
         // `?s = ?a` is even reached).
-        b.push_quad(s1, p, o1, None);
-        b.push_quad(s2, p, o2, None);
-        b.push_quad(s3, p, o3, None);
-        b.push_quad(x, q, y, None);
+        b.push_quad(s1, p, o1, None).unwrap();
+        b.push_quad(s2, p, o2, None).unwrap();
+        b.push_quad(s3, p, o3, None).unwrap();
+        b.push_quad(x, q, y, None).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = "PREFIX : <http://example.org/> \
@@ -10728,15 +11296,15 @@ mod tests {
         // :b :knows :c
         // :a :p :x    ← only :a has :p
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://ex/knows");
-        let p = b.intern_iri("http://ex/p");
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let c = b.intern_iri("http://ex/c");
-        let x = b.intern_iri("http://ex/x");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(bb, knows, c, None);
-        b.push_quad(a, p, x, None);
+        let knows = b.intern_iri("http://ex/knows").unwrap();
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let c = b.intern_iri("http://ex/c").unwrap();
+        let x = b.intern_iri("http://ex/x").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(bb, knows, c, None).unwrap();
+        b.push_quad(a, p, x, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -10848,15 +11416,15 @@ mod tests {
     /// inner bag changes the answer instead of merely shortening it.
     fn exists_governor_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://example.org/knows");
-        let member = b.intern_iri("http://example.org/member");
-        let club = b.intern_iri("http://example.org/club");
+        let knows = b.intern_iri("http://example.org/knows").unwrap();
+        let member = b.intern_iri("http://example.org/member").unwrap();
+        let club = b.intern_iri("http://example.org/club").unwrap();
         for i in 1..=4 {
-            let s = b.intern_iri(&format!("http://example.org/s{i}"));
-            let o = b.intern_iri(&format!("http://example.org/o{i}"));
-            b.push_quad(s, knows, o, None);
+            let s = b.intern_iri(&format!("http://example.org/s{i}")).unwrap();
+            let o = b.intern_iri(&format!("http://example.org/o{i}")).unwrap();
+            b.push_quad(s, knows, o, None).unwrap();
             if i % 2 == 1 {
-                b.push_quad(s, member, club, None);
+                b.push_quad(s, member, club, None).unwrap();
             }
         }
         b.freeze().expect("freeze")
@@ -11032,16 +11600,16 @@ mod tests {
     /// (`s1`, `s3`, `s5`) additionally have a `:p` triple.
     fn correlated_multi_row_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("http://example.org/knows");
-        let p = b.intern_iri("http://example.org/p");
-        let x = b.intern_iri("http://example.org/x");
+        let knows = b.intern_iri("http://example.org/knows").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
         for i in 1..=5 {
-            let s = b.intern_iri(&format!("http://example.org/s{i}"));
-            let o = b.intern_iri(&format!("http://example.org/o{i}"));
-            b.push_quad(s, knows, o, None);
+            let s = b.intern_iri(&format!("http://example.org/s{i}")).unwrap();
+            let o = b.intern_iri(&format!("http://example.org/o{i}")).unwrap();
+            b.push_quad(s, knows, o, None).unwrap();
             if i % 2 == 1 {
                 // Odd subjects (s1, s3, s5) have :p; even ones (s2, s4) do not.
-                b.push_quad(s, p, x, None);
+                b.push_quad(s, p, x, None).unwrap();
             }
         }
         b.freeze().expect("freeze")
@@ -11102,16 +11670,16 @@ mod tests {
             direction: None,
         };
         let mut b = RdfDatasetBuilder::new();
-        let v = b.intern_iri("http://example.org/v");
-        let w = b.intern_iri("http://example.org/w");
-        let x = b.intern_iri("http://example.org/x");
-        let y = b.intern_iri("http://example.org/y");
-        let i5 = b.intern_literal(int("5"));
-        let i15 = b.intern_literal(int("15"));
-        let i3 = b.intern_literal(int("3"));
-        b.push_quad(x, v, i5, None);
-        b.push_quad(x, w, i3, None);
-        b.push_quad(y, v, i15, None);
+        let v = b.intern_iri("http://example.org/v").unwrap();
+        let w = b.intern_iri("http://example.org/w").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let y = b.intern_iri("http://example.org/y").unwrap();
+        let i5 = b.intern_literal(int("5")).unwrap();
+        let i15 = b.intern_literal(int("15")).unwrap();
+        let i3 = b.intern_literal(int("3")).unwrap();
+        b.push_quad(x, v, i5, None).unwrap();
+        b.push_quad(x, w, i3, None).unwrap();
+        b.push_quad(y, v, i15, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -11146,18 +11714,18 @@ mod tests {
             direction: None,
         };
         let mut b = RdfDatasetBuilder::new();
-        let v = b.intern_iri("http://example.org/v");
-        let w = b.intern_iri("http://example.org/w");
-        let x = b.intern_iri("http://example.org/x");
-        let y = b.intern_iri("http://example.org/y");
-        let i10 = b.intern_literal(int("10"));
-        let i3 = b.intern_literal(int("3"));
-        let i1 = b.intern_literal(int("1"));
-        let i5 = b.intern_literal(int("5"));
-        b.push_quad(x, v, i10, None);
-        b.push_quad(x, w, i3, None);
-        b.push_quad(y, v, i1, None);
-        b.push_quad(y, w, i5, None);
+        let v = b.intern_iri("http://example.org/v").unwrap();
+        let w = b.intern_iri("http://example.org/w").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let y = b.intern_iri("http://example.org/y").unwrap();
+        let i10 = b.intern_literal(int("10")).unwrap();
+        let i3 = b.intern_literal(int("3")).unwrap();
+        let i1 = b.intern_literal(int("1")).unwrap();
+        let i5 = b.intern_literal(int("5")).unwrap();
+        b.push_quad(x, v, i10, None).unwrap();
+        b.push_quad(x, w, i3, None).unwrap();
+        b.push_quad(y, v, i1, None).unwrap();
+        b.push_quad(y, w, i5, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -11212,22 +11780,22 @@ mod tests {
     fn held_in_ds() -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
         let mut b = RdfDatasetBuilder::new();
-        let reifier = b.intern_iri("http://ex/r");
-        let s = b.intern_iri("http://ex/s");
-        let p = b.intern_iri("http://ex/p");
-        let o = b.intern_literal(RdfLiteral::simple("v"));
-        let t1 = b.intern_iri("http://ex/T1");
-        let t2 = b.intern_iri("http://ex/T2");
-        let _t3 = b.intern_iri("http://ex/T3");
-        let according_to = b.intern_iri(EX_ACCORDING_TO);
-        let sharpens = b.intern_iri(EX_SHARPENS);
+        let reifier = b.intern_iri("http://ex/r").unwrap();
+        let s = b.intern_iri("http://ex/s").unwrap();
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let o = b.intern_literal(RdfLiteral::simple("v")).unwrap();
+        let t1 = b.intern_iri("http://ex/T1").unwrap();
+        let t2 = b.intern_iri("http://ex/T2").unwrap();
+        let _t3 = b.intern_iri("http://ex/T3").unwrap();
+        let according_to = b.intern_iri(EX_ACCORDING_TO).unwrap();
+        let sharpens = b.intern_iri(EX_SHARPENS).unwrap();
         // The reified triple-term `<<( s p o )>>` and its reifier binding.
-        let triple = b.intern_triple(s, p, o);
-        b.push_reifier(reifier, triple);
+        let triple = b.intern_triple(s, p, o).unwrap();
+        b.push_reifier(reifier, triple).unwrap();
         // The vantage standpoint annotation (annotation side-table).
-        b.push_annotation(reifier, according_to, t1);
+        b.push_annotation(reifier, according_to, t1).unwrap();
         // The direct, already-materialized sharpens edge (quads table): T1 ⊑ T2.
-        b.push_quad(t1, sharpens, t2, None);
+        b.push_quad(t1, sharpens, t2, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -11329,16 +11897,18 @@ mod tests {
         use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
-        let val = b.intern_iri("http://ex/val");
+        let val = b.intern_iri("http://ex/val").unwrap();
         for (s, n) in [("a", "10"), ("b", "20"), ("c", "30")] {
-            let subj = b.intern_iri(&format!("http://ex/{s}"));
-            let v = b.intern_literal(RdfLiteral {
-                lexical_form: n.to_owned(),
-                datatype: Some(XINT.to_owned()),
-                language: None,
-                direction: None,
-            });
-            b.push_quad(subj, val, v, None);
+            let subj = b.intern_iri(&format!("http://ex/{s}")).unwrap();
+            let v = b
+                .intern_literal(RdfLiteral {
+                    lexical_form: n.to_owned(),
+                    datatype: Some(XINT.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap();
+            b.push_quad(subj, val, v, None).unwrap();
         }
         let ds = b.freeze().expect("freeze");
 
@@ -11588,10 +12158,16 @@ mod tests {
         // making §18.5 see disjoint domains and skip the subtraction (the
         // "MINUS disjoint-domain flip").
         let mut b = RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/lateral-substitution#s");
-        let q = b.intern_iri("https://example.org/lateral-substitution#q");
-        let c = b.intern_iri("https://example.org/lateral-substitution#c");
-        b.push_quad(s, q, c, None);
+        let s = b
+            .intern_iri("https://example.org/lateral-substitution#s")
+            .unwrap();
+        let q = b
+            .intern_iri("https://example.org/lateral-substitution#q")
+            .unwrap();
+        let c = b
+            .intern_iri("https://example.org/lateral-substitution#c")
+            .unwrap();
+        b.push_quad(s, q, c, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
         let outer = GraphPattern::Bgp {
@@ -11645,6 +12221,51 @@ mod tests {
             "?s must not be injected past the Project boundary the sub-SELECT \
              does not carry it across — no Values join, no rewrite"
         );
+    }
+
+    #[test]
+    fn star_substitution_borrows_names_under_a_fixed_workspace_limit() {
+        use crate::workspace::owned_row_regressions::{Refusal, account};
+        use std::sync::atomic::Ordering;
+
+        for width in [32, 256, 2048] {
+            let names = (0..width)
+                .map(|index| format!("?v{index}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let query = purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(&format!("SELECT * WHERE {{ VALUES ({names}) {{}} }}"))
+                .expect("valid wide star projection");
+            let GraphPattern::ProjectStar { variables, .. } = query.pattern() else {
+                panic!("star query retains its shared projection");
+            };
+            let pattern = GraphPattern::ProjectStar {
+                inner: Child::new(GraphPattern::empty_bgp()),
+                variables: variables.clone(),
+            };
+            let base = crate::workspace::QueryWorkspace::<Refusal>::control_bytes().unwrap();
+            let (workspace, ledger, _) = account(base + 4096);
+            let empty = SubstitutionRow::resident(Vec::new(), Vec::new());
+            let rewritten = substitute_pattern_admitted(&pattern, &empty, &workspace.capability())
+                .expect("empty bindings do not copy the growing projection snapshot");
+            drop(rewritten);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+
+            for name in ["v0", "outside"] {
+                let row = row_binding_iri(name, "value");
+                let narrowed = row
+                    .narrow_to(
+                        purrdf_sparql_algebra::ProjectionNames::Star(variables),
+                        &workspace.capability(),
+                    )
+                    .expect("only the bound row is admitted");
+                let expected = usize::from(name == "v0");
+                assert_eq!(narrowed.expr.len(), expected);
+                assert_eq!(narrowed.term.len(), expected);
+                drop(narrowed);
+                assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            }
+        }
     }
 
     #[test]
@@ -11729,18 +12350,34 @@ mod tests {
     /// evaluate the `EXISTS` inner against, once, for every outer row alike.
     fn lateral_limit_exists_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let owns = b.intern_iri("https://example.org/lateral-existswiden#owns");
-        let child = b.intern_iri("https://example.org/lateral-existswiden#child");
-        let a = b.intern_iri("https://example.org/lateral-existswiden#a");
-        let bb = b.intern_iri("https://example.org/lateral-existswiden#b");
-        let x1 = b.intern_iri("https://example.org/lateral-existswiden#x1");
-        let x2 = b.intern_iri("https://example.org/lateral-existswiden#x2");
-        let c1 = b.intern_iri("https://example.org/lateral-existswiden#c1");
-        let c2 = b.intern_iri("https://example.org/lateral-existswiden#c2");
-        b.push_quad(a, owns, x1, None);
-        b.push_quad(bb, owns, x2, None);
-        b.push_quad(x1, child, c1, None);
-        b.push_quad(x2, child, c2, None);
+        let owns = b
+            .intern_iri("https://example.org/lateral-existswiden#owns")
+            .unwrap();
+        let child = b
+            .intern_iri("https://example.org/lateral-existswiden#child")
+            .unwrap();
+        let a = b
+            .intern_iri("https://example.org/lateral-existswiden#a")
+            .unwrap();
+        let bb = b
+            .intern_iri("https://example.org/lateral-existswiden#b")
+            .unwrap();
+        let x1 = b
+            .intern_iri("https://example.org/lateral-existswiden#x1")
+            .unwrap();
+        let x2 = b
+            .intern_iri("https://example.org/lateral-existswiden#x2")
+            .unwrap();
+        let c1 = b
+            .intern_iri("https://example.org/lateral-existswiden#c1")
+            .unwrap();
+        let c2 = b
+            .intern_iri("https://example.org/lateral-existswiden#c2")
+            .unwrap();
+        b.push_quad(a, owns, x1, None).unwrap();
+        b.push_quad(bb, owns, x2, None).unwrap();
+        b.push_quad(x1, child, c1, None).unwrap();
+        b.push_quad(x2, child, c2, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -11802,27 +12439,47 @@ mod tests {
         use purrdf_core::RdfLiteral;
 
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri("https://example.org/nested-exists-lateral#knows");
-        let tag = b.intern_iri("https://example.org/nested-exists-lateral#tag");
-        let has_item = b.intern_iri("https://example.org/nested-exists-lateral#hasItem");
-        let flag = b.intern_iri("https://example.org/nested-exists-lateral#flag");
-        let s1 = b.intern_iri("https://example.org/nested-exists-lateral#s1");
-        let s2 = b.intern_iri("https://example.org/nested-exists-lateral#s2");
-        let o1 = b.intern_iri("https://example.org/nested-exists-lateral#o1");
-        let o2 = b.intern_iri("https://example.org/nested-exists-lateral#o2");
-        let v1 = b.intern_iri("https://example.org/nested-exists-lateral#v1");
-        let v2 = b.intern_iri("https://example.org/nested-exists-lateral#v2");
-        let ok = b.intern_literal(RdfLiteral::simple("ok"));
-        let t = b.intern_literal(RdfLiteral::simple("true"));
-        let f = b.intern_literal(RdfLiteral::simple("false"));
-        b.push_quad(s1, knows, o1, None);
-        b.push_quad(s2, knows, o2, None);
-        b.push_quad(o1, tag, ok, None);
-        b.push_quad(o2, tag, ok, None);
-        b.push_quad(s1, has_item, v1, None);
-        b.push_quad(s2, has_item, v2, None);
-        b.push_quad(v1, flag, t, None);
-        b.push_quad(v2, flag, f, None);
+        let knows = b
+            .intern_iri("https://example.org/nested-exists-lateral#knows")
+            .unwrap();
+        let tag = b
+            .intern_iri("https://example.org/nested-exists-lateral#tag")
+            .unwrap();
+        let has_item = b
+            .intern_iri("https://example.org/nested-exists-lateral#hasItem")
+            .unwrap();
+        let flag = b
+            .intern_iri("https://example.org/nested-exists-lateral#flag")
+            .unwrap();
+        let s1 = b
+            .intern_iri("https://example.org/nested-exists-lateral#s1")
+            .unwrap();
+        let s2 = b
+            .intern_iri("https://example.org/nested-exists-lateral#s2")
+            .unwrap();
+        let o1 = b
+            .intern_iri("https://example.org/nested-exists-lateral#o1")
+            .unwrap();
+        let o2 = b
+            .intern_iri("https://example.org/nested-exists-lateral#o2")
+            .unwrap();
+        let v1 = b
+            .intern_iri("https://example.org/nested-exists-lateral#v1")
+            .unwrap();
+        let v2 = b
+            .intern_iri("https://example.org/nested-exists-lateral#v2")
+            .unwrap();
+        let ok = b.intern_literal(RdfLiteral::simple("ok")).unwrap();
+        let t = b.intern_literal(RdfLiteral::simple("true")).unwrap();
+        let f = b.intern_literal(RdfLiteral::simple("false")).unwrap();
+        b.push_quad(s1, knows, o1, None).unwrap();
+        b.push_quad(s2, knows, o2, None).unwrap();
+        b.push_quad(o1, tag, ok, None).unwrap();
+        b.push_quad(o2, tag, ok, None).unwrap();
+        b.push_quad(s1, has_item, v1, None).unwrap();
+        b.push_quad(s2, has_item, v2, None).unwrap();
+        b.push_quad(v1, flag, t, None).unwrap();
+        b.push_quad(v2, flag, f, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -11882,17 +12539,17 @@ mod tests {
 
     fn f1_graph_variable_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://example.org/p");
-        let q = b.intern_iri("http://example.org/q");
-        let s1 = b.intern_iri("http://example.org/s1");
-        let s2 = b.intern_iri("http://example.org/s2");
-        let g1 = b.intern_iri("http://example.org/g1");
-        let g2 = b.intern_iri("http://example.org/g2");
-        let x = b.intern_iri("http://example.org/x");
-        let y = b.intern_iri("http://example.org/y");
-        b.push_quad(s1, p, g1, None);
-        b.push_quad(s2, p, g2, None);
-        b.push_quad(x, q, y, Some(g1));
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let q = b.intern_iri("http://example.org/q").unwrap();
+        let s1 = b.intern_iri("http://example.org/s1").unwrap();
+        let s2 = b.intern_iri("http://example.org/s2").unwrap();
+        let g1 = b.intern_iri("http://example.org/g1").unwrap();
+        let g2 = b.intern_iri("http://example.org/g2").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let y = b.intern_iri("http://example.org/y").unwrap();
+        b.push_quad(s1, p, g1, None).unwrap();
+        b.push_quad(s2, p, g2, None).unwrap();
+        b.push_quad(x, q, y, Some(g1)).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -11952,17 +12609,17 @@ mod tests {
         // blank-node term, exactly as the `NamedNode` case restricts via
         // resolution instead.
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://example.org/p");
-        let q = b.intern_iri("http://example.org/q");
-        let s1 = b.intern_iri("http://example.org/s1");
-        let s2 = b.intern_iri("http://example.org/s2");
-        let x = b.intern_iri("http://example.org/x");
-        let y = b.intern_iri("http://example.org/y");
-        let g1 = b.intern_blank("g1", BlankScope::DEFAULT);
-        let g2 = b.intern_blank("g2", BlankScope::DEFAULT);
-        b.push_quad(s1, p, g1, None);
-        b.push_quad(s2, p, g2, None);
-        b.push_quad(x, q, y, Some(g1));
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let q = b.intern_iri("http://example.org/q").unwrap();
+        let s1 = b.intern_iri("http://example.org/s1").unwrap();
+        let s2 = b.intern_iri("http://example.org/s2").unwrap();
+        let x = b.intern_iri("http://example.org/x").unwrap();
+        let y = b.intern_iri("http://example.org/y").unwrap();
+        let g1 = b.intern_blank("g1", BlankScope::DEFAULT).unwrap();
+        let g2 = b.intern_blank("g2", BlankScope::DEFAULT).unwrap();
+        b.push_quad(s1, p, g1, None).unwrap();
+        b.push_quad(s2, p, g2, None).unwrap();
+        b.push_quad(x, q, y, Some(g1)).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let query = "PREFIX : <http://example.org/> \
@@ -12009,14 +12666,14 @@ mod tests {
 
     fn f3_nested_exists_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://example.org/p");
-        let q = b.intern_iri("http://example.org/q");
-        let d = b.intern_iri("http://example.org/d");
-        let c = b.intern_iri("http://example.org/c");
-        let e = b.intern_iri("http://example.org/e");
-        let y1 = b.intern_iri("http://example.org/y1");
-        b.push_quad(d, p, c, None);
-        b.push_quad(e, q, y1, None);
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let q = b.intern_iri("http://example.org/q").unwrap();
+        let d = b.intern_iri("http://example.org/d").unwrap();
+        let c = b.intern_iri("http://example.org/c").unwrap();
+        let e = b.intern_iri("http://example.org/e").unwrap();
+        let y1 = b.intern_iri("http://example.org/y1").unwrap();
+        b.push_quad(d, p, c, None).unwrap();
+        b.push_quad(e, q, y1, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -12404,13 +13061,13 @@ mod tests {
     fn list_ds() -> Arc<RdfDataset> {
         use purrdf_iri::vocab::rdf::NS as RDF;
         let mut builder = RdfDatasetBuilder::new();
-        let head = builder.intern_iri("https://example.org/list");
-        let first = builder.intern_iri(&format!("{RDF}first"));
-        let rest = builder.intern_iri(&format!("{RDF}rest"));
-        let nil = builder.intern_iri(&format!("{RDF}nil"));
-        let member = builder.intern_literal(RdfLiteral::simple("a"));
-        builder.push_quad(head, first, member, None);
-        builder.push_quad(head, rest, nil, None);
+        let head = builder.intern_iri("https://example.org/list").unwrap();
+        let first = builder.intern_iri(&format!("{RDF}first")).unwrap();
+        let rest = builder.intern_iri(&format!("{RDF}rest")).unwrap();
+        let nil = builder.intern_iri(&format!("{RDF}nil")).unwrap();
+        let member = builder.intern_literal(RdfLiteral::simple("a")).unwrap();
+        builder.push_quad(head, first, member, None).unwrap();
+        builder.push_quad(head, rest, nil, None).unwrap();
         builder.freeze().expect("freeze")
     }
 
@@ -13265,6 +13922,10 @@ mod walk_tests {
                 reference_pattern_vars_outside(inner, endpoint, out);
             }
             GraphPattern::Project { inner, variables } => {
+                out.extend(variables.iter().cloned());
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::ProjectStar { inner, variables } => {
                 out.extend(variables.iter().cloned());
                 reference_pattern_vars_outside(inner, endpoint, out);
             }
@@ -14462,7 +15123,7 @@ fn join_selected_values(
 
 /// Immutable native site tree; ordinary clones retain its original body and grant.
 #[derive(Clone)]
-pub(crate) struct PreparedPattern(crate::workspace::SharedWorkspace<CorrelatedPattern>);
+pub(crate) struct PreparedPattern(crate::workspace::NativeSharedWorkspace<CorrelatedPattern>);
 impl std::ops::Deref for PreparedPattern {
     type Target = GraphPattern;
     fn deref(&self) -> &GraphPattern {
@@ -14479,7 +15140,44 @@ impl PreparedPattern {
         pattern: CorrelatedPattern,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
-        crate::workspace::SharedWorkspace::new_admitted(pattern, workspace).map(Self)
+        crate::workspace::NativeSharedWorkspace::new_admitted(pattern, workspace).map(Self)
+    }
+
+    pub(crate) fn into_cursor(self) -> PreparedPatternCursor {
+        PreparedPatternCursor(self.0.into_projected(|pattern| pattern.as_ref()))
+    }
+}
+
+/// A copied pattern selected from its original admitted, immutable owner.
+#[derive(Clone)]
+pub(crate) struct PreparedPatternCursor(
+    crate::workspace::ProjectedNative<CorrelatedPattern, GraphPattern>,
+);
+
+impl PreparedPatternCursor {
+    pub(crate) fn owner(&self) -> PreparedPattern {
+        PreparedPattern(self.0.owner())
+    }
+
+    pub(crate) fn pattern(&self) -> &GraphPattern {
+        &self.0
+    }
+
+    pub(crate) fn child(&self, child: &GraphPattern) -> Result<Self, EvalError> {
+        self.0
+            .try_project(|parent| {
+                let mut selected = None;
+                purrdf_sparql_algebra::NodeRef::Pattern(parent).for_each_child(|next| {
+                    if let purrdf_sparql_algebra::NodeRef::Pattern(next) = next
+                        && std::ptr::eq(next, child)
+                    {
+                        selected = Some(next);
+                    }
+                });
+                selected
+            })
+            .map(Self)
+            .ok_or_else(|| EvalError::internal("a copied node's child is absent from its owner"))
     }
 }
 

@@ -715,7 +715,7 @@ pub fn lift_research_object(
         &model.dataset.id,
         roles.iri(ResearchRole::RdfType),
         roles.iri(ResearchRole::DatasetClass),
-    );
+    )?;
     push_texts(
         &mut builder,
         &model.dataset.id,
@@ -775,31 +775,31 @@ pub fn lift_research_object(
         &model.dataset.id,
         roles.iri(ResearchRole::Creator),
         &model.dataset.creators,
-    );
+    )?;
     push_relations(
         &mut builder,
         &model.dataset.id,
         roles.iri(ResearchRole::Publisher),
         &model.dataset.publishers,
-    );
+    )?;
     push_relations(
         &mut builder,
         &model.dataset.id,
         roles.iri(ResearchRole::HasResource),
         &model.dataset.resources,
-    );
+    )?;
     push_relations(
         &mut builder,
         &model.dataset.id,
         roles.iri(ResearchRole::HasActivity),
         &model.dataset.activities,
-    );
+    )?;
     push_relations(
         &mut builder,
         &model.dataset.id,
         roles.iri(ResearchRole::HasRecordSet),
         &model.dataset.record_sets,
-    );
+    )?;
 
     for agent in &model.agents {
         push_type(
@@ -807,7 +807,7 @@ pub fn lift_research_object(
             &agent.id,
             roles.iri(ResearchRole::RdfType),
             roles.iri(ResearchRole::AgentClass),
-        );
+        )?;
         push_texts(
             &mut builder,
             &agent.id,
@@ -821,7 +821,7 @@ pub fn lift_research_object(
             &resource.id,
             roles.iri(ResearchRole::RdfType),
             roles.iri(ResearchRole::ResourceClass),
-        );
+        )?;
         push_texts(
             &mut builder,
             &resource.id,
@@ -886,13 +886,13 @@ pub fn lift_research_object(
                 &resource.id,
                 roles.iri(ResearchRole::Checksum),
                 &checksum_id,
-            );
+            )?;
             push_type(
                 &mut builder,
                 &checksum_id,
                 roles.iri(ResearchRole::RdfType),
                 roles.iri(ResearchRole::ChecksumClass),
-            );
+            )?;
             push_values(
                 &mut builder,
                 &checksum_id,
@@ -913,7 +913,7 @@ pub fn lift_research_object(
             &activity.id,
             roles.iri(ResearchRole::RdfType),
             roles.iri(ResearchRole::ActivityClass),
-        );
+        )?;
         push_texts(
             &mut builder,
             &activity.id,
@@ -931,19 +931,19 @@ pub fn lift_research_object(
             &activity.id,
             roles.iri(ResearchRole::Actor),
             &activity.actors,
-        );
+        )?;
         push_relations(
             &mut builder,
             &activity.id,
             roles.iri(ResearchRole::Object),
             &activity.objects,
-        );
+        )?;
         push_relations(
             &mut builder,
             &activity.id,
             roles.iri(ResearchRole::Result),
             &activity.results,
-        );
+        )?;
         push_texts(
             &mut builder,
             &activity.id,
@@ -963,7 +963,7 @@ pub fn lift_research_object(
             &record_set.id,
             roles.iri(ResearchRole::RdfType),
             roles.iri(ResearchRole::RecordSetClass),
-        );
+        )?;
         push_texts(
             &mut builder,
             &record_set.id,
@@ -982,13 +982,13 @@ pub fn lift_research_object(
                 &record_set.id,
                 roles.iri(ResearchRole::HasField),
                 &field.id,
-            );
+            )?;
             push_type(
                 &mut builder,
                 &field.id,
                 roles.iri(ResearchRole::RdfType),
                 roles.iri(ResearchRole::FieldClass),
-            );
+            )?;
             push_texts(
                 &mut builder,
                 &field.id,
@@ -1015,13 +1015,18 @@ pub fn lift_research_object(
         }
     }
 
-    builder
-        .freeze()
-        .map_err(|error| ProjectionError::integrity(format!("freeze research-object RDF: {error}")))
+    builder.freeze().map_err(ProjectionError::from)
 }
 
-fn push_type(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, class: &str) {
-    push_iri_triple(builder, subject, predicate, class);
+fn push_type(
+    builder: &mut RdfDatasetBuilder,
+    subject: &str,
+    predicate: &str,
+    class: &str,
+) -> Result<(), ProjectionError> {
+    push_iri_triple(builder, subject, predicate, class)?;
+
+    Ok(())
 }
 
 fn push_relations(
@@ -1029,10 +1034,12 @@ fn push_relations(
     subject: &str,
     predicate: &str,
     values: &[String],
-) {
+) -> Result<(), ProjectionError> {
     for value in values {
-        push_iri_triple(builder, subject, predicate, value);
+        push_iri_triple(builder, subject, predicate, value)?;
     }
+
+    Ok(())
 }
 
 fn push_values(
@@ -1043,7 +1050,7 @@ fn push_values(
 ) -> Result<(), ProjectionError> {
     for value in values {
         match value {
-            ResearchValue::Iri { value } => push_iri_triple(builder, subject, predicate, value),
+            ResearchValue::Iri { value } => push_iri_triple(builder, subject, predicate, value)?,
             ResearchValue::Text(value) => {
                 push_texts(builder, subject, predicate, std::slice::from_ref(value))?;
             }
@@ -1059,15 +1066,15 @@ fn push_texts(
     values: &[ResearchText],
 ) -> Result<(), ProjectionError> {
     for value in values {
-        let subject = builder.intern_iri(subject);
-        let predicate = builder.intern_iri(predicate);
+        let subject = builder.intern_iri(subject)?;
+        let predicate = builder.intern_iri(predicate)?;
         let object = builder.intern_literal(RdfLiteral {
             lexical_form: value.value.clone(),
             datatype: Some(value.datatype.clone()),
             language: value.language.clone(),
             direction: value.direction,
-        });
-        builder.push_quad(subject, predicate, object, None);
+        })?;
+        builder.push_quad(subject, predicate, object, None)?;
     }
     Ok(())
 }
@@ -1121,10 +1128,10 @@ mod tests {
     }
 
     fn push_iri(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, object: &str) {
-        let subject = builder.intern_iri(subject);
-        let predicate = builder.intern_iri(predicate);
-        let object = builder.intern_iri(object);
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri(subject).unwrap();
+        let predicate = builder.intern_iri(predicate).unwrap();
+        let object = builder.intern_iri(object).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
 
     fn push_text(
@@ -1134,10 +1141,12 @@ mod tests {
         value: &str,
         datatype: &str,
     ) {
-        let subject = builder.intern_iri(subject);
-        let predicate = builder.intern_iri(predicate);
-        let object = builder.intern_literal(RdfLiteral::typed(value, datatype));
-        builder.push_quad(subject, predicate, object, None);
+        let subject = builder.intern_iri(subject).unwrap();
+        let predicate = builder.intern_iri(predicate).unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::typed(value, datatype))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
     }
 
     #[test]

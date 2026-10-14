@@ -108,9 +108,11 @@ pub use pipeline_bundle::{
 };
 pub use segmented::{
     SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError, SegmentedEvidence,
-    SegmentedExportError, SegmentedHandle, SegmentedImage, SegmentedProvider, SegmentedReadLimits,
-    SegmentedReceipt, SegmentedReceiptAuthority, SegmentedRequest, SegmentedReservation,
-    SegmentedSession, SegmentedSnapshot, SegmentedTermGuard,
+    SegmentedExportError, SegmentedHandle, SegmentedImage, SegmentedLayer, SegmentedLayerMetadata,
+    SegmentedProvider, SegmentedReadLimits, SegmentedReceipt, SegmentedReceiptAuthority,
+    SegmentedRequest, SegmentedReservation, SegmentedResidentHead, SegmentedSession,
+    SegmentedSnapshot, SegmentedStack, SegmentedStackQuery, SegmentedStackSnapshot,
+    SegmentedStackSource, SegmentedStackTerm, SegmentedStackTermGuard, SegmentedTermGuard,
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, NonIriPredicate, TermId, TermValue};

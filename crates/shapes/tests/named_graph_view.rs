@@ -23,46 +23,64 @@ const PREFIXES: &str = "@prefix ex: <https://example.org/> . @prefix sh: <http:/
 
 fn graph_fixture() -> (Arc<RdfDataset>, [TermId; 5]) {
     let mut builder = RdfDatasetBuilder::new();
-    let selected = builder.intern_iri(GRAPH);
-    let sibling = builder.intern_iri("https://example.org/sibling");
-    let blank_graph = builder.intern_blank("graph", BlankScope(9));
-    let empty = builder.intern_iri("https://example.org/empty");
-    let absent = builder.intern_iri("https://example.org/absent");
-    builder.declare_named_graph(empty);
-    let subject = builder.intern_iri("https://example.org/focus");
-    let predicate = builder.intern_iri("https://example.org/value");
-    let annotation = builder.intern_iri("https://example.org/annotation");
-    let good = builder.intern_literal(RdfLiteral::simple("good"));
-    let bad = builder.intern_literal(RdfLiteral::simple("bad"));
+    let selected = builder.intern_iri(GRAPH).unwrap();
+    let sibling = builder.intern_iri("https://example.org/sibling").unwrap();
+    let blank_graph = builder.intern_blank("graph", BlankScope(9)).unwrap();
+    let empty = builder.intern_iri("https://example.org/empty").unwrap();
+    let absent = builder.intern_iri("https://example.org/absent").unwrap();
+    builder.declare_named_graph(empty).unwrap();
+    let subject = builder.intern_iri("https://example.org/focus").unwrap();
+    let predicate = builder.intern_iri("https://example.org/value").unwrap();
+    let annotation = builder
+        .intern_iri("https://example.org/annotation")
+        .unwrap();
+    let good = builder.intern_literal(RdfLiteral::simple("good")).unwrap();
+    let bad = builder.intern_literal(RdfLiteral::simple("bad")).unwrap();
     let mut directional = RdfLiteral::language_tagged("bonjour", "fr");
     directional.direction = Some(RdfTextDirection::Rtl);
-    let directional = builder.intern_literal(directional);
-    let blank = builder.intern_blank("same", BlankScope(7));
-    let other_blank = builder.intern_blank("same", BlankScope(8));
-    let triple = builder.intern_triple(blank, predicate, directional);
+    let directional = builder.intern_literal(directional).unwrap();
+    let blank = builder.intern_blank("same", BlankScope(7)).unwrap();
+    let other_blank = builder.intern_blank("same", BlankScope(8)).unwrap();
+    let triple = builder
+        .intern_triple(blank, predicate, directional)
+        .unwrap();
     for graph in [Some(selected), Some(sibling), None] {
-        builder.push_quad(
-            subject,
-            predicate,
-            if graph == Some(selected) { good } else { bad },
-            graph,
-        );
-        builder.push_reifier_in_graph(subject, triple, graph);
-        builder.push_annotation_in_graph(
-            subject,
-            annotation,
-            if graph == Some(selected) {
-                directional
-            } else {
-                bad
-            },
-            graph,
-        );
+        builder
+            .push_quad(
+                subject,
+                predicate,
+                if graph == Some(selected) { good } else { bad },
+                graph,
+            )
+            .unwrap();
+        builder
+            .push_reifier_in_graph(subject, triple, graph)
+            .unwrap();
+        builder
+            .push_annotation_in_graph(
+                subject,
+                annotation,
+                if graph == Some(selected) {
+                    directional
+                } else {
+                    bad
+                },
+                graph,
+            )
+            .unwrap();
     }
-    builder.push_annotation_in_graph(subject, predicate, good, Some(selected));
-    builder.push_quad(blank, predicate, triple, Some(selected));
-    builder.push_quad(other_blank, predicate, bad, Some(sibling));
-    builder.push_quad(blank, annotation, directional, Some(blank_graph));
+    builder
+        .push_annotation_in_graph(subject, predicate, good, Some(selected))
+        .unwrap();
+    builder
+        .push_quad(blank, predicate, triple, Some(selected))
+        .unwrap();
+    builder
+        .push_quad(other_blank, predicate, bad, Some(sibling))
+        .unwrap();
+    builder
+        .push_quad(blank, annotation, directional, Some(blank_graph))
+        .unwrap();
     (
         builder.freeze().expect("graph fixture"),
         [selected, sibling, blank_graph, empty, absent],
@@ -172,7 +190,8 @@ fn construction_and_warm_native_probes_allocate_nothing_and_preserve_term_ids() 
     assert_eq!(allocation.requested_bytes, 0);
     assert_eq!(view.term_count(), DatasetView::term_count(source.as_ref()));
     for index in 0..source.term_count() {
-        let id = TermId::from_index(u32::try_from(index).expect("term index"));
+        let id = TermId::from_index(u32::try_from(index).expect("term index"))
+            .expect("stored term index is representable");
         assert_eq!(
             view.term_id_by_value(&source.as_ref().term_value(id))
                 .expect("lookup"),
@@ -245,41 +264,55 @@ fn blank_empty_and_absent_graphs_are_selected_without_leaking_the_source() {
 fn explicit_materialization_contains_exactly_the_projected_selected_graph() {
     let (source, graphs) = graph_fixture();
     let view = ShaclDatasetView::named_graph(Arc::clone(&source), graphs[0]);
-    let oracle = ShaclDatasetView::project(Arc::new(source.project_named_graph(GRAPH)));
+    let oracle = ShaclDatasetView::project(Arc::new(
+        source.project_named_graph(GRAPH).expect("graph projects"),
+    ));
     let owned_rows = |dataset: &RdfDataset| dataset.owned_quads().collect::<FastSet<_>>();
     assert_eq!(
-        owned_rows(view.materialized()),
-        owned_rows(oracle.materialized())
+        owned_rows(view.materialized().expect("view materializes")),
+        owned_rows(oracle.materialized().expect("view materializes"))
     );
-    assert!(!Arc::ptr_eq(view.materialized(), &source));
-    assert!(Arc::ptr_eq(view.materialized(), view.materialized()));
+    assert!(!Arc::ptr_eq(
+        view.materialized().expect("view materializes"),
+        &source
+    ));
+    assert!(Arc::ptr_eq(
+        view.materialized().expect("view materializes"),
+        view.materialized().expect("view materializes")
+    ));
     assert_eq!(view.stats().materializations, 1);
 }
 
 fn validation_fixture() -> (Arc<RdfDataset>, TermId) {
     let mut builder = RdfDatasetBuilder::new();
-    let graph = builder.intern_iri(GRAPH);
-    let sibling = builder.intern_iri("https://example.org/sibling");
-    let rdf_type = builder.intern_iri(rdf::TYPE);
-    let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF);
-    let child = builder.intern_iri("https://example.org/Child");
-    let parent = builder.intern_iri("https://example.org/Parent");
-    let value = builder.intern_iri("https://example.org/value");
-    let next = builder.intern_iri("https://example.org/next");
-    let focus = builder.intern_iri("https://example.org/focus");
-    let hidden = builder.intern_iri("https://example.org/hidden");
-    let tail = builder.intern_iri("https://example.org/tail");
-    let good = builder.intern_literal(RdfLiteral::simple("good"));
-    let bad = builder.intern_literal(RdfLiteral::simple("bad"));
-    builder.push_quad(child, subclass, parent, Some(graph));
-    builder.push_quad(focus, rdf_type, child, Some(graph));
-    builder.push_quad(focus, value, good, Some(graph));
-    builder.push_quad(focus, next, tail, Some(graph));
-    builder.push_quad(tail, value, good, Some(graph));
+    let graph = builder.intern_iri(GRAPH).unwrap();
+    let sibling = builder.intern_iri("https://example.org/sibling").unwrap();
+    let rdf_type = builder.intern_iri(rdf::TYPE).unwrap();
+    let subclass = builder.intern_iri(rdfs::SUB_CLASS_OF).unwrap();
+    let child = builder.intern_iri("https://example.org/Child").unwrap();
+    let parent = builder.intern_iri("https://example.org/Parent").unwrap();
+    let value = builder.intern_iri("https://example.org/value").unwrap();
+    let next = builder.intern_iri("https://example.org/next").unwrap();
+    let focus = builder.intern_iri("https://example.org/focus").unwrap();
+    let hidden = builder.intern_iri("https://example.org/hidden").unwrap();
+    let tail = builder.intern_iri("https://example.org/tail").unwrap();
+    let good = builder.intern_literal(RdfLiteral::simple("good")).unwrap();
+    let bad = builder.intern_literal(RdfLiteral::simple("bad")).unwrap();
+    builder
+        .push_quad(child, subclass, parent, Some(graph))
+        .unwrap();
+    builder
+        .push_quad(focus, rdf_type, child, Some(graph))
+        .unwrap();
+    builder.push_quad(focus, value, good, Some(graph)).unwrap();
+    builder.push_quad(focus, next, tail, Some(graph)).unwrap();
+    builder.push_quad(tail, value, good, Some(graph)).unwrap();
     for excluded in [Some(sibling), None] {
-        builder.push_quad(hidden, rdf_type, parent, excluded);
-        builder.push_quad(focus, value, bad, excluded);
-        builder.push_quad(tail, value, bad, excluded);
+        builder
+            .push_quad(hidden, rdf_type, parent, excluded)
+            .unwrap();
+        builder.push_quad(focus, value, bad, excluded).unwrap();
+        builder.push_quad(tail, value, bad, excluded).unwrap();
     }
     (builder.freeze().expect("validation fixture"), graph)
 }
@@ -300,14 +333,17 @@ fn core_classes_paths_and_sparql_return_the_same_complete_report_as_an_owned_gra
     "#), None).expect("shapes"));
     let prepared = PreparedShapes::new(shapes);
     let expected = prepared
-        .bind_dataset(&source.project_named_graph(GRAPH))
+        .bind_dataset(&source.project_named_graph(GRAPH).expect("graph projects"))
         .expect("owned bind")
         .validate()
         .expect("owned report");
     let validator = prepared.bind_view(Arc::clone(&view)).expect("view bind");
     let report = validator.validate().expect("view report");
     assert_eq!(report.results.len(), 3);
-    assert_eq!(report.to_ntriples(), expected.to_ntriples());
+    assert_eq!(
+        report.to_ntriples().expect("report serializes"),
+        expected.to_ntriples().expect("report serializes")
+    );
     assert!(
         validator
             .view_stats()
@@ -333,7 +369,7 @@ fn shape_only_class_terms_preserve_the_selection_after_dictionary_supplementatio
     );
     let prepared = PreparedShapes::new(Arc::new(shapes));
     let expected = prepared
-        .bind_dataset(&source.project_named_graph(GRAPH))
+        .bind_dataset(&source.project_named_graph(GRAPH).expect("graph projects"))
         .expect("owned bind")
         .validate()
         .expect("owned report");
@@ -342,7 +378,10 @@ fn shape_only_class_terms_preserve_the_selection_after_dictionary_supplementatio
         .expect("selected bind");
     let report = validator.validate().expect("view report");
     assert_eq!(report.results.len(), 2);
-    assert_eq!(report.to_ntriples(), expected.to_ntriples());
+    assert_eq!(
+        report.to_ntriples().expect("report serializes"),
+        expected.to_ntriples().expect("report serializes")
+    );
     assert!(
         validator
             .view_stats()
@@ -354,14 +393,20 @@ fn shape_only_class_terms_preserve_the_selection_after_dictionary_supplementatio
 #[test]
 fn metadata_in_an_invisible_graph_does_not_allocate_a_base_row_dedup_table() {
     let mut builder = RdfDatasetBuilder::new();
-    let selected = builder.intern_iri(GRAPH);
-    let sibling = builder.intern_iri("https://example.org/sibling");
-    let predicate = builder.intern_iri("https://example.org/value");
-    let object = builder.intern_literal(RdfLiteral::simple("value"));
+    let selected = builder.intern_iri(GRAPH).unwrap();
+    let sibling = builder.intern_iri("https://example.org/sibling").unwrap();
+    let predicate = builder.intern_iri("https://example.org/value").unwrap();
+    let object = builder.intern_literal(RdfLiteral::simple("value")).unwrap();
     for index in 0..256 {
-        let subject = builder.intern_iri(&format!("https://example.org/subject{index}"));
-        builder.push_quad(subject, predicate, object, Some(selected));
-        builder.push_annotation_in_graph(subject, predicate, object, Some(sibling));
+        let subject = builder
+            .intern_iri(&format!("https://example.org/subject{index}"))
+            .unwrap();
+        builder
+            .push_quad(subject, predicate, object, Some(selected))
+            .unwrap();
+        builder
+            .push_annotation_in_graph(subject, predicate, object, Some(sibling))
+            .unwrap();
     }
     let source = builder.freeze().expect("metadata fixture");
     let view = ShaclDatasetView::named_graph(source, selected);
@@ -377,19 +422,21 @@ fn metadata_in_an_invisible_graph_does_not_allocate_a_base_row_dedup_table() {
 #[test]
 fn collection_and_object_readers_honor_the_selected_default_graph() {
     let mut builder = RdfDatasetBuilder::new();
-    let selected = builder.intern_iri(GRAPH);
-    let sibling = builder.intern_iri("https://example.org/sibling");
-    let head = builder.intern_blank("list", BlankScope(11));
-    let first = builder.intern_iri(rdf::FIRST);
-    let rest = builder.intern_iri(rdf::REST);
-    let nil = builder.intern_iri(rdf::NIL);
-    let good = builder.intern_literal(RdfLiteral::simple("good"));
-    let bad = builder.intern_literal(RdfLiteral::simple("bad"));
-    builder.push_quad(head, first, good, Some(selected));
-    builder.push_quad(head, rest, nil, Some(selected));
-    builder.push_quad(head, first, bad, Some(sibling));
-    builder.push_quad(head, rest, head, Some(sibling));
-    builder.push_quad(head, first, bad, None);
+    let selected = builder.intern_iri(GRAPH).unwrap();
+    let sibling = builder.intern_iri("https://example.org/sibling").unwrap();
+    let head = builder.intern_blank("list", BlankScope(11)).unwrap();
+    let first = builder.intern_iri(rdf::FIRST).unwrap();
+    let rest = builder.intern_iri(rdf::REST).unwrap();
+    let nil = builder.intern_iri(rdf::NIL).unwrap();
+    let good = builder.intern_literal(RdfLiteral::simple("good")).unwrap();
+    let bad = builder.intern_literal(RdfLiteral::simple("bad")).unwrap();
+    builder
+        .push_quad(head, first, good, Some(selected))
+        .unwrap();
+    builder.push_quad(head, rest, nil, Some(selected)).unwrap();
+    builder.push_quad(head, first, bad, Some(sibling)).unwrap();
+    builder.push_quad(head, rest, head, Some(sibling)).unwrap();
+    builder.push_quad(head, first, bad, None).unwrap();
     let view = ShaclDatasetView::named_graph(builder.freeze().expect("list fixture"), selected);
     for graph in [GraphMatch::Any, GraphMatch::Default] {
         assert_eq!(view.objects(head, first, graph), [good]);

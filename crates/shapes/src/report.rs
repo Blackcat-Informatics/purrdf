@@ -24,6 +24,7 @@ use ::purrdf_rdf::{RdfQuad, RdfTerm, SerializeGraph, serialize_dataset};
 use ::purrdf_rdf::RdfDataset;
 
 use crate::data::{GraphFilter, native_quads};
+use crate::error::ShapesError;
 use crate::model::{rdf, sh, xsd};
 use crate::term::{Literal, NamedNode, Term};
 
@@ -383,7 +384,7 @@ impl ReportSourceContext {
 #[non_exhaustive]
 pub enum CompleteValidationError {
     /// Parsing or admitting the underlying shape graph failed.
-    Shapes(crate::error::ShapesError),
+    Shapes(ShapesError),
     /// The existing authenticated prepared-product boundary refused restoration.
     Preparation(crate::product::ShapesProductError),
     /// An evaluated constraint no longer matches its original source occurrence.
@@ -407,7 +408,7 @@ pub enum CompleteValidationError {
 }
 
 purrdf_lex::variant_from!(CompleteValidationError {
-    Shapes(crate::error::ShapesError),
+    Shapes(ShapesError),
     Preparation(crate::product::ShapesProductError), Execution(String)
 });
 
@@ -446,6 +447,15 @@ impl std::error::Error for CompleteValidationError {
 }
 
 impl CompleteValidationError {
+    /// Preserve the execution category of ordinary evaluator diagnostics while
+    /// carrying operational causes without rendering them into that category.
+    pub(crate) fn execution(error: ShapesError) -> Self {
+        match error {
+            ShapesError::Invalid(message) => Self::Execution(message),
+            error => Self::Shapes(error),
+        }
+    }
+
     /// Resolve the caller's exact error and its canonically selected native cause.
     /// Typed report/source/governor evidence remains authoritative; only the
     /// generic execution lane projects an attached native diagnostic.
@@ -453,8 +463,7 @@ impl CompleteValidationError {
         match error.into_parts() {
             (
                 Some(cause),
-                None
-                | Some(Self::Execution(_) | Self::Shapes(crate::error::ShapesError::Invalid(_))),
+                None | Some(Self::Execution(_) | Self::Shapes(ShapesError::Invalid(_))),
             ) => Self::XPath(Box::new(cause.into_public())),
             (_, Some(error)) => error,
             (None, None) => unreachable!("a refused run retains an actual error"),
@@ -483,10 +492,10 @@ impl CompleteValidationError {
     }
 
     /// Project through an existing closed compatibility error without changing it.
-    pub(crate) fn into_shapes(self) -> crate::error::ShapesError {
+    pub(crate) fn into_shapes(self) -> ShapesError {
         match self {
             Self::Shapes(error) => error,
-            error => crate::error::ShapesError::Invalid(error.to_string()),
+            error => ShapesError::Invalid(error.to_string()),
         }
     }
 
@@ -621,8 +630,10 @@ impl CompleteValidationReport {
     }
 
     /// Emit the complete RDF graph and its exact source-blank correspondence.
-    #[must_use]
-    pub fn to_graph(&self) -> CompleteReportGraph {
+    ///
+    /// # Errors
+    /// Returns the original storage or native graph construction refusal.
+    pub fn to_graph(&self) -> Result<CompleteReportGraph, ShapesError> {
         let mut labels = CompleteBlankLabels::default();
         let mut report = self.legacy.clone();
         report.results = self
@@ -637,20 +648,22 @@ impl CompleteValidationReport {
             .map(|evidence| labels.evidence(&self.context, evidence))
             .collect();
         let mint = mint_prefix(&report, Some(&evidence));
-        let dataset = report.dataset_as_carried_with_evidence(Some(&evidence));
-        CompleteReportGraph {
+        let dataset = report.dataset_as_carried_with_evidence(Some(&evidence))?;
+        Ok(CompleteReportGraph {
             dataset,
             root: Term::BlankNode(format!("{mint}report")),
             labels,
             context: Arc::clone(&self.context),
-        }
+        })
     }
 
     /// Materialize the complete graph. [`Self::to_graph`] additionally retains the
     /// correspondence needed to interpret its blank nodes outside this report.
-    #[must_use]
-    pub fn to_dataset(&self) -> Arc<RdfDataset> {
-        self.to_graph().dataset
+    ///
+    /// # Errors
+    /// Returns the original storage or native graph construction refusal.
+    pub fn to_dataset(&self) -> Result<Arc<RdfDataset>, ShapesError> {
+        Ok(self.to_graph()?.dataset)
     }
 }
 
@@ -1785,8 +1798,8 @@ impl ValidationReport {
     /// ```no_run
     /// # use purrdf_shapes::report::ValidationReport;
     /// # use purrdf_rdf::{SerializeGraph, serialize_dataset};
-    /// # fn f(report: &ValidationReport) -> Result<Vec<u8>, purrdf_rdf::RdfDiagnostic> {
-    /// serialize_dataset(&report.to_dataset(), "text/turtle", SerializeGraph::DefaultGraph)
+    /// # fn f(report: &ValidationReport) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    /// Ok(serialize_dataset(&report.to_dataset()?, "text/turtle", SerializeGraph::DefaultGraph)?)
     /// # }
     /// ```
     ///
@@ -1815,8 +1828,10 @@ impl ValidationReport {
     /// node. The report is therefore written under [`Self::with_report_blank_labels`]:
     /// every carried blank node relabelled into its OWN graph's label space, distinct
     /// nodes distinct and the same node the same label everywhere it appears.
-    #[must_use]
-    pub fn to_dataset(&self) -> Arc<RdfDataset> {
+    ///
+    /// # Errors
+    /// Returns the original storage or native graph construction refusal.
+    pub fn to_dataset(&self) -> Result<Arc<RdfDataset>, ShapesError> {
         self.with_report_blank_labels().0.dataset_as_carried()
     }
 
@@ -1868,14 +1883,14 @@ impl ValidationReport {
 
     /// The report graph with the carried blank-node labels exactly as the results hold
     /// them: [`Self::to_dataset`] after relabelling.
-    fn dataset_as_carried(&self) -> Arc<RdfDataset> {
+    fn dataset_as_carried(&self) -> Result<Arc<RdfDataset>, ShapesError> {
         self.dataset_as_carried_with_evidence(None)
     }
 
     fn dataset_as_carried_with_evidence(
         &self,
         evidence: Option<&[ResultEvidence]>,
-    ) -> Arc<RdfDataset> {
+    ) -> Result<Arc<RdfDataset>, ShapesError> {
         let mut builder = RdfDatasetBuilder::new();
         // Complex-path structure roots already emitted (keyed by root label).
         let mut emitted_paths: FastSet<String> = FastSet::default();
@@ -1894,7 +1909,7 @@ impl ValidationReport {
             report_subj.clone(),
             rdf::TYPE,
             RdfTerm::iri(sh::VALIDATION_REPORT),
-        );
+        )?;
 
         // _:report sh:conforms "true"^^xsd:boolean (or false)
         push_triple(
@@ -1905,7 +1920,7 @@ impl ValidationReport {
                 if self.conforms { "true" } else { "false" },
                 xsd::BOOLEAN,
             )),
-        );
+        )?;
 
         // _:report sh:conformanceDisallows <level> — the set `sh:conforms` was
         // judged against. "If no values are present in the results graph for the
@@ -1921,7 +1936,7 @@ impl ValidationReport {
                     report_subj.clone(),
                     sh::CONFORMANCE_DISALLOWS,
                     RdfTerm::iri(level.iri()),
-                );
+                )?;
             }
         }
 
@@ -1937,7 +1952,7 @@ impl ValidationReport {
                     if well_formed { "true" } else { "false" },
                     xsd::BOOLEAN,
                 )),
-            );
+            )?;
         }
 
         for (i, r) in self.results.iter().enumerate() {
@@ -1948,7 +1963,7 @@ impl ValidationReport {
                 report_subj.clone(),
                 sh::RESULT,
                 RdfTerm::blank_node(label.clone()),
-            );
+            )?;
             emit_result(
                 &mut builder,
                 &label,
@@ -1956,18 +1971,10 @@ impl ValidationReport {
                 evidence.and_then(|evidence| evidence.get(i)),
                 &mint,
                 &mut emitted_paths,
-            );
+            )?;
         }
 
-        // `freeze` only rejects structural violations (out-of-range term ids, a
-        // literal subject, a non-IRI predicate/graph name, reifier/annotation
-        // targets that are not triple terms, triple-term cycles) — none of which
-        // this builder can produce: every quad above is pushed with a fixed IRI
-        // predicate and a well-formed subject/object built from validated report
-        // data. Blank-node LABEL content is never checked here; it is opaque to
-        // the IR and is escaped, never rejected, at codec egress (see
-        // `to_ntriples`).
-        builder.freeze().expect("report quads freeze into the IR")
+        builder.freeze().map_err(ShapesError::from)
     }
 
     /// Emit the report as N-Triples text using the native purrdf codec.
@@ -1977,27 +1984,17 @@ impl ValidationReport {
     /// construction. This avoids hand-rolling literal escaping. The `DefaultGraph` selection on the
     /// `application/n-quads` codec emits graphless rows (i.e. N-Triples) and is
     /// byte-lenient on language tags.
-    #[must_use]
-    pub fn to_ntriples(&self) -> String {
-        let dataset = self.to_dataset();
-        // `serialize_dataset` is `Result` for two reasons that both provably do
-        // not apply here: (1) `classify(media_type)` can reject an unknown media
-        // type, but `"application/n-quads"` is a constant, always-valid literal;
-        // (2) the interner can fail on a reifier target that is not a triple term
-        // or a literal datatype that is not an IRI, but this dataset never
-        // populates the reifier/annotation side table and every literal is built
-        // from `RdfLiteral::typed`/`simple`, which always carry an IRI datatype.
-        // A blank label illegal in the N-Triples `BLANK_NODE_LABEL` grammar
-        // (e.g. `a×b`, a C0 control) is escaped at intern time, never refused —
-        // see `to_ntriples_survives_hostile_blank_labels_in_focus_nodes` below,
-        // which proves this claim against exactly that hostile input.
+    ///
+    /// # Errors
+    /// Returns the original graph construction or native serialization refusal.
+    pub fn to_ntriples(&self) -> Result<String, ShapesError> {
+        let dataset = self.to_dataset()?;
         let buf = serialize_dataset(
             &dataset,
             "application/n-quads",
             SerializeGraph::DefaultGraph,
-        )
-        .expect("native N-Triples serialisation of report quads is infallible");
-        String::from_utf8(buf).expect("native N-Triples output is valid UTF-8")
+        )?;
+        Ok(String::from_utf8(buf).expect("native N-Triples output is valid UTF-8"))
     }
 
     /// Return the result set as a [`BTreeSet`] of [`ResultTuple`]s for
@@ -2190,7 +2187,7 @@ fn emit_result(
     evidence: Option<&ResultEvidence>,
     mint: &str,
     emitted_paths: &mut FastSet<String>,
-) {
+) -> Result<(), ShapesError> {
     let result_subj = RdfTerm::blank_node(label.to_owned());
 
     if let Some(source) = evidence.and_then(|evidence| evidence.source_constraint.as_ref()) {
@@ -2199,7 +2196,7 @@ fn emit_result(
             result_subj.clone(),
             sh::SOURCE_CONSTRAINT,
             source.to_rdf_term(),
-        );
+        )?;
     }
 
     // _:r rdf:type sh:ValidationResult
@@ -2208,7 +2205,7 @@ fn emit_result(
         result_subj.clone(),
         rdf::TYPE,
         RdfTerm::iri(sh::VALIDATION_RESULT),
-    );
+    )?;
 
     // sh:focusNode
     push_triple(
@@ -2216,7 +2213,7 @@ fn emit_result(
         result_subj.clone(),
         sh::FOCUS_NODE,
         r.focus_node.to_rdf_term(),
-    );
+    )?;
 
     // sh:resultSeverity
     push_triple(
@@ -2224,7 +2221,7 @@ fn emit_result(
         result_subj.clone(),
         sh::RESULT_SEVERITY,
         RdfTerm::iri(r.severity.iri()),
-    );
+    )?;
 
     // sh:sourceConstraintComponent
     push_triple(
@@ -2232,7 +2229,7 @@ fn emit_result(
         result_subj.clone(),
         sh::SOURCE_CONSTRAINT_COMPONENT,
         RdfTerm::iri(r.source_constraint_component.as_str()),
-    );
+    )?;
 
     // sh:sourceShape
     push_triple(
@@ -2240,7 +2237,7 @@ fn emit_result(
         result_subj.clone(),
         sh::SOURCE_SHAPE,
         r.source_shape.to_rdf_term(),
-    );
+    )?;
 
     // sh:resultPath (optional). A complex path is a blank node the report MINTS
     // (see `path::path_to_term`), so it carries the mint prefix like every other
@@ -2257,17 +2254,17 @@ fn emit_result(
             sh::RESULT_PATH,
             root.clone()
                 .map_or_else(|| path.to_rdf_term(), RdfTerm::blank_node),
-        );
+        )?;
         if let (Some(root), Some(structure)) = (root, &r.path_structure)
             && emitted_paths.insert(root.clone())
         {
-            emit_path_structure(builder, &root, structure);
+            emit_path_structure(builder, &root, structure)?;
         }
     }
 
     // sh:value (optional)
     if let Some(value) = &r.value {
-        push_triple(builder, result_subj.clone(), sh::VALUE, value.to_rdf_term());
+        push_triple(builder, result_subj.clone(), sh::VALUE, value.to_rdf_term())?;
     }
 
     // sh:resultMessage — one per message, each literal as it was declared
@@ -2278,7 +2275,7 @@ fn emit_result(
             result_subj.clone(),
             sh::RESULT_MESSAGE,
             Term::Literal(msg.clone()).to_rdf_term(),
-        );
+        )?;
     }
 
     // SHACL-SPARQL result annotations: each `(property, value)` the constraint's
@@ -2289,7 +2286,7 @@ fn emit_result(
             result_subj.clone(),
             property.as_str(),
             value.to_rdf_term(),
-        );
+        )?;
     }
 
     // sh:detail (optional nested results), in the result's own detail order.
@@ -2300,7 +2297,7 @@ fn emit_result(
             result_subj.clone(),
             sh::DETAIL,
             RdfTerm::blank_node(detail_label.clone()),
-        );
+        )?;
         emit_result(
             builder,
             &detail_label,
@@ -2308,8 +2305,9 @@ fn emit_result(
             evidence.and_then(|evidence| evidence.details.get(j)),
             mint,
             emitted_paths,
-        );
+        )?;
     }
+    Ok(())
 }
 
 // ── Builder helpers ───────────────────────────────────────────────────────────
@@ -2320,8 +2318,9 @@ fn push_triple(
     subject: RdfTerm,
     predicate: &str,
     object: RdfTerm,
-) {
-    builder.push_owned_quad(&RdfQuad::new(subject, predicate, object));
+) -> Result<(), ShapesError> {
+    builder.push_owned_quad(&RdfQuad::new(subject, predicate, object))?;
+    Ok(())
 }
 
 // ── SHACL path-structure serialization ────────────────────────────────────────
@@ -2331,9 +2330,13 @@ fn push_triple(
 /// `[ sh:alternativePath ( … ) ]`, and the three closure forms). Interior blank
 /// nodes are labelled `{label}-{n}` with a per-root counter, so the emission is
 /// deterministic for a given path.
-fn emit_path_structure(builder: &mut RdfDatasetBuilder, label: &str, path: &crate::shapes::Path) {
+fn emit_path_structure(
+    builder: &mut RdfDatasetBuilder,
+    label: &str,
+    path: &crate::shapes::Path,
+) -> Result<(), ShapesError> {
     let mut counter = 0usize;
-    emit_path_node(builder, label, path, label, &mut counter);
+    emit_path_node(builder, label, path, label, &mut counter)
 }
 
 /// Allocate the next interior blank-node label under `root`.
@@ -2351,13 +2354,13 @@ fn path_object(
     path: &crate::shapes::Path,
     root: &str,
     counter: &mut usize,
-) -> RdfTerm {
+) -> Result<RdfTerm, ShapesError> {
     if let crate::shapes::Path::Predicate(p) = path {
-        return RdfTerm::iri(p.as_str());
+        return Ok(RdfTerm::iri(p.as_str()));
     }
     let label = next_path_label(root, counter);
-    emit_path_node(builder, &label, path, root, counter);
-    RdfTerm::blank_node(label)
+    emit_path_node(builder, &label, path, root, counter)?;
+    Ok(RdfTerm::blank_node(label))
 }
 
 /// Emit the structure triples for the composite path node `label`.
@@ -2367,51 +2370,51 @@ fn emit_path_node(
     path: &crate::shapes::Path,
     root: &str,
     counter: &mut usize,
-) {
+) -> Result<(), ShapesError> {
     use crate::shapes::Path;
     match path {
         // A plain predicate is always inlined by `path_object`; a predicate
         // root never reaches here (`path_structure` is only set for complex paths).
         Path::Predicate(_) => {}
         Path::Inverse(inner) => {
-            let object = path_object(builder, inner, root, counter);
+            let object = path_object(builder, inner, root, counter)?;
             push_triple(
                 builder,
                 RdfTerm::blank_node(label),
                 sh::INVERSE_PATH,
                 object,
-            );
+            )?;
         }
         Path::ZeroOrMore(inner) => {
-            let object = path_object(builder, inner, root, counter);
+            let object = path_object(builder, inner, root, counter)?;
             push_triple(
                 builder,
                 RdfTerm::blank_node(label),
                 sh::ZERO_OR_MORE_PATH,
                 object,
-            );
+            )?;
         }
         Path::OneOrMore(inner) => {
-            let object = path_object(builder, inner, root, counter);
+            let object = path_object(builder, inner, root, counter)?;
             push_triple(
                 builder,
                 RdfTerm::blank_node(label),
                 sh::ONE_OR_MORE_PATH,
                 object,
-            );
+            )?;
         }
         Path::ZeroOrOne(inner) => {
-            let object = path_object(builder, inner, root, counter);
+            let object = path_object(builder, inner, root, counter)?;
             push_triple(
                 builder,
                 RdfTerm::blank_node(label),
                 sh::ZERO_OR_ONE_PATH,
                 object,
-            );
+            )?;
         }
         // A sequence path IS the RDF list (the list head sits in path position).
         Path::Sequence(parts) => {
-            emit_path_list(builder, label, parts, root, counter);
+            emit_path_list(builder, label, parts, root, counter)?;
         }
         // An alternative path wraps its list under sh:alternativePath.
         Path::Alternative(parts) => {
@@ -2421,14 +2424,15 @@ fn emit_path_node(
                 RdfTerm::blank_node(label),
                 sh::ALTERNATIVE_PATH,
                 RdfTerm::blank_node(head.clone()),
-            );
-            emit_path_list(builder, &head, parts, root, counter);
+            )?;
+            emit_path_list(builder, &head, parts, root, counter)?;
         }
     }
+    Ok(())
 }
 
 /// Emit an RDF collection of sub-paths with `head_label` as the first cell,
-/// through [`build_rdf_list`](purrdf_core::build_rdf_list). Every sub-path's
+/// through [`try_build_rdf_list`](purrdf_core::collections::try_build_rdf_list). Every sub-path's
 /// structure is emitted first, then the cells, labelled in that order.
 fn emit_path_list(
     builder: &mut RdfDatasetBuilder,
@@ -2436,33 +2440,34 @@ fn emit_path_list(
     parts: &[crate::shapes::Path],
     root: &str,
     counter: &mut usize,
-) {
-    let members: Vec<RdfTerm> = parts
+) -> Result<(), ShapesError> {
+    let members = parts
         .iter()
         .map(|part| path_object(builder, part, root, counter))
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     let vocab = purrdf_core::ListVocab {
         first: RdfTerm::iri(rdf::FIRST),
         rest: RdfTerm::iri(rdf::REST),
         nil: RdfTerm::iri(rdf::NIL),
     };
-    purrdf_core::build_rdf_list(
+    purrdf_core::collections::try_build_rdf_list(
         members,
         &vocab,
         |index| {
-            RdfTerm::blank_node(if index == 0 {
+            Ok(RdfTerm::blank_node(if index == 0 {
                 head_label.to_owned()
             } else {
                 next_path_label(root, counter)
-            })
+            }))
         },
         |subject, predicate, object| {
             let RdfTerm::Iri(predicate) = predicate else {
                 unreachable!("rdf:first and rdf:rest are IRIs")
             };
-            push_triple(builder, subject, &predicate, object);
+            push_triple(builder, subject, &predicate, object)
         },
-    );
+    )?;
+    Ok(())
 }
 
 // ── Round-trip helpers ────────────────────────────────────────────────────────
@@ -2667,7 +2672,7 @@ mod tests {
             diagnostics: Vec::new(),
         };
 
-        let nt = report.to_ntriples();
+        let nt = report.to_ntriples().expect("authored report emits");
         assert!(!nt.is_empty(), "N-Triples output must not be empty");
 
         let parsed =
@@ -2703,7 +2708,7 @@ mod tests {
             diagnostics: Vec::new(),
         };
 
-        let nt = report.to_ntriples();
+        let nt = report.to_ntriples().expect("authored report emits");
         assert!(
             nt.contains("<http://www.w3.org/ns/shacl#detail>"),
             "the detail is emitted: {nt}"
@@ -2744,11 +2749,13 @@ mod tests {
 
         let mut builder = RdfDatasetBuilder::new();
         for label in hostile_labels {
-            builder.push_owned_quad(&RdfQuad::new(
-                RdfTerm::blank_node(label),
-                rdf::TYPE,
-                RdfTerm::iri("http://example.org/Thing"),
-            ));
+            builder
+                .push_owned_quad(&RdfQuad::new(
+                    RdfTerm::blank_node(label),
+                    rdf::TYPE,
+                    RdfTerm::iri("http://example.org/Thing"),
+                ))
+                .unwrap();
         }
         let data = builder
             .freeze()
@@ -2772,7 +2779,7 @@ mod tests {
 
         // The actual regression: this must not panic, regardless of how hostile
         // the blank labels embedded in the report are.
-        let nt = report.to_ntriples();
+        let nt = report.to_ntriples().expect("authored report emits");
 
         // Prove the claim: re-parse the emitted text as N-Triples. A hostile
         // label that leaked through unescaped would break the grammar here.
@@ -2818,7 +2825,7 @@ mod tests {
     /// for any label it is handed.
     fn carried_ntriples(report: &ValidationReport) -> String {
         let buf = serialize_dataset(
-            &report.dataset_as_carried(),
+            &report.dataset_as_carried().expect("authored report emits"),
             "application/n-quads",
             SerializeGraph::DefaultGraph,
         )
@@ -2829,7 +2836,8 @@ mod tests {
     /// Every [`::purrdf_rdf::TermId`] in `dataset`'s dense term table.
     fn term_ids(dataset: &RdfDataset) -> impl Iterator<Item = ::purrdf_rdf::TermId> {
         let count = u32::try_from(dataset.term_count()).expect("report term table fits in u32");
-        (0..count).map(::purrdf_rdf::TermId::from_index)
+        (0..count)
+            .map(|index| ::purrdf_rdf::TermId::from_index(index).expect("resident term index"))
     }
 
     /// A deliberately hostile report for the `to_dataset()` ≡ `to_ntriples()`
@@ -2940,9 +2948,10 @@ mod tests {
     fn to_dataset_matches_the_ntriples_round_trip_canonically() {
         let report = hostile_report();
 
-        let direct = report.to_dataset();
-        let round_tripped = dataset_from_ntriples(&report.to_ntriples())
-            .expect("the report's own N-Triples must parse");
+        let direct = report.to_dataset().expect("authored report emits");
+        let round_tripped =
+            dataset_from_ntriples(&report.to_ntriples().expect("authored report emits"))
+                .expect("the report's own N-Triples must parse");
 
         assert_eq!(
             direct.quad_count(),
@@ -2963,7 +2972,7 @@ mod tests {
     #[test]
     fn to_dataset_carries_rdf12_triple_terms_and_shared_path_structure() {
         let report = hostile_report();
-        let nt = report.to_ntriples();
+        let nt = report.to_ntriples().expect("authored report emits");
 
         assert_eq!(
             nt.matches("<http://www.w3.org/ns/shacl#result>").count(),
@@ -2985,7 +2994,7 @@ mod tests {
         );
 
         // And the direct dataset holds it as a real triple term, not as text.
-        let direct = report.to_dataset();
+        let direct = report.to_dataset().expect("authored report emits");
         assert!(
             term_ids(&direct)
                 .any(|id| matches!(direct.resolve(id), ::purrdf_rdf::TermRef::Triple { .. })),
@@ -3006,8 +3015,10 @@ mod tests {
             diagnostics: Vec::new(),
         };
 
-        let direct = report.to_dataset();
-        let round_tripped = dataset_from_ntriples(&report.to_ntriples()).expect("must parse");
+        let direct = report.to_dataset().expect("authored report emits");
+        let round_tripped =
+            dataset_from_ntriples(&report.to_ntriples().expect("authored report emits"))
+                .expect("must parse");
 
         assert_eq!(
             ::purrdf_rdf::canonicalize(&direct).nquads,
@@ -3027,7 +3038,7 @@ mod tests {
         let mut report = hostile_report();
         report.results[1].focus_node = Term::blank("a\u{d7}b");
 
-        let direct = report.dataset_as_carried();
+        let direct = report.dataset_as_carried().expect("authored report emits");
         let round_tripped =
             dataset_from_ntriples(&carried_ntriples(&report)).expect("escaped text must parse");
 
@@ -3048,7 +3059,7 @@ mod tests {
         // …and the public report graph is the same graph under the report's labels.
         assert_eq!(
             ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&report.to_dataset()).nquads,
+            ::purrdf_rdf::canonicalize(&report.to_dataset().expect("authored report emits")).nquads,
             "relabelling must not change the graph"
         );
     }
@@ -3071,7 +3082,7 @@ mod tests {
             };
             report.results[0].focus_node = Term::blank(hostile);
 
-            let dataset = report.dataset_as_carried();
+            let dataset = report.dataset_as_carried().expect("authored report emits");
             let focus = object_string(&dataset, &Term::blank(hostile), sh::FOCUS_NODE);
             assert!(
                 focus.is_none(),
@@ -3111,7 +3122,7 @@ mod tests {
 
             // The public report never meets the collision: the carried focus node is
             // written in the data graph's own label space.
-            let public = report.to_ntriples();
+            let public = report.to_ntriples().expect("authored report emits");
             assert!(
                 public.contains("_:report ") && public.contains("_:r0 "),
                 "{public}"
@@ -3146,7 +3157,7 @@ mod tests {
             "",
             "no collision means no prefix"
         );
-        let nt = report.to_ntriples();
+        let nt = report.to_ntriples().expect("authored report emits");
         assert!(
             nt.contains("_:report "),
             "plain report label retained:\n{nt}"
@@ -3166,7 +3177,7 @@ mod tests {
         let mint = mint_prefix(&report, None);
         assert_ne!(mint, "", "a carried root label must force a mint prefix");
 
-        let dataset = report.dataset_as_carried();
+        let dataset = report.dataset_as_carried().expect("authored report emits");
         // The carried nodes are still only focus nodes — never path structure.
         for carried in ["path0", "path0-1"] {
             assert!(
@@ -3185,7 +3196,7 @@ mod tests {
         );
         assert_eq!(
             ::purrdf_rdf::canonicalize(&dataset).nquads,
-            ::purrdf_rdf::canonicalize(&report.to_dataset()).nquads,
+            ::purrdf_rdf::canonicalize(&report.to_dataset().expect("authored report emits")).nquads,
             "relabelling must not change the graph"
         );
     }
@@ -3226,7 +3237,7 @@ mod tests {
             Some((BlankOrigin::DataGraph, "b0"))
         );
 
-        let nt = report.to_ntriples();
+        let nt = report.to_ntriples().expect("authored report emits");
         assert!(
             nt.contains("<http://www.w3.org/ns/shacl#sourceShape> _:sg0 .")
                 && nt.contains("<http://www.w3.org/ns/shacl#value> _:dg0 ."),
@@ -3253,7 +3264,7 @@ mod tests {
             diagnostics: Vec::new(),
         };
 
-        let nt = report.to_ntriples();
+        let nt = report.to_ntriples().expect("authored report emits");
 
         // conforms=true must appear in the N-Triples
         assert!(
@@ -3339,8 +3350,12 @@ mod tests {
         use ::purrdf_rdf::provenance::{Attribution, AttributionRole, UnitInterner};
 
         let mut interner = UnitInterner::new();
-        let unit_a = interner.intern("https://example.org/slices/core/shapes"); // slice A — owns the shape
-        let unit_b = interner.intern("https://example.org/slices/ext/data"); // slice B — asserts the focus node
+        let unit_a = interner
+            .intern("https://example.org/slices/core/shapes")
+            .expect("authored unit identity"); // slice A — owns the shape
+        let unit_b = interner
+            .intern("https://example.org/slices/ext/data")
+            .expect("authored unit identity"); // slice B — asserts the focus node
 
         let mut result = make_result();
         // Apply two attributions with different roles and different units.
@@ -3385,8 +3400,12 @@ mod tests {
         use ::purrdf_rdf::provenance::{Attribution, AttributionRole, UnitInterner};
 
         let mut interner = UnitInterner::new();
-        let unit_shape = interner.intern("https://example.org/slices/core/shapes"); // owns the sh:minCount shape
-        let unit_scope = interner.intern("https://example.org/slices/core/profile"); // defines the evaluation scope
+        let unit_shape = interner
+            .intern("https://example.org/slices/core/shapes")
+            .expect("authored unit identity"); // owns the sh:minCount shape
+        let unit_scope = interner
+            .intern("https://example.org/slices/core/profile")
+            .expect("authored unit identity"); // defines the evaluation scope
 
         let min_count_result = ValidationResult {
             focus_node: Term::NamedNode(NamedNode::new_unchecked("http://example.org/subjectX")),

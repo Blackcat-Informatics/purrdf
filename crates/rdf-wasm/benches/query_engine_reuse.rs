@@ -29,7 +29,7 @@ fn fixture_dataset() -> Dataset {
         writeln!(&mut input, "ex:s{i} ex:p ex:o{} .", i % 16).expect("write fixture quad");
         writeln!(&mut input, "ex:s{i} ex:score {i} .").expect("write fixture score");
     }
-    Dataset::parse(&input, "turtle", None).expect("parse bench fixture")
+    Dataset::parse(&input, "turtle", None, None).expect("parse bench fixture")
 }
 
 fn run_select(engine: &QueryEngine, dataset: &Dataset) -> usize {

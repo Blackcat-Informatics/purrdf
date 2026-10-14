@@ -296,22 +296,13 @@ fn double_casts_to_float_round_to_nearest_even() {
 
 /// Hold one binary value's decimal cast to the oracle: the decimal value space is
 /// unbounded, so the closest decimal F&O 3.1 §19.1.2.3 asks for is the binary value
-/// itself, exactly, at every magnitude — in the bounded variant wherever that holds it.
+/// itself, exactly, at every magnitude, in the one exact decimal variant.
 fn assert_decimal_cast(source: &XsdValue, value: f64) -> usize {
     let cast = cast_numeric_value(source, XsdDatatype::Decimal)
         .unwrap_or_else(|| panic!("{value:e} casts to a decimal"));
     let expected = Rational::from_f64(value).canonical_terminating();
     assert_eq!(cast.canonical_lexical(), expected, "{value:e}");
-    // The bounded decimal: at most eighteen fractional digits on an `i128` mantissa.
-    let bounded = expected
-        .split_once('.')
-        .is_none_or(|(_, fraction)| fraction.len() <= 18)
-        && expected.replace('.', "").parse::<i128>().is_ok();
-    assert_eq!(
-        matches!(cast, XsdValue::Decimal(_)),
-        bounded,
-        "{value:e}: {cast:?} is in the bounded variant exactly when that holds it"
-    );
+    assert!(matches!(cast, XsdValue::Decimal(_)), "{value:e}: {cast:?}");
     1
 }
 

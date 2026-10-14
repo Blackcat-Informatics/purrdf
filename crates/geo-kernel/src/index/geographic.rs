@@ -768,16 +768,18 @@ mod tests {
 
     fn projection() -> Arc<GeoIndex> {
         let mut builder = RdfDatasetBuilder::new();
-        let property = builder.intern_iri(ogc::geo::AS_WKT);
-        let equals = builder.intern_iri(ogc::geo::SF_EQUALS);
-        let left = builder.intern_iri("http://example.org/a");
-        let right = builder.intern_iri("http://example.org/b");
-        let asserted = builder.intern_iri("http://example.org/c");
+        let property = builder.intern_iri(ogc::geo::AS_WKT).unwrap();
+        let equals = builder.intern_iri(ogc::geo::SF_EQUALS).unwrap();
+        let left = builder.intern_iri("http://example.org/a").unwrap();
+        let right = builder.intern_iri("http://example.org/b").unwrap();
+        let asserted = builder.intern_iri("http://example.org/c").unwrap();
         for (subject, text) in [(left, "POINT(90 90)"), (right, "POINT(-90 90)")] {
-            let value = builder.intern_literal(RdfLiteral::typed(text, ogc::geo::WKT_LITERAL));
-            builder.push_quad(subject, property, value, None);
+            let value = builder
+                .intern_literal(RdfLiteral::typed(text, ogc::geo::WKT_LITERAL))
+                .unwrap();
+            builder.push_quad(subject, property, value, None).unwrap();
         }
-        builder.push_quad(left, equals, asserted, None);
+        builder.push_quad(left, equals, asserted, None).unwrap();
         let dataset = builder.freeze().unwrap();
         let config = super::super::GeoIndexConfig::new(
             vec![TermValue::iri(ogc::geo::AS_WKT)],
@@ -885,14 +887,18 @@ mod tests {
     #[test]
     fn geographic_index_uses_actual_dimensions_of_constant_source_curves() {
         let mut builder = RdfDatasetBuilder::new();
-        let property = builder.intern_iri(ogc::geo::AS_WKT);
+        let property = builder.intern_iri(ogc::geo::AS_WKT).unwrap();
         for (name, text) in [
             ("a", "MULTILINESTRING((0 0,0 0),(1 0,1 0))"),
             ("b", "MULTILINESTRING((0 0,0 0),(2 0,2 0))"),
         ] {
-            let subject = builder.intern_iri(&format!("http://example.org/{name}"));
-            let value = builder.intern_literal(RdfLiteral::typed(text, ogc::geo::WKT_LITERAL));
-            builder.push_quad(subject, property, value, None);
+            let subject = builder
+                .intern_iri(&format!("http://example.org/{name}"))
+                .unwrap();
+            let value = builder
+                .intern_literal(RdfLiteral::typed(text, ogc::geo::WKT_LITERAL))
+                .unwrap();
+            builder.push_quad(subject, property, value, None).unwrap();
         }
         let dataset = builder.freeze().unwrap();
         let config = super::super::GeoIndexConfig::new(

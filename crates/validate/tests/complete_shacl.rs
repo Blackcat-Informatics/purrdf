@@ -43,7 +43,14 @@ fn full_payload_keeps_report_root_and_distinct_authored_blank_domains() {
     assert_eq!(payload["status"].as_str(), Some("nonconforms"));
     assert_eq!(
         payload["root"].as_str(),
-        Some(report.to_graph().root().to_string().as_str())
+        Some(
+            report
+                .to_graph()
+                .expect("report serializes")
+                .root()
+                .to_string()
+                .as_str()
+        )
     );
     assert_eq!(payload["sources"].as_array().unwrap().len(), 2);
     let correspondence = payload["correspondence"].as_array().unwrap();
@@ -489,7 +496,7 @@ fn one_complete_result_carries_every_validation_result_property() {
 
     // The emitted complete graph states exactly these properties on the two
     // result nodes, and the parent's value keeps its data-graph identity.
-    let graph = report.to_graph();
+    let graph = report.to_graph().expect("report serializes");
     let dataset = graph.dataset();
     let iri = |id| match dataset.term_value(id) {
         purrdf_core::TermValue::Iri(iri) => Some(iri),

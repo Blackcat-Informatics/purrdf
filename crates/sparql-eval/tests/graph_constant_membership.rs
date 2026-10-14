@@ -103,14 +103,14 @@ where
 
 #[test]
 fn frozen_dataset_addresses_only_named_graphs() {
-    let dataset = graph_slots("");
+    let dataset = graph_slots("").expect("authored fixture");
     assert_membership(&*dataset, "frozen", &["phantom", "s", "p"], &["g", "empty"]);
     assert_membership(&dataset, "frozen/arc", &["phantom"], &["g", "empty"]);
 }
 
 #[test]
 fn delta_snapshot_addresses_only_named_graphs() {
-    let mut mutable = MutableDataset::new(graph_slots(""));
+    let mut mutable = MutableDataset::new(graph_slots("").expect("authored fixture"));
     // A term the delta alone introduces, as a default-graph object only, and a graph
     // the delta alone introduces.
     for (o, g) in [("delta-phantom", None), ("o", Some("delta-g"))] {
@@ -134,16 +134,20 @@ fn delta_snapshot_addresses_only_named_graphs() {
 
 #[test]
 fn composite_view_addresses_only_named_graphs() {
-    let view = CompositeDatasetView::new(vec![graph_slots("")], ViewLimits::default())
-        .expect("one source composes");
+    let view = CompositeDatasetView::new(
+        vec![graph_slots("").expect("authored fixture")],
+        ViewLimits::default(),
+    )
+    .expect("one source composes");
     assert_membership(&view, "composite", &["phantom"], &["g", "empty"]);
 
     // Projecting the source into the default graph leaves `g` and `empty` as terms
     // that no longer name a graph; the placed name does.
     let projected = CompositeDatasetView::from_sources(
         vec![
-            CompositeSource::new(graph_slots("")).with_graph_placement(GraphPlacement::Default),
-            CompositeSource::new(graph_slots(""))
+            CompositeSource::new(graph_slots("").expect("authored fixture"))
+                .with_graph_placement(GraphPlacement::Default),
+            CompositeSource::new(graph_slots("").expect("authored fixture"))
                 .with_graph_placement(GraphPlacement::Named(iri("placed"))),
         ],
         ViewLimits::default(),

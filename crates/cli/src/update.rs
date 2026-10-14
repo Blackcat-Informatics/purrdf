@@ -25,6 +25,7 @@ pub(crate) struct UpdateOptions<'a> {
     pub(crate) to: Option<CliRdfFormat>,
     pub(crate) base: Option<&'a str>,
     pub(crate) update: &'a str,
+    pub(crate) graph_existence: purrdf_core::GraphExistenceMode,
     pub(crate) governors: GovernorFlags,
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
     /// `--aggregate-namespace`: registers purrdf's first-party statistical aggregate
@@ -92,7 +93,8 @@ pub(crate) fn run(
     let query_options = QueryOptions::new()
         .with_geo(options.geo)
         .with_env(&env)
-        .with_division(options.division);
+        .with_division(options.division)
+        .with_graph_existence(options.graph_existence);
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors()?;
@@ -128,4 +130,15 @@ pub(crate) fn run(
     )?;
     ledger::surface(ledger_target, &loss)?;
     Ok(CliOutcome::Complete)
+}
+
+/// Decode the native graph-lifetime policy before loading or writing data.
+pub(crate) fn parse_graph_existence(
+    value: &str,
+) -> Result<purrdf_core::GraphExistenceMode, String> {
+    match value {
+        "remember-empty" => Ok(purrdf_core::GraphExistenceMode::RememberEmpty),
+        "implicit" => Ok(purrdf_core::GraphExistenceMode::Implicit),
+        _ => Err("graph existence must be remember-empty or implicit".to_owned()),
+    }
 }

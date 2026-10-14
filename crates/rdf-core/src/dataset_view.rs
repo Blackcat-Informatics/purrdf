@@ -867,6 +867,29 @@ pub trait DatasetView {
     /// The capabilities this view's backing data exposes (C7).
     fn capabilities(&self) -> RdfStoreCapabilities;
 
+    /// Certify the XSD value ordering of two original host identities.
+    ///
+    /// `Some` attests the same result as value-space comparison, including numeric
+    /// promotion or temporal timezone rules. It is available only for comparable
+    /// numeric or temporal values; NaN, ill-typed values and unsupported pairs must
+    /// return `None`. This is independent of ID `Ord` and physical probe order.
+    /// A host may use a certified order-preserving encoding without dictionary
+    /// translation. The ordinary value comparator remains the `None` path.
+    ///
+    /// Callers retain their normal parsing and work admission before using this
+    /// certificate. It does not authorize skipping a governor or generation check.
+    ///
+    /// # Errors
+    /// Returns the original source refusal if the certificate's generation or
+    /// backing storage is unavailable.
+    fn certified_value_order(
+        &self,
+        _left: Self::Id,
+        _right: Self::Id,
+    ) -> Result<Option<core::cmp::Ordering>, Self::ReadError> {
+        Ok(None)
+    }
+
     /// A size hint for the number of quads, if known.
     fn len_hint(&self) -> Option<u64> {
         None
@@ -1582,7 +1605,7 @@ pub trait DatasetMut: sealed::Sealed {
     ///
     /// `remove` and `contains` stay infallible: they resolve values WITHOUT minting,
     /// so a quad naming a term interned nowhere is simply absent, not an error.
-    fn insert(&mut self, quad: Self::Quad) -> Result<bool, purrdf_iri::IriError>;
+    fn insert(&mut self, quad: Self::Quad) -> Result<bool, purrdf_iri::IriReadError>;
 
     /// Remove a quad from the effective set. Returns `true` iff the effective set
     /// changed (removing an absent quad is a no-op returning `false`).
@@ -1869,6 +1892,15 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
 
     #[inline]
+    fn certified_value_order(
+        &self,
+        left: Self::Id,
+        right: Self::Id,
+    ) -> Result<Option<core::cmp::Ordering>, Self::ReadError> {
+        (**self).certified_value_order(left, right)
+    }
+
+    #[inline]
     fn len_hint(&self) -> Option<u64> {
         (**self).len_hint()
     }
@@ -2019,7 +2051,7 @@ mod tests {
     use crate::ir::RdfDatasetBuilder;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
-        b.intern_iri(&format!("http://example.org/{n}"))
+        b.intern_iri(&format!("http://example.org/{n}")).unwrap()
     }
 
     #[test]
@@ -2042,7 +2074,7 @@ mod tests {
             iri(&mut b, "o"),
             iri(&mut b, "g"),
         );
-        b.push_quad(s, p, o, Some(g));
+        b.push_quad(s, p, o, Some(g)).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_eq!(
             GraphSelector::Any.resolve(&ds).unwrap(),
@@ -2076,10 +2108,10 @@ mod tests {
             iri(&mut b, "o3"),
             iri(&mut b, "g"),
         );
-        b.push_quad(s1, p, o2, None);
-        b.push_quad(s2, p, o2, Some(g));
-        b.push_quad(s2, p, o1, None);
-        b.push_quad(s1, q, o3, None);
+        b.push_quad(s1, p, o2, None).unwrap();
+        b.push_quad(s2, p, o2, Some(g)).unwrap();
+        b.push_quad(s2, p, o1, None).unwrap();
+        b.push_quad(s1, q, o3, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut expected = vec![o1, o2];
         expected.sort_unstable();
@@ -2097,8 +2129,8 @@ mod tests {
         let o1 = iri(&mut b, "o1");
         let o2 = iri(&mut b, "o2");
         let g = iri(&mut b, "g");
-        b.push_quad(s, p, o1, None); // default graph
-        b.push_quad(s, p, o2, Some(g)); // named graph g
+        b.push_quad(s, p, o1, None).unwrap(); // default graph
+        b.push_quad(s, p, o2, Some(g)).unwrap(); // named graph g
         let ds = b.freeze().expect("freeze");
 
         // Whole-dataset (Any matches everything).
@@ -2333,18 +2365,22 @@ mod term_value_tests {
     /// blank node, with their ids.
     fn fixture() -> (Arc<RdfDataset>, TermId, TermId, TermId) {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri(&format!("{EX}s"));
-        let p = builder.intern_iri(&format!("{EX}p"));
-        let empty = builder.intern_value(&TermValue::simple_literal(""));
-        let quoted = builder.intern_value(&TermValue::Triple {
-            s: TermBox::new(TermValue::iri(format!("{EX}s"))),
-            p: TermBox::new(TermValue::iri(format!("{EX}p"))),
-            o: TermBox::new(TermValue::simple_literal("")),
-        });
-        let blank = builder.intern_value(&TermValue::blank("b"));
-        builder.push_quad(s, p, empty, None);
-        builder.push_quad(s, p, quoted, None);
-        builder.push_quad(blank, p, s, None);
+        let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+        let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+        let empty = builder
+            .intern_value(&TermValue::simple_literal(""))
+            .unwrap();
+        let quoted = builder
+            .intern_value(&TermValue::Triple {
+                s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+                p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+                o: TermBox::new(TermValue::simple_literal("")),
+            })
+            .unwrap();
+        let blank = builder.intern_value(&TermValue::blank("b")).unwrap();
+        builder.push_quad(s, p, empty, None).unwrap();
+        builder.push_quad(s, p, quoted, None).unwrap();
+        builder.push_quad(blank, p, s, None).unwrap();
         let dataset = builder.freeze().expect("the fixture freezes");
         (dataset, empty, quoted, blank)
     }
@@ -2396,8 +2432,8 @@ mod term_value_tests {
     #[test]
     fn every_interned_value_resolves_to_itself() {
         let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri(&format!("{EX}s"));
-        let p = builder.intern_iri(&format!("{EX}p"));
+        let s = builder.intern_iri(&format!("{EX}s")).unwrap();
+        let p = builder.intern_iri(&format!("{EX}p")).unwrap();
         let mut values = Vec::new();
         for seed in 0..200_u64 {
             let mut state = seed;
@@ -2408,8 +2444,8 @@ mod term_value_tests {
                 &mut budget,
                 crate::term_fixture::TermShape::WellFormed,
             );
-            let id = builder.intern_value(&value);
-            builder.push_quad(s, p, id, None);
+            let id = builder.intern_value(&value).unwrap();
+            builder.push_quad(s, p, id, None).unwrap();
             values.push((value, id));
         }
         let dataset = builder.freeze().expect("the generated values freeze");

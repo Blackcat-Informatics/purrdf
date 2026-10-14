@@ -100,6 +100,8 @@ impl std::error::Error for JsonError {
     }
 }
 
+purrdf_lex::variant_from!(JsonError { Storage(purrdf_lex::allocation::StorageError) });
+
 pub(crate) fn metadata(subject: &str, field: &'static str) -> JsonError {
     JsonError::Metadata {
         subject: subject.to_owned(),

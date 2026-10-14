@@ -263,7 +263,11 @@ pub trait LayerHooks {
     /// # Errors
     ///
     /// A message, which aborts the evaluation as [`EvalError::LayerHook`].
-    fn assume(&mut self, layer: usize, model: &RelationStore) -> Result<Vec<Fact>, String> {
+    fn assume(
+        &mut self,
+        layer: usize,
+        model: &RelationStore,
+    ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
         let _ = (layer, model);
         Ok(Vec::new())
     }
@@ -280,7 +284,7 @@ pub trait LayerHooks {
         layer: usize,
         model: &RelationStore,
         withdrawn: &[Fact],
-    ) -> Result<Vec<Fact>, String> {
+    ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
         let _ = (layer, model, withdrawn);
         Ok(Vec::new())
     }
@@ -290,7 +294,7 @@ pub trait LayerHooks {
     /// # Errors
     ///
     /// A message, which aborts the evaluation as [`EvalError::LayerHook`].
-    fn finish(&mut self, model: &RelationStore) -> Result<Vec<Fact>, String> {
+    fn finish(&mut self, model: &RelationStore) -> Result<Vec<Fact>, crate::guard::CallbackError> {
         let _ = model;
         Ok(Vec::new())
     }
@@ -326,13 +330,13 @@ pub fn evaluate_scheduled(
     for (layer_index, layer) in program.schedule.layers.iter().enumerate() {
         run_layer(program, layer_index, layer, &mut state, guards, hooks, stop)?;
     }
-    let finished = hooks
-        .finish(&state.rel)
-        .map_err(|message| EvalError::LayerHook {
+    let finished = hooks.finish(&state.rel).map_err(|error| {
+        error.into_eval_error(|message| EvalError::LayerHook {
             layer: None,
             message,
-        })?;
-    retract(&mut state, &finished);
+        })
+    })?;
+    retract(&mut state, &finished)?;
     Ok(state.finish())
 }
 
@@ -346,9 +350,11 @@ fn run_layer(
     hooks: &mut dyn LayerHooks,
     stop: Option<&dyn StopSignal>,
 ) -> Result<(), EvalError> {
-    let hook_error = |message: String| EvalError::LayerHook {
-        layer: Some(layer_index),
-        message,
+    let hook_error = |error: crate::guard::CallbackError| {
+        error.into_eval_error(|message| EvalError::LayerHook {
+            layer: Some(layer_index),
+            message,
+        })
     };
     // The layer's assumptions become rows like any other, flagged so a rule that derives
     // one again is recorded as having done so.
@@ -358,11 +364,15 @@ fn run_layer(
         if let Some((_, _, row)) =
             state
                 .rel
-                .insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph)
+                .insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph)?
         {
             state.depth.push(0);
             assumed.push(true);
-            debug_assert_eq!(row.index() + 1, assumed.len(), "assumed tracks store rows");
+            debug_assert_eq!(
+                row.resident_index() + 1,
+                assumed.len(),
+                "assumed tracks store rows"
+            );
         }
     }
     check_budget(state)?;
@@ -415,7 +425,8 @@ fn run_layer(
     let withdrawn: Vec<Fact> = rows
         .iter()
         .filter(|(row, fact)| {
-            assumed.get(row.index()).copied().unwrap_or(false) && !confirmed.contains_key(fact)
+            assumed.get(row.resident_index()).copied().unwrap_or(false)
+                && !confirmed.contains_key(fact)
         })
         .map(|(_, fact)| fact.clone())
         .collect();
@@ -428,7 +439,7 @@ fn run_layer(
         .retract(layer_index, &state.rel, &withdrawn)
         .map_err(hook_error)?;
     retracted.extend(withdrawn);
-    retract(state, &retracted);
+    retract(state, &retracted)?;
     Ok(())
 }
 
@@ -520,9 +531,9 @@ fn run_group(
 
 /// Retract `facts` from `state`, rebuilding the store from the surviving rows in their
 /// original row order and dropping the derivations of the retracted facts.
-fn retract(state: &mut FixpointState, facts: &[Fact]) {
+fn retract(state: &mut FixpointState, facts: &[Fact]) -> Result<(), EvalError> {
     if facts.is_empty() {
-        return;
+        return Ok(());
     }
     let doomed: BTreeSet<&Fact> = facts.iter().collect();
     let mut rebuilt = RelationStore::new();
@@ -531,14 +542,15 @@ fn retract(state: &mut FixpointState, facts: &[Fact]) {
         if doomed.contains(&fact) {
             continue;
         }
-        rebuilt.insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph);
-        depth.push(state.depth[row.index()]);
+        rebuilt.insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph)?;
+        depth.push(state.depth[row.resident_index()]);
     }
     state.rel = rebuilt;
     state.depth = depth;
     state
         .derivations
         .retain(|derivation| !doomed.contains(derivation.fact()));
+    Ok(())
 }
 
 // ── Rule-level stratification ───────────────────────────────────────────────────
@@ -854,7 +866,9 @@ mod tests {
     fn store(facts: &[(&str, &str, &str)]) -> RelationStore {
         let mut store = RelationStore::new();
         for (s, p, o) in facts {
-            store.insert(&surface(s), &surface(p), o, RelationStore::DEFAULT_GRAPH);
+            store
+                .insert(&surface(s), &surface(p), o, RelationStore::DEFAULT_GRAPH)
+                .unwrap();
         }
         store
     }
@@ -878,7 +892,10 @@ mod tests {
     }
 
     impl GuardEvaluator for Guards {
-        fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+        fn evaluate(
+            &self,
+            call: &GuardCall<'_>,
+        ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
             let name = call.guard.name();
             if let Some(bound) = name.strip_prefix("gt:") {
                 let bound: i64 = bound.parse().map_err(|_| "bad bound".to_owned())?;
@@ -924,14 +941,14 @@ mod tests {
                     self.minted.set(self.minted.get() + 1);
                     Ok(vec![vec![format!("_:m{}", self.minted.get())]])
                 }
-                "fail" => Err("the guard could not decide".to_owned()),
+                "fail" => Err("the guard could not decide".into()),
                 "count-p" => {
                     let count = call
                         .model
                         .len_for(&surface("p"), RelationStore::DEFAULT_GRAPH);
                     Ok(vec![vec![surface("a"), format!("\"{count}\"")]])
                 }
-                other => Err(format!("unknown guard {other}")),
+                other => Err(format!("unknown guard {other}").into()),
             }
         }
     }
@@ -982,7 +999,10 @@ mod tests {
             calls: std::cell::RefCell<Vec<(GuardSite, String, String)>>,
         }
         impl GuardEvaluator for Trace {
-            fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+            fn evaluate(
+                &self,
+                call: &GuardCall<'_>,
+            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
                 assert_eq!(std::thread::current().id(), self.caller);
                 assert_eq!(call.rule, 0);
                 self.calls.borrow_mut().push((
@@ -1260,14 +1280,16 @@ mod tests {
                 &surface("next"),
                 &surface(&format!("n{}", index + 1)),
                 RelationStore::DEFAULT_GRAPH,
-            );
+            )
+            .unwrap();
         }
         edb.insert(
             &surface("n0"),
             &surface("depth"),
             "\"0\"",
             RelationStore::DEFAULT_GRAPH,
-        );
+        )
+        .unwrap();
         let model = evaluate_guarded(&exe, edb, &Guards::default(), &EvalOptions::default(), None)
             .expect("a data-bounded counter completes under the default limits");
         assert!(has(
@@ -1573,7 +1595,11 @@ mod tests {
     fn assumptions_are_withdrawn_unless_derived() {
         struct Hooks;
         impl LayerHooks for Hooks {
-            fn assume(&mut self, _: usize, _: &RelationStore) -> Result<Vec<Fact>, String> {
+            fn assume(
+                &mut self,
+                _: usize,
+                _: &RelationStore,
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
                 Ok(vec![fact("a", "area", "\"1\""), fact("b", "area", "\"2\"")])
             }
             fn retract(
@@ -1581,11 +1607,14 @@ mod tests {
                 _: usize,
                 _: &RelationStore,
                 withdrawn: &[Fact],
-            ) -> Result<Vec<Fact>, String> {
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
                 assert_eq!(withdrawn, [fact("a", "area", "\"1\"")]);
                 Ok(vec![fact("a", "note", "\"withdrawn\"")])
             }
-            fn finish(&mut self, _: &RelationStore) -> Result<Vec<Fact>, String> {
+            fn finish(
+                &mut self,
+                _: &RelationStore,
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
                 Ok(vec![fact("b", "temp", "\"t\"")])
             }
         }
@@ -1658,7 +1687,11 @@ mod tests {
     fn assumed_confirmations_use_the_canonical_witness_in_every_group_order() {
         struct Assumptions(Vec<Fact>);
         impl LayerHooks for Assumptions {
-            fn assume(&mut self, layer: usize, _: &RelationStore) -> Result<Vec<Fact>, String> {
+            fn assume(
+                &mut self,
+                layer: usize,
+                _: &RelationStore,
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
                 Ok(if layer == 1 {
                     self.0.clone()
                 } else {
@@ -1670,7 +1703,7 @@ mod tests {
                 layer: usize,
                 _: &RelationStore,
                 _: &[Fact],
-            ) -> Result<Vec<Fact>, String> {
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
                 Ok(if layer == 1 {
                     vec![test_fact("discard", "seed", "x")]
                 } else {
@@ -1773,24 +1806,109 @@ mod tests {
         }
     }
 
+    #[test]
+    fn layer_capacity_refusal_preserves_identity_and_stops_later_phases() {
+        struct Refusal {
+            phase: u8,
+            reached: Vec<u8>,
+        }
+        impl Refusal {
+            fn run(&mut self, phase: u8) -> Result<Vec<Fact>, crate::guard::CallbackError> {
+                self.reached.push(phase);
+                if self.phase == phase {
+                    crate::id::TermId::from_index(u64::MAX)
+                        .map_err(purrdf_lex::allocation::StorageError::from)?;
+                }
+                Ok(Vec::new())
+            }
+        }
+        impl LayerHooks for Refusal {
+            fn assume(
+                &mut self,
+                _: usize,
+                _: &RelationStore,
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
+                self.run(0)
+            }
+            fn retract(
+                &mut self,
+                _: usize,
+                _: &RelationStore,
+                _: &[Fact],
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
+                self.run(1)
+            }
+            fn finish(
+                &mut self,
+                _: &RelationStore,
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
+                self.run(2)
+            }
+        }
+        let rule = DlClause::datalog(
+            atom(v("?x"), "result", iri("yes")),
+            vec![atom(v("?x"), "p", iri("x"))],
+        );
+        let program = compile_scheduled(
+            vec![rule],
+            Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]),
+        )
+        .expect("authored schedule");
+        for phase in 0..3 {
+            let mut hooks = Refusal {
+                phase,
+                reached: Vec::new(),
+            };
+            let error = evaluate_scheduled(
+                &program,
+                store(&[("a", "p", &surface("x"))]),
+                &crate::guard::NoGuards,
+                &mut hooks,
+                &EvalOptions::default(),
+                None,
+            )
+            .expect_err("actual term mint capacity refusal");
+            assert_eq!(hooks.reached, (0..=phase).collect::<Vec<_>>());
+            let EvalError::Storage(purrdf_lex::allocation::StorageError::Capacity(capacity)) =
+                error
+            else {
+                panic!("lost layer storage refusal: {error:?}");
+            };
+            assert_eq!(
+                capacity.space,
+                purrdf_lex::allocation::CapacitySpace::DatalogTerms
+            );
+            assert_eq!(capacity.attempted(), u128::from(u64::MAX) + 1);
+            assert_eq!(capacity.limit(), u128::from(u64::MAX));
+        }
+    }
+
     /// Stage-major execution determines the first reached operational failure;
     /// processing each row through all guards would incorrectly report second.
     #[test]
     fn crossed_guard_errors_and_malformed_rows_are_reached_in_stage_order() {
         struct Errors {
             malformed: bool,
+            storage: bool,
         }
         impl GuardEvaluator for Errors {
-            fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+            fn evaluate(
+                &self,
+                call: &GuardCall<'_>,
+            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
                 if call.guard.name() == "first" && call.inputs[0] == surface("b") {
+                    if self.storage {
+                        crate::id::TermId::from_index(u64::MAX)
+                            .map_err(purrdf_lex::allocation::StorageError::from)?;
+                    }
                     return if self.malformed {
                         Ok(vec![vec!["unexpected".to_owned()]])
                     } else {
-                        Err("first-later-row".to_owned())
+                        Err("first-later-row".into())
                     };
                 }
                 if call.guard.name() == "second" {
-                    return Err("second-earlier-row".to_owned());
+                    return Err("second-earlier-row".into());
                 }
                 Ok(vec![Vec::new()])
             }
@@ -1808,11 +1926,11 @@ mod tests {
             Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]),
         )
         .expect("compiles");
-        for malformed in [false, true] {
+        for (malformed, storage) in [(false, false), (true, false), (false, true)] {
             let error = evaluate_scheduled(
                 &program,
                 store(&[("a", "p", &surface("x")), ("b", "p", &surface("x"))]),
-                &Errors { malformed },
+                &Errors { malformed, storage },
                 &mut NoHooks,
                 &EvalOptions::default(),
                 None,
@@ -1820,7 +1938,19 @@ mod tests {
             .expect_err("first-stage refusal");
             let message = error.to_string();
             assert!(!message.contains("second-earlier-row"), "{message}");
-            if malformed {
+            if storage {
+                let EvalError::Storage(purrdf_lex::allocation::StorageError::Capacity(capacity)) =
+                    error
+                else {
+                    panic!("lost typed guard refusal: {error:?}");
+                };
+                assert_eq!(
+                    capacity.space,
+                    purrdf_lex::allocation::CapacitySpace::DatalogTerms
+                );
+                assert_eq!(capacity.attempted(), u128::from(u64::MAX) + 1);
+                assert_eq!(capacity.limit(), u128::from(u64::MAX));
+            } else if malformed {
                 assert!(
                     message.contains("first") && message.contains('1'),
                     "{message}"
@@ -1837,7 +1967,11 @@ mod tests {
     fn later_confirmation_rounds_compete_but_prior_admissions_still_win() {
         struct Hooks;
         impl LayerHooks for Hooks {
-            fn assume(&mut self, layer: usize, _: &RelationStore) -> Result<Vec<Fact>, String> {
+            fn assume(
+                &mut self,
+                layer: usize,
+                _: &RelationStore,
+            ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
                 Ok(if layer == 1 {
                     vec![Fact {
                         subject: surface("answer"),
@@ -2113,24 +2247,31 @@ mod tests {
             &crate::resolve_fol::FolBudget { max_steps: 10 },
         )
         .expect_err("refused");
+        let crate::resolve_fol::FolError::Clause(refusal) = refusal else {
+            panic!("the original guarded-clause refusal must be preserved");
+        };
         assert!(refusal.is_guarded());
         let mut arena = crate::proof::ProofArena::default();
-        let premise = arena.axiom(Fact {
-            subject: surface("a"),
-            predicate: surface("p"),
-            object: "\"2\"".to_owned(),
-            graph: String::new(),
-        });
-        let step = arena.by_rule(
-            Fact {
+        let premise = arena
+            .axiom(Fact {
                 subject: surface("a"),
-                predicate: surface("q"),
+                predicate: surface("p"),
                 object: "\"2\"".to_owned(),
                 graph: String::new(),
-            },
-            0,
-            &[premise],
-        );
+            })
+            .unwrap();
+        let step = arena
+            .by_rule(
+                Fact {
+                    subject: surface("a"),
+                    predicate: surface("q"),
+                    object: "\"2\"".to_owned(),
+                    graph: String::new(),
+                },
+                0,
+                &[premise],
+            )
+            .unwrap();
         let edb = store(&[("a", "p", "\"2\"")]);
         let rules = [guarded];
         let ctx = crate::proof::ProofContext::new(&rules, &edb, &edb);

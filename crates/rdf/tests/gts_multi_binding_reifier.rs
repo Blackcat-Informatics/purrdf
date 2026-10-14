@@ -21,21 +21,21 @@ use std::sync::Arc;
 /// `<g1>` and one in `<g2>` — the `graphReifierScope` shape, across two graphs.
 fn one_reifier_two_bindings_two_graphs() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let a = b.intern_iri("http://example.org/a");
-    let related = b.intern_iri("http://example.org/related");
-    let bb = b.intern_iri("http://example.org/b");
-    let c = b.intern_iri("http://example.org/c");
-    let r1 = b.intern_iri("http://example.org/r1");
-    let g1 = b.intern_iri("http://example.org/g1");
-    let g2 = b.intern_iri("http://example.org/g2");
+    let a = b.intern_iri("http://example.org/a").unwrap();
+    let related = b.intern_iri("http://example.org/related").unwrap();
+    let bb = b.intern_iri("http://example.org/b").unwrap();
+    let c = b.intern_iri("http://example.org/c").unwrap();
+    let r1 = b.intern_iri("http://example.org/r1").unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    let g2 = b.intern_iri("http://example.org/g2").unwrap();
 
-    b.push_quad(a, related, bb, Some(g1));
-    b.push_quad(a, related, c, Some(g2));
+    b.push_quad(a, related, bb, Some(g1)).unwrap();
+    b.push_quad(a, related, c, Some(g2)).unwrap();
 
-    let t1 = b.intern_triple(a, related, bb);
-    let t2 = b.intern_triple(a, related, c);
-    b.push_reifier_in_graph(r1, t1, Some(g1));
-    b.push_reifier_in_graph(r1, t2, Some(g2));
+    let t1 = b.intern_triple(a, related, bb).unwrap();
+    let t2 = b.intern_triple(a, related, c).unwrap();
+    b.push_reifier_in_graph(r1, t1, Some(g1)).unwrap();
+    b.push_reifier_in_graph(r1, t2, Some(g2)).unwrap();
 
     b.freeze().expect("valid dataset")
 }
@@ -130,19 +130,19 @@ fn multi_binding_reifier_writes_deterministically() {
     // The bindings' emission order is content-derived, not insertion order: a
     // graph whose rows were pushed in the opposite order writes the SAME bytes.
     let mut b = RdfDatasetBuilder::new();
-    let a = b.intern_iri("http://example.org/a");
-    let related = b.intern_iri("http://example.org/related");
-    let bb = b.intern_iri("http://example.org/b");
-    let c = b.intern_iri("http://example.org/c");
-    let r1 = b.intern_iri("http://example.org/r1");
-    let g1 = b.intern_iri("http://example.org/g1");
-    let g2 = b.intern_iri("http://example.org/g2");
-    b.push_quad(a, related, c, Some(g2));
-    b.push_quad(a, related, bb, Some(g1));
-    let t2 = b.intern_triple(a, related, c);
-    let t1 = b.intern_triple(a, related, bb);
-    b.push_reifier_in_graph(r1, t2, Some(g2));
-    b.push_reifier_in_graph(r1, t1, Some(g1));
+    let a = b.intern_iri("http://example.org/a").unwrap();
+    let related = b.intern_iri("http://example.org/related").unwrap();
+    let bb = b.intern_iri("http://example.org/b").unwrap();
+    let c = b.intern_iri("http://example.org/c").unwrap();
+    let r1 = b.intern_iri("http://example.org/r1").unwrap();
+    let g1 = b.intern_iri("http://example.org/g1").unwrap();
+    let g2 = b.intern_iri("http://example.org/g2").unwrap();
+    b.push_quad(a, related, c, Some(g2)).unwrap();
+    b.push_quad(a, related, bb, Some(g1)).unwrap();
+    let t2 = b.intern_triple(a, related, c).unwrap();
+    let t1 = b.intern_triple(a, related, bb).unwrap();
+    b.push_reifier_in_graph(r1, t2, Some(g2)).unwrap();
+    b.push_reifier_in_graph(r1, t1, Some(g1)).unwrap();
     let reversed = b.freeze().expect("valid dataset");
     let reversed = to_gts(&reversed, &RdfLookaside::default(), "purrdf-test").expect("write");
     assert_eq!(
@@ -156,21 +156,21 @@ fn multi_binding_reifier_writes_deterministically() {
 #[test]
 fn two_triple_terms_sharing_one_reifier_stay_distinct() {
     let mut b = RdfDatasetBuilder::new();
-    let a = b.intern_iri("http://example.org/a");
-    let related = b.intern_iri("http://example.org/related");
-    let bb = b.intern_iri("http://example.org/b");
-    let c = b.intern_iri("http://example.org/c");
-    let r1 = b.intern_iri("http://example.org/r1");
-    let holds = b.intern_iri("http://example.org/holds");
+    let a = b.intern_iri("http://example.org/a").unwrap();
+    let related = b.intern_iri("http://example.org/related").unwrap();
+    let bb = b.intern_iri("http://example.org/b").unwrap();
+    let c = b.intern_iri("http://example.org/c").unwrap();
+    let r1 = b.intern_iri("http://example.org/r1").unwrap();
+    let holds = b.intern_iri("http://example.org/holds").unwrap();
 
-    let t1 = b.intern_triple(a, related, bb);
-    let t2 = b.intern_triple(a, related, c);
+    let t1 = b.intern_triple(a, related, bb).unwrap();
+    let t2 = b.intern_triple(a, related, c).unwrap();
     // Both triple terms occur as ordinary object terms AND are reified by the
     // same reifier id.
-    b.push_quad(a, holds, t1, None);
-    b.push_quad(a, holds, t2, None);
-    b.push_reifier(r1, t1);
-    b.push_reifier(r1, t2);
+    b.push_quad(a, holds, t1, None).unwrap();
+    b.push_quad(a, holds, t2, None).unwrap();
+    b.push_reifier(r1, t1).unwrap();
+    b.push_reifier(r1, t2).unwrap();
     let ds = b.freeze().expect("valid dataset");
 
     let bytes = to_gts(&ds, &RdfLookaside::default(), "purrdf-test").expect("to_gts");
@@ -195,11 +195,11 @@ fn two_triple_terms_sharing_one_reifier_stay_distinct() {
 #[test]
 fn an_unreified_quoted_triple_round_trips() {
     let mut b = RdfDatasetBuilder::new();
-    let a = b.intern_iri("http://example.org/a");
-    let p = b.intern_iri("http://example.org/p");
-    let o = b.intern_iri("http://example.org/o");
-    let t = b.intern_triple(a, p, o);
-    b.push_quad(a, p, t, None);
+    let a = b.intern_iri("http://example.org/a").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b.intern_iri("http://example.org/o").unwrap();
+    let t = b.intern_triple(a, p, o).unwrap();
+    b.push_quad(a, p, t, None).unwrap();
     let ds = b.freeze().expect("valid dataset");
 
     let bytes = to_gts(&ds, &RdfLookaside::default(), "purrdf-test").expect("to_gts");

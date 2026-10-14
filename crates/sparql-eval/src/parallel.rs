@@ -2393,9 +2393,9 @@ mod tests {
                 if item % 7 != 0 {
                     std::thread::yield_now();
                 }
-                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
-                    item as u32,
-                )))]);
+                acc.push(vec![Some(SolutionTerm::Existing(
+                    TermId::from_index(item as u32).expect("stored term index is representable"),
+                ))]);
                 Ok(())
             },
             |state| *state,
@@ -2437,9 +2437,9 @@ mod tests {
                 if item % 3 == 0 {
                     std::thread::yield_now();
                 }
-                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
-                    item as u32,
-                )))]);
+                acc.push(vec![Some(SolutionTerm::Existing(
+                    TermId::from_index(item as u32).expect("stored term index is representable"),
+                ))]);
                 Ok(())
             },
             |state| *state,
@@ -2479,9 +2479,9 @@ mod tests {
                 0_u64
             },
             |_state, acc, &item| {
-                acc.push(vec![Some(SolutionTerm::Existing(TermId::from_index(
-                    item as u32,
-                )))]);
+                acc.push(vec![Some(SolutionTerm::Existing(
+                    TermId::from_index(item as u32).expect("stored term index is representable"),
+                ))]);
                 Ok(())
             },
             |state| *state,

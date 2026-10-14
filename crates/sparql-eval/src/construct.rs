@@ -1081,6 +1081,7 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }
@@ -1407,12 +1408,12 @@ mod tests {
     fn knows_graph() -> Arc<RdfDataset> {
         // :a :knows :b ; :a :knows :c .
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS);
-        let a = b.intern_iri("http://ex/a");
-        let bb = b.intern_iri("http://ex/b");
-        let cc = b.intern_iri("http://ex/c");
-        b.push_quad(a, knows, bb, None);
-        b.push_quad(a, knows, cc, None);
+        let knows = b.intern_iri(KNOWS).unwrap();
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let bb = b.intern_iri("http://ex/b").unwrap();
+        let cc = b.intern_iri("http://ex/c").unwrap();
+        b.push_quad(a, knows, bb, None).unwrap();
+        b.push_quad(a, knows, cc, None).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -1455,11 +1456,11 @@ mod tests {
     /// subject/object pair (so no row-independent join collapses them).
     fn knows_graph_n(n: usize) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
-        let knows = b.intern_iri(KNOWS);
+        let knows = b.intern_iri(KNOWS).unwrap();
         for i in 0..n {
-            let s = b.intern_iri(&format!("http://ex/s{i}"));
-            let o = b.intern_iri(&format!("http://ex/o{i}"));
-            b.push_quad(s, knows, o, None);
+            let s = b.intern_iri(&format!("http://ex/s{i}")).unwrap();
+            let o = b.intern_iri(&format!("http://ex/o{i}")).unwrap();
+            b.push_quad(s, knows, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -1728,19 +1729,21 @@ mod tests {
         // The dataset binds `?o` to a LITERAL, a BLANK and a TRIPLE TERM in turn.
         for object in ["literal", "blank", "triple"] {
             let mut b = RdfDatasetBuilder::new();
-            let knows = b.intern_iri(KNOWS);
-            let a = b.intern_iri("http://ex/a");
+            let knows = b.intern_iri(KNOWS).unwrap();
+            let a = b.intern_iri("http://ex/a").unwrap();
             let o = match object {
-                "literal" => b.intern_literal(RdfLiteral::simple("not a graph")),
-                "blank" => b.intern_blank("x", purrdf_core::BlankScope::DEFAULT),
+                "literal" => b.intern_literal(RdfLiteral::simple("not a graph")).unwrap(),
+                "blank" => b
+                    .intern_blank("x", purrdf_core::BlankScope::DEFAULT)
+                    .unwrap(),
                 _ => {
-                    let s = b.intern_iri("http://ex/s");
-                    let p = b.intern_iri("http://ex/p");
-                    let x = b.intern_iri("http://ex/x");
-                    b.intern_triple(s, p, x)
+                    let s = b.intern_iri("http://ex/s").unwrap();
+                    let p = b.intern_iri("http://ex/p").unwrap();
+                    let x = b.intern_iri("http://ex/x").unwrap();
+                    b.intern_triple(s, p, x).unwrap()
                 }
             };
-            b.push_quad(a, knows, o, None);
+            b.push_quad(a, knows, o, None).unwrap();
             let ds = b.freeze().expect("freeze");
 
             let mut ctx = EvalCtx::new(&ds);
@@ -1914,10 +1917,12 @@ mod tests {
     #[test]
     fn template_blank_is_fresh_against_data_labels() {
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p");
-        let s = b.intern_blank_value("c1", purrdf_core::BlankScope::DEFAULT);
-        let o = b.intern_iri("http://ex/o");
-        b.push_quad(s, p, o, None);
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let s = b
+            .intern_blank_value("c1", purrdf_core::BlankScope::DEFAULT)
+            .unwrap();
+        let o = b.intern_iri("http://ex/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
 
@@ -1960,10 +1965,12 @@ mod tests {
     fn freshness_allocation_is_deterministic_across_runs() {
         let build = || {
             let mut b = RdfDatasetBuilder::new();
-            let p = b.intern_iri("http://ex/p");
-            let s = b.intern_blank_value("c1", purrdf_core::BlankScope::DEFAULT);
-            let o = b.intern_iri("http://ex/o");
-            b.push_quad(s, p, o, None);
+            let p = b.intern_iri("http://ex/p").unwrap();
+            let s = b
+                .intern_blank_value("c1", purrdf_core::BlankScope::DEFAULT)
+                .unwrap();
+            let o = b.intern_iri("http://ex/o").unwrap();
+            b.push_quad(s, p, o, None).unwrap();
             b.freeze().expect("freeze")
         };
         let where_pat = GraphPattern::Bgp {
@@ -1996,10 +2003,10 @@ mod tests {
         // CONSTRUCT { ?o :related ?s } where ?o binds to a literal → literal subject
         // → skipped.
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p");
-        let s = b.intern_iri("http://ex/s");
-        let lit = b.intern_literal(RdfLiteral::simple("hello"));
-        b.push_quad(s, p, lit, None); // :s :p "hello"
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let s = b.intern_iri("http://ex/s").unwrap();
+        let lit = b.intern_literal(RdfLiteral::simple("hello")).unwrap();
+        b.push_quad(s, p, lit, None).unwrap(); // :s :p "hello"
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
 
@@ -2030,12 +2037,12 @@ mod tests {
         // lets the ill-formed instantiation reach `freeze`, where it is a HARD
         // error that kills the whole query instead of skipping one statement.
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://ex/a");
-        let p = b.intern_iri("http://ex/p");
-        let o = b.intern_iri("http://ex/b");
-        let r = b.intern_iri("http://ex/r");
-        let quoted = b.intern_triple(a, p, o);
-        b.push_reifier(r, quoted);
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let o = b.intern_iri("http://ex/b").unwrap();
+        let r = b.intern_iri("http://ex/r").unwrap();
+        let quoted = b.intern_triple(a, p, o).unwrap();
+        b.push_reifier(r, quoted).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
 
@@ -2075,10 +2082,10 @@ mod tests {
         // the term model: `<<( "hello" ex:p ex:s )>>` has a literal subject, so
         // the instantiation is ill-formed and the whole statement is skipped.
         let mut b = RdfDatasetBuilder::new();
-        let p = b.intern_iri("http://ex/p");
-        let s = b.intern_iri("http://ex/s");
-        let lit = b.intern_literal(RdfLiteral::simple("hello"));
-        b.push_quad(s, p, lit, None);
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let s = b.intern_iri("http://ex/s").unwrap();
+        let lit = b.intern_literal(RdfLiteral::simple("hello")).unwrap();
+        b.push_quad(s, p, lit, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
 
@@ -2129,12 +2136,12 @@ mod tests {
         // came out": every emitted statement is re-serialized and re-parsed, and
         // the term model is checked directly on the emitted object.
         let mut b = RdfDatasetBuilder::new();
-        let a = b.intern_iri("http://ex/a");
-        let p = b.intern_iri("http://ex/p");
-        let o = b.intern_iri("http://ex/b");
-        let r = b.intern_iri("http://ex/r");
-        let quoted = b.intern_triple(a, p, o);
-        b.push_reifier(r, quoted);
+        let a = b.intern_iri("http://ex/a").unwrap();
+        let p = b.intern_iri("http://ex/p").unwrap();
+        let o = b.intern_iri("http://ex/b").unwrap();
+        let r = b.intern_iri("http://ex/r").unwrap();
+        let quoted = b.intern_triple(a, p, o).unwrap();
+        b.push_reifier(r, quoted).unwrap();
         let ds = b.freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&ds);
 
@@ -2227,20 +2234,20 @@ mod tests {
         let mut b = RdfDatasetBuilder::new();
         // `rdf:reifies` MUST be interned for the reifier-query layer to fire
         // (the virtual-predicate id is resolved via term_id_by_value).
-        let _ = b.intern_iri(REIFIES);
-        let alice = b.intern_iri("http://ex/alice");
-        let age = b.intern_iri("http://ex/age");
-        let forty_two = b.intern_literal(RdfLiteral::simple("42"));
-        let triple = b.intern_triple(alice, age, forty_two);
-        let r = b.intern_iri("http://ex/r");
-        b.push_reifier(r, triple);
+        let _ = b.intern_iri(REIFIES).unwrap();
+        let alice = b.intern_iri("http://ex/alice").unwrap();
+        let age = b.intern_iri("http://ex/age").unwrap();
+        let forty_two = b.intern_literal(RdfLiteral::simple("42")).unwrap();
+        let triple = b.intern_triple(alice, age, forty_two).unwrap();
+        let r = b.intern_iri("http://ex/r").unwrap();
+        b.push_reifier(r, triple).unwrap();
         // Annotation: :r :confidence "0.9" ; :r example:accordingTo :sourceX .
-        let confidence = b.intern_iri("http://ex/confidence");
-        let conf_val = b.intern_literal(RdfLiteral::simple("0.9"));
-        b.push_annotation(r, confidence, conf_val);
-        let according = b.intern_iri(ACCORDING_TO);
-        let source_x = b.intern_iri("http://ex/sourceX");
-        b.push_annotation(r, according, source_x);
+        let confidence = b.intern_iri("http://ex/confidence").unwrap();
+        let conf_val = b.intern_literal(RdfLiteral::simple("0.9")).unwrap();
+        b.push_annotation(r, confidence, conf_val).unwrap();
+        let according = b.intern_iri(ACCORDING_TO).unwrap();
+        let source_x = b.intern_iri("http://ex/sourceX").unwrap();
+        b.push_annotation(r, according, source_x).unwrap();
         b.freeze().expect("freeze")
     }
 
@@ -2668,13 +2675,13 @@ mod tests {
         // (2) Via direct builder calls — same logical structure as reified_graph() but
         //     without annotations (the template above carries no annotations).
         let mut b = RdfDatasetBuilder::new();
-        let _ = b.intern_iri(REIFIES);
-        let alice = b.intern_iri("http://ex/alice");
-        let age = b.intern_iri("http://ex/age");
-        let forty_two = b.intern_literal(RdfLiteral::simple("42"));
-        let triple = b.intern_triple(alice, age, forty_two);
-        let r = b.intern_iri("http://ex/r");
-        b.push_reifier(r, triple);
+        let _ = b.intern_iri(REIFIES).unwrap();
+        let alice = b.intern_iri("http://ex/alice").unwrap();
+        let age = b.intern_iri("http://ex/age").unwrap();
+        let forty_two = b.intern_literal(RdfLiteral::simple("42")).unwrap();
+        let triple = b.intern_triple(alice, age, forty_two).unwrap();
+        let r = b.intern_iri("http://ex/r").unwrap();
+        b.push_reifier(r, triple).unwrap();
         let direct_out = b.freeze().expect("freeze direct");
 
         assert_eq!(
@@ -2691,15 +2698,15 @@ mod tests {
         // rows that drop to the SAME lost triple, so the deterministic content-keyed
         // loss node collapses to ONE.
         let mut b = RdfDatasetBuilder::new();
-        let _ = b.intern_iri(REIFIES);
-        let alice = b.intern_iri("http://ex/alice");
-        let age = b.intern_iri("http://ex/age");
-        let forty_two = b.intern_literal(RdfLiteral::simple("42"));
-        let triple = b.intern_triple(alice, age, forty_two);
-        let r1 = b.intern_iri("http://ex/r1");
-        let r2 = b.intern_iri("http://ex/r2");
-        b.push_reifier(r1, triple);
-        b.push_reifier(r2, triple);
+        let _ = b.intern_iri(REIFIES).unwrap();
+        let alice = b.intern_iri("http://ex/alice").unwrap();
+        let age = b.intern_iri("http://ex/age").unwrap();
+        let forty_two = b.intern_literal(RdfLiteral::simple("42")).unwrap();
+        let triple = b.intern_triple(alice, age, forty_two).unwrap();
+        let r1 = b.intern_iri("http://ex/r1").unwrap();
+        let r2 = b.intern_iri("http://ex/r2").unwrap();
+        b.push_reifier(r1, triple).unwrap();
+        b.push_reifier(r2, triple).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let template = vec![TriplePattern {
@@ -2803,6 +2810,7 @@ mod where_walk_tests {
             | GraphPattern::Unfold { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Project { inner, .. }
+            | GraphPattern::ProjectStar { inner, .. }
             | GraphPattern::Distinct { inner }
             | GraphPattern::Reduced { inner }
             | GraphPattern::Slice { inner, .. }

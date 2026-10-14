@@ -103,7 +103,7 @@ impl UniqueGroups {
         spec: &UniqueSpec,
         binding: &DatasetBinding,
         classes: &ClassCatalog,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, crate::error::ShapesError> {
         let predicates = spec
             .properties
             .iter()

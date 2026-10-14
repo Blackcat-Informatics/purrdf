@@ -170,13 +170,13 @@ mod tests {
     #[test]
     fn graph_names_are_written_in_term_syntax() {
         let mut b = crate::RdfDatasetBuilder::new();
-        let s = b.intern_iri("https://example.org/s");
-        let iri_graph = b.intern_iri("https://example.org/g");
-        let odd_blank = b.intern_blank("a b", crate::BlankScope::DEFAULT);
-        let plain_blank = b.intern_blank("g1", crate::BlankScope::DEFAULT);
-        b.push_quad(s, s, s, Some(iri_graph));
-        b.push_quad(s, s, s, Some(odd_blank));
-        b.push_quad(s, s, s, Some(plain_blank));
+        let s = b.intern_iri("https://example.org/s").unwrap();
+        let iri_graph = b.intern_iri("https://example.org/g").unwrap();
+        let odd_blank = b.intern_blank("a b", crate::BlankScope::DEFAULT).unwrap();
+        let plain_blank = b.intern_blank("g1", crate::BlankScope::DEFAULT).unwrap();
+        b.push_quad(s, s, s, Some(iri_graph)).unwrap();
+        b.push_quad(s, s, s, Some(odd_blank)).unwrap();
+        b.push_quad(s, s, s, Some(plain_blank)).unwrap();
         let ds = b.freeze().expect("dataset freezes");
         assert_eq!(
             distinct_graph_names(&ds),

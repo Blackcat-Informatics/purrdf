@@ -279,10 +279,14 @@ fn phonetics_read_surface_words_and_expose_refinement_evidence() {
 #[test]
 fn search_and_occurrence_relations_use_the_stored_analyzer() {
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_iri("https://example.org/doc");
-    let predicate = builder.intern_iri("https://example.org/text");
-    let literal = builder.intern_literal(RdfLiteral::simple("CAFÉS running alpha\u{200b}beta"));
-    builder.push_quad(subject, predicate, literal, None);
+    let subject = builder.intern_iri("https://example.org/doc").unwrap();
+    let predicate = builder.intern_iri("https://example.org/text").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral::simple("CAFÉS running alpha\u{200b}beta"))
+        .unwrap();
+    builder
+        .push_quad(subject, predicate, literal, None)
+        .unwrap();
     let dataset = builder.freeze().unwrap();
     let configuration = TextIndexConfig::new(
         vec![TermValue::iri("https://example.org/text")],
@@ -322,7 +326,11 @@ fn search_and_occurrence_relations_use_the_stored_analyzer() {
         [vec!["<https://example.org/doc>".to_owned()]]
     );
     assert_eq!(
-        index.surface_index().substring("afé").unwrap()[0]
+        index
+            .surface_index()
+            .expect("default surface index")
+            .substring("afé")
+            .unwrap()[0]
             .term
             .text(),
         "cafes"
@@ -332,7 +340,11 @@ fn search_and_occurrence_relations_use_the_stored_analyzer() {
         configuration.analyzer().fingerprint()
     );
     assert_eq!(
-        index.surface_index().analyzer().fingerprint(),
+        index
+            .surface_index()
+            .expect("default surface index")
+            .analyzer()
+            .fingerprint(),
         index.analyzer_fingerprint()
     );
 }

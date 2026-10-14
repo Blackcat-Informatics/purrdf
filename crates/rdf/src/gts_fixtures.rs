@@ -64,42 +64,56 @@ pub const KEYSTONE_GROUPS: usize = 60;
 /// See the module docs for what each element is there to catch.
 pub fn keystone_base(groups: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let q = b.intern_iri("https://example.org/q");
-    let g1 = b.intern_iri(KEY_G1);
-    let g2 = b.intern_iri(KEY_G2);
-    let declared = b.intern_iri(KEY_DECLARED);
-    let plain = b.intern_literal(RdfLiteral::simple("bare"));
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("cat", "en"));
-    let directional = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let q = b.intern_iri("https://example.org/q").unwrap();
+    let g1 = b.intern_iri(KEY_G1).unwrap();
+    let g2 = b.intern_iri(KEY_G2).unwrap();
+    let declared = b.intern_iri(KEY_DECLARED).unwrap();
+    let plain = b.intern_literal(RdfLiteral::simple("bare")).unwrap();
+    let tagged = b
+        .intern_literal(RdfLiteral::language_tagged("cat", "en"))
+        .unwrap();
+    let directional = b
+        .intern_literal(RdfLiteral {
+            direction: Some(RdfTextDirection::Rtl),
+            ..RdfLiteral::language_tagged("مرحبا", "ar")
+        })
+        .unwrap();
     for index in 0..groups {
-        let s = b.intern_iri(&format!("https://example.org/s{index}"));
-        let o = b.intern_iri(&format!("https://example.org/o{index}"));
+        let s = b
+            .intern_iri(&format!("https://example.org/s{index}"))
+            .unwrap();
+        let o = b
+            .intern_iri(&format!("https://example.org/o{index}"))
+            .unwrap();
         // Default-graph rows, relocated to <selected> at ingest time.
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, q, plain, None);
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, q, plain, None).unwrap();
         // Named-graph rows, one literal shape each.
-        b.push_quad(s, p, directional, Some(g1));
-        b.push_quad(s, q, tagged, Some(g2));
+        b.push_quad(s, p, directional, Some(g1)).unwrap();
+        b.push_quad(s, q, tagged, Some(g2)).unwrap();
         // One local label in two scopes: two nodes a label-keyed identity would
         // conflate, kept structurally distinguishable so canonicalization stays
         // linear rather than exploring automorphisms.
-        let shared = b.intern_blank(&format!("n{index}"), BlankScope::DEFAULT);
-        let scoped = b.intern_blank(&format!("n{index}"), BlankScope(4));
-        b.push_quad(shared, p, o, Some(g1));
-        b.push_quad(scoped, q, o, Some(g1));
+        let shared = b
+            .intern_blank(&format!("n{index}"), BlankScope::DEFAULT)
+            .unwrap();
+        let scoped = b.intern_blank(&format!("n{index}"), BlankScope(4)).unwrap();
+        b.push_quad(shared, p, o, Some(g1)).unwrap();
+        b.push_quad(scoped, q, o, Some(g1)).unwrap();
         if index % 8 == 0 {
-            let triple = b.intern_triple(shared, p, directional);
-            let reifier = b.intern_blank(&format!("st{index}"), BlankScope(7));
-            b.push_reifier_in_graph(reifier, triple, Some(g1));
-            b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+            let triple = b.intern_triple(shared, p, directional).unwrap();
+            let reifier = b
+                .intern_blank(&format!("st{index}"), BlankScope(7))
+                .unwrap();
+            b.push_reifier_in_graph(reifier, triple, Some(g1)).unwrap();
+            b.push_annotation_in_graph(reifier, q, tagged, Some(g1))
+                .unwrap();
         }
     }
     // A named graph owning no row at all.
-    b.declare_named_graph(declared);
+    b.declare_named_graph(declared)
+        .expect("keystone declared graph");
     b.freeze().expect("the keystone base freezes")
 }
 
@@ -114,17 +128,19 @@ pub fn keystone_base(groups: usize) -> Arc<RdfDataset> {
 /// graph — which is why a shape varies term overlap rather than row overlap.
 pub fn keystone_contribution(graph: &str, space: usize, rows: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let q = b.intern_iri("https://example.org/q");
-    let g = b.intern_iri(graph);
-    let node = b.intern_blank("n0", BlankScope::DEFAULT);
-    let elsewhere = b.intern_blank("n0", BlankScope(4));
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let q = b.intern_iri("https://example.org/q").unwrap();
+    let g = b.intern_iri(graph).unwrap();
+    let node = b.intern_blank("n0", BlankScope::DEFAULT).unwrap();
+    let elsewhere = b.intern_blank("n0", BlankScope(4)).unwrap();
     for index in 0..rows {
-        let o = b.intern_iri(&format!("https://example.org/space{space}/c{index}"));
-        b.push_quad(node, p, o, Some(g));
-        b.push_quad(elsewhere, q, o, Some(g));
+        let o = b
+            .intern_iri(&format!("https://example.org/space{space}/c{index}"))
+            .unwrap();
+        b.push_quad(node, p, o, Some(g)).unwrap();
+        b.push_quad(elsewhere, q, o, Some(g)).unwrap();
     }
-    b.push_quad(node, q, elsewhere, Some(g));
+    b.push_quad(node, q, elsewhere, Some(g)).unwrap();
     b.freeze().expect("the keystone contribution freezes")
 }
 

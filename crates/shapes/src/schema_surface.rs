@@ -2220,7 +2220,7 @@ fn catalog_restrictions(
 pub(crate) fn build(
     request: &SchemaCompileRequest<'_>,
 ) -> Result<SchemaSurface, SchemaCompileError> {
-    let union = RdfDataset::union(&[request.ontology(), request.shapes().shapes_dataset.as_ref()]);
+    let union = RdfDataset::union(&[request.ontology(), request.shapes().shapes_dataset.as_ref()])?;
     let mut rows = dataset_rows(&union);
     rows.sort_by(|left, right| {
         left.subject_key

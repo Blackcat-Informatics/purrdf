@@ -1258,6 +1258,7 @@ impl From<&EvalError> for FailureCode {
             | EvalError::ExchangeIdExhausted
             | EvalError::WorkspaceUnpriced(_)
             | EvalError::WorkspaceBoundOverflow
+            | EvalError::Capacity(_)
             | EvalError::AllocationFailed { .. }
             | EvalError::Dataset(_)
             | EvalError::Internal(_)
@@ -1363,7 +1364,7 @@ pub struct Problem {
 ///
 /// | Status | Failures |
 /// |---|---|
-/// | `400` | the operation does not parse, nests past a parse or host stack, or is one the engine refuses to evaluate as written |
+/// | `400` | the operation does not parse, nests past an evaluator or host stack, or is one the engine refuses to evaluate as written |
 /// | `403` | a catalog or the host's policy refused a `SERVICE` or `LOAD` it names; nothing was contacted |
 /// | `406` | no acceptable format carries the result |
 /// | `409` | an update of the same dataset is already in flight |
@@ -1377,6 +1378,7 @@ pub const fn problem_for(code: FailureCode) -> Problem {
         FailureCode::QueryParse
         | FailureCode::UpdateParse
         | FailureCode::HostStackExhausted
+        | FailureCode::EvaluationStackExhausted
         | FailureCode::Unsupported
         | FailureCode::CustomFunction
         | FailureCode::QuotedTripleTermVariable => (400, ProblemDetail::Message),
@@ -1411,9 +1413,7 @@ pub const fn problem_for(code: FailureCode) -> Problem {
         FailureCode::NotAcceptable => (406, ProblemDetail::Message),
         FailureCode::UpdateInFlight => (409, ProblemDetail::Message),
         FailureCode::GovernorCeiling => (422, ProblemDetail::Message),
-        FailureCode::EvaluationStackExhausted | FailureCode::Evaluation => {
-            (500, ProblemDetail::Message)
-        }
+        FailureCode::Evaluation => (500, ProblemDetail::Message),
         FailureCode::ServiceUnconfigured => (
             500,
             ProblemDetail::Internal {

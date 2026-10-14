@@ -436,13 +436,15 @@ mod tests {
     #[test]
     fn graph_is_format_error() {
         let mut builder = RdfDatasetBuilder::new();
-        builder.push_owned_quad(&RdfQuad {
-            subject: RdfTerm::iri("http://example.org/s"),
-            predicate: "http://example.org/p".to_string(),
-            object: RdfTerm::iri("http://example.org/o"),
-            graph_name: None,
-            location: None,
-        });
+        builder
+            .push_owned_quad(&RdfQuad {
+                subject: RdfTerm::iri("http://example.org/s"),
+                predicate: "http://example.org/p".to_string(),
+                object: RdfTerm::iri("http://example.org/o"),
+                graph_name: None,
+                location: None,
+            })
+            .unwrap();
         let dataset = builder.freeze().expect("dataset freezes");
         let err = to_csv(
             &SparqlResult::Graph(dataset.into()),

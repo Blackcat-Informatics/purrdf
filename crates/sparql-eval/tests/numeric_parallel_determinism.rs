@@ -186,29 +186,35 @@ fn bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential()
 /// `i` (from 40 digits to 340), and `ex:s{i} ex:g g{i}` — one group per subject.
 fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
-    let v = builder.intern_iri(&format!("{EX}v"));
-    let d = builder.intern_iri(&format!("{EX}d"));
-    let g = builder.intern_iri(&format!("{EX}g"));
-    let w = builder.intern_iri(&format!("{EX}w"));
+    let v = builder.intern_iri(&format!("{EX}v")).unwrap();
+    let d = builder.intern_iri(&format!("{EX}d")).unwrap();
+    let g = builder.intern_iri(&format!("{EX}g")).unwrap();
+    let w = builder.intern_iri(&format!("{EX}w")).unwrap();
     for index in 0..ROWS {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let big = builder.intern_literal(RdfLiteral::typed(
-            format!("1{index:039}"),
-            format!("{XSD}integer"),
-        ));
-        let fine = builder.intern_literal(RdfLiteral::typed(
-            format!("0.{index:039}1"),
-            format!("{XSD}decimal"),
-        ));
-        let growing = builder.intern_literal(RdfLiteral::typed(
-            format!("1{}", "7".repeat(39 + index / 5)),
-            format!("{XSD}integer"),
-        ));
-        builder.push_quad(s, w, growing, None);
-        let group = builder.intern_iri(&format!("{EX}g{index}"));
-        builder.push_quad(s, v, big, None);
-        builder.push_quad(s, d, fine, None);
-        builder.push_quad(s, g, group, None);
+        let s = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let big = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("1{index:039}"),
+                format!("{XSD}integer"),
+            ))
+            .unwrap();
+        let fine = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("0.{index:039}1"),
+                format!("{XSD}decimal"),
+            ))
+            .unwrap();
+        let growing = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("1{}", "7".repeat(39 + index / 5)),
+                format!("{XSD}integer"),
+            ))
+            .unwrap();
+        builder.push_quad(s, w, growing, None).unwrap();
+        let group = builder.intern_iri(&format!("{EX}g{index}")).unwrap();
+        builder.push_quad(s, v, big, None).unwrap();
+        builder.push_quad(s, d, fine, None).unwrap();
+        builder.push_quad(s, g, group, None).unwrap();
     }
     builder.freeze().expect("a valid fixture")
 }
@@ -403,14 +409,16 @@ fn an_optional_filter_over_exact_values_trips_at_one_row() {
 #[test]
 fn a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip() {
     let mut builder = RdfDatasetBuilder::new();
-    let v = builder.intern_iri(&format!("{EX}v"));
+    let v = builder.intern_iri(&format!("{EX}v")).unwrap();
     for index in 0..6_000 {
-        let s = builder.intern_iri(&format!("{EX}s{index}"));
-        let big = builder.intern_literal(RdfLiteral::typed(
-            format!("1{index:039}"),
-            format!("{XSD}integer"),
-        ));
-        builder.push_quad(s, v, big, None);
+        let s = builder.intern_iri(&format!("{EX}s{index}")).unwrap();
+        let big = builder
+            .intern_literal(RdfLiteral::typed(
+                format!("1{index:039}"),
+                format!("{XSD}integer"),
+            ))
+            .unwrap();
+        builder.push_quad(s, v, big, None).unwrap();
     }
     let dataset = builder.freeze().expect("a valid fixture");
     let query = format!(

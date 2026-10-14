@@ -55,6 +55,8 @@ pub(crate) struct Job {
     pub(crate) forbidden: Forbidden,
     /// Sanctioned second implementations.
     pub(crate) variants: Vec<Variant>,
+    /// Audited exact reconstruction sites for the logical-capacity rule only.
+    pub(crate) capacity_proofs: Vec<crate::capacity::Proof>,
 }
 
 /// Which grouping a [`Distinct`] row names.
@@ -121,7 +123,7 @@ impl Ledger {
     }
 }
 
-const JOB_KEYS: [&str; 12] = [
+const JOB_KEYS: [&str; 13] = [
     "id",
     "summary",
     "home",
@@ -134,8 +136,9 @@ const JOB_KEYS: [&str; 12] = [
     "enforced",
     "forbidden",
     "variant",
+    "capacity_proof",
 ];
-const JOB_OPTIONAL: [&str; 1] = ["variant"];
+const JOB_OPTIONAL: [&str; 2] = ["variant", "capacity_proof"];
 const FORBIDDEN_KEYS: [&str; 3] = ["constants", "fingerprints", "names"];
 const DISTINCT_KEYS: [&str; 5] = ["members", "kind", "criterion", "anchor", "reason"];
 const VARIANT_KEYS: [&str; 6] = [
@@ -279,12 +282,61 @@ fn job(row: &BTreeMap<String, Value>) -> Result<Job, String> {
             .map_err(|error| format!("{id}: {error}"))?,
         Some(_) => return Err(format!("{id}: `variant` must be an array of tables")),
     };
+    let capacity_proofs = match row.get("capacity_proof") {
+        None => Vec::new(),
+        Some(Value::Array(items)) if id == "logical-capacity-panic" => items
+            .iter()
+            .map(|item| {
+                let Value::Table(table) = item else {
+                    return Err("capacity_proof must be a table".to_owned());
+                };
+                check_keys(
+                    table,
+                    &[
+                        "file",
+                        "symbol",
+                        "line",
+                        "sink",
+                        "class",
+                        "authorities",
+                        "constructors",
+                        "reason",
+                    ],
+                    &[],
+                    "capacity_proof",
+                )?;
+                string(table, "reason")?;
+                let Some(Value::Int(line)) = table.get("line") else {
+                    return Err("capacity proof line must be a positive integer".to_owned());
+                };
+                let line = usize::try_from(*line)
+                    .ok()
+                    .filter(|line| *line > 0)
+                    .ok_or_else(|| "capacity proof line must be a positive address".to_owned())?;
+                Ok(crate::capacity::Proof {
+                    file: string(table, "file")?,
+                    symbol: string(table, "symbol")?,
+                    line,
+                    sink: string(table, "sink")?,
+                    class: string(table, "class")?,
+                    authorities: strings(table, "authorities")?,
+                    constructors: string(table, "constructors")?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        Some(_) => {
+            return Err(
+                "capacity_proof is an array available only to logical-capacity-panic".to_owned(),
+            );
+        }
+    };
     Ok(Job {
         home: string(row, "home")?,
         entry_points: strings(row, "entry_points")?,
         enforced: *enforced,
         forbidden: forbidden_table(forbidden).map_err(|error| format!("{id}: {error}"))?,
         variants,
+        capacity_proofs,
         id,
     })
 }

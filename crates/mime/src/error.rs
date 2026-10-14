@@ -11,6 +11,8 @@ use purrdf_core::{
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum MimeError {
+    /// Logical capacity or physical storage refused RDF construction.
+    Storage(purrdf_lex::allocation::StorageError),
     /// Invalid absolute source or vocabulary IRI.
     Iri(IriError),
     /// Invalid explicitly selected profile.
@@ -53,6 +55,7 @@ pub enum MimeError {
 impl std::fmt::Display for MimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => write!(f, "MIME storage: {error}"),
             Self::Iri(error) => write!(f, "MIME IRI: {error}"),
             Self::Profile(reason) => write!(f, "MIME profile: {reason}"),
             Self::Limit { resource, limit } => {
@@ -74,6 +77,7 @@ impl std::fmt::Display for MimeError {
 impl std::error::Error for MimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(error) => Some(error),
             Self::Iri(error) => Some(error),
             Self::Emit(error) => Some(error),
             Self::Cover(error) => Some(error),
@@ -84,7 +88,7 @@ impl std::error::Error for MimeError {
 }
 
 purrdf_lex::variant_from!(MimeError {
-    Iri(IriError), Emit(EmitError), Cover(ReconstructError), Rdf(RdfDiagnostic)
+    Storage(purrdf_lex::allocation::StorageError), Iri(IriError), Emit(EmitError), Cover(ReconstructError), Rdf(RdfDiagnostic)
 });
 
 pub(crate) fn metadata(subject: &str, field: &'static str) -> MimeError {

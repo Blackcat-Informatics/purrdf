@@ -18,25 +18,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&output)?;
 
     let mut builder = RdfDatasetBuilder::new();
-    let subject = builder.intern_blank("subject", BlankScope(5));
-    let predicate = builder.intern_iri("https://example.org/predicate");
-    let object = builder.intern_literal(RdfLiteral::typed("17", "https://example.org/integer"));
-    let directional = builder.intern_literal(RdfLiteral {
-        lexical_form: "مرحبا".to_owned(),
-        datatype: None,
-        language: Some("ar".to_owned()),
-        direction: Some(RdfTextDirection::Rtl),
-    });
-    let graph = builder.intern_iri("https://example.org/graph");
-    let empty_graph = builder.intern_iri("https://example.org/empty");
-    builder.declare_named_graph(empty_graph);
-    builder.push_quad(subject, predicate, object, None);
-    builder.push_quad(subject, predicate, directional, Some(graph));
+    let subject = builder.intern_blank("subject", BlankScope(5)).unwrap();
+    let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+    let object = builder
+        .intern_literal(RdfLiteral::typed("17", "https://example.org/integer"))
+        .unwrap();
+    let directional = builder
+        .intern_literal(RdfLiteral {
+            lexical_form: "مرحبا".to_owned(),
+            datatype: None,
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        })
+        .unwrap();
+    let graph = builder.intern_iri("https://example.org/graph").unwrap();
+    let empty_graph = builder.intern_iri("https://example.org/empty").unwrap();
+    builder.declare_named_graph(empty_graph).unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
+    builder
+        .push_quad(subject, predicate, directional, Some(graph))
+        .unwrap();
 
-    let triple = builder.intern_triple(subject, predicate, directional);
-    let reifier = builder.intern_blank("reifier", BlankScope(5));
-    builder.push_reifier_in_graph(reifier, triple, Some(graph));
-    builder.push_annotation_in_graph(reifier, predicate, object, None);
+    let triple = builder
+        .intern_triple(subject, predicate, directional)
+        .unwrap();
+    let reifier = builder.intern_blank("reifier", BlankScope(5)).unwrap();
+    builder
+        .push_reifier_in_graph(reifier, triple, Some(graph))
+        .unwrap();
+    builder
+        .push_annotation_in_graph(reifier, predicate, object, None)
+        .unwrap();
     let dataset = builder.freeze()?;
 
     let mut blobs = ContentStore::new();

@@ -163,13 +163,13 @@ impl Inference {
     ///
     /// An internal-invariant breach: an inferred triple with a non-IRI predicate,
     /// which the evaluation refuses before it returns.
-    pub fn inferred_dataset(&self) -> Result<Arc<RdfDataset>, String> {
+    pub fn inferred_dataset(&self) -> Result<Arc<RdfDataset>, crate::error::ShapesError> {
         let reifiers = rules::reifier_subjects(self.inferred.iter());
         let mut builder = RdfDatasetBuilder::new();
         for triple in &self.inferred {
             rules::push_fact(&mut builder, triple, &reifiers)?;
         }
-        builder.freeze().map_err(|e| e.to_string())
+        builder.freeze().map_err(crate::error::ShapesError::from)
     }
 
     /// The inferred triples as N-Triples 1.2, one `S P O .` line each, in the canonical
@@ -301,7 +301,7 @@ pub(crate) fn evaluate_with(
     let program =
         schedule::compile_scheduled(lowered.clauses, schedule).map_err(|e| describe(&e, set))?;
 
-    let base = data.core_arc();
+    let base = data.core_arc()?;
     let base_triples = rules::base_triples(&base);
     // Every label this evaluation mints — a head blank node, a blank node an assignment
     // computes, a data block's blank node standardized apart from the base graph ("rdf
@@ -343,9 +343,11 @@ pub(crate) fn evaluate_with(
     let mut edb = RelationStore::new();
     for triple in base_triples {
         let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
-        edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH);
+        edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH)
+            .map_err(crate::error::ShapesError::from)?;
         if lowered.uses_base {
-            edb.insert(&s, &p, &o, BASE_GRAPH);
+            edb.insert(&s, &p, &o, BASE_GRAPH)
+                .map_err(crate::error::ShapesError::from)?;
         }
         engine.originals.insert(triple);
     }
@@ -354,7 +356,8 @@ pub(crate) fn evaluate_with(
             .each_ref()
             .map(|term| data_block_term(term, &engine.mint_prefix));
         let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
-        edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH);
+        edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH)
+            .map_err(crate::error::ShapesError::from)?;
     }
 
     let evaluation = schedule::evaluate_scheduled(
@@ -443,11 +446,11 @@ pub(crate) fn evaluate_with(
     }
     let reifiers = rules::reifier_subjects(all.iter().copied());
     let mut builder = RdfDatasetBuilder::new();
-    rules::push_projection(&mut builder, base.as_ref());
+    rules::push_projection(&mut builder, base.as_ref())?;
     for triple in inferred.iter().chain(&sources) {
         rules::push_fact(&mut builder, triple, &reifiers)?;
     }
-    let dataset = builder.freeze().map_err(|e| e.to_string())?;
+    let dataset = builder.freeze().map_err(crate::error::ShapesError::from)?;
     Ok(Inference {
         dataset,
         inferred,
@@ -544,6 +547,7 @@ fn register_constants(codec: &Codec, rule: &super::ir::ElementRule) {
 /// limit) and the host's knob, or the described error.
 fn refusal(error: &EvalError, set: &RuleSet<'_>, knobs: &rules::LimitKnobs) -> rules::RulesError {
     match error {
+        EvalError::Storage(error) => crate::error::ShapesError::Storage(*error).into(),
         EvalError::BudgetExhausted {
             resource: resource @ (BudgetResource::StoredFacts | BudgetResource::JoinSteps),
             report,
@@ -630,14 +634,16 @@ fn empty_data() -> Result<ShaclData, String> {
 }
 
 /// The one point in time `NOW()` denotes throughout this evaluation.
-fn capture_now(empty: &ShaclData) -> Result<purrdf_sparql_algebra::Literal, String> {
+fn capture_now(
+    empty: &ShaclData,
+) -> Result<purrdf_sparql_algebra::Literal, crate::error::ShapesError> {
     let now = crate::sparql::eval_scalar_query_view(
         empty.sparql_view(),
         "SELECT (NOW() AS ?result) WHERE {}",
         &[],
     )?;
     let Some(Term::Literal(now)) = now else {
-        return Err("NOW() did not evaluate to a literal".to_owned());
+        return Err("NOW() did not evaluate to a literal".into());
     };
     let datatype = purrdf_sparql_algebra::NamedNode::new(now.datatype_str())
         .map_err(|e| format!("NOW() returned an invalid datatype IRI: {e}"))?;
@@ -842,7 +848,7 @@ impl Engine<'_, '_> {
     /// an `r rdf:reifies t` declaration or mentions a blank node (whose identity the
     /// compacted view keeps by label), and once re-freezing the delta has cost as much as
     /// a compaction would.
-    fn view(&self, model: &RelationStore) -> Result<Rc<ShaclData>, String> {
+    fn view(&self, model: &RelationStore) -> Result<Rc<ShaclData>, crate::error::ShapesError> {
         let generation = self.generation.get();
         let rows = model.row_count();
         let mut live = self.view.borrow_mut();
@@ -868,15 +874,19 @@ impl Engine<'_, '_> {
     }
 
     /// The evaluation graph rebuilt from the whole store.
-    fn compact(&self, model: &RelationStore, generation: u64) -> Result<LiveView, String> {
+    fn compact(
+        &self,
+        model: &RelationStore,
+        generation: u64,
+    ) -> Result<LiveView, crate::error::ShapesError> {
         let facts = self.model_facts(model)?;
         let reifiers = rules::reifier_subjects(facts.iter());
         let mut builder = RdfDatasetBuilder::new();
-        rules::push_projection(&mut builder, self.base.as_ref());
+        rules::push_projection(&mut builder, self.base.as_ref())?;
         for triple in facts.iter().filter(|t| !self.originals.contains(*t)) {
             rules::push_fact(&mut builder, triple, &reifiers)?;
         }
-        let core = builder.freeze().map_err(|e| e.to_string())?;
+        let core = builder.freeze().map_err(crate::error::ShapesError::from)?;
         let sparql = rules::build_round_base(&core, self.shapes, self.shapes_graph_iri.as_deref())?;
         Ok(LiveView::compacted(
             generation,
@@ -893,7 +903,7 @@ impl Engine<'_, '_> {
         &self,
         view: &mut LiveView,
         model: &RelationStore,
-    ) -> Result<Option<Rc<ShaclData>>, String> {
+    ) -> Result<Option<Rc<ShaclData>>, crate::error::ShapesError> {
         let rows = model.row_count();
         let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
         let mut triples = self.new_triples(model, view.rows)?;
@@ -919,16 +929,19 @@ impl Engine<'_, '_> {
             );
             for dataset in std::iter::once(&mut view.core).chain(view.sparql.as_mut()) {
                 ::purrdf_rdf::DatasetMut::insert(dataset, quad.clone())
-                    .map_err(|e| e.to_string())?;
+                    .map_err(crate::error::ShapesError::from)?;
             }
         }
         view.rows = rows;
         if compact {
             // The delta holds no triple whose layer a compaction would change, so
             // freezing the base and the delta together is the compaction.
-            let core = view.core.freeze().map_err(|e| e.to_string())?;
+            let core = view
+                .core
+                .freeze()
+                .map_err(crate::error::ShapesError::from)?;
             let sparql = match &view.sparql {
-                Some(sparql) => sparql.freeze().map_err(|e| e.to_string())?,
+                Some(sparql) => sparql.freeze().map_err(crate::error::ShapesError::from)?,
                 None => Arc::clone(&core),
             };
             *view = LiveView::compacted(view.generation, rows, core, sparql, self);
@@ -936,15 +949,19 @@ impl Engine<'_, '_> {
         }
         view.delta_bytes = delta_bytes;
         view.spent += delta_bytes;
-        let snapshot = |dataset: &MutableDataset| -> Result<Arc<ShaclDatasetView>, String> {
-            let delta = dataset.snapshot_view().map_err(|e| e.to_string())?;
-            ShaclDatasetView::delta(
-                Arc::new(delta),
-                false,
-                ::purrdf_rdf::ir::ViewLimits::default(),
-            )
-            .map(Arc::new)
-        };
+        let snapshot =
+            |dataset: &MutableDataset| -> Result<Arc<ShaclDatasetView>, crate::error::ShapesError> {
+                let delta = dataset
+                    .snapshot_view()
+                    .map_err(crate::error::ShapesError::from)?;
+                ShaclDatasetView::delta(
+                    Arc::new(delta),
+                    false,
+                    ::purrdf_rdf::ir::ViewLimits::default(),
+                )
+                .map(Arc::new)
+                .map_err(crate::error::ShapesError::from)
+            };
         let core = snapshot(&view.core)?;
         let sparql = match &view.sparql {
             Some(sparql) => snapshot(sparql)?,
@@ -1001,7 +1018,10 @@ impl Engine<'_, '_> {
 }
 
 impl GuardEvaluator for Engine<'_, '_> {
-    fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+    fn evaluate(
+        &self,
+        call: &GuardCall<'_>,
+    ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
         let implementation = self
             .guards
             .get(&(call.rule, call.site))
@@ -1309,7 +1329,11 @@ struct Hooks<'e, 'r, 'a> {
 
 impl LayerHooks for Hooks<'_, '_, '_> {
     /// "Compute the expected derived triples for all rules in the layer".
-    fn assume(&mut self, layer: usize, model: &RelationStore) -> Result<Vec<Fact>, String> {
+    fn assume(
+        &mut self,
+        layer: usize,
+        model: &RelationStore,
+    ) -> Result<Vec<Fact>, purrdf_datalog::guard::CallbackError> {
         let expected = &self.engine.expectations[layer];
         if expected.is_empty() {
             return Ok(Vec::new());
@@ -1333,7 +1357,7 @@ impl LayerHooks for Hooks<'_, '_, '_> {
         _layer: usize,
         model: &RelationStore,
         withdrawn: &[Fact],
-    ) -> Result<Vec<Fact>, String> {
+    ) -> Result<Vec<Fact>, purrdf_datalog::guard::CallbackError> {
         self.engine.generation.set(self.engine.generation.get() + 1);
         if withdrawn.is_empty() {
             return Ok(Vec::new());
@@ -1354,7 +1378,10 @@ impl LayerHooks for Hooks<'_, '_, '_> {
     /// "Delete the temporary triples and their reifiers": "A temporary triple is an
     /// inferred triple for which the inference graph contains a reifier with the value
     /// sh:tempTriple true."
-    fn finish(&mut self, model: &RelationStore) -> Result<Vec<Fact>, String> {
+    fn finish(
+        &mut self,
+        model: &RelationStore,
+    ) -> Result<Vec<Fact>, purrdf_datalog::guard::CallbackError> {
         self.engine.generation.set(self.engine.generation.get() + 1);
         let facts = self.engine.model_facts(model)?;
         let temp = Term::NamedNode(NamedNode::from(sh::TEMP_TRIPLE));

@@ -247,7 +247,8 @@ fn substring_predicates_check_compatibility_on_bound_values() {
         "http://example.org/s",
         "http://example.org/p",
         "http://example.org/o",
-    );
+    )
+    .expect("authored fixture");
     for (needle, expected) in [
         (r#""b"@en--rtl"#, Some(boolean(true))),
         (r#""z"@en--rtl"#, Some(boolean(false))),
@@ -712,6 +713,7 @@ fn lang_matches_data() -> std::sync::Arc<RdfDataset> {
         (ex("x"), ex("p4"), TermValue::lang_literal("abc", "en-gb")),
         (ex("x"), ex("p5"), TermValue::lang_literal("abc", "fr")),
     ])
+    .expect("authored fixture")
 }
 
 /// Every `?p` local name `query` binds over [`lang_matches_data`], sorted.

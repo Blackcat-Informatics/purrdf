@@ -318,9 +318,9 @@ impl ChaseProof {
         let owl = matches!(self.regime, Regime::OwlRl);
         let mut cited: BTreeSet<usize> = BTreeSet::new();
         let mut stack = vec![self.root];
-        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut seen: BTreeSet<ProofId> = BTreeSet::new();
         while let Some(node) = stack.pop() {
-            if !seen.insert(node.index()) {
+            if !seen.insert(node) {
                 continue;
             }
             if let Some(clause) = self.arena.rule(node) {
@@ -533,13 +533,13 @@ fn confirm_backward(
 /// use purrdf_entail::{Regime, RuleId, explain_conclusion};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// let tom = b.intern_iri("http://example.org/tom");
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-/// b.push_quad(cat, sub, animal, None);
-/// b.push_quad(tom, ty, cat, None);
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// let tom = b.intern_iri("http://example.org/tom")?;
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let ty = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
+/// b.push_quad(cat, sub, animal, None)?;
+/// b.push_quad(tom, ty, cat, None)?;
 /// let dataset = b.freeze().expect("freeze");
 ///
 /// // `tom a Animal` is not asserted; cax-sco derives it.
@@ -556,6 +556,7 @@ fn confirm_backward(
 /// assert!(proof.rules().contains(&RuleId::CaxSco));
 /// // …and the proof re-derives, from the clauses rather than from its own claim.
 /// assert!(proof.check().is_ok());
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn explain_conclusion(
     ds: &RdfDataset,
@@ -597,7 +598,7 @@ pub fn explain_conclusion(
     let executable = compile(program.clone()).map_err(EntailError::Evaluate)?;
     let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
 
-    let proofs = EvaluationProofs::of(&evaluation);
+    let proofs = EvaluationProofs::of(&evaluation).map_err(EntailError::from)?;
     // Re-intern through the canonical encoding, so the returned arena is EXACTLY this
     // conclusion's sub-DAG rather than a handle into the whole evaluation's.
     let (arena, root) = match proofs.root_for(&goal) {
@@ -621,7 +622,7 @@ pub fn explain_conclusion(
                 });
             }
             let mut arena = ProofArena::default();
-            let root = arena.axiom(goal.clone());
+            let root = arena.axiom(goal.clone()).map_err(EntailError::from)?;
             (arena, root)
         }
     };
@@ -801,14 +802,14 @@ impl Justification {
 /// use purrdf_entail::{DlAxiom, justify};
 ///
 /// let mut b = RdfDatasetBuilder::new();
-/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
-/// let cat = b.intern_iri("http://example.org/Cat");
-/// let mammal = b.intern_iri("http://example.org/Mammal");
-/// let animal = b.intern_iri("http://example.org/Animal");
-/// let fish = b.intern_iri("http://example.org/Fish");
-/// b.push_quad(cat, sub, mammal, None);
-/// b.push_quad(mammal, sub, animal, None);
-/// b.push_quad(fish, sub, animal, None);
+/// let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")?;
+/// let cat = b.intern_iri("http://example.org/Cat")?;
+/// let mammal = b.intern_iri("http://example.org/Mammal")?;
+/// let animal = b.intern_iri("http://example.org/Animal")?;
+/// let fish = b.intern_iri("http://example.org/Fish")?;
+/// b.push_quad(cat, sub, mammal, None)?;
+/// b.push_quad(mammal, sub, animal, None)?;
+/// b.push_quad(fish, sub, animal, None)?;
 /// let dataset = b.freeze().expect("freeze");
 ///
 /// let axiom = DlAxiom::SubClassOf {
@@ -820,6 +821,7 @@ impl Justification {
 /// assert_eq!(justification.axioms(), 2);
 /// assert!(justification.is_sufficient().expect("well formed"));
 /// assert!(justification.is_minimal().expect("well formed"));
+/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn justify(ds: &RdfDataset, axiom: &DlAxiom) -> Result<Justification, ExplainError> {
     match entails(ds, axiom)? {
@@ -1028,13 +1030,12 @@ impl Axioms {
         let mut b = RdfDatasetBuilder::new();
         for &index in &emitted {
             let (s, p, o) = self.triples[index];
-            let s = intern_into(&mut b, self.interner.value(s));
-            let p = intern_into(&mut b, self.interner.value(p));
-            let o = intern_into(&mut b, self.interner.value(o));
-            b.push_quad(s, p, o, None);
+            let s = intern_into(&mut b, self.interner.value(s))?;
+            let p = intern_into(&mut b, self.interner.value(p))?;
+            let o = intern_into(&mut b, self.interner.value(o))?;
+            b.push_quad(s, p, o, None)?;
         }
-        b.freeze()
-            .map_err(|e| EntailError::Build(format!("freeze justification: {e}")))
+        b.freeze().map_err(EntailError::from)
     }
 }
 
@@ -1062,10 +1063,10 @@ mod tests {
     fn dataset(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         for &(s, p, o) in triples {
-            let s = b.intern_iri(s);
-            let p = b.intern_iri(p);
-            let o = b.intern_iri(o);
-            b.push_quad(s, p, o, None);
+            let s = b.intern_iri(s).unwrap();
+            let p = b.intern_iri(p).unwrap();
+            let o = b.intern_iri(o).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
         }
         b.freeze().expect("freeze")
     }
@@ -1405,14 +1406,14 @@ mod tests {
     #[test]
     fn a_named_graph_conclusion_is_explained_in_its_own_graph() {
         let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri(CAT);
-        let sub = b.intern_iri(SUB);
-        let mammal = b.intern_iri(MAMMAL);
-        let ty = b.intern_iri(TYPE);
-        let tom = b.intern_iri(TOM);
-        let g = b.intern_iri("http://example.org/g");
-        b.push_quad(cat, sub, mammal, None);
-        b.push_quad(tom, ty, cat, Some(g));
+        let cat = b.intern_iri(CAT).unwrap();
+        let sub = b.intern_iri(SUB).unwrap();
+        let mammal = b.intern_iri(MAMMAL).unwrap();
+        let ty = b.intern_iri(TYPE).unwrap();
+        let tom = b.intern_iri(TOM).unwrap();
+        let g = b.intern_iri("http://example.org/g").unwrap();
+        b.push_quad(cat, sub, mammal, None).unwrap();
+        b.push_quad(tom, ty, cat, Some(g)).unwrap();
         let ds = b.freeze().expect("freeze");
 
         let graph = TermValue::iri("http://example.org/g");
@@ -1477,12 +1478,12 @@ mod tests {
             .arena
             .premises(honest.root)
             .iter()
-            .map(|&premise| arena.axiom(honest.arena.goal(premise).clone()))
+            .map(|&premise| arena.axiom(honest.arena.goal(premise).clone()).unwrap())
             .collect();
         let rule = honest.arena.rule(honest.root).expect("a derived root");
         let mut lie = honest.arena.goal(honest.root).clone();
         lie.object = surface_of(&TermValue::iri(FISH));
-        let root = arena.by_rule(lie, rule, &premises);
+        let root = arena.by_rule(lie, rule, &premises).unwrap();
         let forged = ChaseProof {
             arena,
             root,
@@ -1499,7 +1500,7 @@ mod tests {
 
         // The circular forgery: claim the DERIVED conclusion as a given.
         let mut arena = ProofArena::default();
-        let root = arena.axiom(honest.arena.goal(honest.root).clone());
+        let root = arena.axiom(honest.arena.goal(honest.root).clone()).unwrap();
         let circular = ChaseProof {
             arena,
             root,

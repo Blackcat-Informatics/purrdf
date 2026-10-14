@@ -19,17 +19,25 @@ const ROWS: u32 = 500;
 
 fn fixture() -> (Arc<RdfDataset>, ContentStore) {
     let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/p");
-    let graph = builder.intern_iri("https://example.org/g");
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let graph = builder.intern_iri("https://example.org/g").unwrap();
     for row in 0..ROWS {
-        let subject = builder.intern_iri(&format!("https://example.org/s{row}"));
-        let blank = builder.intern_blank(&format!("b{row}"), BlankScope(row % 8));
-        let literal = builder.intern_literal(RdfLiteral::typed(
-            row.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
-        ));
-        builder.push_quad(subject, predicate, blank, None);
-        builder.push_quad(blank, predicate, literal, Some(graph));
+        let subject = builder
+            .intern_iri(&format!("https://example.org/s{row}"))
+            .unwrap();
+        let blank = builder
+            .intern_blank(&format!("b{row}"), BlankScope(row % 8))
+            .unwrap();
+        let literal = builder
+            .intern_literal(RdfLiteral::typed(
+                row.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        builder.push_quad(subject, predicate, blank, None).unwrap();
+        builder
+            .push_quad(blank, predicate, literal, Some(graph))
+            .unwrap();
     }
     let mut blobs = ContentStore::new();
     for row in 0..16 {

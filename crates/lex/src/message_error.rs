@@ -64,6 +64,47 @@ macro_rules! message_error {
     };
 }
 
+/// Implement an enum error's borrowed cause through its named wrapper variants.
+///
+/// Each named variant contains one error. Other variants describe the failure
+/// themselves and have no underlying cause. The original error is borrowed,
+/// preserving its type for downcasting without allocating or rendering it.
+/// The enum already supplies its `Debug` and `Display` implementations.
+///
+/// ```rust
+/// #[derive(Debug)]
+/// enum Refusal {
+///     Storage(purrdf_lex::allocation::StorageError),
+///     InvalidInput,
+/// }
+/// impl core::fmt::Display for Refusal {
+///     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+///         write!(f, "{self:?}")
+///     }
+/// }
+/// purrdf_lex::error_source!(Refusal { Storage });
+/// use core::error::Error as _;
+/// let error = Refusal::Storage(purrdf_lex::allocation::StorageError::SizeOverflow);
+/// assert_eq!(
+///     error.source().unwrap().downcast_ref(),
+///     Some(&purrdf_lex::allocation::StorageError::SizeOverflow),
+/// );
+/// assert!(Refusal::InvalidInput.source().is_none());
+/// ```
+#[macro_export]
+macro_rules! error_source {
+    ($type:ty { $($variant:ident),+ $(,)? }) => {
+        impl ::core::error::Error for $type {
+            fn source(&self) -> Option<&(dyn ::core::error::Error + 'static)> {
+                match self {
+                    $(Self::$variant(error) => Some(error),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     crate::message_error! {

@@ -164,8 +164,7 @@ pub(crate) fn evaluate_parsed(
         &mut guard,
         request.scope,
         Scope::EMPTY,
-    )
-    .map_err(ShapesError::Invalid)?;
+    )?;
     Ok(NodeExprEvaluation {
         outputs,
         diagnostics: shapes.mandatory_diagnostics().to_vec(),
@@ -180,7 +179,7 @@ fn eval_bound(
     guard: &mut RecursionGuard,
     bindings: &[(String, Term)],
     scope: Scope<'_>,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, ShapesError> {
     match bindings.split_first() {
         None => eval_node_expr_in_scope(data, focus, expr, guard, scope),
         Some(((name, value), rest)) => {

@@ -101,6 +101,17 @@ const jsonld = reparsed.serializeWithContext("jsonld", context);
 derived requests. Matching `QueryEngine.queryRawConfigured` and
 `queryRawWithContext` methods serialize CONSTRUCT/DESCRIBE graph results.
 
+## Named graph lifetime
+
+Datasets remember empty named graphs by default: removing their last row or
+clearing them preserves the graph, while `DROP` removes it. Pass `false` to
+`new Dataset(false)` or `Dataset.parse(input, format, base, false)` for implicit
+graph existence. The `rememberEmptyGraphs` getter reports this choice.
+Snapshots, matches, and synchronous and asynchronous updates preserve it.
+In remembered mode, an operation requiring a missing graph fails unless its
+SPARQL `SILENT` form suppresses that error. The policy belongs to the dataset
+instance and is not serialized into RDF.
+
 ## Graph, tabular, and research-object projection archives
 
 Projection and lift run entirely in memory through the native Rust engine. The
@@ -178,7 +189,8 @@ ownership, and all limits. Complete examples are in
 - `DataFactory` — `namedNode`, `blankNode`, `literal`, `typedLiteral`,
   `directionalLiteral`, `variable`, `defaultGraph`, `quad`, `quotedTriple`,
   `fromTerm`, `fromQuad`.
-- `Dataset` — `Dataset.parse(input, format, base?)`, `serialize(format)`,
+- `Dataset` — `new Dataset(rememberEmptyGraphs?)`,
+  `Dataset.parse(input, format, base?, rememberEmptyGraphs?)`, `serialize(format)`,
   `serializeWithLoss(format)`, `serializeConfigured(format, optionsJson)`,
   `serializeWithContext(format, context)`,
   `add` / `delete` / `has` / `match` / `quads` / `size`, iteration.
@@ -791,12 +803,12 @@ never shared or reused.
 Each job evaluates on its own stack region, exactly as large as the module's own shadow
 stack — the stack the synchronous lane runs on (1 MiB in the shipped module). No option
 sizes it. `evidence.async.stackHighWaterBytes` reports the deepest the job went below the
-region's top. The two stacks are the same size, so the two lanes evaluate requests to
-nearly the same depth — each spends a little stack on its own frames, so the deepest
-request each evaluates can differ by a few levels — and a request too deep for either
-fails with the evaluator's own typed stack refusal,
-`native-sparql-evaluation-stack-exhausted`, which names no lane-specific remedy. The
-construct its message names is the one whose frame found the stack low. The evaluator checks the stack left above the
+region's top. The package's synchronous and asynchronous query entries admit the same
+nesting depth for the tested query shapes and return the same typed refusal at the next
+level. An evaluator-stack refusal has code
+`native-sparql-evaluation-stack-exhausted` and names no lane-specific remedy. Its package
+message names "query evaluation" on both lanes, regardless of the frame that found the
+stack low. The evaluator checks the stack left above the
 region's base at every recursive step and refuses while 64 KiB remain. Parsing keeps a
 request's nesting in linear memory and spends neither stack on it.
 
@@ -909,7 +921,7 @@ pieces:
 | `204` | — | an update applied |
 | `400` | the protocol refusal's name | a malformed request, or dataset parameters applied to an operation that does not parse |
 | `400` | `native-sparql-query-parse`, `native-sparql-update-parse` | the operation does not parse; `detail` is the parser's message |
-| `400` | `native-sparql-unsupported`, `native-sparql-custom-function`, `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted` | the engine refuses to evaluate the request as written (a `SERVICE ?e` no solution names an endpoint for, an unregistered function, nesting past the host-stack budget); `detail` is the engine's message |
+| `400` | `native-sparql-unsupported`, `native-sparql-custom-function`, `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted`, `native-sparql-evaluation-stack-exhausted` | the engine refuses to evaluate the request as written (a `SERVICE ?e` no solution names an endpoint for, an unregistered function, or nesting past either stack budget); `detail` is the engine's message |
 | `403` | `native-sparql-service-denied` | the catalog withholds a capability from a `SERVICE` endpoint the query names; no endpoint was contacted |
 | `403` | `native-sparql-service-host-denied` | `resolveService` refused the request by its own policy (`{ kind: "denied" }`); no endpoint was contacted |
 | `403` | `native-sparql-load-denied` | the catalog does not authorize a `LOAD` source, or a location it redirected to; nothing was fetched |
@@ -920,7 +932,7 @@ pieces:
 | `413` | `ContentTooLarge` | the body exceeds `maxRequestBytes` |
 | `415` | the protocol refusal's name | a `Content-Type` the protocol does not define |
 | `422` | the governor's label | a deterministic ceiling stopped the request |
-| `500` | the engine's diagnostic code (`native-sparql-query-eval`, `native-sparql-evaluation-stack-exhausted`, …) | the query's evaluation failed; `detail` is the engine's message |
+| `500` | the engine's diagnostic code (`native-sparql-query-eval`, …) | the query's evaluation failed; `detail` is the engine's message |
 | `500` | `native-sparql-service-unconfigured`, `native-sparql-load-no-resolver` | no resolver reaches a named endpoint or source; with a `correlationId` |
 | `500` | `InternalError` | a host-supplied resolver threw, rejected or answered with something that is not an answer, an exception no code classifies, or any other unexpected exception; with a `correlationId` |
 | `502` | `native-sparql-service-failed` | a `SERVICE` endpoint was contacted and gave no usable answer: a network error, the resolver's timeout, an HTTP error status, a redirect, an undecodable body |

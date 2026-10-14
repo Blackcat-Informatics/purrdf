@@ -102,7 +102,9 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 /// Returns `Err` when a file cannot be read, has no derivable retrieval IRI, fails to
 /// parse as Turtle, or when [`shapes::from_dataset_with_base`] rejects the union — an
 /// `owl:imports` no member file resolves, or an unsupported SHACL construct.
-pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String> {
+pub fn load_shapes(
+    repo_root: &Path,
+) -> Result<(Arc<RdfDataset>, Shapes), crate::error::ShapesError> {
     let files = shape_files(repo_root)?;
     let mut prefix_map: BTreeMap<String, String> = BTreeMap::new();
     let mut per_file: Vec<Arc<RdfDataset>> = Vec::with_capacity(files.len());
@@ -126,7 +128,7 @@ pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String
             Some(base.as_str()),
             &ParseOptions::default(),
         )
-        .map_err(|e| format!("failed to parse Turtle shape file {}: {e}", file.display()))?;
+        .map_err(crate::error::ShapesError::from)?;
         per_file.push(outcome.dataset);
         for (prefix, namespace) in outcome.document_prefixes {
             prefix_map.insert(prefix, namespace);
@@ -136,10 +138,10 @@ pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String
     let merged = if per_file.is_empty() {
         RdfDatasetBuilder::new()
             .freeze()
-            .map_err(|e| format!("failed to build empty shapes dataset: {e}"))?
+            .map_err(crate::error::ShapesError::from)?
     } else {
         let refs: Vec<&RdfDataset> = per_file.iter().map(AsRef::as_ref).collect();
-        Arc::new(RdfDataset::union(&refs))
+        Arc::new(RdfDataset::union(&refs)?)
     };
     let doc_prefixes: Vec<(String, String)> = prefix_map.into_iter().collect();
     let shapes =

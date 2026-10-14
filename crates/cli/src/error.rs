@@ -193,6 +193,7 @@ purrdf_lex::variant_from!(CliError {
         std::io::Error,
         purrdf_sparql_results::Error,
         EntailError,
+        purrdf_validate::ShapesError,
     ) as ToString::to_string
 });
 
@@ -201,6 +202,26 @@ mod tests {
     use purrdf_iri::IriError;
 
     use super::*;
+
+    #[test]
+    fn shapes_storage_refusal_keeps_the_original_message_and_runtime_exit() {
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        use purrdf_validate::ShapesError;
+
+        for storage in [
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::GlobalTerms,
+                u128::from(u64::MAX) + 1,
+                u128::from(u64::MAX),
+            )),
+            StorageError::AllocationFailed,
+            StorageError::AdmissionFailed,
+        ] {
+            let error = CliError::from(ShapesError::Storage(storage));
+            assert_eq!(error.exit_code(), 1);
+            assert_eq!(error.to_string(), storage.to_string());
+        }
+    }
 
     #[test]
     fn an_argv_iri_refusal_names_the_flag_remedy_only_for_its_relative_code() {
