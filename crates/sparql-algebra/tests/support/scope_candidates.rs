@@ -776,8 +776,9 @@ fn visible(query: &Query) -> Vec<Identity> {
     query
         .pattern()
         .projected_names()
-        .map(|names| names.iter().map(Identity::variable).collect())
-        .unwrap_or_default()
+        .map_or_else(Vec::new, |names| {
+            names.iter().map(Identity::variable).collect()
+        })
 }
 
 /// What actual current admission proves, without any candidate metadata.
