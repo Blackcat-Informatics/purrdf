@@ -4558,13 +4558,26 @@ pub(crate) fn eval_evaluated_with<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     evaluate: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut boundary = NodeBoundary::enter(pattern, ctx)?;
-    let evaluated = match boundary.start(pattern, ctx) {
+    let boundary = NodeBoundary::enter(pattern, ctx)?;
+    let mut pending = ResidentPending {
+        child: Some(boundary),
+        ctx,
+    };
+    let boundary = pending.child.as_mut().expect("entered node boundary");
+    let evaluated = match boundary.start(pattern, pending.ctx) {
         Ok(Some(early)) => Ok(early),
-        Ok(None) => evaluate(ctx),
+        Ok(None) => evaluate(pending.ctx),
         Err(error) => Err(error),
     };
-    boundary.finish(pattern, ctx, evaluated)
+    let evaluated = boundary.finish(pattern, pending.ctx, evaluated);
+    pending.child = None;
+    evaluated
+}
+
+impl<D: DatasetView + Sync> ResidentAbort<D> for NodeBoundary {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        let _ = Self::abort(self, ctx);
+    }
 }
 
 /// The name a stack refusal at `pattern` reports: the construct a request writes to get
@@ -6697,51 +6710,105 @@ mod tests {
         .expect("deep evaluation stack");
     }
 
+    use crate::shapes::{
+        ShapeEstimate, ShapeOffer, ShapeOperator, ShapeProvider, ShapeRegistry, ShapeRequest,
+        ShapeRuntime,
+    };
+
+    struct RootJoin;
+    impl ShapeProvider for RootJoin {
+        fn offer(
+            &self,
+            request: ShapeRequest<'_>,
+            _: &crate::WorkspaceCapability,
+        ) -> Result<Option<ShapeOffer>, EvalError> {
+            let GraphPattern::Join { left, right } = request.pattern else {
+                return Ok(None);
+            };
+            if !matches!(&**left, GraphPattern::Join { .. })
+                || !matches!(&**right, GraphPattern::Join { .. })
+            {
+                return Ok(None);
+            }
+            Ok(Some(ShapeOffer::from_shared(
+                "copied root join",
+                Arc::new(Self),
+                ShapeEstimate::default(),
+            )))
+        }
+    }
+    impl ShapeOperator for RootJoin {
+        fn execute(&self, runtime: &mut dyn ShapeRuntime) -> Result<(), EvalError> {
+            let Some(left) = runtime.input(&[0])? else {
+                return Ok(());
+            };
+            let Some(right) = runtime.input(&[1])? else {
+                return Ok(());
+            };
+            let (Some(left), Some(right)) = (left.row(0), right.row(0)) else {
+                return Ok(());
+            };
+            let _ = runtime.emit(&[left, right])?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn callback_unwind_restores_node_boundary_and_context_is_reusable() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let pattern = GraphPattern::Slice {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            start: 0,
+            length: Some(2),
+        };
+        let mut shapes = ShapeRegistry::new();
+        shapes.register("root join", Arc::new(RootJoin));
+        let mut ctx = EvalCtx::new(&*dataset).with_shapes(&shapes);
+        let original = (ctx.cap_at, ctx.ledger_node, ctx.ledger_counts_rows);
+        for unwind in [true, false] {
+            let called = std::cell::Cell::new(false);
+            let mut consume = |rows: &SolutionSeq<_>, ctx: &mut EvalCtx<'_, _>| {
+                called.set(true);
+                assert_eq!(rows.rows.len(), 1);
+                assert!(ctx.cap_pushdown.is_some());
+                assert!(ctx.cap_at.is_some());
+                assert!(
+                    ctx.evidence_search
+                        .as_ref()
+                        .is_some_and(|frames| frames.len() >= 2)
+                );
+                assert!(!unwind, "caller callback unwinds with entered node scopes");
+                Err(EvalError::WorkspaceUnpriced("caller callback error"))
+            };
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                eval_yielding(&pattern, &mut RowConsumer::new(&mut consume), &mut ctx)
+            }));
+            assert!(called.get(), "the real answer callback must be reached");
+            if unwind {
+                assert!(caught.is_err());
+            } else {
+                assert!(matches!(
+                    caught.expect("returned error does not unwind"),
+                    Err(EvalError::WorkspaceUnpriced("caller callback error"))
+                ));
+            }
+            assert!(ctx.cap_pushdown.is_none());
+            assert_eq!(
+                (ctx.cap_at, ctx.ledger_node, ctx.ledger_counts_rows),
+                original
+            );
+            assert!(
+                ctx.evidence_search
+                    .as_ref()
+                    .is_none_or(|frames| frames.is_empty())
+            );
+            let answer = eval(&GraphPattern::empty_bgp(), &mut ctx).expect("healthy context reuse");
+            assert_eq!(answer.rows.len(), 1);
+        }
+    }
+
     #[test]
     fn copied_join_shape_offer_sees_the_positive_scope_before_its_inputs() {
-        use crate::shapes::{
-            ShapeEstimate, ShapeOffer, ShapeOperator, ShapeProvider, ShapeRegistry, ShapeRequest,
-            ShapeRuntime,
-        };
-
-        struct RootJoin;
-        impl ShapeProvider for RootJoin {
-            fn offer(
-                &self,
-                request: ShapeRequest<'_>,
-                _: &crate::WorkspaceCapability,
-            ) -> Result<Option<ShapeOffer>, EvalError> {
-                let GraphPattern::Join { left, right } = request.pattern else {
-                    return Ok(None);
-                };
-                if !matches!(&**left, GraphPattern::Join { .. })
-                    || !matches!(&**right, GraphPattern::Join { .. })
-                {
-                    return Ok(None);
-                }
-                Ok(Some(ShapeOffer::from_shared(
-                    "copied root join",
-                    Arc::new(Self),
-                    ShapeEstimate::default(),
-                )))
-            }
-        }
-        impl ShapeOperator for RootJoin {
-            fn execute(&self, runtime: &mut dyn ShapeRuntime) -> Result<(), EvalError> {
-                let Some(left) = runtime.input(&[0])? else {
-                    return Ok(());
-                };
-                let Some(right) = runtime.input(&[1])? else {
-                    return Ok(());
-                };
-                let (Some(left), Some(right)) = (left.row(0), right.row(0)) else {
-                    return Ok(());
-                };
-                let _ = runtime.emit(&[left, right])?;
-                Ok(())
-            }
-        }
-
         let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
         let unit_join = || GraphPattern::Join {
             left: Child::new(GraphPattern::empty_bgp()),
