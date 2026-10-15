@@ -417,6 +417,8 @@ pub struct QueryExplanation {
     aggregates: AdmittedRecords<AggDescriptor>,
     /// Exact selected strategies at original logical nodes, with actual work.
     shapes: AdmittedVec<crate::shapes::ShapeReport>,
+    /// Available access in the exact view whose statement probes were executed.
+    statement_indexes: purrdf_core::StatementIndexSupport,
     /// The whole execution's consumption and ceilings, so a reader can check the ledger's
     /// fuel column against the total it decomposes.
     evidence: purrdf_core::GovernorEvidence,
@@ -493,7 +495,7 @@ impl Clone for QueryExplanation {
             self.relations.to_vec(),
             self.aggregates.to_vec(),
             self.evidence.clone(),
-            self.shapes.to_vec(),
+            (self.shapes.to_vec(), self.statement_indexes),
         )
     }
 }
@@ -505,7 +507,10 @@ impl QueryExplanation {
         relations: Vec<PfDescriptor>,
         aggregates: Vec<AggDescriptor>,
         evidence: purrdf_core::GovernorEvidence,
-        shapes: Vec<crate::shapes::ShapeReport>,
+        (shapes, statement_indexes): (
+            Vec<crate::shapes::ShapeReport>,
+            purrdf_core::StatementIndexSupport,
+        ),
     ) -> Self {
         Self {
             profile: ProfileIdentity::current(),
@@ -514,6 +519,7 @@ impl QueryExplanation {
             relations: AdmittedRecords::resident(relations),
             aggregates: AdmittedRecords::resident(aggregates),
             shapes: AdmittedVec::from_parts(shapes, None, &crate::WorkspaceCapability::resident()),
+            statement_indexes,
             evidence,
             _profile_allocation: None,
         }
@@ -527,7 +533,10 @@ impl QueryExplanation {
         relations: AdmittedRecords<PfDescriptor>,
         aggregates: AdmittedRecords<AggDescriptor>,
         evidence: purrdf_core::GovernorEvidence,
-        shapes: AdmittedVec<crate::shapes::ShapeReport>,
+        (shapes, statement_indexes): (
+            AdmittedVec<crate::shapes::ShapeReport>,
+            purrdf_core::StatementIndexSupport,
+        ),
     ) -> Self {
         Self {
             profile: profile.0,
@@ -536,6 +545,7 @@ impl QueryExplanation {
             relations,
             aggregates,
             shapes,
+            statement_indexes,
             evidence,
             _profile_allocation: Some(profile.1),
         }
@@ -555,6 +565,13 @@ impl QueryExplanation {
     #[must_use]
     pub fn join_orders(&self) -> &[String] {
         &self.join_orders
+    }
+
+    /// Available statement indexes of the actual evaluated view. A scan-only
+    /// wrapper stays visible even when its underlying payload has native indexes.
+    #[must_use]
+    pub const fn statement_indexes(&self) -> purrdf_core::StatementIndexSupport {
+        self.statement_indexes
     }
 
     /// One line per algebra node, in the plan's pre-order.
@@ -691,6 +708,7 @@ impl QueryExplanation {
         for pattern in self.join_orders.iter() {
             let _ = writeln!(out, "  {pattern}");
         }
+        let _ = writeln!(out, "statement-indexes {}", self.statement_indexes);
         if !self.shapes.is_empty() {
             let _ = writeln!(out, "physical-shapes");
             for shape in &self.shapes {

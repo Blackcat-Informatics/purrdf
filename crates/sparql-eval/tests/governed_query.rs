@@ -11,6 +11,9 @@
 
 mod support;
 
+use support::statement_claims::{
+    QUERIES as STATEMENT_RANGE_QUERIES, candidate_quads, dataset as statement_claims,
+};
 use support::{PollCountdown, fan_out, row_count};
 
 use std::sync::Arc;
@@ -1279,13 +1282,207 @@ fn wide_fixture(edges: usize) -> Arc<RdfDataset> {
     )
 }
 
-/// Every `bgp-candidate-quad` unit the ledger attributes to any node of `explanation`.
-fn candidate_quads(explanation: &QueryExplanation) -> u64 {
-    explanation
-        .ledger()
-        .iter()
-        .map(|node| node.fuel_at(ChargePoint::BgpCandidateQuad))
-        .sum()
+fn assert_statement_query_ranges(dataset: &Arc<RdfDataset>) {
+    let engine = NativeSparqlEngine::new();
+    for (query, matches) in STATEMENT_RANGE_QUERIES {
+        let measured = engine.explain_query(dataset, query, None).unwrap();
+        assert_eq!(candidate_quads(&measured), matches);
+        assert_eq!(
+            measured.statement_indexes(),
+            purrdf_core::StatementIndexSupport::INDEXED
+        );
+        assert!(measured.render().contains("statement-indexes reifier-target=range reifier-components=range annotation-values=range"));
+        assert!(
+            measured
+                .ledger()
+                .iter()
+                .filter_map(|node| node.estimate.as_ref())
+                .any(|estimate| estimate.rows == matches)
+        );
+        let bounded = engine
+            .query_governed(
+                dataset,
+                request(query),
+                QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED.with_fuel(128),
+            )
+            .unwrap();
+        let GovernedOutcome::Complete { result, .. } = bounded else {
+            panic!("a fixed matching range fits the fixed fuel ceiling")
+        };
+        assert_eq!(row_count(&result), usize::try_from(matches).unwrap());
+    }
+    let seeded = "SELECT ?r ?o WHERE { VALUES ?s { <http://example.org/focus> } ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <http://example.org/p> ?o )>> }";
+    let result = engine
+        .query_governed(
+            dataset,
+            request(seeded),
+            QueryOptions::EMPTY,
+            &QueryGovernors::UNBOUNDED.with_fuel(128),
+        )
+        .unwrap();
+    let GovernedOutcome::Complete { result, .. } = result else {
+        panic!("bound driver components use the matching range")
+    };
+    assert_eq!(row_count(&result), 2);
+}
+
+#[test]
+fn statement_queries_charge_matching_ranges_and_forecast_statement_rows() {
+    for population in [128, 4096] {
+        assert_statement_query_ranges(&statement_claims(population));
+    }
+}
+
+#[test]
+fn statement_scan_defaults_remain_visible_in_explain() {
+    use purrdf_core::{
+        PackBuilder, PackView, SegmentedBuildLimits, SegmentedImage, SegmentedLayer,
+        SegmentedLayerMetadata, SegmentedReadLimits, SegmentedSession, SegmentedStack,
+    };
+    let dataset = statement_claims(64);
+    let bytes = PackBuilder::build_view_bytes(dataset.as_ref()).unwrap();
+    let pack = PackView::from_bytes(&bytes).unwrap();
+    let image = SegmentedImage::from_pack_v1(
+        &bytes,
+        SegmentedBuildLimits::new(4096, 500_000, 4096, 16_384, 64).unwrap(),
+    )
+    .unwrap();
+    let limits = SegmentedReadLimits::new(8_000_000, 2, 65_536, 100_000_000, 8);
+    let mut stack = SegmentedStack::default();
+    stack
+        .publish(
+            vec![Arc::new(
+                SegmentedLayer::new(
+                    Arc::new(image.provider()),
+                    image.receipt().clone(),
+                    SegmentedLayerMetadata::default(),
+                )
+                .unwrap(),
+            )],
+            limits,
+        )
+        .unwrap();
+    let snapshot = stack.snapshot().unwrap();
+    let paged =
+        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![dataset]))).unwrap();
+    let engine = NativeSparqlEngine::new();
+    for (query, matches) in STATEMENT_RANGE_QUERIES {
+        let resident = engine.explain_query_view(&paged, query, None).unwrap();
+        assert_scanning_statement_indexes(&resident, matches);
+        let packed = engine.explain_query_view(&pack, query, None).unwrap();
+        assert_scanning_statement_indexes(&packed, matches);
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let operational = engine
+            .explain_query_fallible_view(&view, query, None)
+            .unwrap();
+        assert_eq!(
+            operational.0.statement_indexes(),
+            resident.statement_indexes()
+        );
+        assert_eq!(candidate_quads(&operational.0), candidate_quads(&resident));
+        let segmented =
+            SegmentedSession::open(Arc::new(image.provider()), image.receipt(), limits).unwrap();
+        let measured = engine
+            .explain_query_fallible_view(&segmented, query, None)
+            .unwrap();
+        assert_scanning_statement_indexes(&measured.0, matches);
+        let stacked = snapshot.query(limits).unwrap();
+        let measured = engine
+            .explain_query_fallible_view(&stacked, query, None)
+            .unwrap();
+        assert_scanning_statement_indexes(&measured.0, matches);
+    }
+}
+
+fn assert_scanning_statement_indexes(explanation: &QueryExplanation, matches: u64) {
+    assert_eq!(
+        explanation.statement_indexes(),
+        purrdf_core::StatementIndexSupport::default()
+    );
+    assert!(explanation.render().contains("statement-indexes reifier-target=scan-default reifier-components=scan-default annotation-values=scan-default"));
+    assert!(candidate_quads(explanation) >= matches);
+}
+
+#[test]
+#[ignore = "actual ten-million-claim execution with sixty million annotations"]
+fn statement_ranges_at_ten_million_claims() {
+    let dataset = statement_claims(10_000_000);
+    assert_eq!(dataset.reifiers().count(), 10_000_000);
+    assert_eq!(dataset.annotations().count(), 60_000_000);
+    eprintln!(
+        "claims=10000000 annotations=60000000 payload_bytes={} terms={}",
+        dataset.rdf_payload_bytes(),
+        dataset.term_count()
+    );
+    assert_statement_query_ranges(&dataset);
+}
+
+/// Fixed work for external instruction counting. Both modes build and warm the
+/// identical population; subtract control from query for each population/kind.
+/// There is no timer, adaptive sampling or throughput claim in this probe.
+#[test]
+#[ignore = "explicit fixed-work instruction probe; requires population, iterations, kind and mode"]
+fn statement_fixed_work_probe() {
+    use std::hint::black_box;
+    let population: usize = std::env::var("PURRDF_STATEMENT_PROBE_ROWS")
+        .expect("set rows")
+        .parse()
+        .unwrap();
+    let iterations: usize = std::env::var("PURRDF_STATEMENT_PROBE_ITERATIONS")
+        .expect("set iterations")
+        .parse()
+        .unwrap();
+    let kind = std::env::var("PURRDF_STATEMENT_PROBE_KIND")
+        .expect("set target, components or annotations");
+    let control = match std::env::var("PURRDF_STATEMENT_PROBE_MODE")
+        .expect("set query or control")
+        .as_str()
+    {
+        "query" => false,
+        "control" => true,
+        _ => panic!("mode must be query or control"),
+    };
+    assert!(population >= 4 && iterations > 0);
+    let dataset = statement_claims(population);
+    let engine = NativeSparqlEngine::new();
+    let prepared =
+        STATEMENT_RANGE_QUERIES.map(|(query, _)| engine.prepare_query(query, None).unwrap());
+    for (index, query) in prepared.iter().enumerate() {
+        let result = engine
+            .query_prepared_view(dataset.as_ref(), query, &[], QueryOptions::EMPTY)
+            .unwrap();
+        assert_eq!(
+            row_count(&result),
+            usize::try_from(STATEMENT_RANGE_QUERIES[index].1).unwrap()
+        );
+    }
+    let target = dataset.reifiers().next().unwrap().1;
+    assert_eq!(dataset.reifiers_of(target).count(), 1);
+    let (query, expected) = match kind.as_str() {
+        "target" => (None, 1),
+        "components" => (Some(&prepared[0]), 2),
+        "annotations" => (Some(&prepared[1]), 3),
+        _ => panic!("kind must be target, components or annotations"),
+    };
+    let mut checksum = 0_usize;
+    for _ in 0..iterations {
+        let rows = if control {
+            black_box(expected)
+        } else if let Some(query) = query {
+            let result = engine
+                .query_prepared_view(dataset.as_ref(), black_box(query), &[], QueryOptions::EMPTY)
+                .unwrap();
+            row_count(black_box(&result))
+        } else {
+            dataset.reifiers_of(black_box(target)).count()
+        };
+        checksum = checksum.checked_add(black_box(rows)).unwrap();
+    }
+    assert_eq!(checksum, iterations.checked_mul(expected).unwrap());
+    eprintln!(
+        "rows={population} iterations={iterations} kind={kind} control={control} checksum={checksum}"
+    );
 }
 
 #[test]

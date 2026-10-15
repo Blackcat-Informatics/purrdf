@@ -1295,7 +1295,7 @@ fn healthy_explain_is_identical_to_resident_and_holds_admission_through_publicat
                 .expect("resident explanation");
             let (actual, receipt) =
                 explain(&engine, &source, route, QUERY).expect("healthy operational explanation");
-            assert_eq!(actual.render(), expected.render());
+            support::assert_scan_explanation_matches_resident(&actual, &expected.render());
             assert_eq!(actual.evidence(), expected.evidence());
             assert_eq!(actual.evidence().tripped, None);
             assert_held_receipt(&source, &receipt);
@@ -1324,7 +1324,7 @@ fn healthy_explain_is_identical_to_resident_and_holds_admission_through_publicat
     let (actual, receipt) = engine
         .explain_query_with_options_fallible_view(&source, QUERY, None, options)
         .expect("operational configured explanation");
-    assert_eq!(actual.render(), expected.render());
+    support::assert_scan_explanation_matches_resident(&actual, &expected.render());
     assert_held_receipt(&source, &receipt);
     drop(expected);
     drop(engine);
@@ -1444,7 +1444,7 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
                 cause: StopCause::Cancelled
             })
         );
-        assert_eq!(actual.render(), expected.render());
+        support::assert_scan_explanation_matches_resident(&actual, &expected.render());
         assert_workspace_receipt(&source, &receipt);
         drop(expected);
         drop(engine);

@@ -806,6 +806,11 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				owned_transfer_preserves_lexical_owner_and_flat_statement_identity \
 				conversion_refuses_every_named_role_including_empty_declarations \
 				refused_child_stops_existing_streams_and_fresh_session_is_healthy \
+				statement_mask_probes_preserve_frozen_order_and_graph_multiplicity \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test statement_indexes -- --exact \
+				native_and_compact_statement_queries_keep_answers_and_candidate_work \
+				named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
 				triple_base_authority_survives_data_growth_and_layer_retraction \
@@ -881,6 +886,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-mime --test lossless -- --exact \
 				production_rdf_round_trip_is_deterministic_for_original_and_broken_messages \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test statement_indexes -- --exact \
+				native_and_compact_statement_queries_keep_answers_and_candidate_work \
+				named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \

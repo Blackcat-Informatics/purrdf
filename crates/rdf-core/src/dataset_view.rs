@@ -227,6 +227,40 @@ pub struct ProbePattern<Id = TermId> {
     pub g: GraphMatch<Id>,
 }
 
+/// Physical statement access implemented by this exact view. Defaults report
+/// scans, including wrappers that do not forward an inner carrier's indexes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatementIndexSupport {
+    /// Exact triple-term to reifier ranges.
+    pub reifier_targets: bool,
+    /// Ranges for every bound triple-component mask.
+    pub reifier_components: bool,
+    /// Annotation predicate, object and predicate/object ranges.
+    pub annotation_values: bool,
+}
+
+impl StatementIndexSupport {
+    /// All three access families are physically indexed.
+    pub const INDEXED: Self = Self {
+        reifier_targets: true,
+        reifier_components: true,
+        annotation_values: true,
+    };
+}
+
+impl std::fmt::Display for StatementIndexSupport {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let access = |indexed| if indexed { "range" } else { "scan-default" };
+        write!(
+            out,
+            "reifier-target={} reifier-components={} annotation-values={}",
+            access(self.reifier_targets),
+            access(self.reifier_components),
+            access(self.annotation_values)
+        )
+    }
+}
+
 /// Measured residency of a selected access path, including multi-tier reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReadResidency {
@@ -1120,6 +1154,68 @@ pub trait DatasetView {
         self.reifier_quads().filter(move |q| q.s == reifier)
     }
 
+    /// Reifier declarations of an exact triple term within `graph`. The default
+    /// preserves graph pruning and filters its stream; an indexed backend can
+    /// narrow the target before admitting or visiting unrelated rows.
+    /// The result has the same order and multiplicity as that filtered stream.
+    fn reifier_quads_for_target(
+        &self,
+        target: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.reifier_quads_in_graph(graph)
+            .filter(move |quad| quad.o == target)
+    }
+
+    /// Physical access of this view's statement probes, for honest EXPLAIN.
+    /// A wrapper must forward both the probes and this descriptor to claim its
+    /// inner implementation. This describes access, not RDF capabilities.
+    fn statement_indexes(&self) -> StatementIndexSupport {
+        StatementIndexSupport::default()
+    }
+
+    /// Snapshot-local statement cardinality from cheap access summaries. It
+    /// may conservatively include residual matches; it is not a sound output
+    /// certificate. `None` reports that the view has no such estimate without
+    /// scanning. Operational failures must retain the session's first cause.
+    fn statement_cardinality_estimate(
+        &self,
+        pattern: ProbePattern<Self::Id>,
+        components: [Option<Self::Id>; 3],
+    ) -> Option<u64> {
+        let _ = (pattern, components);
+        None
+    }
+
+    /// Candidate reifier declarations for a structural triple pattern. Indexed
+    /// implementations narrow bound components before visiting rows. The default
+    /// retains graph pruning and returns a conservative superset, leaving exact
+    /// structural unification to the caller. It never performs a second term
+    /// walk that could obscure the original consumer's typed read failure.
+    fn reifier_quads_for_components(
+        &self,
+        components: [Option<Self::Id>; 3],
+        graph: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        let _ = components;
+        self.reifier_quads_in_graph(graph)
+    }
+
+    /// Annotation rows matching the predicate/object bounds and graph scope.
+    /// Default backends scan their graph-pruned stream. Indexed backends narrow
+    /// the key range first. Views certifying probe order must preserve their
+    /// original statement-row order for this restricted stream too.
+    fn annotation_quads_for_pattern(
+        &self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.annotation_quads_in_graph(graph).filter(move |quad| {
+            predicate.is_none_or(|id| quad.p == id) && object.is_none_or(|id| quad.o == id)
+        })
+    }
+
     /// The RDF 1.2 annotation side-table AS resolved virtual triples: each
     /// `(reifier, predicate, object)` annotation becomes a quad carrying its own graph
     /// slot. Capability-gated: a backend with no annotation layer yields nothing.
@@ -1829,6 +1925,43 @@ impl DatasetView for RdfDataset {
         Self::annotation_quads(self)
     }
 
+    fn reifier_quads_for_target(
+        &self,
+        target: TermId,
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::reifier_quads_for_target(self, target, graph)
+    }
+
+    fn statement_indexes(&self) -> StatementIndexSupport {
+        StatementIndexSupport::INDEXED
+    }
+
+    fn statement_cardinality_estimate(
+        &self,
+        pattern: ProbePattern,
+        components: [Option<TermId>; 3],
+    ) -> Option<u64> {
+        Self::statement_cardinality_estimate(self, pattern, components)
+    }
+
+    fn reifier_quads_for_components(
+        &self,
+        components: [Option<TermId>; 3],
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::reifier_quads_for_components(self, components, graph)
+    }
+
+    fn annotation_quads_for_pattern(
+        &self,
+        predicate: Option<TermId>,
+        object: Option<TermId>,
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::annotation_quads_for_pattern(self, predicate, object, graph)
+    }
+
     #[inline]
     fn annotations_of_with_graph(
         &self,
@@ -2045,6 +2178,43 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     #[inline]
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         (**self).annotation_quads()
+    }
+
+    fn reifier_quads_for_target(
+        &self,
+        target: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads_for_target(target, graph)
+    }
+
+    fn statement_indexes(&self) -> StatementIndexSupport {
+        (**self).statement_indexes()
+    }
+
+    fn statement_cardinality_estimate(
+        &self,
+        pattern: ProbePattern<Self::Id>,
+        components: [Option<Self::Id>; 3],
+    ) -> Option<u64> {
+        (**self).statement_cardinality_estimate(pattern, components)
+    }
+
+    fn reifier_quads_for_components(
+        &self,
+        components: [Option<Self::Id>; 3],
+        graph: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads_for_components(components, graph)
+    }
+
+    fn annotation_quads_for_pattern(
+        &self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).annotation_quads_for_pattern(predicate, object, graph)
     }
 
     #[inline]

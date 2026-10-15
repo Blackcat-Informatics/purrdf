@@ -35,6 +35,14 @@ pub(crate) struct FrozenTerms {
 }
 
 impl FrozenTerms {
+    /// Reifier targets have already passed the frozen triple-term validation.
+    pub(super) fn triple_components(&self, target: TermId) -> [TermId; 3] {
+        match self.terms[target.index()] {
+            InternedTerm::Triple { s, p, o } => [s, p, o],
+            _ => panic!("a validated reifier target must be a triple term"),
+        }
+    }
+
     pub(super) fn content_ids(&self) -> impl Iterator<Item = (TermId, Blake3ContentId)> + '_ {
         let mut pairs: Vec<(TermId, Blake3ContentId)> = self
             .content_ids

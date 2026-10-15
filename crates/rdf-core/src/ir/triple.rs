@@ -4,12 +4,13 @@
 //! Explicit graph-free resident RDF 1.2 storage.
 
 use std::cmp::Ordering;
+use std::ops::Range;
 use std::sync::OnceLock;
 
-use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use purrdf_lex::allocation::StorageError;
 
 use super::builder::LocalCapacity;
-use super::dataset::{QuadHandle, TermRef, build_ordinal_permutation};
+use super::dataset::{QuadHandle, TermRef, cached_permutation};
 use super::frozen_terms::FrozenTerms;
 use super::term::{TermId, TermValue};
 use crate::{RdfLocation, RdfStoreCapabilities};
@@ -50,36 +51,108 @@ pub struct TripleStorageLayout {
     pub annotation_orders: [usize; 2],
     /// Reifier bindings ordered by target, zero until first target probe.
     pub reifier_targets: usize,
-}
-
-fn cached_permutation<'a, T>(
-    cell: &'a OnceLock<Box<[u32]>>,
-    rows: &[T],
-    compare: impl FnMut(&T, &T) -> Ordering,
-) -> Result<&'a [u32], StorageError> {
-    if let Some(ordinals) = cell.get() {
-        return Ok(ordinals);
-    }
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    let ordinals = build_ordinal_permutation(
-        rows,
-        LocalCapacity::Native,
-        &mut memory,
-        Memory::reserve,
-        Memory::boxed_slice,
-        compare,
-    )?;
-    // A competing successful publication owns the same deterministic order.
-    // Refusal never poisons the immutable payload's cache.
-    let _ = cell.set(ordinals);
-    Ok(cell
-        .get()
-        .expect("a successful permutation publication initialized the cell"))
+    /// Component-mask ordinal payloads in mask order (S=1, P=2, O=4).
+    pub reifier_components: [usize; 7],
 }
 
 fn permutation_bytes(cell: &OnceLock<Box<[u32]>>) -> usize {
     cell.get().map_or(0, |rows| size_of_val(rows.as_ref()))
+}
+
+pub(super) fn component_mask(pattern: [Option<TermId>; 3]) -> usize {
+    usize::from(pattern[0].is_some())
+        | (usize::from(pattern[1].is_some()) << 1)
+        | (usize::from(pattern[2].is_some()) << 2)
+}
+
+fn masked_key(components: [TermId; 3], mask: usize) -> [Option<TermId>; 3] {
+    std::array::from_fn(|index| (mask & (1 << index) != 0).then_some(components[index]))
+}
+
+pub(super) fn compare_masked<T: Ord>(
+    a: &T,
+    b: &T,
+    mask: usize,
+    components: &impl Fn(&T) -> [TermId; 3],
+) -> Ordering {
+    masked_key(components(a), mask)
+        .cmp(&masked_key(components(b), mask))
+        .then_with(|| a.cmp(b))
+}
+
+/// One mask order preserves the frozen row order within every matching key.
+pub(super) fn masked_permutation<'a, T: Ord>(
+    cell: &'a OnceLock<Box<[u32]>>,
+    rows: &[T],
+    capacity: LocalCapacity,
+    mask: usize,
+    components: impl Fn(&T) -> [TermId; 3],
+) -> Result<&'a [u32], StorageError> {
+    cached_permutation(cell, rows, capacity, |a, b| {
+        compare_masked(a, b, mask, &components)
+    })
+}
+
+/// Borrowed physical rows addressed by an identity or ordinal range.
+#[derive(Debug)]
+pub(super) struct OrdinalRows<'a, T> {
+    rows: &'a [T],
+    ordinals: Option<&'a [u32]>,
+    range: Range<usize>,
+}
+
+impl<T: Copy> Iterator for OrdinalRows<'_, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.range
+            .next()
+            .map(|index| self.rows[self.ordinals.map_or(index, |order| order[index] as usize)])
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.range.size_hint()
+    }
+}
+
+impl<T: Copy> ExactSizeIterator for OrdinalRows<'_, T> {}
+
+pub(super) fn ordinal_range<'a, T>(
+    rows: &'a [T],
+    ordinals: Option<&'a [u32]>,
+    compare: impl Fn(&T) -> Ordering,
+) -> OrdinalRows<'a, T> {
+    let (lower, upper) = match ordinals {
+        Some(order) => (
+            order.partition_point(|&index| compare(&rows[index as usize]) == Ordering::Less),
+            order.partition_point(|&index| compare(&rows[index as usize]) != Ordering::Greater),
+        ),
+        None => (
+            rows.partition_point(|row| compare(row) == Ordering::Less),
+            rows.partition_point(|row| compare(row) != Ordering::Greater),
+        ),
+    };
+    OrdinalRows {
+        rows,
+        ordinals,
+        range: lower..upper,
+    }
+}
+
+pub(super) fn masked_rows<'a, T: Copy + Ord>(
+    rows: &'a [T],
+    cell: Option<&'a OnceLock<Box<[u32]>>>,
+    capacity: LocalCapacity,
+    pattern: [Option<TermId>; 3],
+    components: impl Fn(&T) -> [TermId; 3],
+) -> Result<OrdinalRows<'a, T>, StorageError> {
+    let mask = component_mask(pattern);
+    let ordinals = cell
+        .map(|cell| masked_permutation(cell, rows, capacity, mask, &components))
+        .transpose()?;
+    Ok(ordinal_range(rows, ordinals, |row| {
+        masked_key(components(row), mask).cmp(&pattern)
+    }))
 }
 
 /// The three physical access orders of a graph-free table.
@@ -135,7 +208,7 @@ impl TripleTable {
             TripleOrder::Pos => &self.pos,
             TripleOrder::Osp => &self.osp,
         };
-        cached_permutation(cell, &self.rows, |a, b| {
+        cached_permutation(cell, &self.rows, LocalCapacity::Native, |a, b| {
             order
                 .ordered([a.s, a.p, a.o])
                 .cmp(&order.ordered([b.s, b.p, b.o]))
@@ -158,7 +231,7 @@ impl TripleTable {
         let ordinals = self.permutation(order)?;
         let ordered = order.ordered(pattern);
         let prefix = ordered.iter().take_while(|value| value.is_some()).count();
-        let compare = |row: TripleIds| {
+        let compare = |row: &TripleIds| {
             for (actual, expected) in order
                 .ordered([row.s, row.p, row.o])
                 .into_iter()
@@ -174,26 +247,8 @@ impl TripleTable {
             }
             Ordering::Equal
         };
-        let (lower, upper) = match ordinals {
-            Some(ordinals) => (
-                ordinals
-                    .partition_point(|&index| compare(self.rows[index as usize]) == Ordering::Less),
-                ordinals.partition_point(|&index| {
-                    compare(self.rows[index as usize]) != Ordering::Greater
-                }),
-            ),
-            None => (
-                self.rows
-                    .partition_point(|&row| compare(row) == Ordering::Less),
-                self.rows
-                    .partition_point(|&row| compare(row) != Ordering::Greater),
-            ),
-        };
         Ok(TripleRows {
-            rows: &self.rows,
-            ordinals,
-            next: lower,
-            end: upper,
+            rows: ordinal_range(&self.rows, ordinals, compare),
             pattern,
         })
     }
@@ -202,10 +257,7 @@ impl TripleTable {
 /// Borrowed ID-native matching rows, with no per-row lexical allocation.
 #[derive(Debug)]
 pub struct TripleRows<'a> {
-    rows: &'a [TripleIds],
-    ordinals: Option<&'a [u32]>,
-    next: usize,
-    end: usize,
+    rows: OrdinalRows<'a, TripleIds>,
     pattern: [Option<TermId>; 3],
 }
 
@@ -213,21 +265,17 @@ impl Iterator for TripleRows<'_> {
     type Item = TripleIds;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.next < self.end {
-            let ordinal = self
-                .ordinals
-                .map_or(self.next, |values| values[self.next] as usize);
-            self.next += 1;
-            let row = self.rows[ordinal];
-            if [row.s, row.p, row.o]
+        let pattern = self.pattern;
+        self.rows.find(|row| {
+            [row.s, row.p, row.o]
                 .into_iter()
-                .zip(self.pattern)
+                .zip(pattern)
                 .all(|(actual, expected)| expected.is_none_or(|expected| actual == expected))
-            {
-                return Some(row);
-            }
-        }
-        None
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.rows.len()))
     }
 }
 
@@ -239,6 +287,7 @@ pub struct TripleDataset {
     pub(super) triples: TripleTable,
     pub(super) reifiers: Box<[TripleReifierRow]>,
     pub(super) reifier_targets: OnceLock<Box<[u32]>>,
+    pub(super) reifier_components: [OnceLock<Box<[u32]>>; 7],
     pub(super) annotations: TripleTable,
     pub(super) locations: Box<[(QuadHandle, RdfLocation)]>,
     pub(super) caps: RdfStoreCapabilities,
@@ -261,6 +310,7 @@ impl TripleDataset {
                 permutation_bytes(&self.annotations.osp),
             ],
             reifier_targets: permutation_bytes(&self.reifier_targets),
+            reifier_components: self.reifier_components.each_ref().map(permutation_bytes),
         }
     }
     /// Number of distinct asserted triples, excluding the statement layer.
@@ -346,6 +396,7 @@ impl TripleDataset {
             Some(cached_permutation(
                 &self.reifier_targets,
                 &self.reifiers,
+                LocalCapacity::Native,
                 |a, b| (a.1, a.0).cmp(&(b.1, b.0)),
             )?)
         } else {
@@ -369,6 +420,26 @@ impl TripleDataset {
         Ok((start..end).map(at).filter(move |&(r, t)| {
             reifier.is_none_or(|bound| bound == r) && target.is_none_or(|bound| bound == t)
         }))
+    }
+
+    /// Bindings whose target's components match the supplied local IDs.
+    /// Matching bindings retain frozen reifier order without lexical allocation.
+    ///
+    /// # Errors
+    /// Returns typed ordinal-capacity or physical allocation refusal.
+    pub fn reifiers_for_components(
+        &self,
+        pattern: [Option<TermId>; 3],
+    ) -> Result<impl ExactSizeIterator<Item = TripleReifierRow> + '_, StorageError> {
+        let mask = component_mask(pattern);
+        masked_rows(
+            &self.reifiers,
+            mask.checked_sub(1)
+                .map(|index| &self.reifier_components[index]),
+            LocalCapacity::Native,
+            pattern,
+            |row| self.dictionary.triple_components(row.1),
+        )
     }
 
     /// Every annotation as `(reifier, predicate, object)`.

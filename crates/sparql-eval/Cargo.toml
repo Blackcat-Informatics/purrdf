@@ -123,6 +123,11 @@ name = "update_graph_modes"
 harness = false
 
 [[test]]
+# The original statement populations on native, scalar WASM and SIMD WASM.
+name = "statement_indexes"
+harness = false
+
+[[test]]
 name = "update_typed_records"
 harness = false
 

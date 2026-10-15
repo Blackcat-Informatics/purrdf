@@ -3,7 +3,7 @@
 
 //! Operation-local graph support and first-cause ownership over compact payloads.
 
-use super::{TripleDataset, TripleIds, TripleOrder};
+use super::{TripleDataset, TripleIds, TripleOrder, TripleReifierRow};
 use crate::dataset_view::{
     DatasetView, FallibleDatasetView, GraphMatch, ViewOperationStatus, WorkspaceReservation,
 };
@@ -159,21 +159,50 @@ impl TripleRead<'_> {
             .map(Self::project)
     }
 
-    fn binding_rows(&self, reifier: Option<TermId>) -> impl Iterator<Item = QuadIds> + '_ {
+    fn binding_rows(
+        &self,
+        reifier: Option<TermId>,
+        target: Option<TermId>,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        let rows = self.ready().and_then(|()| {
+            self.dataset
+                .reifiers_for_pattern(reifier, target)
+                .map_err(|error| self.latch(error.into()))
+        });
+        self.project_bindings(rows)
+    }
+
+    fn project_bindings<'a, I: Iterator<Item = TripleReifierRow> + 'a>(
+        &'a self,
+        rows: Result<I, TripleReadError>,
+    ) -> impl Iterator<Item = QuadIds> + 'a {
         let predicate = self
             .dataset
             .dictionary
             .term_id_by_iri(purrdf_iri::vocab::rdf::REIFIES);
-        let rows = self.ready().and_then(|()| {
+        rows.ok()
+            .into_iter()
+            .flatten()
+            .take_while(|_| self.ready().is_ok())
+            .filter_map(move |(s, o)| predicate.map(|p| QuadIds { s, p, o, g: None }))
+    }
+
+    fn annotation_rows(
+        &self,
+        pattern: [Option<TermId>; 3],
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        let rows = self.graph(graph).and_then(|()| {
             self.dataset
-                .reifiers_for_pattern(reifier, None)
+                .annotations
+                .probe(pattern)
                 .map_err(|error| self.latch(error.into()))
         });
         rows.ok()
             .into_iter()
             .flatten()
             .take_while(|_| self.ready().is_ok())
-            .filter_map(move |(s, o)| predicate.map(|p| QuadIds { s, p, o, g: None }))
+            .map(Self::project)
     }
 }
 
@@ -291,7 +320,7 @@ impl DatasetView for TripleRead<'_> {
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.binding_rows(None)
+        self.binding_rows(None, None)
     }
 
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -302,24 +331,95 @@ impl DatasetView for TripleRead<'_> {
     }
 
     fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
-        self.binding_rows(Some(reifier))
+        self.binding_rows(Some(reifier), None)
+    }
+
+    fn reifier_quads_for_target(
+        &self,
+        target: TermId,
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        let _ = self.graph(graph);
+        self.binding_rows(None, Some(target))
+    }
+
+    fn statement_indexes(&self) -> crate::StatementIndexSupport {
+        crate::StatementIndexSupport::INDEXED
+    }
+
+    fn statement_cardinality_estimate(
+        &self,
+        pattern: crate::ProbePattern,
+        components: [Option<TermId>; 3],
+    ) -> Option<u64> {
+        self.graph(pattern.g).ok()?;
+        if self.dataset.reifiers.is_empty() && self.dataset.annotations.rows.is_empty() {
+            return Some(0);
+        }
+        let can_reify = pattern.p.is_none_or(|predicate| {
+            Some(predicate)
+                == self
+                    .dataset
+                    .dictionary
+                    .term_id_by_iri(purrdf_iri::vocab::rdf::REIFIES)
+        });
+        let reifiers = if !can_reify || self.dataset.reifiers.is_empty() {
+            0
+        } else if pattern.s.is_some() || pattern.o.is_some() {
+            self.dataset
+                .reifiers_for_pattern(pattern.s, pattern.o)
+                .map_err(|error| self.latch(error.into()))
+                .ok()?
+                .size_hint()
+                .1?
+        } else {
+            self.dataset
+                .reifiers_for_components(components)
+                .map_err(|error| self.latch(error.into()))
+                .ok()?
+                .len()
+        };
+        let annotations = self
+            .dataset
+            .annotations
+            .probe([pattern.s, pattern.p, pattern.o])
+            .map_err(|error| self.latch(error.into()))
+            .ok()?
+            .size_hint()
+            .1?;
+        u64::try_from(reifiers)
+            .ok()?
+            .checked_add(u64::try_from(annotations).ok()?)
+    }
+
+    fn reifier_quads_for_components(
+        &self,
+        components: [Option<TermId>; 3],
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        let rows = self.graph(graph).and_then(|()| {
+            self.dataset
+                .reifiers_for_components(components)
+                .map_err(|error| self.latch(error.into()))
+        });
+        self.project_bindings(rows)
+    }
+
+    fn annotation_quads_for_pattern(
+        &self,
+        predicate: Option<TermId>,
+        object: Option<TermId>,
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        self.annotation_rows([None, predicate, object], graph)
     }
 
     fn annotations_of_with_graph(
         &self,
         reifier: TermId,
     ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
-        let rows = self.ready().and_then(|()| {
-            self.dataset
-                .annotations
-                .probe([Some(reifier), None, None])
-                .map_err(|error| self.latch(error.into()))
-        });
-        rows.ok()
-            .into_iter()
-            .flatten()
-            .take_while(|_| self.ready().is_ok())
-            .map(|row| (row.p, row.o, None))
+        self.annotation_rows([Some(reifier), None, None], GraphMatch::Any)
+            .map(|quad| (quad.p, quad.o, quad.g))
     }
 
     fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
