@@ -348,8 +348,9 @@ fn fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure()
 }
 
 #[test]
-/// Cold, cached, configured, and inert-stop EXPLAIN entries preserve resident bytes.
-fn healthy_fallible_explain_is_byte_identical_on_cold_warm_and_signalled_entries() {
+/// Cold, cached, configured and inert-stop entries preserve resident receipts
+/// with their different physical-access descriptor explicitly asserted.
+fn healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entries() {
     let rows = [
         ("a", "p", "x"),
         ("b", "p", "y"),
@@ -400,7 +401,7 @@ fn healthy_fallible_explain_is_byte_identical_on_cold_warm_and_signalled_entries
                     .expect("quiet stop signal is inert"),
             ];
             for (explanation, evidence) in explanations {
-                assert_eq!(explanation.render(), expected);
+                support::assert_scan_explanation_matches_resident(&explanation, &expected);
                 assert_eq!(explanation.evidence().tripped, None);
                 let fuel: u64 = explanation
                     .ledger()
@@ -847,7 +848,7 @@ fn fallible_explain_options_measure_the_same_registered_relation_as_resident() {
             )
             .expect("quiet signal preserves registry-aware measuring"),
     ] {
-        assert_eq!(explanation.render(), expected);
+        support::assert_scan_explanation_matches_resident(&explanation, &expected);
         assert_eq!(explanation.relations().len(), 1);
         assert!(explanation.ledger().iter().any(|node| node.rows > 0));
         assert!(
