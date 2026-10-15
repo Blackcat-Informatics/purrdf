@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T16:45:01-06:00\n"
+"POT-Creation-Date: 2026-10-15T17:21:07-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -764,7 +764,8 @@ msgstr "// 在驻留的 TermId 空间中构建数据集。\n"
 #: src/getting-started/rust.md:33 src/getting-started/python.md:40
 #: src/reference/python-api.md:49 src/reference/python-api.md:51
 #: src/reference/python-api.md:89 src/reference/python-api.md:529
-#: src/validation/shex.md:60 src/validation/shex.md:80
+#: src/sparql/results.md:21 src/sparql/results.md:30 src/validation/shex.md:60
+#: src/validation/shex.md:80
 msgid "\"https://example.org/alice\""
 msgstr "\"https://example.org/alice\""
 
@@ -6806,7 +6807,7 @@ msgid ""
 msgstr ""
 "PurRDF 为九种格式提供**第一方**解析器与序列化器——不封装任何第三方编解码器："
 
-#: src/concepts/codecs.md:11 src/sparql/results.md:56
+#: src/concepts/codecs.md:11 src/sparql/results.md:61
 msgid "Format"
 msgstr "格式"
 
@@ -6828,8 +6829,8 @@ msgstr "`text/turtle`"
 
 #: src/concepts/codecs.md:13 src/concepts/codecs.md:14
 #: src/concepts/codecs.md:15 src/concepts/codecs.md:16
-#: src/concepts/codecs.md:20 src/concepts/codecs.md:21 src/sparql/results.md:58
-#: src/sparql/results.md:59 src/sparql/results.md:60 src/sparql/results.md:61
+#: src/concepts/codecs.md:20 src/concepts/codecs.md:21 src/sparql/results.md:63
+#: src/sparql/results.md:64 src/sparql/results.md:65 src/sparql/results.md:66
 #: src/entailment-rules.md:94 src/entailment-rules.md:95
 #: src/entailment-rules.md:96 src/entailment-rules.md:102
 #: src/entailment-rules.md:103 src/entailment-rules.md:104
@@ -7335,7 +7336,7 @@ msgstr ""
 "时记分板见 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/"
 "purrdf/blob/main/docs/CONFORMANCE.md)。"
 
-#: src/concepts/codecs.md:203 src/sparql/results.md:103
+#: src/concepts/codecs.md:203 src/sparql/results.md:119
 #: src/validation/shapes-products.md:952 src/gts.md:120 src/slices.md:95
 #: src/interop/rdflib.md:81 src/interop/rdfjs.md:116
 msgid "Related"
@@ -13692,23 +13693,23 @@ msgstr ""
 "现，并在格式能够承载时附加一个增补性的、由调用方命名的溯源扩展。JSON 与 XML "
 "文档也可以读回（`from_json`、`from_xml`）。"
 
-#: src/sparql/results.md:17
-msgid ""
-"// `result` is the SparqlResult produced by purrdf-sparql-eval (or any "
-"engine\n"
-"// implementing the purrdf-core SparqlEngine seam). `None` here means "
-"\"carry\n"
-"// no provenance extension\" — see \"The provenance extension\" below.\n"
-msgstr ""
-"// `result` 是由 purrdf-sparql-eval（或任何实现了 purrdf-core\n"
-"// SparqlEngine 扩展点的引擎）产生的 SparqlResult。此处的 `None` 表示\n"
-"// 「不携带溯源扩展」——参见下文「溯源扩展」。\n"
+#: src/sparql/results.md:20 src/sparql/results.md:29
+msgid "\"s\""
+msgstr "\"s\""
 
 #: src/sparql/results.md:22
+msgid "\"empty auxiliary dataset\""
+msgstr "\"empty auxiliary dataset\""
+
+#: src/sparql/results.md:25
 msgid "\"SELECT serializes to SRJ\""
 msgstr "\"SELECT serializes to SRJ\""
 
 #: src/sparql/results.md:28
+msgid "\"emitted JSON parses back\""
+msgstr "\"emitted JSON parses back\""
+
+#: src/sparql/results.md:33
 msgid ""
 "Per-format writers (`to_json`, `to_xml`, `to_csv`, `to_tsv`) and readers "
 "(`from_json`, `from_json_boolean`, `from_xml`, `from_xml_boolean`) are also "
@@ -13718,11 +13719,11 @@ msgstr ""
 "（`from_json`、`from_json_boolean`、`from_xml`、`from_xml_boolean`）也会直接"
 "导出。"
 
-#: src/sparql/results.md:32
+#: src/sparql/results.md:37
 msgid "Behavior worth knowing before you pick a format"
 msgstr "选择格式之前值得了解的行为"
 
-#: src/sparql/results.md:34
+#: src/sparql/results.md:39
 msgid ""
 "**Byte-deterministic output** — the same result always serializes to the "
 "same bytes, like every other PurRDF output path ([Codecs & Determinism](../"
@@ -13731,7 +13732,7 @@ msgstr ""
 "**逐字节确定的输出**——同一结果总是序列化为相同的字节，与 PurRDF 其他所有输出"
 "路径一样（[编解码器与确定性](../concepts/codecs.md)）。"
 
-#: src/sparql/results.md:37
+#: src/sparql/results.md:42
 msgid ""
 "**The support matrix is enforced, not fudged** — XML rejects CONSTRUCT "
 "graphs, and CSV/TSV reject both ASK booleans and CONSTRUCT graphs, each as a "
@@ -13741,7 +13742,7 @@ msgstr ""
 "同时拒绝 ASK 布尔值与 CONSTRUCT 图，各自报告为带类型的 `Error::Format`，而不"
 "是输出某种形似规范却错误的东西。"
 
-#: src/sparql/results.md:41
+#: src/sparql/results.md:46
 msgid ""
 "**Lossy projections are flagged** — CSV/TSV have no extension point, so a "
 "populated provenance is trimmed at the exit gate and "
@@ -13754,7 +13755,7 @@ msgstr ""
 "为 JSON/XML 提供了非空的 `ResultProvenance`、却没有可供锚定的 "
 "`ProvenanceNamespace` 时，也会设置同一标志——见下文。"
 
-#: src/sparql/results.md:46
+#: src/sparql/results.md:51
 msgid ""
 "**RDF 1.2 base direction uses the spec's own key** — a directional literal's "
 "base direction serializes as `its:dir` (JSON: an additive `\"its:dir\"` "
@@ -13774,55 +13775,55 @@ msgstr ""
 "及——仅限 XML——一个带 `purrdf:dir` 命名空间的属性），但当同一字面量上存在多于"
 "一种拼写时，以 `its:dir` 为准，并且写出的永远只有 `its:dir`。"
 
-#: src/sparql/results.md:56
+#: src/sparql/results.md:61
 msgid "SELECT"
 msgstr "SELECT"
 
-#: src/sparql/results.md:56
+#: src/sparql/results.md:61
 msgid "ASK"
 msgstr "ASK"
 
-#: src/sparql/results.md:56
+#: src/sparql/results.md:61
 msgid "CONSTRUCT"
 msgstr "CONSTRUCT"
 
-#: src/sparql/results.md:56
+#: src/sparql/results.md:61
 msgid "Provenance extension"
 msgstr "溯源扩展"
 
-#: src/sparql/results.md:58
+#: src/sparql/results.md:63
 msgid "JSON (SRJ)"
 msgstr "JSON (SRJ)"
 
-#: src/sparql/results.md:58 src/sparql/results.md:59
+#: src/sparql/results.md:63 src/sparql/results.md:64
 msgid "yes, with a namespace"
 msgstr "是，需提供命名空间"
 
-#: src/sparql/results.md:59
+#: src/sparql/results.md:64
 msgid "XML"
 msgstr "XML"
 
-#: src/sparql/results.md:59 src/sparql/results.md:60 src/sparql/results.md:61
+#: src/sparql/results.md:64 src/sparql/results.md:65 src/sparql/results.md:66
 msgid "rejected"
 msgstr "拒绝"
 
-#: src/sparql/results.md:60
+#: src/sparql/results.md:65
 msgid "CSV"
 msgstr "CSV"
 
-#: src/sparql/results.md:60 src/sparql/results.md:61
+#: src/sparql/results.md:65 src/sparql/results.md:66
 msgid "dropped, flagged"
 msgstr "丢弃，并加标记"
 
-#: src/sparql/results.md:61
+#: src/sparql/results.md:66
 msgid "TSV"
 msgstr "TSV"
 
-#: src/sparql/results.md:63
+#: src/sparql/results.md:68
 msgid "The provenance extension"
 msgstr "溯源扩展"
 
-#: src/sparql/results.md:65
+#: src/sparql/results.md:70
 msgid ""
 "The provenance extension is **additive** and **caller-named**: a standard "
 "SPARQL results consumer can read the JSON/XML documents unchanged, while a "
@@ -13853,23 +13854,35 @@ msgstr ""
 "作为绝对 IRI 进行验证，因为 `prefix` 会被直接拼接进 XML 元素/属性名，无法像文"
 "本内容那样进行转义："
 
-#: src/sparql/results.md:84
+#: src/sparql/results.md:90
 msgid "\"prov\""
 msgstr "\"prov\""
 
-#: src/sparql/results.md:84
+#: src/sparql/results.md:90
 msgid "\"https://example.org/provenance#\""
 msgstr "\"https://example.org/provenance#\""
 
-#: src/sparql/results.md:85
+#: src/sparql/results.md:91
 msgid "\"valid NCName prefix + absolute IRI\""
 msgstr "\"valid NCName prefix + absolute IRI\""
 
-#: src/sparql/results.md:86
-msgid "// or a populated one\n"
-msgstr "// 或者一个已填充的溯源\n"
+#: src/sparql/results.md:93
+msgid "\"example-query\""
+msgstr "\"example-query\""
 
-#: src/sparql/results.md:90
+#: src/sparql/results.md:97
+msgid "\"ASK with caller-named provenance serializes\""
+msgstr "\"ASK with caller-named provenance serializes\""
+
+#: src/sparql/results.md:99
+msgid "\"emitted ASK parses back\""
+msgstr "\"emitted ASK parses back\""
+
+#: src/sparql/results.md:101
+msgid "\"ASK without a provenance namespace serializes\""
+msgstr "\"ASK without a provenance namespace serializes\""
+
+#: src/sparql/results.md:105
 msgid ""
 "With `namespace: None`, JSON/XML emit no provenance element/member at all, "
 "however populated a `ResultProvenance` is — the same drop-and-flag contract "
@@ -13882,28 +13895,29 @@ msgstr ""
 "式完全没有扩展点的地方（CSV/TSV），无论 `namespace` 如何，溯源都会被丢弃并显"
 "式告知，遵循[切片、映射与溯源](../slices.md)中描述的损失纪律。"
 
-#: src/sparql/results.md:96
+#: src/sparql/results.md:111
 msgid "One term-syntax authority"
 msgstr "唯一的项语法权威"
 
-#: src/sparql/results.md:98
+#: src/sparql/results.md:113
 msgid ""
-"The crate depends only on `purrdf-core` and stays wasm-clean; term and N-"
-"Triples syntax come exclusively from the kernel's emit primitives, so there "
-"is exactly one term-syntax authority in the workspace — results, codecs, and "
-"diagnostics can never disagree about how a term is written."
+"The crate depends on `purrdf-core`, `purrdf-lex` and `purrdf-iri`, and stays "
+"wasm-clean. Shared lexical readers and IRI validation serve the result "
+"formats; term and N-Triples syntax come from the kernel's emit primitives "
+"and the shared lexical term writer. Results, codecs and diagnostics "
+"therefore use the same term-syntax authority."
 msgstr ""
-"该 crate 只依赖 `purrdf-core`，并保持 wasm 洁净；项与 N-Triples 语法完全来自"
-"内核的输出原语，因此工作区中恰好只有一个项语法权威——结果、编解码器与诊断在一"
-"个项如何书写这一点上永远不会出现分歧。"
+"该 crate 依赖 `purrdf-core`、`purrdf-lex` 和 `purrdf-iri`，并保持 wasm 洁净。"
+"共享的词法读取器和 IRI 验证服务于结果格式；项与 N-Triples 语法来自内核的输出"
+"原语以及共享的词法项写出器。因此，结果、编解码器和诊断使用同一个项语法权威实现。"
 
-#: src/sparql/results.md:105
+#: src/sparql/results.md:121
 msgid ""
 "[SPARQL: Querying](querying.md) — producing the `SparqlResult` in the first "
 "place."
 msgstr "[SPARQL：查询](querying.md)——首先要产生 `SparqlResult`。"
 
-#: src/sparql/results.md:107
+#: src/sparql/results.md:123
 msgid ""
 "[docs.rs/purrdf-sparql-results](https://docs.rs/purrdf-sparql-results) — the "
 "full API reference."
@@ -27374,6 +27388,20 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid ""
+#~ "// `result` is the SparqlResult produced by purrdf-sparql-eval (or any "
+#~ "engine\n"
+#~ "// implementing the purrdf-core SparqlEngine seam). `None` here means "
+#~ "\"carry\n"
+#~ "// no provenance extension\" — see \"The provenance extension\" below.\n"
+#~ msgstr ""
+#~ "// `result` 是由 purrdf-sparql-eval（或任何实现了 purrdf-core\n"
+#~ "// SparqlEngine 扩展点的引擎）产生的 SparqlResult。此处的 `None` 表示\n"
+#~ "// 「不携带溯源扩展」——参见下文「溯源扩展」。\n"
+
+#~ msgid "// or a populated one\n"
+#~ msgstr "// 或者一个已填充的溯源\n"
 
 #~ msgid "\"http://www.w3.org/2001/XMLSchema#integer\""
 #~ msgstr "\"http://www.w3.org/2001/XMLSchema#integer\""
