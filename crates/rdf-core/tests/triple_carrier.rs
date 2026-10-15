@@ -148,6 +148,33 @@ fn compact_statement_probes_populate_only_the_requested_ordinal_arrays() {
         }
     }
     assert_eq!(dataset.storage_layout().reifier_targets, 4 * 8);
+    assert_eq!(dataset.storage_layout().reifier_components, [0; 7]);
+    for mask in 0..8 {
+        for target in targets.iter().copied().chain([ids[7]]) {
+            let parts = match dataset.resolve(target) {
+                TermRef::Triple { s, p, o } => [s, p, o],
+                _ => [target; 3],
+            };
+            let pattern =
+                std::array::from_fn(|index| (mask & (1 << index) != 0).then_some(parts[index]));
+            let expected: Vec<_> = dataset
+                .reifiers()
+                .filter(|&(_, target)| {
+                    let TermRef::Triple { s, p, o } = dataset.resolve(target) else {
+                        panic!("validated triple target");
+                    };
+                    [s, p, o]
+                        .into_iter()
+                        .zip(pattern)
+                        .all(|(actual, bound)| bound.is_none_or(|value| value == actual))
+                })
+                .collect();
+            let actual = dataset.reifiers_for_components(pattern).unwrap();
+            assert_eq!(actual.len(), expected.len());
+            assert_eq!(actual.collect::<Vec<_>>(), expected);
+        }
+    }
+    assert_eq!(dataset.storage_layout().reifier_components, [4 * 8; 7]);
     let read = Arc::new(dataset.read().unwrap());
     for &target in targets.iter().chain(ids.iter()) {
         let expected: Vec<_> = read
@@ -407,7 +434,100 @@ fn refused_child_stops_existing_streams_and_fresh_session_is_healthy() {
     assert_eq!(selector.resolve(&quad), Ok(None));
 }
 
+fn statement_mask_probes_preserve_frozen_order_and_graph_multiplicity() {
+    let mut builder = RdfDatasetBuilder::new();
+    let ids: Vec<_> = (0..9)
+        .map(|index| builder.intern_iri(&format!("urn:mask:{index}")).unwrap())
+        .collect();
+    for index in 0..64 {
+        let point = (index * 37) % 64;
+        let target = builder
+            .intern_triple(ids[point / 16], ids[(point / 4) % 4], ids[point % 4])
+            .unwrap();
+        let reifier = ids[4 + index % 4];
+        let graph = (index % 3 == 0).then_some(ids[8]);
+        builder
+            .push_reifier_in_graph(reifier, target, graph)
+            .unwrap();
+        builder
+            .push_annotation_in_graph(reifier, ids[(point / 8) % 4], ids[point % 4], graph)
+            .unwrap();
+        if point % 5 == 0 {
+            builder
+                .push_reifier_in_graph(reifier, target, None)
+                .unwrap();
+            builder
+                .push_reifier_in_graph(reifier, target, Some(ids[8]))
+                .unwrap();
+        }
+    }
+    let dataset = builder.freeze().unwrap();
+    for mask in 0..8 {
+        for point in 0..=64 {
+            let parts = if point == 64 {
+                [ids[8]; 3]
+            } else {
+                [ids[point / 16], ids[(point / 4) % 4], ids[point % 4]]
+            };
+            let pattern =
+                std::array::from_fn(|index| (mask & (1 << index) != 0).then_some(parts[index]));
+            for graph in [
+                GraphMatch::Any,
+                GraphMatch::Default,
+                GraphMatch::Named(ids[8]),
+                GraphMatch::Named(ids[0]),
+            ] {
+                let expected: Vec<_> = dataset
+                    .reifier_quads()
+                    .filter(|quad| {
+                        let TermRef::Triple { s, p, o } = dataset.as_ref().resolve(quad.o) else {
+                            panic!("validated target");
+                        };
+                        graph.matches(quad.g)
+                            && [s, p, o]
+                                .into_iter()
+                                .zip(pattern)
+                                .all(|(actual, bound)| bound.is_none_or(|value| value == actual))
+                    })
+                    .collect();
+                assert_eq!(
+                    dataset
+                        .reifier_quads_for_components(pattern, graph)
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        }
+    }
+    for predicate in std::iter::once(None).chain(ids.iter().copied().map(Some)) {
+        for object in std::iter::once(None).chain(ids.iter().copied().map(Some)) {
+            for graph in [
+                GraphMatch::Any,
+                GraphMatch::Default,
+                GraphMatch::Named(ids[8]),
+                GraphMatch::Named(ids[0]),
+            ] {
+                let expected: Vec<_> = dataset
+                    .annotation_quads()
+                    .filter(|quad| {
+                        predicate.is_none_or(|value| value == quad.p)
+                            && object.is_none_or(|value| value == quad.o)
+                            && graph.matches(quad.g)
+                    })
+                    .collect();
+                assert_eq!(
+                    dataset
+                        .annotation_quads_for_pattern(predicate, object, graph)
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        }
+    }
+}
+
 purrdf_testkit::harness_main!(
+    statement_mask_probes_preserve_frozen_order_and_graph_multiplicity,
     compact_statement_probes_populate_only_the_requested_ordinal_arrays,
     compact_layout_and_all_bound_shapes,
     owned_transfer_preserves_lexical_owner_and_flat_statement_identity,

@@ -741,25 +741,36 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                     // the probe binds `?g` under `GRAPH ?g`: a default-graph reifier
                     // shows only when the scope admits the default graph (unchanged),
                     // and a `GRAPH :g`-scoped reifier shows only under that named graph.
-                    emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, *gm, |quad| {
-                        if acc.is_full() || ctx.stop_check().is_some() {
-                            return ControlFlow::Break(());
-                        }
-                        *fuel = fuel.saturating_add(1);
-                        match bind_row(row, cp, &quad, ctx) {
-                            Ok(Some(extended)) => acc.push(extended),
-                            Ok(None) => {}
-                            Err(error) => {
-                                acc.fail(error);
+                    let components = components_of(&cp.o, |part| query_id(part, row));
+                    emit_virtual_candidates(
+                        ctx.dataset,
+                        cp,
+                        s,
+                        p,
+                        o,
+                        components,
+                        reifies_id,
+                        *gm,
+                        |quad| {
+                            if acc.is_full() || ctx.stop_check().is_some() {
                                 return ControlFlow::Break(());
                             }
-                        }
-                        if acc.is_full() {
-                            ControlFlow::Break(())
-                        } else {
-                            ControlFlow::Continue(())
-                        }
-                    });
+                            *fuel = fuel.saturating_add(1);
+                            match bind_row(row, cp, &quad, ctx) {
+                                Ok(Some(extended)) => acc.push(extended),
+                                Ok(None) => {}
+                                Err(error) => {
+                                    acc.fail(error);
+                                    return ControlFlow::Break(());
+                                }
+                            }
+                            if acc.is_full() {
+                                ControlFlow::Break(())
+                            } else {
+                                ControlFlow::Continue(())
+                            }
+                        },
+                    );
                 }
                 // A FROM/USING-merged default graph: union the per-graph reads, but
                 // RDF-merge unions *triples*, so a triple present in two merged graphs
@@ -1363,7 +1374,24 @@ fn visit_access_costs<D: DatasetView>(
     let mut graph = |g| {
         let probe = purrdf_core::ProbePattern { s, p, o, g };
         let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
-        visit(probe, dataset.cost(probe, &plan));
+        let cost = dataset.cost(probe, &plan);
+        let statements = dataset
+            .statement_cardinality_estimate(probe, components_of(&pattern.o, constant_of))
+            .unwrap_or(0);
+        if statements == 0 {
+            visit(probe, cost);
+        } else {
+            let ordinary = cost
+                .cardinality_fallback()
+                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, g));
+            // Statement summaries provide row counts, not a conversion into a
+            // host's physical work unit. Use the explicit cardinality fallback
+            // for this complete probe instead of inventing a statement page fee.
+            visit(
+                probe,
+                purrdf_core::AccessCost::from_cardinality(ordinary.saturating_add(statements)),
+            );
+        }
     };
     match scope {
         GraphScope::One(g) => graph(*g),
@@ -1440,12 +1468,20 @@ fn base_cardinality<D: DatasetView>(
     let s = constant_of(&cp.s);
     let p = constant_of(&cp.p);
     let o = constant_of(&cp.o);
+    let cardinality = |g| {
+        let probe = purrdf_core::ProbePattern { s, p, o, g };
+        dataset.cardinality_estimate(s, p, o, g).saturating_add(
+            dataset
+                .statement_cardinality_estimate(probe, components_of(&cp.o, constant_of))
+                .unwrap_or(0),
+        )
+    };
     match scope {
-        GraphScope::One(gm) => dataset.cardinality_estimate(s, p, o, *gm),
+        GraphScope::One(gm) => cardinality(*gm),
         GraphScope::Merge(gs) => gs
             .iter()
-            .map(|&g| dataset.cardinality_estimate(s, p, o, GraphMatch::Named(g)))
-            .sum(),
+            .map(|&g| cardinality(GraphMatch::Named(g)))
+            .fold(0, u64::saturating_add),
     }
 }
 
@@ -1455,6 +1491,16 @@ fn constant_of<I: ViewTermId>(pos: &Pos<I>) -> Option<I> {
     match pos {
         Pos::Bound(id) => Some(*id),
         Pos::Slot(_) | Pos::Triple(_) => None,
+    }
+}
+
+fn components_of<I: ViewTermId>(
+    position: &Pos<I>,
+    resolve: impl Fn(&Pos<I>) -> Option<I>,
+) -> [Option<I>; 3] {
+    match position {
+        Pos::Triple(triple) => [resolve(&triple.s), resolve(&triple.p), resolve(&triple.o)],
+        Pos::Bound(_) | Pos::Slot(_) => [None; 3],
     }
 }
 
@@ -2656,6 +2702,7 @@ fn emit_virtual_candidates<D: DatasetView>(
     s: Option<D::Id>,
     p: Option<D::Id>,
     o: Option<D::Id>,
+    components: [Option<D::Id>; 3],
     reifies_id: Option<D::Id>,
     gm: GraphMatch<D::Id>,
     emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
@@ -2666,18 +2713,15 @@ fn emit_virtual_candidates<D: DatasetView>(
     // free variable (`Pos::Slot`). A literal/IRI object constant can never be a triple
     // term, so the reifier scan is skipped. The residual `bind_row` enforces the exact
     // object match.
-    let predicate_can_reify = reifies_id.is_some_and(|reifies| match &cp.p {
-        Pos::Slot(_) => true,
-        Pos::Bound(id) => *id == reifies,
-        // A quoted triple is never a predicate position.
-        Pos::Triple(_) => false,
-    });
+    let predicate_can_reify =
+        reifies_id.is_some_and(|reifies| p.is_none_or(|bound| bound == reifies));
     statement_layer::visit_quads(
         dataset,
         StatementProbe {
             s,
             p,
             o,
+            components,
             graph: gm,
             scan_reifier_rows: predicate_can_reify && object_can_be_triple_term(&cp.o, dataset),
         },

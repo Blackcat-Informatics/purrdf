@@ -135,6 +135,21 @@ no per-quad allocation and no term-string clones. Its surface:
 - `capabilities()` — the capability probe for this view's backing data (see C7).
 - `len_hint()` — an optional quad-count hint.
 
+Statement-layer reads retain the same local identity and graph scope.
+`reifier_quads_for_target` selects an exact triple term;
+`reifier_quads_for_components` selects candidates for bound components of a
+structural triple pattern; `annotation_quads_for_pattern` selects annotation
+predicate/object bounds. The component default is a conservative graph-pruned
+stream: the caller still performs structural unification. Native resident
+carriers implement component ranges, and annotation ranges use their existing
+row identities. A backend certifying statement order preserves that order
+within a narrowed stream. `statement_indexes()` reports the access families a
+view actually implements, separately from RDF capabilities; a wrapper forwards
+both probes and this descriptor to advertise an inner index. EXPLAIN renders
+unimplemented families as `scan-default`. Optional cheap statement cardinalities
+are planner estimates, not output bounds or memory certificates. Operational
+failures still latch the original session cause before guarded completion.
+
 The graph slot is stored as `g: Option<TermId>` where `None` is the default
 graph. Because `Option<TermId>` alone cannot distinguish *any graph* from *the
 default graph*, the read view uses the dedicated three-way `GraphMatch` enum, which

@@ -13,6 +13,7 @@ pub mod boundary_joins;
 pub mod governor_counts;
 pub mod governor_workloads;
 pub mod segmented;
+pub mod statement_claims;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

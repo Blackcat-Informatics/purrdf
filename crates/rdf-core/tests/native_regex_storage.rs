@@ -74,12 +74,15 @@ fn reifier_target_order_uses_original_admission_and_warmed_probes_allocate_nothi
         builder
             .push_reifier_in_graph_with_memory(reifier, target, None, &mut memory)
             .unwrap();
+        builder
+            .push_annotation_in_graph_with_memory(reifier, predicate, subject, None, &mut memory)
+            .unwrap();
     }
     let mut dataset = builder.freeze_with_memory(&mut memory).unwrap();
     let frozen = memory.admitted_bytes();
-    let bytes = 3 * size_of::<u32>();
+    let bytes = 3 * (8 + 3) * size_of::<u32>();
     let certificate = dataset.query_retained_bytes().unwrap();
-    memory.admission_mut().limit = frozen + bytes - 1;
+    memory.admission_mut().limit = frozen + 3 * size_of::<u32>() - 1;
     let window = CurrentThreadWindow::open();
     assert_eq!(
         dataset.warm_query_indexes_with_memory(&mut memory),
@@ -88,17 +91,45 @@ fn reifier_target_order_uses_original_admission_and_warmed_probes_allocate_nothi
     let refused = window.close();
     assert_eq!(refused.allocations, 0);
     assert_eq!(memory.admitted_bytes(), frozen);
+    memory.admission_mut().limit = frozen + 3 * size_of::<u32>();
+    assert_eq!(
+        dataset.warm_query_indexes_with_memory(&mut memory),
+        Err(StorageError::AdmissionFailed)
+    );
+    assert_eq!(memory.admitted_bytes(), frozen + 3 * size_of::<u32>());
     memory.admission_mut().limit = frozen + bytes;
     let window = CurrentThreadWindow::open();
     dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
     let warmed = window.close();
-    assert_eq!(usize::try_from(warmed.retained_bytes).unwrap(), bytes);
+    assert_eq!(
+        usize::try_from(warmed.retained_bytes).unwrap(),
+        bytes - 3 * size_of::<u32>()
+    );
     assert_eq!(memory.admitted_bytes(), frozen + bytes);
     assert!(memory.admitted_bytes() <= certificate);
     let window = CurrentThreadWindow::open();
     for _ in 0..32 {
         assert_eq!(dataset.reifiers_of(target).count(), 3);
         assert_eq!(dataset.reifiers_of(subject).count(), 0);
+        assert_eq!(
+            dataset
+                .annotation_quads_for_pattern(
+                    Some(predicate),
+                    Some(subject),
+                    purrdf_core::GraphMatch::Default,
+                )
+                .count(),
+            3
+        );
+        assert_eq!(
+            dataset
+                .reifier_quads_for_components(
+                    [Some(subject), Some(predicate), Some(subject)],
+                    purrdf_core::GraphMatch::Any,
+                )
+                .count(),
+            3
+        );
         dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
     }
     let probes = window.close();

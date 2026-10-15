@@ -3667,7 +3667,7 @@ impl NativeSparqlEngine {
             registered,
             registered_aggregates,
             state.evidence(),
-            shapes,
+            (shapes, dataset.statement_indexes()),
         ))
     }
 

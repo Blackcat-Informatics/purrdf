@@ -313,6 +313,7 @@ impl TripleDatasetBuilder {
             triples: TripleTable::new(self.triples.freeze(memory)?),
             reifiers: self.reifiers.freeze(memory)?,
             reifier_targets: std::sync::OnceLock::new(),
+            reifier_components: std::array::from_fn(|_| std::sync::OnceLock::new()),
             annotations: TripleTable::new(self.annotations.freeze(memory)?),
             locations: Box::default(),
             caps,

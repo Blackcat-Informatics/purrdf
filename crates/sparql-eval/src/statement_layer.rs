@@ -73,6 +73,9 @@ pub(crate) struct StatementProbe<I: ViewTermId> {
     pub p: Option<I>,
     /// The bound object, or `None` when the object is free.
     pub o: Option<I>,
+    /// Bound first-level components of a structural triple object. Deeper
+    /// structure remains the caller's exact unification responsibility.
+    pub components: [Option<I>; 3],
     /// The active graph scope, applied to each row's own graph slot — so a `GRAPH ?g`
     /// probe binds `?g` to the graph the reifier or annotation was declared in.
     pub graph: GraphMatch<I>,
@@ -102,6 +105,7 @@ pub(crate) fn visit_quads<D: DatasetView>(
         s,
         p,
         o,
+        components,
         graph,
         scan_reifier_rows,
     } = probe;
@@ -145,6 +149,16 @@ pub(crate) fn visit_quads<D: DatasetView>(
                     }
                 }
             }
+            (None, None) if components.iter().any(Option::is_some) => {
+                for quad in dataset
+                    .reifier_quads_for_components(components, graph)
+                    .filter(unkeyed_residual)
+                {
+                    if emit(quad).is_break() {
+                        return;
+                    }
+                }
+            }
             (None, None) => {
                 for quad in dataset
                     .reifier_quads_in_graph(graph)
@@ -177,10 +191,7 @@ pub(crate) fn visit_quads<D: DatasetView>(
             }
         }
         None => {
-            for quad in dataset
-                .annotation_quads_in_graph(graph)
-                .filter(unkeyed_residual)
-            {
+            for quad in dataset.annotation_quads_for_pattern(p, o, graph) {
                 if emit(quad).is_break() {
                     return;
                 }
@@ -194,6 +205,87 @@ mod tests {
     use super::*;
     use purrdf_alloc_probe::CurrentThreadWindow;
     use purrdf_core::RdfDatasetBuilder;
+
+    #[test]
+    fn component_and_annotation_walks_materialize_only_selected_orders() {
+        let mut builder = RdfDatasetBuilder::new();
+        let terms: Vec<_> = (0..9)
+            .map(|index| {
+                builder
+                    .intern_iri(&format!("http://example.org/key/{index}"))
+                    .unwrap()
+            })
+            .collect();
+        for index in 0..257 {
+            let reifier = builder
+                .intern_iri(&format!("http://example.org/claim/{index}"))
+                .unwrap();
+            let target = builder
+                .intern_triple(
+                    if index % 17 == 0 { terms[0] } else { terms[3] },
+                    if index % 2 == 0 { terms[1] } else { terms[4] },
+                    terms[2],
+                )
+                .unwrap();
+            builder.push_reifier(reifier, target).unwrap();
+            builder
+                .push_annotation(
+                    reifier,
+                    if index % 23 == 0 { terms[5] } else { terms[6] },
+                    if index % 2 == 0 { terms[7] } else { terms[8] },
+                )
+                .unwrap();
+        }
+        let dataset = builder.freeze().unwrap();
+        let reifies = dataset
+            .term_id_by_iri(purrdf_iri::vocab::rdf::REIFIES)
+            .unwrap();
+        for round in 0..2 {
+            for annotation in [false, true] {
+                let probe = StatementProbe {
+                    s: None,
+                    p: Some(if annotation { terms[5] } else { reifies }),
+                    o: annotation.then_some(terms[7]),
+                    components: if annotation {
+                        [None; 3]
+                    } else {
+                        [Some(terms[0]), Some(terms[1]), None]
+                    },
+                    graph: GraphMatch::Any,
+                    scan_reifier_rows: !annotation,
+                };
+                let mut count = 0;
+                let window = CurrentThreadWindow::open();
+                visit_quads(&dataset, probe, |quad| {
+                    assert_eq!(Some(quad.p), probe.p);
+                    if annotation {
+                        assert_eq!(quad.o, terms[7]);
+                    } else {
+                        let purrdf_core::TermRef::Triple { s, p, .. } =
+                            dataset.as_ref().resolve(quad.o)
+                        else {
+                            panic!("triple target")
+                        };
+                        assert_eq!([s, p], [terms[0], terms[1]]);
+                    }
+                    count += 1;
+                    ControlFlow::Continue(())
+                });
+                let measured = window.close();
+                assert_eq!(count, if annotation { 6 } else { 8 });
+                let arrays = if round == 0 {
+                    if annotation { 1 } else { 2 }
+                } else {
+                    0
+                };
+                assert_eq!(measured.allocations, arrays);
+                assert_eq!(
+                    measured.retained_bytes,
+                    i64::try_from(arrays * 257 * 4).unwrap()
+                );
+            }
+        }
+    }
 
     #[test]
     fn exact_target_walk_materializes_the_target_order_then_reuses_it() {
@@ -239,6 +331,7 @@ mod tests {
                     s: None,
                     p: None,
                     o: Some(target),
+                    components: [None; 3],
                     graph: scope,
                     scan_reifier_rows: true,
                 },

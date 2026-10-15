@@ -170,8 +170,8 @@ pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{
     AccessCost, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView,
     GraphMatch, GraphMatchValue, GraphSelector, NoopReservation, OwnedWorkspaceReservation,
-    ProbePattern, ReadResidency, ResolvedQuad, TermGuard, TermLookupError, ViewOperationStatus,
-    ViewTermId, WorkspaceReservation, checkpointed_drain,
+    ProbePattern, ReadResidency, ResolvedQuad, StatementIndexSupport, TermGuard, TermLookupError,
+    ViewOperationStatus, ViewTermId, WorkspaceReservation, checkpointed_drain,
 };
 pub use describe::{Describer, describe};
 pub use diagnostic::{

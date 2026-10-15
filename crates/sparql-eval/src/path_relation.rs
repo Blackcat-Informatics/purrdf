@@ -1124,6 +1124,7 @@ fn canonical_edges<D: DatasetView>(
                     s: None,
                     p: Some(predicate_id),
                     o: None,
+                    components: [None; 3],
                     graph,
                     scan_reifier_rows: matches!(predicate, TermValue::Iri(iri) if iri == RDF_REIFIES),
                 },

@@ -4,7 +4,7 @@
 //! Once-read candidate indexes for the original BGP loop. The row binder,
 //! selected join order, row sink, checkpoints and final FILTER are unchanged.
 
-use super::{BgpOrder, CompiledPattern, Pos, emit_virtual_candidates, query_id};
+use super::{BgpOrder, CompiledPattern, Pos, components_of, emit_virtual_candidates, query_id};
 use crate::dataset_spec::GraphScope;
 use crate::eval::EvalCtx;
 use crate::parsed_value::ParsedValue;
@@ -132,6 +132,7 @@ impl<I: ViewTermId> PreparedWindow<I> {
             let s = constants(&cp.s);
             let p = constants(&cp.p);
             let o = constants(&cp.o);
+            let components = components_of(&cp.o, constants);
             let mut scan_graph = |ordinal, graph| -> Result<(), EvalError> {
                 let mut virtual_ordinal = 0;
                 for quad in ctx.dataset.quads_for_pattern(s, p, o, graph) {
@@ -151,33 +152,43 @@ impl<I: ViewTermId> PreparedWindow<I> {
                 }
                 if matches!(scope, GraphScope::One(_)) {
                     let mut failure = None;
-                    emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies, graph, |quad| {
-                        if failure.is_some() || ctx.stop_check().is_some() {
-                            return ControlFlow::Break(());
-                        }
-                        let added = (|| {
-                            result.visits = result
-                                .visits
-                                .checked_add(1)
-                                .ok_or(EvalError::WorkspaceBoundOverflow)?;
-                            candidates.push(Candidate {
-                                quad,
-                                graph: ordinal,
-                                virtual_ordinal: Some(virtual_ordinal),
-                                numeric: None,
-                            })?;
-                            virtual_ordinal = virtual_ordinal
-                                .checked_add(1)
-                                .ok_or(EvalError::WorkspaceBoundOverflow)?;
-                            Ok::<_, EvalError>(())
-                        })();
-                        if let Err(error) = added {
-                            failure = Some(error);
-                            ControlFlow::Break(())
-                        } else {
-                            ControlFlow::Continue(())
-                        }
-                    });
+                    emit_virtual_candidates(
+                        ctx.dataset,
+                        cp,
+                        s,
+                        p,
+                        o,
+                        components,
+                        reifies,
+                        graph,
+                        |quad| {
+                            if failure.is_some() || ctx.stop_check().is_some() {
+                                return ControlFlow::Break(());
+                            }
+                            let added = (|| {
+                                result.visits = result
+                                    .visits
+                                    .checked_add(1)
+                                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                                candidates.push(Candidate {
+                                    quad,
+                                    graph: ordinal,
+                                    virtual_ordinal: Some(virtual_ordinal),
+                                    numeric: None,
+                                })?;
+                                virtual_ordinal = virtual_ordinal
+                                    .checked_add(1)
+                                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                                Ok::<_, EvalError>(())
+                            })();
+                            if let Err(error) = added {
+                                failure = Some(error);
+                                ControlFlow::Break(())
+                            } else {
+                                ControlFlow::Continue(())
+                            }
+                        },
+                    );
                     if let Some(error) = failure {
                         return Err(error);
                     }

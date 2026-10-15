@@ -1849,7 +1849,16 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// charge their actual numeric work and scratch instead of the former bounded or
 /// zero-cost path. Even when a query's answer is unchanged, its fuel and scratch
 /// cut points can move; consumers must remeasure those ceilings.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 18;
+///
+/// # v19
+///
+/// The point schedule stays unchanged. Structural reifier probes narrow bound
+/// triple components before emitting BGP candidates, so unrelated reifier rows
+/// no longer consume candidate fuel. Annotation predicate/object ranges preserve
+/// the same emitted candidates while reducing source rows visited. Statement
+/// estimates also participate in join planning. Consumers must remeasure fuel,
+/// scratch and intermediate cut points against their actual statement queries.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 19;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2889,7 +2898,7 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 18);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 19);
         assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
         let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(
