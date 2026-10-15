@@ -513,10 +513,17 @@ pub fn numeric_render_layout(
     let groups = digits.div_ceil(19);
     let group_words = if groups <= 3 { 0 } else { groups };
     let quotient_words = if limbs <= 3 { 0 } else { limbs };
-    // Native rendering mutates one admitted quotient beside the group array.
-    let words = quotient_words
-        .checked_add(group_words)
-        .ok_or(SizeOverflow)?;
+    // Ordinary rendering retains one quotient beside its groups. The tree
+    // includes cached powers, saved quotient/remainder owners and the existing
+    // recursive division/product scratch. Their simultaneous envelope is
+    // 32 group-width words plus the one output-group destination.
+    let words = if groups > crate::bigint::DECIMAL_RENDER_TREE_START_GROUPS {
+        group_words.checked_mul(33).ok_or(SizeOverflow)?
+    } else {
+        quotient_words
+            .checked_add(group_words)
+            .ok_or(SizeOverflow)?
+    };
     let temporary_bytes = std::alloc::Layout::array::<u64>(words)
         .map_err(|_| SizeOverflow)?
         .size();
@@ -745,16 +752,18 @@ pub const fn render(limbs: u64, scale: u64) -> Cost {
     render_parts(limbs, digits, digits.saturating_add(scale))
 }
 
-// Display divides by 10^19, once per coefficient group, not once per
-// output digit. The one retained quotient is cloned initially, then each pass
-// computes division and remainder over at most `limbs` words. The conservative
-// linear terms also cover trimming and amortized group growth; fractional
-// padding only costs text.
+// Ordinary output uses 10^19 leaves; large output splits by cached powers.
+// The tree's complete node counts are computed from widths, never the digits.
 const fn render_parts(limbs: u64, digits: u64, text: u64) -> Cost {
     let groups = digits.div_ceil(19);
-    let work = groups
-        .saturating_mul(limbs.saturating_mul(3).saturating_add(10))
-        .saturating_add(limbs)
+    let conversion = if groups > crate::bigint::DECIMAL_RENDER_TREE_START_GROUPS as u64 {
+        decimal_tree_render_work(groups)
+    } else {
+        groups
+            .saturating_mul(limbs.saturating_mul(3).saturating_add(10))
+            .saturating_add(limbs)
+    };
+    let work = conversion
         // Decimal formatting reads coefficient text before writing the final
         // padded text. Each is bounded by the final rendered length.
         .saturating_add(text.saturating_mul(2))
@@ -763,12 +772,75 @@ const fn render_parts(limbs: u64, digits: u64, text: u64) -> Cost {
     // conservative work-admission bound over the in-place native renderer.
     // Decimal formatting additionally holds its coefficient text, padded text
     // and destination string, including geometric spare string capacity.
-    let words = limbs
+    let ordinary_words = limbs
         .saturating_mul(3)
         .saturating_add(groups.saturating_mul(3));
+    let words = if groups > crate::bigint::DECIMAL_RENDER_TREE_START_GROUPS as u64 {
+        let tree_words = groups.saturating_mul(33);
+        if tree_words > ordinary_words {
+            tree_words
+        } else {
+            ordinary_words
+        }
+    } else {
+        ordinary_words
+    };
     Cost::new(
         work,
         limb_bytes(words).saturating_add(text.saturating_mul(6)),
+    )
+}
+
+/// Work of one tree split, using group widths as binary-limb upper bounds.
+/// B=10^19 lies between 2^63 and 2^64. The divisor for L groups therefore
+/// has floor(63L/64)+1..=L limbs. Clamp to the maximum of the existing
+/// quotient-length times divisor-length bound over that whole interval.
+const fn decimal_render_split_work(width: u64) -> u64 {
+    let lower = 1_u64 << (width - 1).ilog2();
+    let minimum = lower.saturating_sub(lower.div_ceil(64)).saturating_add(1);
+    let middle = width / 2;
+    let divisor = if middle < minimum {
+        minimum
+    } else if middle > lower {
+        lower
+    } else {
+        middle
+    };
+    div(width, divisor).work()
+}
+
+/// At most 64 width levels. Full subtrees occur floor(groups/width) times;
+/// each binary suffix contributes its one partial node at its highest bit.
+/// The old complete power-work certificate also bounds the cached squares.
+const fn decimal_tree_render_work(groups: u64) -> u64 {
+    let top = 1_u64 << (groups - 1).ilog2();
+    let power_work = if top > u32::MAX as u64 {
+        u64::MAX
+    } else {
+        pow(64 << 16, top as u32).work()
+    };
+    let mut work = power_work;
+    let mut width = top;
+    if groups > top {
+        work = work.saturating_add(decimal_render_split_work(groups));
+    }
+    while width > crate::bigint::DECIMAL_TREE_START_GROUPS as u64 {
+        work =
+            work.saturating_add((groups / width).saturating_mul(decimal_render_split_work(width)));
+        let tail = groups % width;
+        if tail > width / 2 && tail > crate::bigint::DECIMAL_TREE_START_GROUPS as u64 {
+            work = work.saturating_add(decimal_render_split_work(tail));
+        }
+        width /= 2;
+    }
+    // Each leaf has at most 256 groups/limbs, including its quotient copy,
+    // divisions, zero padding and output writes. Fraction placement is separate.
+    work.saturating_add(
+        groups.saturating_mul(
+            (crate::bigint::DECIMAL_TREE_START_GROUPS as u64)
+                .saturating_mul(3)
+                .saturating_add(16),
+        ),
     )
 }
 

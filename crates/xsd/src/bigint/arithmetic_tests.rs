@@ -275,6 +275,70 @@ mod tests {
     }
 
     #[test]
+    fn decimal_render_tree_preserves_zero_padding_peak_and_scratch_release() {
+        for groups in [255_u32, 256, 257, 511, 512, 513, 2106, 8191, 8192, 8193] {
+            let digits = groups * 19;
+            let power = BigInt::pow10(digits);
+            for (value, expected) in [
+                (power.sub(&BigInt::one()), "9".repeat(digits as usize)),
+                (
+                    power.add(&BigInt::one()).negated(),
+                    format!("-1{}1", "0".repeat(digits as usize - 1)),
+                ),
+            ] {
+                let layout = value.decimal_render_layout(0).unwrap();
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let prepared = value.prepare_decimal_digits().unwrap();
+                let measured = window.close();
+                assert_eq!(prepared.to_string(), expected, "{groups} groups");
+                assert!(
+                    usize::try_from(measured.peak_working_bytes).unwrap()
+                        <= layout.temporary_bytes(),
+                    "{groups}: {measured:?}, {layout:?}"
+                );
+                assert_eq!(
+                    measured.retained_bytes,
+                    i64::try_from(prepared.heap_bytes()).unwrap()
+                );
+                let cost = crate::exact::cost::render(value.limb_len() as u64, 0);
+                assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= cost.bytes());
+            }
+        }
+
+        let value = BigInt::pow10(160_000).add(&BigInt::one());
+        let layout = value.decimal_render_layout(0).unwrap();
+        let capacity = value.limb_len() * 2 + 128;
+        let scratch = LimbScratch::new(128, capacity).unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let prepared = value.prepare_decimal_digits_in(&scratch).unwrap();
+        assert_eq!(scratch.available(), 127);
+        drop(prepared);
+        assert_eq!(scratch.available(), 128);
+        assert_eq!(window.close().allocations, 0);
+
+        let one = LimbScratch::new(1, capacity).unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        assert!(matches!(
+            value.prepare_decimal_digits_in(&one),
+            Err(LimbScratchError::Exhausted { .. })
+        ));
+        assert_eq!(one.available(), 1);
+        let neighbor = BigInt::one().shl_in(400, &one).unwrap();
+        drop(neighbor);
+        assert_eq!(one.available(), 1);
+        assert_eq!(window.close().allocations, 0);
+
+        let narrow = LimbScratch::new(128, layout.group_capacity() - 1).unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        assert!(matches!(
+            value.prepare_decimal_digits_in(&narrow),
+            Err(LimbScratchError::Capacity { .. })
+        ));
+        assert_eq!(narrow.available(), 128);
+        assert_eq!(window.close().allocations, 0);
+    }
+
+    #[test]
     fn pow_gcd_and_decimal_shapes() {
         assert_eq!(BigInt::from_i128(-3).pow(3), BigInt::from_i128(-27));
         assert_eq!(BigInt::zero().pow(0), BigInt::one());

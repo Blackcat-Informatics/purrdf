@@ -599,7 +599,10 @@ fn mag_sqrt_floor(value: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScr
 // Retain scalar Horner through the measured 4,000-digit window; tree products
 // become useful only for substantially longer inputs.
 const DECIMAL_TREE_START_RANK: usize = 8;
-const DECIMAL_TREE_START_GROUPS: usize = 1 << DECIMAL_TREE_START_RANK;
+pub(crate) const DECIMAL_TREE_START_GROUPS: usize = 1 << DECIMAL_TREE_START_RANK;
+// A root must contain a full subtree whose balanced divisor reaches the
+// recursive division range. Smaller renders retain the original quotient loop.
+pub(crate) const DECIMAL_RENDER_TREE_START_GROUPS: usize = 4 * DIVISION_BLOCK_THRESHOLD;
 
 /// The one validating reader for both the small Horner and large tree paths.
 /// Leading zeros consume input but form no group, matching parse admission's
@@ -767,6 +770,90 @@ fn decimal_group_power<'a>(
         }
     }
     Ok(powers[rank].as_ref().expect("requested power exists"))
+}
+
+/// The one mutable quotient-to-group leaf used by both rendering paths.
+fn append_decimal_group_leaf(
+    magnitude: &[u64],
+    groups: &mut Mag,
+    storage: &impl Allocate,
+) -> Result<(), LimbScratchError> {
+    let mut quotient = storage.copy(magnitude)?;
+    while !quotient.is_empty() {
+        let remainder = mag_divmod_small_in_place(&mut quotient, CHUNK_BASE);
+        storage.push(groups, remainder)?;
+    }
+    Ok(())
+}
+
+/// Split by cached B^(2^rank), B=10^19, and emit low groups before high ones.
+/// Low subtrees are padded to their specified width; the root is not padded.
+fn append_decimal_group_tree(
+    magnitude: &[u64],
+    width: usize,
+    padded: bool,
+    groups: &mut Mag,
+    powers: &[Option<BigInt>; usize::BITS as usize],
+    storage: &impl Allocate,
+) -> Result<(), LimbScratchError> {
+    let start = groups.len();
+    if !magnitude.is_empty() {
+        if width <= DECIMAL_TREE_START_GROUPS {
+            append_decimal_group_leaf(magnitude, groups, storage)?;
+        } else {
+            let rank = (width - 1).ilog2();
+            let lower_width = 1_usize << rank;
+            let power = powers[rank as usize]
+                .as_ref()
+                .expect("prepared decimal power");
+            let (quotient, remainder) = mag_div_rem(magnitude, &power.magnitude, storage)?;
+            append_decimal_group_tree(
+                &remainder,
+                lower_width,
+                padded || !quotient.is_empty(),
+                groups,
+                powers,
+                storage,
+            )?;
+            drop(remainder);
+            append_decimal_group_tree(
+                &quotient,
+                width - lower_width,
+                padded,
+                groups,
+                powers,
+                storage,
+            )?;
+        }
+    }
+    let end = start
+        .checked_add(width)
+        .ok_or(LimbScratchError::SizeOverflow)?;
+    if groups.len() > end {
+        return Err(LimbScratchError::SizeOverflow);
+    }
+    if padded {
+        while groups.len() < end {
+            storage.push(groups, 0)?;
+        }
+    }
+    Ok(())
+}
+
+/// Keep the cached-power array off ordinary render frames. Cached powers are
+/// shared with decimal parsing; every native owner uses the supplied allocator.
+#[inline(never)]
+fn append_large_decimal_groups(
+    magnitude: &[u64],
+    width: usize,
+    groups: &mut Mag,
+    storage: &impl Allocate,
+) -> Result<(), LimbScratchError> {
+    let mut powers: [Option<BigInt>; usize::BITS as usize] = core::array::from_fn(|_| None);
+    powers[0] = Some(BigInt::from_u64(CHUNK_BASE));
+    let rank = usize::try_from((width - 1).ilog2()).map_err(|_| LimbScratchError::SizeOverflow)?;
+    decimal_group_power(&mut powers, rank, storage)?;
+    append_decimal_group_tree(magnitude, width, false, groups, &powers, storage)
 }
 
 // ---------------------------------------------------------------------------
@@ -1791,12 +1878,15 @@ impl BigInt {
         let mut groups = storage.destination(layout.group_capacity(), 0)?;
         if self.is_zero() {
             storage.push(&mut groups, 0)?;
+        } else if layout.group_capacity() > DECIMAL_RENDER_TREE_START_GROUPS {
+            append_large_decimal_groups(
+                &self.magnitude,
+                layout.group_capacity(),
+                &mut groups,
+                storage,
+            )?;
         } else {
-            let mut quotient = storage.copy(&self.magnitude)?;
-            while !quotient.is_empty() {
-                let remainder = mag_divmod_small_in_place(&mut quotient, CHUNK_BASE);
-                storage.push(&mut groups, remainder)?;
-            }
+            append_decimal_group_leaf(&self.magnitude, &mut groups, storage)?;
         }
         let leading = groups.last().copied().expect("zero includes one group");
         let leading_digits = if leading == 0 {

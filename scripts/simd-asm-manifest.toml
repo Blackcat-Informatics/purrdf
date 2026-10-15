@@ -1865,7 +1865,7 @@ summary = "`numeric::canonical_double`, the xsd:double canonical lexical form"
 
 [[site]]
 id = "xsd.exact-arith"
-summary = "The single arbitrary-precision product/division dispatch and its exact modular transform"
+summary = "Arbitrary-precision product/division dispatch, exact modular transform and cached-power rendering"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1890,6 +1890,15 @@ summary = "The single arbitrary-precision product/division dispatch and its exac
   label = "transform"
   crate = "purrdf_xsd"
   symbol = "purrdf_xsd::bigint::ntt::transform"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "decimal tree"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::bigint::append_large_decimal_groups"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

@@ -41,8 +41,8 @@
 //!   products around recursive cutoffs, including asymmetric and signed cases,
 //!   checked against the independent schoolbook kernel.
 //! * `large_decimal_group_parse_replays_on_this_target`: long decimal input
-//!   around the balanced-reader crossover and at 40,000 digits, checked
-//!   against the independent decimal renderer on the actual target.
+//!   around the balanced-reader crossover and at 40,000 and 160,000 digits,
+//!   parsed and rendered back to the original lexical input on the actual target.
 
 use std::fmt::Write as _;
 use std::str::FromStr;
@@ -274,7 +274,7 @@ fn the_oracle_vectors_replay_on_this_target() {
 }
 
 fn large_decimal_group_parse_replays_on_this_target() {
-    for digits in [4_000, 4_882, 4_883, 4_884, 40_000] {
+    for digits in [4_000, 4_882, 4_883, 4_884, 40_000, 160_000] {
         let mut lexical = String::with_capacity(digits);
         lexical.push('7');
         for at in 1..digits {

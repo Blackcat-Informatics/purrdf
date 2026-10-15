@@ -343,6 +343,9 @@ fn bench_karatsuba(c: &mut Bench) {
         group.bench_function(format!("transform_range/{digits}"), |bench| {
             bench.iter(|| black_box(black_box(&a).mul_fast(black_box(&b))));
         });
+        group.bench_function(format!("render_range/{digits}"), |bench| {
+            bench.iter(|| black_box(black_box(&a).to_string()));
+        });
     }
     group.finish();
 }

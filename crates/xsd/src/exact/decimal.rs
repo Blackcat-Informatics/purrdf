@@ -2450,33 +2450,38 @@ mod physical_render_tests {
 
     #[test]
     fn decimal_group_and_output_refusals_keep_the_original_prefix_and_account() {
-        let coefficient =
-            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
+        let large = "7".repeat(160_000);
+        for lexical in [
+            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
+            large.as_str(),
+        ] {
+            let coefficient = lexical
                 .parse::<crate::exact::Integer>()
                 .unwrap()
                 .to_bigint();
-        let layout = coefficient.decimal_render_layout(7).unwrap();
-        assert!(layout.temporary_bytes() > 0);
-        for allowed_temporary in [0, layout.temporary_bytes()] {
-            let mut account = Account {
-                live: 0,
-                peak: 0,
-                ceiling: usize::MAX,
-                refused: None,
-            };
-            let mut output = Memory::new(&mut account).string("prefix:").unwrap();
-            let baseline = output.capacity();
-            account.ceiling = baseline + allowed_temporary;
-            let mut memory = Memory::resume(&mut account, baseline);
-            assert_eq!(
-                append_scaled_integer_with_memory(&coefficient, 7, &mut output, &mut memory),
-                Err(DecimalTextError::Storage(StorageError::AdmissionFailed))
-            );
-            assert_eq!(output, "prefix:");
-            assert_eq!(memory.admitted_bytes(), baseline);
-            memory.release_string(output).unwrap();
-            assert_eq!(account.live, 0);
-            assert!(account.refused.is_some());
+            let layout = coefficient.decimal_render_layout(7).unwrap();
+            assert!(layout.temporary_bytes() > 0);
+            for allowed_temporary in [0, layout.temporary_bytes()] {
+                let mut account = Account {
+                    live: 0,
+                    peak: 0,
+                    ceiling: usize::MAX,
+                    refused: None,
+                };
+                let mut output = Memory::new(&mut account).string("prefix:").unwrap();
+                let baseline = output.capacity();
+                account.ceiling = baseline + allowed_temporary;
+                let mut memory = Memory::resume(&mut account, baseline);
+                assert_eq!(
+                    append_scaled_integer_with_memory(&coefficient, 7, &mut output, &mut memory),
+                    Err(DecimalTextError::Storage(StorageError::AdmissionFailed))
+                );
+                assert_eq!(output, "prefix:");
+                assert_eq!(memory.admitted_bytes(), baseline);
+                memory.release_string(output).unwrap();
+                assert_eq!(account.live, 0);
+                assert!(account.refused.is_some());
+            }
         }
     }
 }
