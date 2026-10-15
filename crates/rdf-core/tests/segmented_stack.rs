@@ -473,6 +473,84 @@ fn persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last() {
     }
 }
 
+fn ordinary_quads_keep_their_authored_kind_across_layer_partitions() {
+    use purrdf_core::{GraphMatch, QuadValues};
+    for graph in [None, Some("urn:graph")] {
+        let rows = [
+            statement("urn:x", "urn:a", graph),
+            statement("urn:x", "urn:b", graph),
+        ];
+        let declaration = QuadValues {
+            g: graph.map(TermValue::iri),
+            ..QuadValues::triple(
+                TermValue::iri("urn:x"),
+                TermValue::iri(purrdf_iri::vocab::rdf::REIFIES),
+                TermValue::Triple {
+                    s: TermValue::iri("urn:ts").into(),
+                    p: TermValue::iri("urn:tp").into(),
+                    o: TermValue::iri("urn:to").into(),
+                },
+            )
+        };
+        let declared = std::slice::from_ref(&declaration);
+        let sources = [
+            statement_layer([&[], declared, &[]], SegmentedLayerMetadata::default()),
+            statement_layer([&rows[..1], &[], &[]], SegmentedLayerMetadata::default()),
+            statement_layer([&rows[1..], &[], &[]], SegmentedLayerMetadata::default()),
+        ];
+        let combined = statement_layer([&rows, declared, &[]], SegmentedLayerMetadata::default());
+        let mut stack = SegmentedStack::default();
+        for (layers, reifiers) in [
+            (vec![Arc::clone(&combined)], 1),
+            (vec![Arc::clone(&sources[1]), Arc::clone(&sources[2])], 0),
+        ]
+        .into_iter()
+        .chain(
+            [
+                [0, 1, 2],
+                [0, 2, 1],
+                [1, 0, 2],
+                [1, 2, 0],
+                [2, 0, 1],
+                [2, 1, 0],
+            ]
+            .into_iter()
+            .map(|order| (order.map(|index| Arc::clone(&sources[index])).to_vec(), 1)),
+        ) {
+            stack.publish(layers, limits()).unwrap();
+            let snapshot = stack.snapshot().unwrap();
+            let query = snapshot.query(limits()).unwrap();
+            assert_eq!(
+                (
+                    query.quads().count(),
+                    query.reifier_quads().count(),
+                    query.annotation_quads().count()
+                ),
+                (2, reifiers, 0),
+                "authored ordinary rows must not depend on partitioning: {graph:?}",
+            );
+            let subject = query.term_id_by_value(&rows[0].s).unwrap().unwrap();
+            let predicate = query.term_id_by_value(&rows[0].p).unwrap().unwrap();
+            let scope = graph.map_or(GraphMatch::Default, |graph| {
+                GraphMatch::Named(
+                    query
+                        .term_id_by_value(&TermValue::iri(graph))
+                        .unwrap()
+                        .unwrap(),
+                )
+            });
+            let mut objects: Vec<_> = query
+                .quads_for_pattern(Some(subject), Some(predicate), None, scope)
+                .map(|row| query.term_value(row.o).unwrap().value().clone())
+                .collect();
+            objects.sort();
+            assert_eq!(objects, [TermValue::iri("urn:a"), TermValue::iri("urn:b")]);
+            assert!(query.read_error().is_none());
+            query.check_ready().unwrap();
+        }
+    }
+}
+
 fn chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs() {
     use purrdf_core::{DatasetView, GraphMatch};
     let a = statement("urn:s", "urn:a", Some("urn:implicit"));
@@ -565,7 +643,7 @@ fn effective_annotation_classification_uses_original_chronology_and_first_occurr
             vec![Arc::clone(&initial), Arc::clone(&removal), orphan],
             (0, 0, 4),
         ),
-        (vec![Arc::clone(&initial), ordinary], (0, 1, 4)),
+        (vec![Arc::clone(&initial), ordinary], (4, 1, 0)),
     ] {
         stack.publish(layers, limits()).unwrap();
         let snapshot = stack.snapshot().unwrap();
@@ -1133,6 +1211,7 @@ fn resident_head_copy_refuses_under_the_shared_operation_grant() {
 }
 
 purrdf_testkit::harness_main!(
+    ordinary_quads_keep_their_authored_kind_across_layer_partitions,
     generated_chronological_publications_match_eager_typed_seals,
     empty_certified_streams_do_not_probe_dictionary_for_bound_head_row,
     persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last,

@@ -652,10 +652,12 @@ stream filtering; within one source, annotation typing takes precedence over a
 duplicate ordinary occurrence. Thus a value row appears in at most one of the
 logical ordinary/annotation streams. The virtual reifier stream retains native
 IR behavior, which permits an equal physical ordinary or annotation row beside
-that reifier binding. Native ordinary typing in a sealed source is retained when all
-applicable reifier declarations are in that source. A surviving declaration in
-another generation promotes that ordinary row to an annotation, in the same graph
-only. A physical annotation becomes ordinary when an originally applicable
+that reifier binding. Explicit ordinary typing in a sealed source is retained
+regardless of which generation holds a reifier declaration for its subject.
+Partitioning ordinary rows and declarations across layers cannot turn those
+ordinary rows into annotations. Mutable value input can still infer typing at
+its write boundary; that inference is distinct from reading authored sealed rows.
+A physical annotation becomes ordinary when an originally applicable
 graph-scoped declaration was visible in that annotation's introduction prefix
 and no effective declaration survives. Prefix visibility includes removals through
 that source and excludes future sources. An explicit annotation introduced after
