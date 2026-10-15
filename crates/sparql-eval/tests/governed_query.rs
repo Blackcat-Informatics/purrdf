@@ -1418,6 +1418,54 @@ fn statement_ranges_at_ten_million_claims() {
     assert_statement_query_ranges(&dataset);
 }
 
+/// The fixture's caller-chosen `valid` predicate is its valid-from field. Every
+/// reifier has exactly one such annotation; the join must therefore have N rows.
+fn assert_statement_statistics(population: usize) {
+    let dataset = statement_claims(population);
+    assert_eq!(dataset.reifiers().count(), population);
+    assert_eq!(dataset.annotations().count(), population * 6);
+    let explanation = NativeSparqlEngine::new()
+        .explain_query(
+            &dataset,
+            "SELECT (COUNT(*) AS ?count) WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?t . ?r <http://example.org/valid> ?v }",
+            None,
+        )
+        .unwrap();
+    let bgps: Vec<_> = explanation
+        .ledger()
+        .iter()
+        .filter(|node| node.label == "Bgp")
+        .collect();
+    assert_eq!(bgps.len(), 1);
+    let actual = bgps[0].rows;
+    let estimate = bgps[0].estimate.as_ref().unwrap().rows;
+    assert_eq!(actual, u64::try_from(population).unwrap());
+    assert!(estimate <= actual * 2 && actual <= estimate * 2);
+    assert_eq!(candidate_quads(&explanation), actual * 2);
+    assert_eq!(explanation.statistics().len(), 2);
+    assert!(explanation.statistics().iter().all(|input| {
+        input.contains("accuracy: Exact") && !input.contains("accuracy: UpperBound")
+    }));
+    eprintln!(
+        "claims={population} annotations={} actual_rows={actual} estimated_rows={estimate} candidates={}",
+        population * 6,
+        candidate_quads(&explanation)
+    );
+}
+
+#[test]
+fn statement_statistics_predict_reifier_annotation_join() {
+    for population in [1, 128, 4096] {
+        assert_statement_statistics(population);
+    }
+}
+
+#[test]
+#[ignore = "actual million-claim statistics execution with six million annotations"]
+fn statement_statistics_at_one_million_claims() {
+    assert_statement_statistics(1_000_000);
+}
+
 /// Fixed work for external instruction counting. Both modes build and warm the
 /// identical population; subtract control from query for each population/kind.
 /// There is no timer, adaptive sampling or throughput claim in this probe.
