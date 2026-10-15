@@ -64,7 +64,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-lex` (`crates/lex`) | The workspace's lexical layer, over the zero-dependency `purrdf-hash` root alone: the exact Turtle/SPARQL/XML/ECMA-262 terminal classes and escape decoders (`terminals`: `decode_uchar`, `echar_value`, `decode_char_ref`, `skip_ws`/`trim_ws`, `is_ncname`, `in_ranges`); the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128, with `find_byte`/`find_byte2` for needles known at run time and `find_byte_pair` for two positions a fixed gap apart, the search behind `purrdf_core::xsd_regex`'s literal prefilter (`scan`); the RFC 8259 JSON string escaper and decoder (`json_escape`); RFC 6901 JSON Pointer tokens (`json_pointer`); RFC 3986/3987/6570 percent-encoding (`percent`); the one JSON reader, lexeme-keeping value and deterministic writer, with the strict typed record reader and its record codec (`json`, `json::record`, `json_record!`); the YAML 1.2 core-schema reader and block emitter over the JSON data model (`yaml`); the RFC 8949 CBOR codec with core deterministic encoding (`cbor`); the XML 1.0 + Namespaces reader, which expands an internal DTD subset under a budget and refuses external entities (`xml`); the literal and IRI escapers for each carrier (`literal_escape`, `iri_escape`), the RDF 1.2 term spelling (`term_syntax`), the text sink (`text_out`) and Crockford Base32 (`crockford`); the typed diagnostic presentation (`diagnostic`: stable message identity and exact typed arguments, validated against an English template; `purrdf_core::diagnostic` re-exports it); and the one Unicode normalization pipeline (`unicode`: NFC, NFD, NFKC, NFKD, `is_nfc`, `ccc` and the streaming stages the text analyzer composes its case fold with) over tables generated at `unicode::UNICODE_VERSION`, the version every Unicode table in the workspace is generated from by its one generator (`examples/gen_unicode_tables.rs`); and the shared structures and constructor macros (`walk`, `assoc`, `constructors!`, `variant_from!`, `message_error!`; see [Shared structures and constructors](#shared-structures-and-constructors)) |
 | `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags and their RDF 1.2 identity fold, IDNA2008) and `vocab`, the W3C vocabulary terms (one module per W3C namespace; XSD datatype IRIs live in `purrdf_xsd::datatype`); runtime dependencies are `purrdf-lex`, whose `terminals`, `scan`, `json_escape`, `json_pointer` and `percent` it re-exports, and the `purrdf-hash` root |
 | `purrdf-xsd` | Foundation over `purrdf-lex` and `purrdf-hash` |
-| `purrdf-events` | Zero-dependency foundation: the event protocol and `TextDirection`, the one RDF 1.2 base-direction type |
+| `purrdf-events` | Foundation over `purrdf-hash`: the event protocol and `TextDirection`, the one RDF 1.2 base-direction type; event errors use the root's borrowed structured inspection |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`), re-exporting the one RDF 1.2 base-direction type, `purrdf_events::TextDirection`: `no_std` closed leaf over `purrdf-events`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only |
 | `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at; `on_stack`/`on_stack_scoped` run a computation on a stack of a stated size (a fresh thread natively, checked against the floor on wasm32) |
@@ -146,11 +146,18 @@ order, with the home each names. Call the home; never write a second body.
 | `secret-clearing` | `purrdf_hash::wipe_secret` |
 | `constant-time-byte-comparison` | `purrdf_ed25519::constant_time_eq` |
 | `prefixed-name` | `purrdf_iri::contract_where` |
+| `structured-error-list` | `purrdf_hash::error::visit_list` |
 
 ### Shared structures and constructors
 
 The general-purpose structures a job's home is built from are shared the same
 way, so a crate reaches for them rather than writing its own:
+
+* `purrdf_hash::error`: `StructuredError`, `ErrorVisitor` and the closed
+  `ErrorValue` algebra inspect semantic error fields without rendering them.
+  `error_visit!` generates exhaustive producer patterns; `visit_list` emits
+  borrowed lists. Consumers handle this protocol rather than mirroring each
+  non-exhaustive error enum.
 
 * `purrdf_lex::walk`: `WorkList` (the heap work list every whole-tree walk
   keeps), `Nested`/`Dismantle` (an owned child box whose drop is iterative)

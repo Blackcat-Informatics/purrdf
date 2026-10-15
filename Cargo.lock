@@ -615,6 +615,9 @@ dependencies = [
 [[package]]
 name = "purrdf-events"
 version = "3.0.1"
+dependencies = [
+ "purrdf-hash",
+]
 
 [[package]]
 name = "purrdf-geo"

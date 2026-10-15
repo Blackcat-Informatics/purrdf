@@ -1,0 +1,178 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Borrowed error inspection, independent of human presentation.
+//!
+//! Producers report a stable variant code and every semantic field. A consumer
+//! handles this fixed value algebra, rather than matching each producer's enum.
+//! Nested payloads are references, not recursive calls: a consumer can put them
+//! on its own heap work list. Inspection neither formats nor clones a payload.
+
+/// An error, or a structured compound value carried by an error.
+///
+/// Variant codes and field names are stable public identities. Adding a producer
+/// variant or field does not add a variant to [`ErrorValue`]. Implementations
+/// report all semantic fields, including explicit absence and empty lists.
+pub trait StructuredError {
+    /// Report this value's variant and fields without rendering it to text.
+    /// Borrowed payloads remain valid for the original value's lifetime.
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>);
+}
+
+impl StructuredError for core::convert::Infallible {
+    fn visit<'error>(&'error self, _visitor: &mut dyn ErrorVisitor<'error>) {
+        // Generic query errors can name Infallible without ever carrying one.
+        // Do not dereference an uninhabited reference to implement that bound.
+        unreachable!("an Infallible error has no value to inspect")
+    }
+}
+
+/// One field value. These primitive kinds form a closed interchange algebra.
+///
+/// Compound values use [`Self::Record`], [`Self::Term`] or [`Self::Cause`]; lists
+/// use the visitor's list events. New producer variants and fields therefore do
+/// not require a consumer wildcard or an enum mirror. Float bit patterns retain
+/// every value, including negative zero and NaN payloads, without formatting.
+#[derive(Clone, Copy)]
+pub enum ErrorValue<'error> {
+    /// An optional field is present in the schema but has no value.
+    Absent,
+    /// An exact unsigned integer, including full-width capacity counters.
+    Unsigned(u128),
+    /// An exact signed integer.
+    Signed(i128),
+    /// A Boolean condition.
+    Boolean(bool),
+    /// An IEEE 754 binary32 value's original bits.
+    Float32Bits(u32),
+    /// An IEEE 754 binary64 value's original bits.
+    Float64Bits(u64),
+    /// One Unicode scalar value.
+    Character(char),
+    /// A machine-readable code or discriminant, distinct from prose.
+    Code(&'error str),
+    /// Text that is itself data, such as an input lexical form.
+    Text(&'error str),
+    /// A genuine caller or external message, not a rendered native cause.
+    Message(&'error str),
+    /// An IRI-valued field; inspection does not parse or normalize its bytes.
+    Iri(&'error str),
+    /// Original bytes, without an encoding or allocation.
+    Bytes(&'error [u8]),
+    /// A byte quantity, distinct from an unqualified integer.
+    ByteCount(u128),
+    /// A nested error retaining its own stable variant and fields.
+    Cause(&'error dyn StructuredError),
+    /// A compound non-error payload retaining its variant and fields.
+    Record(&'error dyn StructuredError),
+    /// A structured RDF term payload, visited without converting it to a string.
+    Term(&'error dyn StructuredError),
+}
+
+// A debug view must not accidentally render a retained or recursively nested
+// cause. The visitor, not Debug, is the complete structural interface.
+crate::debug_non_exhaustive!(ErrorValue<'_> {});
+
+/// Receives one structured error and its fields.
+///
+/// A value starts with `variant`. Named fields have `Some(name)`; list entries
+/// have `None`. A list's begin/end pair encloses its values, including nested
+/// lists. Nested records/causes are borrowed values: the producer does not call
+/// their visitor recursively. No method has a default that can discard a field.
+pub trait ErrorVisitor<'error> {
+    /// Stable identity of the current error or compound payload variant.
+    fn variant(&mut self, code: &'static str);
+
+    /// A named field or an unnamed list entry, preserving its primitive kind.
+    fn value(&mut self, name: Option<&'static str>, value: ErrorValue<'error>);
+
+    /// Begin a named list field or an unnamed nested list entry.
+    fn begin_list(&mut self, name: Option<&'static str>, length: usize);
+
+    /// End the most recently begun list.
+    fn end_list(&mut self);
+}
+
+/// Emit a borrowed list without materializing or cloning its items.
+///
+/// The iterator's exact length includes absent entries. A consumer receives an
+/// empty begin/end pair for an empty list, rather than losing the field.
+pub fn visit_list<'error>(
+    visitor: &mut dyn ErrorVisitor<'error>,
+    name: Option<&'static str>,
+    values: impl ExactSizeIterator<Item = ErrorValue<'error>>,
+) {
+    visitor.begin_list(name, values.len());
+    for value in values {
+        visitor.value(None, value);
+    }
+    visitor.end_list();
+}
+
+/// Implement an enum's borrowed visitor through exhaustive producer patterns.
+///
+/// Use inside its [`StructuredError`](crate::error::StructuredError) impl.
+/// Every variant and named/tuple field
+/// must be listed; the grammar supplies no wildcard or rest pattern. New fields
+/// or variants therefore require producer support at compilation, while a
+/// consumer continues to handle the fixed [`ErrorValue`](crate::error::ErrorValue)
+/// algebra. A field is
+/// `"name" => Kind(value)`, `"name" => Absent`, or `"name" => List(iterator)`.
+/// `Value(expression)` forwards an existing value, for example an optional
+/// cause mapped to either `Cause` or `Absent`.
+///
+/// A producer cannot add a variant without exposing it:
+///
+/// ```compile_fail,E0004
+/// use purrdf_hash::error::StructuredError;
+/// pub enum Failure { Original, Added }
+/// impl StructuredError for Failure {
+///     purrdf_hash::error_visit! { Original => "original" {} }
+/// }
+/// ```
+///
+/// Nor can it add a named payload field without updating the visitor:
+///
+/// ```compile_fail
+/// use purrdf_hash::error::StructuredError;
+/// pub enum Failure { Refused { attempted: u128, limit: u128 } }
+/// impl StructuredError for Failure {
+///     purrdf_hash::error_visit! {
+///         Refused { attempted } => "refused" { "attempted" => Unsigned(*attempted) }
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! error_visit {
+    (
+        $(
+            $variant:ident
+            $({ $($named:ident),* $(,)? })?
+            $(($($tuple:ident),* $(,)?))?
+            => $code:literal {
+                $($field:literal => $kind:ident $(($value:expr))?),* $(,)?
+            }
+        ),* $(,)?
+    ) => {
+        fn visit<'error>(
+            &'error self,
+            visitor: &mut dyn $crate::error::ErrorVisitor<'error>,
+        ) {
+            match self {
+                $(Self::$variant $({ $($named),* })? $(($($tuple),*))? => {
+                    visitor.variant($code);
+                    $($crate::error_visit!(@field visitor, $field, $kind $(($value))?);)*
+                }),*
+            }
+        }
+    };
+    (@field $visitor:ident, $field:literal, List($value:expr)) => {
+        $crate::error::visit_list($visitor, Some($field), $value)
+    };
+    (@field $visitor:ident, $field:literal, Value($value:expr)) => {
+        $visitor.value(Some($field), $value)
+    };
+    (@field $visitor:ident, $field:literal, $kind:ident $(($value:expr))?) => {
+        $visitor.value(Some($field), $crate::error::ErrorValue::$kind $(($value))?)
+    };
+}

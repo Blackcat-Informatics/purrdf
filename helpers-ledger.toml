@@ -1390,6 +1390,23 @@ fingerprints = []
 names = ['^(curie_prefix_of|namespace_and_local|split_iri_local)$']
 
 [[job]]
+id = "structured-error-list"
+summary = "Emitting borrowed structured error lists without cloning, formatting or recursive cause traversal"
+home = "purrdf_hash::error::visit_list"
+entry_points = []
+spec = "purrdf_hash::error: stable variant codes, named typed fields, explicit empty lists and borrowed nested payloads"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(emit_structured_error_list|visit_structured_error_list)$']
+
+[[job]]
 id = "media-type-by-extension"
 summary = "The media type a file extension names: the GTS files profile (tar entries carry no media type), slice artifacts, the slice RDF loader and the SPARQL conformance data-file loaders"
 home = "purrdf_gts::files::media_type_for_extension"
