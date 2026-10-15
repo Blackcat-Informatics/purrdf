@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T17:33:21-06:00\n"
+"POT-Creation-Date: 2026-10-15T17:48:47-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -4737,11 +4737,10 @@ msgid ""
 "appears in a million quads costs its bytes exactly once."
 msgstr ""
 "每个项——IRI、空节点、字面量、三元组项——都只驻留**一次**，并通过一个可复制的 "
-"`TermId`（经过 niche 优化的 `NonZeroU32`）寻址。文本载荷使用字符串区块（arena）；"
-"三元组项保留其组成部分的 ID。四元组"
-"是由四个 `TermId` 组成的行。这使得项的相等比较只需一次整数比较，使四元组保持"
-"固定的较小尺寸，也意味着一个出现在一百万个四元组中的项，其字节恰好只付一次代"
-"价。"
+"`TermId`（经过 niche 优化的 `NonZeroU32`）寻址。文本载荷使用字符串区块"
+"（arena）；三元组项保留其组成部分的 ID。四元组是由四个 `TermId` 组成的行。这"
+"使得项的相等比较只需一次整数比较，使四元组保持固定的较小尺寸，也意味着一个出"
+"现在一百万个四元组中的项，其字节恰好只付一次代价。"
 
 #: src/concepts/interned-dataset.md:21
 msgid ""
@@ -7326,7 +7325,7 @@ msgstr ""
 "profile 见[规范性列式模式](https://github.com/Blackcat-Informatics/purrdf/"
 "blob/main/docs/COLUMNAR.md)。"
 
-#: src/concepts/codecs.md:197 src/concepts/base-iris.md:258
+#: src/concepts/codecs.md:197 src/concepts/base-iris.md:263
 #: src/sparql/querying.md:2263 src/validation/shacl.md:1590
 #: src/validation/shex.md:98 src/entailment.md:365
 msgid "Conformance"
@@ -7759,9 +7758,9 @@ msgid ""
 "RDF/JS `dataset.add`, and `purrdf_graph_insert` all refuse a relative IRI at "
 "the call, naming the offending term:"
 msgstr ""
-"在引入它的那次修改时。`Store.add`、`MutableDataset.add`、RDF/JS 的 "
-"`dataset.add` 以及 `purrdf_graph_insert` 都会在调用时拒绝相对 IRI，并点名出错"
-"的项："
+"在执行引入该相对 IRI 的修改操作时。`Store.add`、`MutableDataset.add`、RDF/JS "
+"的 `dataset.add` 以及 `purrdf_graph_insert` 都会在调用时拒绝相对 IRI，并点名"
+"出错的项："
 
 #: src/concepts/base-iris.md:121 src/concepts/base-iris.md:122
 msgid "\"rel\""
@@ -8121,7 +8120,13 @@ msgid ""
 "base.\n"
 msgstr "# stdin 没有获取 IRI，因此其中的相对 IRI 需要显式提供基准。\n"
 
-#: src/concepts/base-iris.md:248
+#: src/concepts/base-iris.md:246
+msgid ""
+"If `data.ttl` declares its own base, keep that parsing base while writing a "
+"new output base:"
+msgstr "如果 `data.ttl` 声明了自己的基准，则保留该解析基准，同时写出一个新的输出基准："
+
+#: src/concepts/base-iris.md:253
 msgid ""
 "`--base` is validated where it is typed. A value that is not an absolute IRI "
 "is a usage error, and a path-shaped value gets a derived suggestion — `./"
@@ -8132,7 +8137,7 @@ msgstr ""
 "得到一个推导出的建议——对 `./vocab/`，会给出它实际所指的 `file://` IRI，该 "
 "IRI 是解析得出的，而不是拼接而成的。"
 
-#: src/concepts/base-iris.md:253
+#: src/concepts/base-iris.md:258
 msgid ""
 "A shape map given to `purrdf shex` is command-line text with no document of "
 "its own, so `--base` is the only base it can ever have. A `--schema` file, "
@@ -8143,7 +8148,7 @@ msgstr ""
 "一可能拥有的基准。与之相对，`--schema` 文件是一份独立的文档，相对于它自身的获"
 "取 IRI 或它自己的 `BASE` 指令进行解析。"
 
-#: src/concepts/base-iris.md:260
+#: src/concepts/base-iris.md:265
 msgid ""
 "The RFC 3986 §5.4 normative resolution table is asserted directly against "
 "the resolver in `crates/iri/tests/`. End-to-end, the W3C `rdf-tests` `IRI-"
