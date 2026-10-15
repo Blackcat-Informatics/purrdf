@@ -12,6 +12,7 @@ use crate::dataset_view::{
 use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, TermRef, TermValue};
 use purrdf_hash::blake3::Hasher;
 use purrdf_lex::allocation::shared::{Shared, SharedCloneError};
+use purrdf_lex::allocation::{StorageError, growth_capacity};
 
 use super::build::fixed_records;
 use super::format::{self, DecodedRecords, Header, Reader, Stream};
@@ -273,7 +274,7 @@ struct CacheEntry {
 }
 #[derive(Clone, Copy)]
 enum ReaderBuffer {
-    Cache,
+    Cache { block_charge: u64 },
     Requests,
 }
 struct State {
@@ -308,13 +309,49 @@ impl State {
 
     fn reserve_buffer(&mut self, buffer: ReaderBuffer) -> Result<(), SegmentedError> {
         loop {
-            let result = match buffer {
-                ReaderBuffer::Cache => self
-                    .storage
-                    .run(|memory| memory.reserve_for_push(&mut self.cache)),
-                ReaderBuffer::Requests => self
-                    .storage
-                    .run(|memory| memory.reserve_for_push(&mut self.requests)),
+            // Memory checks the old/new replacement overlap. Also plan the
+            // final cache-plus-block layout before allocating: reclaiming one
+            // slot can avoid growth altogether, especially beside pinned blocks.
+            let refusal = if let ReaderBuffer::Cache { block_charge } = buffer
+                && self.cache.len() == self.cache.capacity()
+            {
+                let required = self
+                    .cache
+                    .len()
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                let next = growth_capacity::<CacheEntry>(self.cache.capacity(), required)?;
+                let layout = core::alloc::Layout::array::<CacheEntry>(next)
+                    .map_err(|_| StorageError::SizeOverflow)?;
+                let increase = layout
+                    .size()
+                    .checked_sub(size_of_val(self.cache.as_slice()))
+                    .ok_or(StorageError::SizeOverflow)?;
+                let increase = u64::try_from(increase).map_err(|_| StorageError::SizeOverflow)?;
+                let budget = &self.storage.reservation.budget;
+                let live = lock_read_state(&budget.state).live;
+                let requested = live
+                    .checked_add(increase)
+                    .and_then(|live| live.checked_add(block_charge))
+                    .ok_or(SegmentedError::AddressExhausted)?;
+                (requested > budget.limit).then_some(SegmentedError::Residency {
+                    requested,
+                    limit: budget.limit,
+                })
+            } else {
+                None
+            };
+            let result = if let Some(error) = refusal {
+                Err(error)
+            } else {
+                match buffer {
+                    ReaderBuffer::Cache { .. } => self
+                        .storage
+                        .run(|memory| memory.reserve_for_push(&mut self.cache)),
+                    ReaderBuffer::Requests => self
+                        .storage
+                        .run(|memory| memory.reserve_for_push(&mut self.requests)),
+                }
             };
             // State is already locked. Evict here rather than installing a
             // reservation backlink that would recursively acquire that lock.
@@ -993,7 +1030,9 @@ impl SegmentedSession {
             .and_then(|v| v.checked_add(overhead))
             .ok_or(SegmentedError::AddressExhausted)?;
         self.make_room(&mut state, charge, true)?;
-        if let Err(error) = state.reserve_buffer(ReaderBuffer::Cache) {
+        if let Err(error) = state.reserve_buffer(ReaderBuffer::Cache {
+            block_charge: charge,
+        }) {
             state.error.get_or_insert_with(|| error.clone());
             return Err(error);
         }
@@ -1951,6 +1990,89 @@ mod operation_tests {
             assert!(after.peak_bytes() <= CEILING);
             assert_eq!(session.read_error(), None);
             drop(held);
+        }
+    }
+
+    #[test]
+    fn cache_slot_growth_counts_the_pending_block_before_allocating() {
+        const CEILING: u64 = 2_000_000;
+        let mut builder =
+            SegmentedBuilder::new(SegmentedBuildLimits::new(4096, 200_000, 4096, 1024, 4).unwrap())
+                .unwrap();
+        let values: Vec<_> = (0..128)
+            .map(|index| TermValue::iri(format!("urn:pending-cache:{index:03}")))
+            .collect();
+        let mut ids = Vec::new();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        for &id in &ids {
+            builder
+                .push_quad(QuadIds {
+                    s: ids[0],
+                    p: ids[0],
+                    o: id,
+                    g: None,
+                })
+                .unwrap();
+        }
+        let image = builder.seal().unwrap();
+        for pin_header in [false, true] {
+            let session = SegmentedSession::open(
+                Arc::new(image.provider()),
+                image.receipt(),
+                SegmentedReadLimits::new(CEILING, 64, 2000, 10_000_000, 64),
+            )
+            .unwrap();
+            let mut pinned = Vec::new();
+            for offset in 0..31 {
+                pinned.push(
+                    session
+                        .block(session.header.dictionary.first + offset)
+                        .unwrap(),
+                );
+            }
+            // Replaying the sole unpinned header gives the request ledger spare
+            // capacity while restoring the full cache array and its pinned neighbors.
+            assert!(lock_read_state(&session.state).evict_one().unwrap());
+            drop(session.block(0).unwrap());
+            let header_pin = pin_header.then(|| session.block(0).unwrap());
+            {
+                let state = lock_read_state(&session.state);
+                let shape = (state.cache.len(), state.cache.capacity());
+                let request_room = state.requests.capacity() - state.requests.len();
+                drop(state);
+                assert_eq!(shape, (32, 32));
+                assert!(request_room > 8);
+            }
+            let records = u64::from(session.header.records_per_block);
+            let charge = u64::from(session.receipt.block_bytes) * (records + 1)
+                + records
+                    * u64::try_from(size_of::<(GlobalTermId, core::ops::Range<usize>)>()).unwrap()
+                + u64::try_from(size_of::<CachedBlock>() + 64).unwrap();
+            let before = session.evidence();
+            let headroom = charge
+                + if pin_header {
+                    32 * u64::try_from(size_of::<CacheEntry>()).unwrap()
+                } else {
+                    0
+                };
+            let held = session
+                .reserve_workspace(CEILING - before.live_bytes() - headroom)
+                .unwrap();
+            drop(session.block(session.header.dictionary.first + 31).unwrap());
+            if pin_header {
+                assert_eq!(session.evidence().evictions(), before.evictions());
+            } else {
+                assert!(session.evidence().evictions() > before.evictions());
+            }
+            assert!(session.evidence().peak_bytes() <= CEILING);
+            assert_eq!(session.read_error(), None);
+            assert_eq!(
+                lock_read_state(&session.state).cache.capacity(),
+                if pin_header { 64 } else { 32 }
+            );
+            drop(held);
+            drop(header_pin);
+            drop(pinned);
         }
     }
 
