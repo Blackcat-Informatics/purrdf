@@ -1107,9 +1107,7 @@ impl MutableDataset {
             MutTermId::Delta(_) => false,
         };
         let target_kind =
-            match classify_statement(physical, true, original_reifier, effective_reifier)
-                .expect("visible record has a classification")
-            {
+            match classify_statement(physical, true, original_reifier, effective_reifier) {
                 StatementKind::Ordinary => RecordKind::Ordinary,
                 StatementKind::Annotation => RecordKind::Annotation,
             };
@@ -1767,6 +1765,8 @@ pub struct QuadValues {
 /// Shared graph-scoped RDF 1.2 statement classification. Source-specific indexed
 /// probes supply visibility and reifier presence; an explicitly typed orphan
 /// annotation stays typed unless its originally applicable declaration disappears.
+/// Callers establish visibility first. Ordinary typing is inferred only for
+/// mutable value input; explicitly typed sealed rows retain their authored kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StatementKind {
     Ordinary,
@@ -1774,19 +1774,16 @@ pub(crate) enum StatementKind {
 }
 pub(crate) const fn classify_statement(
     physical: StatementKind,
-    visible: bool,
+    infer_ordinary: bool,
     original_reifier: bool,
     effective_reifier: bool,
-) -> Option<StatementKind> {
-    if !visible {
-        return None;
-    }
+) -> StatementKind {
     match physical {
-        StatementKind::Ordinary if effective_reifier => Some(StatementKind::Annotation),
+        StatementKind::Ordinary if infer_ordinary && effective_reifier => StatementKind::Annotation,
         StatementKind::Annotation if original_reifier && !effective_reifier => {
-            Some(StatementKind::Ordinary)
+            StatementKind::Ordinary
         }
-        other => Some(other),
+        other => other,
     }
 }
 

@@ -413,42 +413,33 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
         ..declaration
     };
     assert!(stack.insert(new_declaration.clone()).unwrap());
-    let mut promoted_builder = RdfDatasetBuilder::new();
-    let ordinary_expected = eager(ordinary[..2].iter().cloned().chain([note.clone()]), &[]);
-    purrdf_core::ir::import::DatasetImporter::new(
-        &mut promoted_builder,
-        ordinary_expected.as_ref(),
-    )
-    .unwrap()
-    .append()
-    .unwrap();
-    let r = promoted_builder.intern_value(&new_declaration.s).unwrap();
-    let triple = promoted_builder.intern_value(&new_declaration.o).unwrap();
-    let graph = promoted_builder
+    let mut restored_builder = RdfDatasetBuilder::new();
+    purrdf_core::ir::import::DatasetImporter::new(&mut restored_builder, expected_after.as_ref())
+        .unwrap()
+        .append()
+        .unwrap();
+    let r = restored_builder.intern_value(&new_declaration.s).unwrap();
+    let triple = restored_builder.intern_value(&new_declaration.o).unwrap();
+    let graph = restored_builder
         .intern_value(new_declaration.g.as_ref().unwrap())
         .unwrap();
-    promoted_builder
+    restored_builder
         .push_reifier_in_graph(r, triple, Some(graph))
         .unwrap();
-    let p = promoted_builder.intern_value(&note.p).unwrap();
-    let o = promoted_builder.intern_value(&note.o).unwrap();
-    promoted_builder
-        .push_annotation_in_graph(r, p, o, Some(graph))
-        .unwrap();
-    let promoted_oracle = promoted_builder.freeze().unwrap();
-    let promoted_head = stack.snapshot().unwrap();
+    let restored_oracle = restored_builder.freeze().unwrap();
+    let restored_head = stack.snapshot().unwrap();
     stack.seal_head(bound(1)).unwrap();
-    let promoted_sealed = stack.snapshot().unwrap();
-    for snapshot in [&promoted_head, &promoted_sealed] {
+    let restored_sealed = stack.snapshot().unwrap();
+    for snapshot in [&restored_head, &restored_sealed] {
         let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
         assert_eq!(
             view.quads().count(),
-            3,
-            "only matching graph primary is promoted"
+            4,
+            "reifier insertion preserves authored ordinary rows in every graph"
         );
-        assert_eq!(view.annotation_quads().count(), 1);
+        assert_eq!(view.annotation_quads().count(), 0);
         assert_eq!(view.reifier_quads().count(), 1);
-        matrix(snapshot, &promoted_oracle, &queries);
+        matrix(snapshot, &restored_oracle, &queries);
         for n in [1, 3] {
             assert_eq!(
                 carrier_pages(
@@ -456,7 +447,7 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
                         .compact(PagedQueryLimits::UNBOUNDED, bound(n))
                         .unwrap()
                 ),
-                carrier_pages(&canonical_paged_seal(promoted_oracle.as_ref(), bound(n)).unwrap())
+                carrier_pages(&canonical_paged_seal(restored_oracle.as_ref(), bound(n)).unwrap())
             );
         }
     }

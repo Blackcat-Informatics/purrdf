@@ -357,7 +357,6 @@ impl SegmentedStackQuery<'_> {
         subject: GlobalTermId,
         graph: Option<GlobalTermId>,
         prefix: usize,
-        excluded: Option<usize>,
     ) -> bool {
         let pattern = ProbePattern {
             s: Some(subject),
@@ -365,12 +364,10 @@ impl SegmentedStackQuery<'_> {
             o: None,
             g: graph.map_or(GraphMatch::Default, GraphMatch::Named),
         };
-        (0..=prefix)
-            .filter(|layer| Some(*layer) != excluded)
-            .any(|layer| {
-                self.physical_rows(self.source_at(layer), Stream::Reifier, pattern)
-                    .any(|row| self.visible_at(layer, row, prefix))
-            })
+        (0..=prefix).any(|layer| {
+            self.physical_rows(self.source_at(layer), Stream::Reifier, pattern)
+                .any(|row| self.visible_at(layer, row, prefix))
+        })
     }
 
     fn logical_rows(
@@ -401,8 +398,8 @@ impl SegmentedStackQuery<'_> {
                         return Ok(None);
                     }
                     let ordinary = stream == Stream::Ordinary;
-                    let effective = self.declarations(row.s, row.g, end, ordinary.then_some(layer));
-                    let original = !ordinary && self.declarations(row.s, row.g, layer, None);
+                    let effective = !ordinary && self.declarations(row.s, row.g, end);
+                    let original = !ordinary && self.declarations(row.s, row.g, layer);
                     self.operation.ready()?;
                     let physical = if ordinary {
                         StatementKind::Ordinary
@@ -410,7 +407,7 @@ impl SegmentedStackQuery<'_> {
                         StatementKind::Annotation
                     };
                     Ok(
-                        (classify_statement(physical, true, original, effective) == Some(kind))
+                        (classify_statement(physical, false, original, effective) == kind)
                             .then_some(row),
                     )
                 };
