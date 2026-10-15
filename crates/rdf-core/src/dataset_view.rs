@@ -1119,6 +1119,13 @@ pub trait DatasetView {
         0
     }
 
+    /// Immutable statistics in this view's own local identity space. Unknown
+    /// provider fields retain the existing cardinality fallback. Consumers must
+    /// include the provider's fingerprint in any retained order cache key.
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        None
+    }
+
     /// The RDF 1.2 reifier side-table AS resolved virtual triples: each
     /// `(reifier, triple-term)` binding becomes a `(reifier, rdf:reifies, triple-term)`
     /// quad carrying the declaration's own graph slot. Capability-gated: a backend
@@ -2150,6 +2157,10 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     #[inline]
     fn stats_fingerprint(&self) -> u64 {
         (**self).stats_fingerprint()
+    }
+
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        (**self).statistics()
     }
 
     #[inline]

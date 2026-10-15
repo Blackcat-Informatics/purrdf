@@ -1020,8 +1020,12 @@ fn plan_or_cached_order<D: DatasetView>(
             workspace,
         );
     };
+    let snapshot = dataset.stats_fingerprint();
+    let snapshot = dataset.statistics().map_or(snapshot, |statistics| {
+        purrdf_hash::fixed::hash_one(&(snapshot, statistics.source(), statistics.fingerprint()))
+    });
     let key = (
-        dataset.stats_fingerprint(),
+        snapshot,
         bgp_shape_key_seeded_admitted(compiled, scope, initial, workspace)?,
     );
     use crate::plan_cache::OrderCacheRef;
@@ -1375,6 +1379,15 @@ fn visit_access_costs<D: DatasetView>(
         let probe = purrdf_core::ProbePattern { s, p, o, g };
         let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
         let cost = dataset.cost(probe, &plan);
+        if cost.cardinality_fallback().is_some()
+            && let Some(count) = dataset.statistics().and_then(|stats| stats.pattern(probe))
+        {
+            visit(
+                probe,
+                purrdf_core::AccessCost::from_cardinality(count.value),
+            );
+            return;
+        }
         let statements = dataset
             .statement_cardinality_estimate(probe, components_of(&pattern.o, constant_of))
             .unwrap_or(0);
@@ -1470,6 +1483,9 @@ fn base_cardinality<D: DatasetView>(
     let o = constant_of(&cp.o);
     let cardinality = |g| {
         let probe = purrdf_core::ProbePattern { s, p, o, g };
+        if let Some(count) = dataset.statistics().and_then(|stats| stats.pattern(probe)) {
+            return count.value;
+        }
         dataset.cardinality_estimate(s, p, o, g).saturating_add(
             dataset
                 .statement_cardinality_estimate(probe, components_of(&cp.o, constant_of))
@@ -4624,6 +4640,7 @@ mod tests {
         predicates: [TermId; 3],
         measured: Option<[purrdf_core::AccessCost; 3]>,
         cardinalities: Option<[u64; 3]>,
+        supplied_statistics: bool,
         first_probe: std::sync::Mutex<Option<TermId>>,
     }
 
@@ -4639,6 +4656,7 @@ mod tests {
                     AccessCost::new(1_000, 1, 64, ReadResidency::NonResident),
                 ]),
                 cardinalities: None,
+                supplied_statistics: false,
                 first_probe: std::sync::Mutex::new(None),
             }
         }
@@ -4738,6 +4756,119 @@ mod tests {
         fn stats_fingerprint(&self) -> u64 {
             purrdf_hash::fixed::hash_one(&(self.inner.stats_fingerprint(), self.measured))
         }
+
+        fn statistics(&self) -> Option<&dyn purrdf_core::SnapshotStatistics<TermId>> {
+            self.supplied_statistics.then_some(self)
+        }
+    }
+
+    impl purrdf_core::SnapshotStatistics<TermId> for HostCost<'_> {
+        fn source(&self) -> &str {
+            "fixture-exact"
+        }
+
+        fn fingerprint(&self) -> u64 {
+            self.inner.stats_fingerprint()
+        }
+
+        fn predicate(
+            &self,
+            predicate: TermId,
+            graph: GraphMatch,
+            stream: purrdf_core::StatisticsStream,
+        ) -> Option<purrdf_core::PredicateStatistics> {
+            Some(purrdf_core::PredicateStatistics {
+                rows: self.predicate_object_count(predicate, None, graph, stream),
+                subjects: None,
+                objects: None,
+            })
+        }
+
+        fn predicate_object(
+            &self,
+            predicate: TermId,
+            object: TermId,
+            graph: GraphMatch,
+            stream: purrdf_core::StatisticsStream,
+        ) -> Option<purrdf_core::StatisticCount> {
+            Some(self.predicate_object_count(predicate, Some(object), graph, stream))
+        }
+
+        fn predicate_object_kind(
+            &self,
+            _predicate: TermId,
+            _kind: purrdf_core::RdfTermKind,
+            _datatype: Option<TermId>,
+            _graph: GraphMatch,
+            _stream: purrdf_core::StatisticsStream,
+        ) -> Option<purrdf_core::StatisticCount> {
+            None
+        }
+
+        fn reifier_target_predicate(
+            &self,
+            _predicate: TermId,
+            _graph: GraphMatch,
+        ) -> Option<purrdf_core::PredicateStatistics> {
+            None
+        }
+    }
+
+    impl HostCost<'_> {
+        fn predicate_object_count(
+            &self,
+            predicate: TermId,
+            object: Option<TermId>,
+            graph: GraphMatch,
+            stream: purrdf_core::StatisticsStream,
+        ) -> purrdf_core::StatisticCount {
+            // This original fixture has only asserted rows. Count the native
+            // exact p/o prefix; no replacement triple store or wrapper is built.
+            let value = match stream {
+                purrdf_core::StatisticsStream::Asserted => u64::try_from(
+                    self.inner
+                        .cardinality_estimate(None, Some(predicate), object, graph),
+                )
+                .expect("fixture count fits"),
+                purrdf_core::StatisticsStream::Reifiers
+                | purrdf_core::StatisticsStream::Annotations => 0,
+            };
+            purrdf_core::StatisticCount {
+                value,
+                accuracy: purrdf_core::StatisticsAccuracy::Exact,
+            }
+        }
+    }
+
+    #[test]
+    fn supplied_statistics_changes_actual_join_order_without_changing_answers() {
+        let graph = skewed_graph();
+        let mut fallback = HostCost::over(&graph, false);
+        fallback.cardinalities = Some([1_000; 3]);
+        let mut supplied = HostCost::over(&graph, false);
+        supplied.cardinalities = fallback.cardinalities;
+        supplied.supplied_statistics = true;
+        let patterns = host_cost_patterns(&graph);
+        let columns = ["hub", "hot", "mid", "rare"];
+        let expected = run(&fallback, &patterns, &columns);
+        assert_eq!(fallback.take_first_probe(), Some(graph.hot));
+        let actual = run(&supplied, &patterns, &columns);
+        assert_eq!(supplied.take_first_probe(), Some(graph.rare));
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 100);
+    }
+
+    fn host_cost_patterns(graph: &Skewed) -> Vec<TriplePattern> {
+        [graph.hot, graph.mid, graph.rare]
+            .into_iter()
+            .zip(["hot", "mid", "rare"])
+            .map(|(id, variable)| {
+                let Ok(TermRef::Iri(iri)) = graph.ds.resolve(id) else {
+                    panic!("fixture predicate is an IRI");
+                };
+                triple(var_pos("hub"), pred(iri), var_pos(variable))
+            })
+            .collect()
     }
 
     fn cost_spokes(graph: &Skewed, count: usize) -> Vec<CompiledPattern> {
@@ -4904,16 +5035,7 @@ mod tests {
         let graph = skewed_graph();
         let ordinary = HostCost::over(&graph, false);
         let host = HostCost::over(&graph, true);
-        let patterns = [graph.hot, graph.mid, graph.rare]
-            .into_iter()
-            .zip(["hot", "mid", "rare"])
-            .map(|(id, variable)| {
-                let Ok(TermRef::Iri(iri)) = graph.ds.resolve(id) else {
-                    panic!("fixture predicate is an IRI");
-                };
-                triple(var_pos("hub"), pred(iri), var_pos(variable))
-            })
-            .collect::<Vec<_>>();
+        let patterns = host_cost_patterns(&graph);
         let columns = ["hub", "hot", "mid", "rare"];
         let expected = run(&ordinary, &patterns, &columns);
         assert_eq!(ordinary.take_first_probe(), Some(graph.rare));
