@@ -106,11 +106,26 @@ impl SegmentedStackQuery<'_> {
     fn translate_pattern<D: DatasetView>(
         &self,
         source: &D,
+        origin: SegmentedStackSource,
         pattern: ProbePattern<GlobalTermId>,
+        local: impl Fn(u64) -> Result<D::Id, SegmentedError>,
         error: impl Fn(D::ReadError) -> SegmentedError,
     ) -> Result<Option<ProbePattern<D::Id>>, SegmentedError> {
         let convert = |id: Option<GlobalTermId>| {
             id.map(|id| {
+                // IDs originally imported from this source already carry its
+                // exact local address. Do not materialize and reverse-search
+                // that same value again for each annotation membership probe.
+                let original = {
+                    let identities = lock_read_state(&self.identities);
+                    usize::try_from(id.index())
+                        .ok()
+                        .and_then(|index| identities.representatives.get(index))
+                        .map(|representative| representative.term)
+                };
+                if let Some(term) = original.filter(|term| term.source == origin) {
+                    return local(term.index).map(Some);
+                }
                 let value = self.term_value(id)?;
                 source.term_id_by_value(value.value()).map_err(&error)
             })
@@ -142,65 +157,38 @@ impl SegmentedStackQuery<'_> {
         }))
     }
 
-    fn rows_from<'a, D: DatasetView>(
+    fn rows_from<'a, D: DatasetView, R: Iterator<Item = QuadIds<D::Id>> + 'a>(
         &'a self,
         dataset: &'a D,
         origin: SegmentedStackSource,
-        stream: Stream,
+        rows: impl Fn(ProbePattern<D::Id>) -> R + 'a,
         pattern: ProbePattern<GlobalTermId>,
-        index: impl Fn(D::Id) -> u64 + Copy + 'a,
+        ids: (
+            impl Fn(D::Id) -> u64 + Copy + 'a,
+            impl Fn(u64) -> Result<D::Id, SegmentedError>,
+        ),
         error: impl Fn(D::ReadError) -> SegmentedError,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
+        let (index, local) = ids;
         let pattern = self
-            .translate_pattern(dataset, pattern, error)
+            .translate_pattern(dataset, origin, pattern, local, error)
             .or_else(|error| self.operation.fail(error))
             .ok()
             .flatten();
-        pattern
-            .into_iter()
-            .flat_map(move |pattern| {
-                let matches = move |row: &QuadIds<D::Id>| {
-                    pattern.s.is_none_or(|id| row.s == id)
-                        && pattern.p.is_none_or(|id| row.p == id)
-                        && pattern.o.is_none_or(|id| row.o == id)
-                };
-                (stream == Stream::Ordinary)
-                    .then_some(())
-                    .into_iter()
-                    .flat_map(move |()| {
-                        dataset.quads_for_pattern(pattern.s, pattern.p, pattern.o, pattern.g)
-                    })
-                    .chain(
-                        (stream == Stream::Reifier)
-                            .then_some(())
-                            .into_iter()
-                            .flat_map(move |()| {
-                                dataset.reifier_quads_in_graph(pattern.g).filter(matches)
-                            }),
-                    )
-                    .chain(
-                        (stream == Stream::Annotation)
-                            .then_some(())
-                            .into_iter()
-                            .flat_map(move |()| {
-                                dataset.annotation_quads_in_graph(pattern.g).filter(matches)
-                            }),
-                    )
-            })
-            .map_while(move |row| {
-                let translate = || {
-                    Ok(QuadIds {
-                        s: self.intern_source_term(origin, index(row.s))?,
-                        p: self.intern_source_term(origin, index(row.p))?,
-                        o: self.intern_source_term(origin, index(row.o))?,
-                        g: row
-                            .g
-                            .map(|id| self.intern_source_term(origin, index(id)))
-                            .transpose()?,
-                    })
-                };
-                translate().or_else(|error| self.operation.fail(error)).ok()
-            })
+        pattern.into_iter().flat_map(rows).map_while(move |row| {
+            let translate = || {
+                Ok(QuadIds {
+                    s: self.intern_source_term(origin, index(row.s))?,
+                    p: self.intern_source_term(origin, index(row.p))?,
+                    o: self.intern_source_term(origin, index(row.o))?,
+                    g: row
+                        .g
+                        .map(|id| self.intern_source_term(origin, index(id)))
+                        .transpose()?,
+                })
+            };
+            translate().or_else(|error| self.operation.fail(error)).ok()
+        })
     }
 
     fn physical_rows(
@@ -224,9 +212,17 @@ impl SegmentedStackQuery<'_> {
                 self.rows_from(
                     source,
                     origin,
-                    stream,
+                    move |pattern| {
+                        source.stream(
+                            stream as usize,
+                            (pattern.s, pattern.p, pattern.o, pattern.g),
+                        )
+                    },
                     pattern,
-                    GlobalTermId::index,
+                    (GlobalTermId::index, |index| {
+                        GlobalTermId::from_index(index)
+                            .map_err(|error| StorageError::from(error).into())
+                    }),
                     |error| error,
                 )
             })
@@ -242,9 +238,94 @@ impl SegmentedStackQuery<'_> {
                             }
                     })
                     .flat_map(move |source| {
-                        self.rows_from(source, origin, stream, pattern, local_index, |error| {
-                            match error {}
-                        })
+                        self.rows_from(
+                            source,
+                            origin,
+                            move |pattern| {
+                                let dataset = source;
+                                let matches = move |row: &QuadIds| {
+                                    pattern.s.is_none_or(|id| row.s == id)
+                                        && pattern.p.is_none_or(|id| row.p == id)
+                                        && pattern.o.is_none_or(|id| row.o == id)
+                                        && pattern.g.matches(row.g)
+                                };
+                                (stream == Stream::Ordinary)
+                                    .then_some(())
+                                    .into_iter()
+                                    .flat_map(move |()| {
+                                        dataset.quads_for_pattern(
+                                            pattern.s, pattern.p, pattern.o, pattern.g,
+                                        )
+                                    })
+                                    .chain(
+                                        (stream == Stream::Reifier)
+                                            .then_some(())
+                                            .into_iter()
+                                            .flat_map(move |()| {
+                                                pattern
+                                                    .s
+                                                    .into_iter()
+                                                    .flat_map(move |subject| {
+                                                        dataset.reifier_quads_of(subject)
+                                                    })
+                                                    .chain(
+                                                        pattern
+                                                            .s
+                                                            .is_none()
+                                                            .then_some(())
+                                                            .into_iter()
+                                                            .flat_map(move |()| {
+                                                                dataset.reifier_quads_in_graph(
+                                                                    pattern.g,
+                                                                )
+                                                            }),
+                                                    )
+                                                    .filter(matches)
+                                            }),
+                                    )
+                                    .chain(
+                                        (stream == Stream::Annotation)
+                                            .then_some(())
+                                            .into_iter()
+                                            .flat_map(move |()| {
+                                                pattern
+                                                    .s
+                                                    .into_iter()
+                                                    .flat_map(move |subject| {
+                                                        dataset
+                                                            .annotations_of_with_graph(subject)
+                                                            .map(move |(p, o, g)| QuadIds {
+                                                                s: subject,
+                                                                p,
+                                                                o,
+                                                                g,
+                                                            })
+                                                    })
+                                                    .chain(
+                                                        pattern
+                                                            .s
+                                                            .is_none()
+                                                            .then_some(())
+                                                            .into_iter()
+                                                            .flat_map(move |()| {
+                                                                dataset.annotation_quads_in_graph(
+                                                                    pattern.g,
+                                                                )
+                                                            }),
+                                                    )
+                                                    .filter(matches)
+                                            }),
+                                    )
+                            },
+                            pattern,
+                            (local_index, |index| {
+                                let index = u32::try_from(index)
+                                    .map_err(|_| SegmentedError::AddressExhausted)?;
+                                TermId::from_index(index)
+                                    .map_err(|error| StorageError::from(error).into())
+                            }),
+                            |error| match error {},
+                        )
                     }),
             )
     }

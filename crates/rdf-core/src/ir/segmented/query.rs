@@ -229,7 +229,7 @@ impl SegmentedStackQuery<'_> {
                     .len()
                     .checked_add(1)
                     .ok_or(StorageError::SizeOverflow)?;
-                memory.reserve(representatives, next)?;
+                memory.reserve_for_push(representatives)?;
                 reserve_table_with_memory(values, next, |id| id.1, memory)?;
             }
             Ok::<_, StorageError>(())
@@ -350,9 +350,9 @@ impl SegmentedStackQuery<'_> {
 }
 
 #[derive(Debug)]
-struct QueryStorage {
-    reservation: SegmentedReservation,
-    cause: Option<SegmentedError>,
+pub(super) struct QueryStorage {
+    pub(super) reservation: SegmentedReservation,
+    pub(super) cause: Option<SegmentedError>,
 }
 
 impl QueryStorage {
@@ -371,7 +371,7 @@ impl QueryStorage {
         })
     }
 
-    fn run<T, E: Into<SegmentedError>>(
+    pub(super) fn run<T, E: Into<SegmentedError>>(
         &mut self,
         body: impl FnOnce(&mut Memory<'_, Self>) -> Result<T, E>,
     ) -> Result<T, SegmentedError> {
@@ -432,5 +432,48 @@ mod tests {
         assert_eq!(term.value().as_iri(), Some("urn:retained-value"));
         drop(term);
         assert!(base.upgrade().is_none());
+
+        // Incremental identity admission must not copy the entire representative
+        // array for each newly touched term. Measure actual capacity transitions
+        // at the production owner, independently of hashing and lexical reads.
+        let mut head = RdfDatasetBuilder::new();
+        let ids: Vec<_> = (0..4096)
+            .map(|index| {
+                head.intern_value(&TermValue::iri(format!("urn:growth:{index}")))
+                    .unwrap()
+            })
+            .collect();
+        let mut stack = SegmentedStack::default();
+        stack.set_head(Some(
+            SegmentedResidentHead::new(head.freeze().unwrap(), SegmentedLayerMetadata::default())
+                .unwrap(),
+        ));
+        let snapshot = stack.snapshot().unwrap();
+        let query = snapshot
+            .query(SegmentedReadLimits::new(4_000_000, 1, 32, 100_000, 2))
+            .unwrap();
+        let mut copied = 0;
+        let mut growths = 0;
+        for id in &ids {
+            let previous = lock_read_state(&query.identities)
+                .representatives
+                .capacity();
+            query
+                .intern_source_term(
+                    SegmentedStackSource::Head,
+                    u64::try_from(id.index()).unwrap(),
+                )
+                .unwrap();
+            let identities = lock_read_state(&query.identities);
+            if identities.representatives.capacity() != previous {
+                copied += identities.representatives.len() - 1;
+                growths += 1;
+            }
+            drop(identities);
+        }
+        assert_eq!(query.touched_terms(), ids.len());
+        assert!(growths <= 12, "representative growths: {growths}");
+        assert!(copied < 2 * ids.len(), "representatives copied: {copied}");
+        query.check_ready().unwrap();
     }
 }

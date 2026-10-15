@@ -55,6 +55,7 @@
 //! trait's capability-gated defaults yield nothing for a backend that has no such layer.
 
 use purrdf_core::{DatasetView, GraphMatch, QuadIds, ViewTermId};
+use std::ops::ControlFlow;
 
 /// The `(s, p, o)` probe, graph scope, and reifier-table gate one statement-layer walk
 /// runs under.
@@ -85,7 +86,8 @@ pub(crate) struct StatementProbe<I: ViewTermId> {
     pub scan_reifier_rows: bool,
 }
 
-/// Call `emit` for every statement-layer virtual quad matching `probe`.
+/// Call `emit` for each matching quad until it requests a break. A break stops
+/// both streams before pulling or translating another source row.
 ///
 /// Reifier rows come first, then annotation rows, each in its side-table's frozen sorted
 /// order — a deterministic, dataset-derived order, as every result-observable order in
@@ -93,7 +95,7 @@ pub(crate) struct StatementProbe<I: ViewTermId> {
 pub(crate) fn visit_quads<D: DatasetView>(
     dataset: &D,
     probe: StatementProbe<D::Id>,
-    mut emit: impl FnMut(QuadIds<D::Id>),
+    mut emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
 ) {
     let StatementProbe {
         s,
@@ -127,7 +129,9 @@ pub(crate) fn visit_quads<D: DatasetView>(
         match s {
             Some(reifier) => {
                 for quad in dataset.reifier_quads_of(reifier).filter(keyed_residual) {
-                    emit(quad);
+                    if emit(quad).is_break() {
+                        return;
+                    }
                 }
             }
             None => {
@@ -135,7 +139,9 @@ pub(crate) fn visit_quads<D: DatasetView>(
                     .reifier_quads_in_graph(graph)
                     .filter(unkeyed_residual)
                 {
-                    emit(quad);
+                    if emit(quad).is_break() {
+                        return;
+                    }
                 }
             }
         }
@@ -154,7 +160,9 @@ pub(crate) fn visit_quads<D: DatasetView>(
                 })
                 .filter(keyed_residual)
             {
-                emit(quad);
+                if emit(quad).is_break() {
+                    return;
+                }
             }
         }
         None => {
@@ -162,7 +170,9 @@ pub(crate) fn visit_quads<D: DatasetView>(
                 .annotation_quads_in_graph(graph)
                 .filter(unkeyed_residual)
             {
-                emit(quad);
+                if emit(quad).is_break() {
+                    return;
+                }
             }
         }
     }
