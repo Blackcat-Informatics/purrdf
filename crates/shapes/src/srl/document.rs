@@ -62,6 +62,8 @@ use crate::term::{NamedNode, Term, Triple};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SrlError {
+    /// Original failure of the graph-free input operation.
+    TripleSource(purrdf_core::TripleReadError),
     /// Data materialization or a shapes operation refused evaluation.
     Shapes(crate::error::ShapesError),
     /// The document is not a SPARQL-RL Document: §7 "A conforming SRL document is an RDF
@@ -124,6 +126,7 @@ impl fmt::Display for SrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Shapes(error) => error.fmt(f),
+            Self::TripleSource(error) => error.fmt(f),
             Self::Syntax {
                 document,
                 line,
@@ -180,6 +183,7 @@ impl std::error::Error for SrlError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Shapes(error) => Some(error),
+            Self::TripleSource(error) => Some(error),
             Self::LimitExceeded(error) => Some(error),
             _ => None,
         }
@@ -598,17 +602,47 @@ pub fn infer(
         &Shapes::default(),
         &options.rules,
     )
-    .map_err(|error| match error {
-        crate::rules::RulesError::Shapes(error) => SrlError::Shapes(error),
-        crate::rules::RulesError::LimitExceeded(mut limit) => {
-            limit.rename(|index| document.rules.get(index).map(SrlRule::describe));
-            SrlError::LimitExceeded(limit)
-        }
-        crate::rules::RulesError::Failed(message) => SrlError::Evaluation { message },
+    .map_err(|error| document.evaluation_error(error))
+}
+
+/// Apply parsed SPARQL 1.2 RL directly to a graph-free read operation.
+///
+/// The compiled clauses and store have three positions. The result retains compact
+/// triple/reifier/annotation tables; no quad dataset is materialized.
+///
+/// # Errors
+///
+/// Preserves the input operation's original typed failure, then the same document,
+/// stratification, guard and budget errors as [infer]. A fresh read operation is
+/// required to retry after an input failure.
+pub fn infer_triples(
+    document: &RuleSetDocument,
+    base: &purrdf_core::TripleRead<'_>,
+    options: &InferOptions,
+) -> Result<Inference<purrdf_core::TripleDataset>, SrlError> {
+    use purrdf_core::DatasetView as _;
+    base.checked_read(|base| {
+        document.check_well_formed()?;
+        document.stratify()?;
+        eval::evaluate_triples(&document.rule_set(), base, &options.rules)
+            .map_err(|error| document.evaluation_error(error))
     })
+    .map_err(SrlError::TripleSource)?
 }
 
 impl RuleSetDocument {
+    /// Preserve the one public rule-error mapping for both physical carriers.
+    fn evaluation_error(&self, error: crate::rules::RulesError) -> SrlError {
+        match error {
+            crate::rules::RulesError::Shapes(error) => SrlError::Shapes(error),
+            crate::rules::RulesError::LimitExceeded(mut limit) => {
+                limit.rename(|index| self.rules.get(index).map(SrlRule::describe));
+                SrlError::LimitExceeded(limit)
+            }
+            crate::rules::RulesError::Failed(message) => SrlError::Evaluation { message },
+        }
+    }
+
     /// The rules, in document order.
     #[must_use]
     pub fn rules(&self) -> &[SrlRule] {

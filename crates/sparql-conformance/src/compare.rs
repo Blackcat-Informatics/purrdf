@@ -61,7 +61,15 @@ pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String
             }
             other => Err(format!("syntax outcome for non-syntax kind {other:?}")),
         },
-        RunOutcome::Eval { result, ordered } => compare_eval(case, result, *ordered),
+        RunOutcome::Eval { result, ordered } => {
+            compare_eval(case, EvalRef::from(result), *ordered, result.query_form())
+        }
+        RunOutcome::RetainedEval { result, ordered } => compare_eval(
+            case,
+            EvalRef::retained(result)?,
+            *ordered,
+            result.query_form(),
+        ),
         RunOutcome::Update(actual) => compare_update(case, actual),
     }
 }
@@ -197,16 +205,60 @@ fn compare_update(case: &SparqlTestCase, actual: &Arc<RdfDataset>) -> Result<(),
     }
 }
 
+/// Borrowed result coordinates; comparison never extracts or copies a retained owner.
+enum EvalRef<'a> {
+    Boolean(bool),
+    Solutions {
+        variables: &'a [String],
+        rows: &'a [Vec<Option<TermValue>>],
+    },
+    Graph(&'a RdfDataset),
+}
+
+impl<'a> From<&'a SparqlResult> for EvalRef<'a> {
+    fn from(result: &'a SparqlResult) -> Self {
+        match result {
+            SparqlResult::Boolean(value) => Self::Boolean(*value),
+            SparqlResult::Solutions {
+                variables, rows, ..
+            } => Self::Solutions { variables, rows },
+            SparqlResult::Graph(graph) => Self::Graph(graph),
+        }
+    }
+}
+
+impl<'a> EvalRef<'a> {
+    fn retained(result: &'a purrdf_sparql_eval::RetainedSparqlResult) -> Result<Self, String> {
+        if let Some(value) = result.boolean() {
+            Ok(Self::Boolean(value))
+        } else if let Some((variables, rows)) = result.solutions() {
+            Ok(Self::Solutions { variables, rows })
+        } else if let Some(graph) = result.graph() {
+            Ok(Self::Graph(graph))
+        } else {
+            Err(format!(
+                "retained {} result exposes no matching payload",
+                result.query_form()
+            ))
+        }
+    }
+}
+
 /// Compare an evaluation result against the expected result file.
 ///
 /// `ordered` is `true` when the query has a top-level `ORDER BY` (§18.5): a
 /// `SELECT`'s solution rows are then compared as an ordered *sequence* rather
 /// than a multiset (see [`compare_solutions`]).
-fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> Result<(), String> {
+fn compare_eval(
+    case: &SparqlTestCase,
+    result: EvalRef<'_>,
+    ordered: bool,
+    query_form: &str,
+) -> Result<(), String> {
     match (&case.expected, result) {
-        (ExpectedResult::Srx(path) | ExpectedResult::Srj(path), SparqlResult::Boolean(actual)) => {
+        (ExpectedResult::Srx(path) | ExpectedResult::Srj(path), EvalRef::Boolean(actual)) => {
             let expected = read_boolean(path, matches!(case.expected, ExpectedResult::Srj(_)))?;
-            if expected == *actual {
+            if expected == actual {
                 Ok(())
             } else {
                 Err(format!("ASK mismatch: expected {expected}, got {actual}"))
@@ -214,7 +266,7 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
         }
         (
             ExpectedResult::Srx(path) | ExpectedResult::Srj(path),
-            SparqlResult::Solutions {
+            EvalRef::Solutions {
                 variables, rows, ..
             },
         ) => {
@@ -229,11 +281,8 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
             )
             .map_err(|e| format!("parse expected rs:ResultSet {}: {e}", path.display()))?;
             match (expected, result) {
-                (
-                    crate::rs_resultset::RdfResult::Boolean(expected),
-                    SparqlResult::Boolean(actual),
-                ) => {
-                    if expected == *actual {
+                (crate::rs_resultset::RdfResult::Boolean(expected), EvalRef::Boolean(actual)) => {
+                    if expected == actual {
                         Ok(())
                     } else {
                         Err(format!("ASK mismatch: expected {expected}, got {actual}"))
@@ -244,14 +293,14 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
                         solutions,
                         ordered: indexed,
                     },
-                    SparqlResult::Solutions {
+                    EvalRef::Solutions {
                         variables, rows, ..
                     },
                 ) => compare_case_solutions(case, variables, rows, &solutions, indexed),
                 _ => Err("DAWG RDF result kind differs from the query result".to_owned()),
             }
         }
-        (ExpectedResult::Graph(path), SparqlResult::Graph(actual)) => {
+        (ExpectedResult::Graph(path), EvalRef::Graph(actual)) => {
             let expected_bytes =
                 std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
             let media = crate::run::data_media_type(path);
@@ -270,9 +319,8 @@ fn compare_eval(case: &SparqlTestCase, result: &SparqlResult, ordered: bool) -> 
             path.display()
         )),
         (ExpectedResult::None, _) => Err("evaluation case has no expected result".to_owned()),
-        (expected, actual) => Err(format!(
-            "result-kind mismatch: expected {expected:?}, got a {} result",
-            actual.query_form()
+        (expected, _) => Err(format!(
+            "result-kind mismatch: expected {expected:?}, got a {query_form} result"
         )),
     }
 }

@@ -9,12 +9,12 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 120 named cases in 19 integration targets,
-with 125 executions across 23 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 135 named cases in 23 integration targets,
+with 140 executions across 27 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
-Turtle-chain, regular-role, evidence, real-producer and physical-shape semantic
-acceptance targets. The evidence and scoped retrieval cases exercise the original
+Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
+carrier semantic acceptance targets. The evidence and scoped retrieval cases exercise the original
 admitted owners, four-valued evidence, exact aggregation and refusal paths on the
 32-bit target; the scoped text cases retain original candidate rows and scores.
 The twenty-one real-producer cases exercise both shipped text and kNN strata,
@@ -116,7 +116,11 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-mime` / `lossless` | scalar | `production_rdf_round_trip_is_deterministic_for_original_and_broken_messages` | Reproduces the frozen native transcript of message and RDF bytes across all three serializers; reconstructs repeated, nested, multipart and malformed originals through the production RDF parser and byte-cover decoder. |
 
 | `purrdf-sparql-eval` / `evidence_ingress` | scalar | All twenty exact cases registered in the original target | Preserves polarity, closure, unknown status, scope, ledger cells and accepted ordering through actual operators and query forms; native empty, late-emitted and unclosed whole-search declarations retain their original owners and admitted COUNT bounds through EXISTS and ASK functions without an external evidence source. Thirty-six actual empty-producer combinations cover complete/open/incomplete search, explicit source scope, positive EXISTS, NOT EXISTS and nested MINUS: only closed complete absence decides the predicate; unresolved membership remains enumerable. Producer refusal prevents partial publication. |
-| `purrdf-text` / `physical_shapes` | scalar | All nineteen exact cases registered in the original target | Compares dictionary, ordered-window and bucket execution with literal execution, exercises original owner lifetimes and admission refusal, and retains exact bytes and work bounds. |
+| `purrdf-core` / `triple_carrier` | scalar | All five registered cases | Pins 12/8/12-byte row layouts, all bound patterns and lazy side indexes, lexical/statement/canonical identity, named-role refusal and shared first-cause/fresh-read behavior. |
+| `purrdf-datalog` / `rules_runtime` | scalar | The four `triple_` cases | Exercises actual predicate-only keys, original wide host IDs, compiler/chase/proof, immutable Base through retraction and NoOutput semantics. |
+| `purrdf-sparql-eval` / `host_identity` | scalar | The two `triple_` cases | Checks typed named-graph refusal before nested/empty shortcuts and actual default-query bags, unbound cells, paths and graph output. |
+| `purrdf-shapes` / `srl_language` | scalar | `triple_carrier_runs_the_public_rl_program_without_quad_storage`, `triple_rl_keeps_statement_roles_and_scoped_blank_identity` | Runs the public compact SRL entry, pins quad-model parity and compact result tables, and preserves scoped blank and statement roles. |
+| `purrdf-text` / `physical_shapes` | scalar | All twenty-one exact cases registered in the original target | Compares dictionary, ordered-window and bucket execution with literal execution, exercises original owner lifetimes and admission refusal, and retains exact bytes and work bounds. |
 | `purrdf-retrieval` / `real_producers` | scalar | All twenty-one exact cases registered in the original target | Exercises the shipped text and kNN strata, scoped ranks, retained fused acceptance without another producer call, and typed terminal suffix-settlement refusal with original owner release. |
 | `purrdf-text` / `wasm_determinism` | scalar | `scoped_text_bound_candidates_retain_unknown_membership`, `scoped_text_depth_preserves_original_unknown_rows_and_scores`, `scoped_text_preserves_original_constraint_failure` | Retains original scoped candidate membership, unknown rows, scores and constraint failures through production text retrieval. |
 

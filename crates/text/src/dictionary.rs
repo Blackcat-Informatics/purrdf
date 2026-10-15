@@ -5,7 +5,7 @@
 //! All matches preserve the ordinary positional join's ordered bag. Greedy
 //! longest-first selection is an explicit logical consumer, not a shape flag.
 
-use crate::TextIndex;
+use crate::{CorpusProfile, GraphLanguage, TextIndex};
 use purrdf_core::{TermValue, small::Shared};
 use purrdf_lex::allocation::SharedText;
 use purrdf_sparql_eval::{
@@ -67,8 +67,8 @@ impl Dictionary {
     ///
     /// # Errors
     /// Preserves analyzer input errors and before-allocation physical refusals.
-    pub fn compile(
-        index: &TextIndex,
+    pub fn compile<P: CorpusProfile>(
+        index: &TextIndex<P>,
         entries: &[DictionaryEntry<'_>],
         workspace: &WorkspaceCapability,
     ) -> Result<Self, EvalError> {
@@ -189,9 +189,9 @@ impl Dictionary {
     pub(crate) fn token_count(&self, entry: usize) -> usize {
         self.0.lengths[entry]
     }
-    fn matches_key(
+    fn matches_key<P: CorpusProfile>(
         &self,
-        index: &TextIndex,
+        index: &TextIndex<P>,
         entries: &[DictionaryEntry<'_>],
         workspace: &WorkspaceCapability,
     ) -> Result<bool, EvalError> {
@@ -220,12 +220,12 @@ impl Dictionary {
     ///
     /// # Errors
     /// Refuses an analyzer mismatch, overflow or actual storage failure.
-    pub fn scan(
+    pub fn scan<P: CorpusProfile>(
         &self,
-        index: Arc<TextIndex>,
+        index: Arc<TextIndex<P>>,
         predicate: Option<u32>,
         workspace: &WorkspaceCapability,
-    ) -> Result<DictionaryMatches, EvalError> {
+    ) -> Result<DictionaryMatches<P>, EvalError> {
         if self.0.analyzer != index.analyzer_fingerprint() {
             return Err(purrdf_sparql_eval::NativeDiagnostic::error(
                 purrdf_sparql_eval::NativeDiagnosticKind::Config,
@@ -361,9 +361,9 @@ impl DictionaryCache {
     ///
     /// # Errors
     /// Preserves analyzer, allocation and checked-layout failures.
-    pub fn get(
+    pub fn get<P: CorpusProfile>(
         &self,
-        index: &TextIndex,
+        index: &TextIndex<P>,
         entries: &[DictionaryEntry<'_>],
         workspace: &WorkspaceCapability,
     ) -> Result<Dictionary, EvalError> {
@@ -431,15 +431,15 @@ pub struct DictionaryWork {
 }
 /// Retained index/compilation and the admitted ordered match bag.
 #[derive(Debug)]
-pub struct DictionaryMatches {
-    index: Arc<TextIndex>,
+pub struct DictionaryMatches<P: CorpusProfile = GraphLanguage> {
+    index: Arc<TextIndex<P>>,
     dictionary: Dictionary,
     rows: AdmittedVec<DictionaryMatch>,
     work: DictionaryWork,
 }
-impl DictionaryMatches {
+impl<P: CorpusProfile> DictionaryMatches<P> {
     pub(crate) fn from_literal(
-        index: Arc<TextIndex>,
+        index: Arc<TextIndex<P>>,
         dictionary: Dictionary,
         rows: AdmittedVec<DictionaryMatch>,
     ) -> Self {
@@ -459,7 +459,7 @@ impl DictionaryMatches {
         &self.rows
     }
     /// Original index containing this result's source identity.
-    pub fn index(&self) -> &TextIndex {
+    pub fn index(&self) -> &TextIndex<P> {
         &self.index
     }
     /// Reusable analyzer-bound dictionary, retained through result extraction.
@@ -518,7 +518,10 @@ impl DictionaryMatches {
         Ok(result)
     }
 }
-fn domain<'a>(index: &'a TextIndex, row: &DictionaryMatch) -> (&'a TermValue, Option<&'a str>) {
+fn domain<'a, P: CorpusProfile>(
+    index: &'a TextIndex<P>,
+    row: &DictionaryMatch,
+) -> (&'a TermValue, Option<&'a str>) {
     let document = index
         .document(row.path[0].document)
         .expect("retained occurrence");
@@ -571,12 +574,12 @@ fn append_match(
         path: owned,
     })
 }
-fn scan_unique(
+fn scan_unique<P: CorpusProfile>(
     dictionary: &Dictionary,
     occurrences: &[Occurrence],
     rows: &mut AdmittedVec<DictionaryMatch>,
     work: &mut DictionaryWork,
-    index: &TextIndex,
+    index: &TextIndex<P>,
     workspace: &WorkspaceCapability,
 ) -> Result<(), EvalError> {
     let mut state = 0;
@@ -611,12 +614,12 @@ struct Parent {
     occurrence: Occurrence,
     parent: Option<usize>,
 }
-fn scan_aliases(
+fn scan_aliases<P: CorpusProfile>(
     dictionary: &Dictionary,
     occurrences: &[Occurrence],
     rows: &mut AdmittedVec<DictionaryMatch>,
     work: &mut DictionaryWork,
-    index: &TextIndex,
+    index: &TextIndex<P>,
     workspace: &WorkspaceCapability,
 ) -> Result<(), EvalError> {
     let mut parents = AdmittedVec::new(workspace);

@@ -98,7 +98,9 @@ use std::sync::OnceLock;
 use hashbrown::HashTable;
 
 use crate::cursor::{RowCursor, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
-use crate::dictionary::{DictionaryError, DictionaryTerm, TermDictionary, TermIdentity};
+use crate::dictionary::{
+    DictionaryError, DictionaryTerm, TermDictionary, TermIdentity, try_map_row,
+};
 use crate::id::{PartitionId, RowId, TermId};
 use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
@@ -175,6 +177,19 @@ impl TermInterner {
         Ok(id)
     }
 
+    /// Copy the original insertion order through the checked mint home.
+    fn try_clone(&self) -> Result<Self, StorageError> {
+        let mut copy = Self::default();
+        #[cfg(test)]
+        {
+            copy.term_limit = self.term_limit;
+        }
+        for surface in &self.surfaces {
+            copy.intern(surface)?;
+        }
+        Ok(copy)
+    }
+
     /// The id of the term with this surface, if already interned; never inserts.
     pub fn lookup(&self, surface: &str) -> Option<TermId> {
         let hash = surface_hash(surface);
@@ -248,24 +263,20 @@ impl TermDictionary for TermInterner {
     fn resolve_term(&self, id: TermId) -> Result<&str, Infallible> {
         Ok(self.resolve(id))
     }
-    fn with_interned<T>(
+    fn with_interned<T, const N: usize>(
         &mut self,
-        terms: [DictionaryTerm<'_, TermId>; 4],
-        validate: impl FnOnce(&Self, [TermId; 4]) -> Result<T, DictionaryError<Infallible>>,
+        terms: [DictionaryTerm<'_, TermId>; N],
+        validate: impl FnOnce(&Self, [TermId; N]) -> Result<T, DictionaryError<Infallible>>,
     ) -> Result<T, DictionaryError<Infallible>> {
         let checkpoint = self.len();
         let result = (|| {
-            let mut ids = [None; 4];
-            for (slot, term) in ids.iter_mut().zip(terms) {
-                *slot = Some(match term {
+            let ids = try_map_row(terms, |term| {
+                Ok::<_, StorageError>(match term {
                     DictionaryTerm::Id(id) => id,
                     DictionaryTerm::Surface(surface) => self.intern(surface)?,
-                });
-            }
-            validate(
-                self,
-                ids.map(|id| id.expect("every admitted term has an identity")),
-            )
+                })
+            })?;
+            validate(self, ids)
         })();
         if result.is_err() {
             self.rollback_to(checkpoint);
@@ -907,6 +918,109 @@ impl<I: TermIdentity> Relation<I> {
     }
 }
 
+mod arity_seal {
+    pub trait Sealed {}
+    impl Sealed for super::Arity<3> {}
+    impl Sealed for super::Arity<4> {}
+}
+
+/// Closed compile-time row arity, with no run-time shape tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Arity<const N: usize>;
+
+/// Physical key and row coordinates of the supported triple and quad stores.
+///
+/// Three-position keys hold one predicate identity. Four-position keys retain
+/// the predicate and graph pair. Both use the same subject/object arrangements.
+pub trait StoreShape<const N: usize>: arity_seal::Sealed {
+    /// The physically retained partition key.
+    type Key<I: TermIdentity>: TermIdentity;
+    /// No field storage for triples; the original owned graph surface for quads.
+    type Graph: fmt::Debug + Clone + Eq + Ord + Send + Sync;
+    /// RDF positions that identify a partition, in lexical sweep order.
+    const KEY_POSITIONS: &'static [usize];
+    /// Original dictionary mint order, expressed as RDF position indices.
+    const MINT_ORDER: [usize; N];
+    /// Project a complete row to its physical key.
+    fn key<I: TermIdentity>(row: &[I; N]) -> Self::Key<I>;
+    /// Obtain a key only when every partition coordinate is bound.
+    fn known_key<I: TermIdentity>(row: &[Option<I>; N]) -> Option<Self::Key<I>>;
+    /// Read a key coordinate by its key-order position.
+    fn key_term<I: TermIdentity>(key: Self::Key<I>, position: usize) -> I;
+    /// Reconstruct a row from its original key and subject/object identities.
+    fn row<I: TermIdentity>(subject: I, key: Self::Key<I>, object: I) -> [I; N];
+    /// Own exactly the shape's lexical positions at publication.
+    fn fact(terms: [String; N]) -> Fact<Self::Graph>;
+    /// Borrow exactly the shape's lexical positions for proof and model identities.
+    fn fact_terms(fact: &Fact<Self::Graph>) -> [&str; N];
+}
+
+impl StoreShape<3> for Arity<3> {
+    type Key<I: TermIdentity> = I;
+    type Graph = ();
+    const KEY_POSITIONS: &'static [usize] = &[1];
+    const MINT_ORDER: [usize; 3] = [1, 0, 2];
+    fn key<I: TermIdentity>(row: &[I; 3]) -> I {
+        row[1]
+    }
+    fn known_key<I: TermIdentity>(row: &[Option<I>; 3]) -> Option<I> {
+        row[1]
+    }
+    fn key_term<I: TermIdentity>(key: I, _position: usize) -> I {
+        key
+    }
+    fn row<I: TermIdentity>(subject: I, key: I, object: I) -> [I; 3] {
+        [subject, key, object]
+    }
+    fn fact([subject, predicate, object]: [String; 3]) -> ShapeFact<3> {
+        Fact {
+            subject,
+            predicate,
+            object,
+            graph: (),
+        }
+    }
+    fn fact_terms(fact: &ShapeFact<3>) -> [&str; 3] {
+        [&fact.subject, &fact.predicate, &fact.object]
+    }
+}
+
+impl StoreShape<4> for Arity<4> {
+    type Key<I: TermIdentity> = (I, I);
+    type Graph = String;
+    const KEY_POSITIONS: &'static [usize] = &[1, 3];
+    const MINT_ORDER: [usize; 4] = [1, 3, 0, 2];
+    fn key<I: TermIdentity>(row: &[I; 4]) -> (I, I) {
+        (row[1], row[3])
+    }
+    fn known_key<I: TermIdentity>(row: &[Option<I>; 4]) -> Option<(I, I)> {
+        row[1].zip(row[3])
+    }
+    fn key_term<I: TermIdentity>(key: (I, I), position: usize) -> I {
+        if position == 0 { key.0 } else { key.1 }
+    }
+    fn row<I: TermIdentity>(subject: I, key: (I, I), object: I) -> [I; 4] {
+        [subject, key.0, object, key.1]
+    }
+    fn fact([subject, predicate, object, graph]: [String; 4]) -> ShapeFact<4> {
+        Fact {
+            subject,
+            predicate,
+            object,
+            graph,
+        }
+    }
+    fn fact_terms(fact: &ShapeFact<4>) -> [&str; 4] {
+        [&fact.subject, &fact.predicate, &fact.object, &fact.graph]
+    }
+}
+
+/// The exact key type of an admitted static row shape.
+pub type StoreKey<I, const N: usize> = <Arity<N> as StoreShape<N>>::Key<I>;
+
+/// A lexical fact with exactly the selected shape's owned coordinates.
+pub type ShapeFact<const N: usize> = Fact<<Arity<N> as StoreShape<N>>::Graph>;
+
 // ── The store ───────────────────────────────────────────────────────────────────
 
 /// One projected row of the store: a `(subject, predicate, object, graph)` quad of
@@ -917,7 +1031,7 @@ impl<I: TermIdentity> Relation<I> {
 /// this crate ever produces. The graph sorts LAST so a dataset confined to one graph keeps
 /// exactly the fact order it had before the position existed.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Fact {
+pub struct Fact<G = String> {
     /// The subject term's lexical surface.
     pub subject: String,
     /// The predicate term's lexical surface — an IRI predicate renders as `<iri>`, the
@@ -927,7 +1041,7 @@ pub struct Fact {
     pub object: String,
     /// The graph term's lexical surface; EMPTY for the default graph
     /// ([`RelationStore::DEFAULT_GRAPH`]).
-    pub graph: String,
+    pub graph: G,
 }
 
 /// One addressed partition of the store's arity-4 relation: the `(subject, object)`
@@ -938,18 +1052,22 @@ pub struct Fact {
 /// galloping `(subject, object)` access, so an atom whose predicate happens to be a
 /// variable pays for the extra partitions it visits and for nothing else.
 #[derive(Debug, Clone, Copy)]
-pub struct PartitionRef<'a, I: TermIdentity = TermId> {
+pub struct PartitionRef<'a, I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The partition's dense slot handle.
     id: PartitionId,
     /// The interned predicate surface this partition is keyed by.
-    predicate: I,
-    /// The interned graph surface this partition is keyed by.
-    graph: I,
+    key: StoreKey<I, N>,
     /// The partition's arrangement.
     relation: &'a Relation<I>,
 }
 
-impl<'a, I: TermIdentity> PartitionRef<'a, I> {
+impl<'a, I: TermIdentity, const N: usize> PartitionRef<'a, I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The partition's dense slot handle.
     pub fn id(self) -> PartitionId {
         self.id
@@ -958,13 +1076,12 @@ impl<'a, I: TermIdentity> PartitionRef<'a, I> {
     /// The interned predicate this partition is keyed by — the value a free predicate
     /// position binds to.
     pub fn predicate(self) -> I {
-        self.predicate
+        Arity::<N>::key_term(self.key, 0)
     }
 
-    /// The interned graph this partition is keyed by — the value a free graph position
-    /// binds to.
-    pub fn graph(self) -> I {
-        self.graph
+    /// Reconstruct the original row without a graph coordinate on triple stores.
+    pub fn row(self, subject: I, object: I) -> [I; N] {
+        Arity::<N>::row(subject, self.key, object)
     }
 
     /// The number of distinct `(subject, object)` rows in this partition.
@@ -999,22 +1116,30 @@ impl<'a, I: TermIdentity> PartitionRef<'a, I> {
     }
 }
 
+impl<I: TermIdentity> PartitionRef<'_, I, 4> {
+    /// The interned graph this partition is keyed by.
+    pub fn graph(self) -> I {
+        self.key.1
+    }
+}
+
 /// How a [`Partitions`] sweep is being served.
-enum PartitionsCursor<'a, D: TermDictionary> {
+enum PartitionsCursor<'a, D: TermDictionary, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Both key positions are known, so at most ONE partition can match and it was
     /// located by an ordered-map probe. This is the constant-predicate hot path: no
     /// sweep, no filter, straight to the same arrangement a predicate-keyed store would
     /// have handed back.
-    Single(Option<PartitionRef<'a, D::Id>>),
+    Single(Option<PartitionRef<'a, D::Id, N>>),
     /// At least one key position is free: walk the store's lexical partition order,
     /// keeping the partitions whose key agrees with the known positions.
     Sweep {
         /// The store being swept.
-        store: &'a RelationStore<D>,
-        /// The required predicate, or `None` if the position is free.
-        predicate: Option<D::Id>,
-        /// The required graph, or `None` if the position is free.
-        graph: Option<D::Id>,
+        store: &'a RelationStore<D, N>,
+        /// Bound RDF positions; only the shape's key coordinates select partitions.
+        positions: [Option<D::Id>; N],
         /// The next index into the store's lexical partition order.
         next: usize,
     },
@@ -1025,9 +1150,16 @@ enum PartitionsCursor<'a, D: TermDictionary> {
 ///
 /// Allocation-free in both modes, so an atom's partition resolution never materialises a
 /// `Vec` — see [`RelationStore::partitions`].
-pub struct Partitions<'a, D: TermDictionary = TermInterner>(PartitionsCursor<'a, D>);
+pub struct Partitions<'a, D: TermDictionary = TermInterner, const N: usize = 4>(
+    PartitionsCursor<'a, D, N>,
+)
+where
+    Arity<N>: StoreShape<N>;
 
-impl<D: TermDictionary> fmt::Debug for Partitions<'_, D> {
+impl<D: TermDictionary, const N: usize> fmt::Debug for Partitions<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Prints the sweep's shape, never the borrowed store.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
@@ -1037,39 +1169,42 @@ impl<D: TermDictionary> fmt::Debug for Partitions<'_, D> {
                 .field("found", &found.is_some())
                 .finish(),
             PartitionsCursor::Sweep {
-                predicate,
-                graph,
-                next,
-                ..
+                positions, next, ..
             } => f
                 .debug_struct("Partitions")
                 .field("mode", &"sweep")
-                .field("predicate", predicate)
-                .field("graph", graph)
+                .field("predicate", &positions[1])
+                .field("graph", &positions.get(3).copied().flatten())
                 .field("next", next)
                 .finish(),
         }
     }
 }
 
-impl<'a, D: TermDictionary> Iterator for Partitions<'a, D> {
-    type Item = PartitionRef<'a, D::Id>;
+impl<'a, D: TermDictionary, const N: usize> Iterator for Partitions<'a, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    type Item = PartitionRef<'a, D::Id, N>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.0 {
             PartitionsCursor::Single(found) => found.take(),
             PartitionsCursor::Sweep {
                 store,
-                predicate,
-                graph,
+                positions,
                 next,
             } => {
                 while let Some(&slot) = store.order.get(*next) {
                     *next += 1;
-                    let (_, partition_predicate, partition_graph) = store.keys[slot];
-                    if predicate.is_none_or(|wanted| wanted == partition_predicate)
-                        && graph.is_none_or(|wanted| wanted == partition_graph)
-                    {
+                    let (_, key) = store.keys[slot];
+                    if Arity::<N>::KEY_POSITIONS.iter().enumerate().all(
+                        |(coordinate, &position)| {
+                            positions[position].is_none_or(|wanted| {
+                                wanted == Arity::<N>::key_term(key, coordinate)
+                            })
+                        },
+                    ) {
                         return Some(store.partition_at(slot));
                     }
                 }
@@ -1089,18 +1224,23 @@ impl<'a, D: TermDictionary> Iterator for Partitions<'a, D> {
 /// constant-predicate atom exactly as fast as it was when predicates were relation
 /// symbols.
 #[derive(Debug, Clone)]
-pub struct RelationStore<D: TermDictionary = TermInterner> {
+pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The store's term dictionary, shared by every position of every partition. This is
     /// the persistent term arena: never reset within the store's lifetime, because a
     /// [`TermDictionary::Id`] handed out in round 1 must still resolve in round 40.
     interner: D,
+    /// Explicit immutable native base; capture strips any older base, so depth is one.
+    base: Option<Box<Self>>,
     /// The partitions, indexed by dense [`PartitionId`] slot.
     relations: Vec<Relation<D::Id>>,
     /// `keys[slot]` retains the original partition id and `(predicate, graph)` key.
-    keys: Vec<(PartitionId, D::Id, D::Id)>,
+    keys: Vec<(PartitionId, StoreKey<D::Id, N>)>,
     /// Key → slot. Probed, NEVER iterated: its order is term mint order, which carries no
     /// lexical meaning. Every sweep reads `order` instead.
-    by_key: BTreeMap<(D::Id, D::Id), usize>,
+    by_key: BTreeMap<StoreKey<D::Id, N>, usize>,
     /// The partition slots in LEXICAL `(predicate surface, graph surface)` order — the
     /// single sweep order, maintained on partition creation so no sweep has to sort.
     order: Vec<usize>,
@@ -1132,12 +1272,38 @@ struct RowAdmission<I: TermIdentity> {
 /// Original subject/object identities and the newly published row, if not a duplicate.
 pub type InsertedRow<I> = Option<(I, I, RowId)>;
 
-impl<D: TermDictionary> RelationStore<D> {
+impl<D: TermDictionary, const N: usize> RelationStore<D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Select a declared read authority. Base is checked by the executor before work.
+    pub(crate) fn read_source(&self, source: crate::clause::ReadSource) -> &Self {
+        match source {
+            crate::clause::ReadSource::Evaluation => self,
+            crate::clause::ReadSource::Base => self
+                .base
+                .as_deref()
+                .expect("the evaluator admitted the rule's base read authority"),
+        }
+    }
+
+    /// Whether an explicit immutable base was captured.
+    pub(crate) const fn has_base(&self) -> bool {
+        self.base.is_some()
+    }
+
+    /// All retained rows, including the immutable base's separate arrangements.
+    pub(crate) fn retained_rows(&self) -> usize {
+        self.row_count
+            .saturating_add(self.base.as_ref().map_or(0, |base| base.row_count))
+    }
+
     /// Construct an empty store using the original dictionary and identity space.
     /// No term is read, copied or remapped by construction.
     pub fn with_dictionary(interner: D) -> Self {
         Self {
             interner,
+            base: None,
             relations: Vec::new(),
             keys: Vec::new(),
             by_key: BTreeMap::new(),
@@ -1161,7 +1327,7 @@ impl<D: TermDictionary> RelationStore<D> {
     /// source failure nor admission failure publishes a partial row or partition.
     pub fn insert_ids(
         &mut self,
-        ids: [D::Id; 4],
+        ids: [D::Id; N],
     ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
         self.insert_terms(ids.map(DictionaryTerm::Id))
     }
@@ -1173,12 +1339,12 @@ impl<D: TermDictionary> RelationStore<D> {
     /// New lexical identities are rolled back if their dependent validation refuses.
     pub fn insert_terms(
         &mut self,
-        terms: [DictionaryTerm<'_, D::Id>; 4],
+        terms: [DictionaryTerm<'_, D::Id>; N],
     ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
-        let mut known = [None; 4];
+        let mut known = [None; N];
         for (slot, term) in known.iter_mut().zip(terms) {
             *slot = match term {
                 DictionaryTerm::Id(id) => Some(id),
@@ -1191,35 +1357,33 @@ impl<D: TermDictionary> RelationStore<D> {
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
-        let [subject, predicate, object, graph] = known;
-        let existing = predicate
-            .zip(graph)
-            .and_then(|key| self.by_key.get(&key).copied());
+        let (subject, object) = (known[0], known[2]);
+        let existing = Arity::<N>::known_key(&known).and_then(|key| self.by_key.get(&key).copied());
         if let (Some(slot), Some(subject), Some(object)) = (existing, subject, object)
             && self.relations[slot].contains(subject, object)
         {
             return Ok(None);
         }
         let admission = self.admit_row(existing)?;
-        let [subject, predicate, object, graph] =
-            core::array::from_fn(|i| known[i].map_or(terms[i], DictionaryTerm::Id));
-        // Preserve the original native mint order: predicate, graph, subject, object.
+        let ordered = Arity::<N>::MINT_ORDER
+            .map(|position| known[position].map_or(terms[position], DictionaryTerm::Id));
         let keys = &self.keys;
         let order = &self.order;
-        let (ids, position) = self.interner.with_interned(
-            [predicate, graph, subject, object],
-            |dictionary, [predicate, graph, subject, object]| {
-                dictionary.check_read().map_err(DictionaryError::Source)?;
-                let position = if existing.is_some() {
-                    0
-                } else {
-                    partition_position(dictionary, keys, order, predicate, graph)
-                        .map_err(DictionaryError::Source)?
-                };
-                dictionary.check_read().map_err(DictionaryError::Source)?;
-                Ok(([subject, predicate, object, graph], position))
-            },
-        )?;
+        let (ids, position) = self.interner.with_interned(ordered, |dictionary, minted| {
+            let mut ids = minted;
+            for (index, position) in Arity::<N>::MINT_ORDER.into_iter().enumerate() {
+                ids[position] = minted[index];
+            }
+            dictionary.check_read().map_err(DictionaryError::Source)?;
+            let position = if existing.is_some() {
+                0
+            } else {
+                partition_position::<D, N>(dictionary, keys, order, Arity::<N>::key(&ids))
+                    .map_err(DictionaryError::Source)?
+            };
+            dictionary.check_read().map_err(DictionaryError::Source)?;
+            Ok((ids, position))
+        })?;
         Ok(Some(self.publish_row(ids, existing, position, admission)))
     }
 
@@ -1261,12 +1425,13 @@ impl<D: TermDictionary> RelationStore<D> {
 
     fn publish_row(
         &mut self,
-        ids: [D::Id; 4],
+        ids: [D::Id; N],
         existing: Option<usize>,
         position: usize,
         admission: RowAdmission<D::Id>,
     ) -> (D::Id, D::Id, RowId) {
-        let [subject_id, predicate_id, object_id, graph_id] = ids;
+        let (subject_id, object_id) = (ids[0], ids[2]);
+        let key = Arity::<N>::key(&ids);
         let RowAdmission {
             row_id,
             partition_id,
@@ -1277,8 +1442,8 @@ impl<D: TermDictionary> RelationStore<D> {
         } else {
             let slot = self.relations.len();
             self.relations.push(new_relation);
-            self.keys.push((partition_id, predicate_id, graph_id));
-            self.by_key.insert((predicate_id, graph_id), slot);
+            self.keys.push((partition_id, key));
+            self.by_key.insert(key, slot);
             self.order.insert(position, slot);
             slot
         };
@@ -1291,22 +1456,27 @@ impl<D: TermDictionary> RelationStore<D> {
 }
 
 /// Lexical position of an absent partition in the original dictionary order.
-fn partition_position<D: TermDictionary>(
+fn partition_position<D: TermDictionary, const N: usize>(
     dictionary: &D,
-    keys: &[(PartitionId, D::Id, D::Id)],
+    keys: &[(PartitionId, StoreKey<D::Id, N>)],
     order: &[usize],
-    predicate: D::Id,
-    graph: D::Id,
-) -> Result<usize, D::Error> {
-    let predicate = dictionary.resolve_term(predicate)?;
-    let graph = dictionary.resolve_term(graph)?;
+    key: StoreKey<D::Id, N>,
+) -> Result<usize, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let terms = resolve_key::<D, N>(dictionary, key)?;
     let (mut lo, mut hi) = (0, order.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        let (_, p, g) = keys[order[mid]];
-        let p = dictionary.resolve_term(p)?;
-        let g = dictionary.resolve_term(g)?;
-        if (p.as_ref(), g.as_ref()) < (predicate.as_ref(), graph.as_ref()) {
+        let (_, existing) = keys[order[mid]];
+        let other = resolve_key::<D, N>(dictionary, existing)?;
+        let ordering = other
+            .iter()
+            .flatten()
+            .map(AsRef::as_ref)
+            .cmp(terms.iter().flatten().map(AsRef::as_ref));
+        if ordering.is_lt() {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -1315,7 +1485,66 @@ fn partition_position<D: TermDictionary>(
     Ok(lo)
 }
 
+/// Pin every physical key coordinate before a lexical comparison.
+fn resolve_key<D: TermDictionary, const N: usize>(
+    dictionary: &D,
+    key: StoreKey<D::Id, N>,
+) -> Result<[Option<D::Lexical<'_>>; 2], D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut terms = [None, None];
+    for (coordinate, slot) in terms
+        .iter_mut()
+        .enumerate()
+        .take(Arity::<N>::KEY_POSITIONS.len())
+    {
+        *slot = Some(dictionary.resolve_term(Arity::<N>::key_term(key, coordinate))?);
+    }
+    Ok(terms)
+}
+
 purrdf_hash::default_from_new!(RelationStore);
+
+impl RelationStore<TermInterner, 3> {
+    /// Capture the current triples as the immutable base for ordered rules.
+    ///
+    /// Later insertions and retractions affect only the evaluation model. The snapshot
+    /// retains the same dictionary IDs; no graph term or partition is introduced.
+    /// A second explicit capture replaces the old base instead of nesting snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original typed dictionary, row-storage or owner-allocation refusal.
+    pub fn with_base_snapshot(mut self) -> Result<Self, StorageError> {
+        let mut base = Self::with_dictionary(self.interner.try_clone()?);
+        for (_, row) in self.rows_from(0) {
+            base.insert_row(row.map(|id| self.interner.resolve(id)))?;
+        }
+        let mut resident = Resident;
+        self.base = Some(Memory::new(&mut resident).boxed(base)?);
+        Ok(self)
+    }
+}
+
+impl<const N: usize> RelationStore<TermInterner, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Preserve IDs referenced by the immutable base across an ordered retraction.
+    pub(crate) fn retraction_dictionary(&self) -> Result<TermInterner, StorageError> {
+        if self.has_base() {
+            self.interner.try_clone()
+        } else {
+            Ok(TermInterner::default())
+        }
+    }
+
+    /// Move the immutable read authority to a rebuilt model without another copy.
+    pub(crate) fn transfer_base(&mut self, destination: &mut Self) {
+        destination.base = self.base.take();
+    }
+}
 
 impl RelationStore {
     /// A fresh, empty store; [`Default`] delegates here.
@@ -1351,25 +1580,24 @@ impl RelationStore {
         object: &str,
         graph: &str,
     ) -> Result<Option<(TermId, TermId, RowId)>, StorageError> {
-        self.insert_terms([subject, predicate, object, graph].map(DictionaryTerm::Surface))
-            .map_err(|error| match error {
-                DictionaryError::Storage(error) => error,
-                DictionaryError::Source(never) => match never {},
-            })
+        self.insert_row([subject, predicate, object, graph])
     }
 }
 
-impl<D: TermDictionary> RelationStore<D> {
+impl<D: TermDictionary, const N: usize> RelationStore<D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The rows from row `since` on, in row order, as `(subject, predicate, object,
     /// graph)` interned ids — the facts the store gained since it held `since` rows,
     /// read in time proportional to their number.
-    pub fn rows_from(&self, since: usize) -> impl Iterator<Item = (RowId, [D::Id; 4])> + '_ {
+    pub fn rows_from(&self, since: usize) -> impl Iterator<Item = (RowId, [D::Id; N])> + '_ {
         let since = since.min(self.row_log.len());
         self.row_log[since..]
             .iter()
             .map(|&(row, partition, subject, object)| {
-                let (_, predicate, graph) = self.keys[partition.resident_index()];
-                (row, [subject, predicate, object, graph])
+                let (_, key) = self.keys[partition.resident_index()];
+                (row, Arity::<N>::row(subject, key, object))
             })
     }
 
@@ -1402,22 +1630,15 @@ impl<D: TermDictionary> RelationStore<D> {
     /// Predicate and graph surfaces are terms too, so they are counted here exactly like a
     /// subject or an object: the ceiling measures the whole dictionary, not a subset of it.
     pub fn term_bytes(&self) -> usize {
-        self.interner.resident_bytes()
+        self.interner.resident_bytes().saturating_add(
+            self.base
+                .as_ref()
+                .map_or(0, |base| base.interner.resident_bytes()),
+        )
     }
 }
 
 impl RelationStore {
-    /// The interned id of the term with this lexical surface, if the term has ever entered
-    /// this store in ANY position. Never inserts.
-    ///
-    /// This is the SINGLE place probe-miss semantics lives: `None` means the term has
-    /// never been seen, so any selection or membership bound on it is empty / false —
-    /// callers short-circuit to the empty result exactly where a surface-keyed index
-    /// would have produced zero matches.
-    pub fn term_id(&self, surface: &str) -> Option<TermId> {
-        self.interner.lookup(surface)
-    }
-
     /// The dense handle of the `(predicate, graph)` partition, if it exists; never
     /// creates one.
     pub fn partition_id(&self, predicate: &str, graph: &str) -> Option<PartitionId> {
@@ -1436,9 +1657,7 @@ impl<D: TermDictionary> RelationStore<D> {
     /// whose predicate and graph are constants or already-bound variables, and the reason
     /// carrying the predicate as data costs such an atom nothing.
     pub fn partition(&self, predicate: D::Id, graph: D::Id) -> Option<PartitionRef<'_, D::Id>> {
-        self.by_key
-            .get(&(predicate, graph))
-            .map(|&slot| self.partition_at(slot))
+        self.partition_for(&[None, Some(predicate), None, Some(graph)])
     }
 
     /// Every partition matching the given positions, in LEXICAL
@@ -1449,26 +1668,43 @@ impl<D: TermDictionary> RelationStore<D> {
     /// lexical order, which is why an unbound predicate is deterministic and is still a
     /// sequence of indexed probes rather than one undifferentiated scan.
     pub fn partitions(&self, predicate: Option<D::Id>, graph: Option<D::Id>) -> Partitions<'_, D> {
-        match (predicate, graph) {
-            (Some(predicate), Some(graph)) => {
-                Partitions(PartitionsCursor::Single(self.partition(predicate, graph)))
-            }
-            _ => Partitions(PartitionsCursor::Sweep {
+        self.partitions_for([None, predicate, None, graph])
+    }
+}
+
+impl<D: TermDictionary, const N: usize> RelationStore<D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Resolve a fully bound partition key; subject/object coordinates do not select keys.
+    pub fn partition_for(
+        &self,
+        positions: &[Option<D::Id>; N],
+    ) -> Option<PartitionRef<'_, D::Id, N>> {
+        self.by_key
+            .get(&Arity::<N>::known_key(positions)?)
+            .map(|&slot| self.partition_at(slot))
+    }
+
+    /// Match the shape's actual partition coordinates in lexical order, without allocation.
+    pub fn partitions_for(&self, positions: [Option<D::Id>; N]) -> Partitions<'_, D, N> {
+        if Arity::<N>::known_key(&positions).is_some() {
+            Partitions(PartitionsCursor::Single(self.partition_for(&positions)))
+        } else {
+            Partitions(PartitionsCursor::Sweep {
                 store: self,
-                predicate,
-                graph,
+                positions,
                 next: 0,
-            }),
+            })
         }
     }
 
     /// The partition at a dense slot.
-    fn partition_at(&self, slot: usize) -> PartitionRef<'_, D::Id> {
-        let (id, predicate, graph) = self.keys[slot];
+    fn partition_at(&self, slot: usize) -> PartitionRef<'_, D::Id, N> {
+        let (id, key) = self.keys[slot];
         PartitionRef {
             id,
-            predicate,
-            graph,
+            key,
             relation: &self.relations[slot],
         }
     }
@@ -1481,11 +1717,7 @@ impl RelationStore {
     /// Membership for negation-as-failure and downstream dedup: every surface must resolve
     /// to an interned id ([`Self::term_id`]) or the quad cannot be present.
     pub fn contains(&self, subject: &str, predicate: &str, object: &str, graph: &str) -> bool {
-        let (Some(s), Some(o)) = (self.term_id(subject), self.term_id(object)) else {
-            return false;
-        };
-        self.relation(predicate, graph)
-            .is_some_and(|r| r.contains(s, o))
+        self.contains_row([subject, predicate, object, graph])
     }
 
     /// A galloping lending [`RowCursor`] over the id rows of the `(predicate, graph)`
@@ -1523,7 +1755,7 @@ impl RelationStore {
     pub fn predicates(&self) -> impl Iterator<Item = &str> {
         self.keys
             .iter()
-            .map(|&(_, predicate, _)| self.interner.resolve(predicate))
+            .map(|&(_, (predicate, _))| self.interner.resolve(predicate))
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
@@ -1535,63 +1767,92 @@ impl RelationStore {
     pub fn graphs(&self) -> impl Iterator<Item = &str> {
         self.keys
             .iter()
-            .map(|&(_, _, graph)| self.interner.resolve(graph))
+            .map(|&(_, (_, graph))| self.interner.resolve(graph))
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
+}
 
-    /// Every live row with its [`RowId`], in ROW order — the order the rows were inserted.
+impl<const N: usize> RelationStore<TermInterner, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The interned id of a surface in any position. Never inserts.
     ///
-    /// The rebuild seam for a caller that must drop facts: this store has no deletion,
-    /// because the semi-naive delta addresses rows as a dense range, so a retraction is a
-    /// new store built from the surviving rows in their original order — which keeps the
-    /// relative row order, and with it every order-derived observable, unchanged.
-    pub(crate) fn facts_in_row_order(&self) -> Vec<(RowId, Fact)> {
-        let mut rows = Vec::with_capacity(self.row_count);
-        for &slot in &self.order {
-            let (_, predicate, graph) = self.keys[slot];
-            let predicate = self.interner.resolve(predicate);
-            let graph = self.interner.resolve(graph);
-            let mut cursor = self.relations[slot].select(Bound::Any);
-            while let Some((s_id, o_id, row)) = crate::cursor::LendingIterator::next(&mut cursor) {
-                rows.push((
-                    row,
-                    Fact {
-                        subject: self.interner.resolve(s_id).to_owned(),
-                        predicate: predicate.to_owned(),
-                        object: self.interner.resolve(o_id).to_owned(),
-                        graph: graph.to_owned(),
-                    },
-                ));
-            }
+    /// An unknown surface constrains a selection or membership probe to no rows.
+    pub fn term_id(&self, surface: &str) -> Option<TermId> {
+        self.interner.lookup(surface)
+    }
+
+    /// Whether this shape's complete row is present, without interning any surface.
+    pub fn contains_row(&self, terms: [&str; N]) -> bool {
+        let (Some(subject), Some(object)) = (self.term_id(terms[0]), self.term_id(terms[2])) else {
+            return false;
+        };
+        let mut ids = [None; N];
+        for &position in Arity::<N>::KEY_POSITIONS {
+            let Some(id) = self.term_id(terms[position]) else {
+                return false;
+            };
+            ids[position] = Some(id);
         }
+        self.partition_for(&ids)
+            .is_some_and(|partition| partition.relation.contains(subject, object))
+    }
+
+    /// Insert one native row in the store's declared shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original typed dictionary or row-storage refusal before publication.
+    pub fn insert_row(
+        &mut self,
+        terms: [&str; N],
+    ) -> Result<Option<(TermId, TermId, RowId)>, StorageError> {
+        self.insert_terms(terms.map(DictionaryTerm::Surface))
+            .map_err(|error| match error {
+                DictionaryError::Storage(error) => error,
+                DictionaryError::Source(never) => match never {},
+            })
+    }
+
+    /// Project native rows through the original lexical owner, pinning each key once.
+    fn projected_rows(&self) -> impl Iterator<Item = (RowId, ShapeFact<N>)> + '_ {
+        self.order.iter().flat_map(move |&slot| {
+            let (_, key) = self.keys[slot];
+            let key_terms = match resolve_key::<TermInterner, N>(&self.interner, key) {
+                Ok(terms) => terms,
+                Err(never) => match never {},
+            };
+            let mut cursor = self.relations[slot].select(Bound::Any);
+            core::iter::from_fn(move || {
+                let (subject, object, row) = crate::cursor::LendingIterator::next(&mut cursor)?;
+                let mut terms = core::array::from_fn(|_| String::new());
+                self.interner.resolve(subject).clone_into(&mut terms[0]);
+                self.interner.resolve(object).clone_into(&mut terms[2]);
+                for (&position, surface) in Arity::<N>::KEY_POSITIONS
+                    .iter()
+                    .zip(key_terms.iter().flatten())
+                {
+                    (*surface).clone_into(&mut terms[position]);
+                }
+                Some((row, Arity::<N>::fact(terms)))
+            })
+        })
+    }
+
+    /// Every live row in insertion order, for deterministic rebuilds after retraction.
+    pub(crate) fn facts_in_row_order(&self) -> Vec<(RowId, ShapeFact<N>)> {
+        let mut rows = Vec::with_capacity(self.row_count);
+        rows.extend(self.projected_rows());
         rows.sort_unstable_by_key(|(row, _)| row.index());
         rows
     }
 
-    /// Project every live row back to a [`Fact`] quad of lexical surfaces, in sorted
-    /// `(subject, predicate, object, graph)` order.
-    ///
-    /// This is the single columnar-to-lexical bridge. Keeping it in one place prevents
-    /// consumers from growing subtly different seed ordering or term-resolution rules,
-    /// and it is the surface a determinism test compares across permuted insertion
-    /// orders.
-    pub fn facts_sorted(&self) -> Vec<Fact> {
+    /// Project the model to lexical facts in subject/predicate/object[/graph] order.
+    pub fn facts_sorted(&self) -> Vec<ShapeFact<N>> {
         let mut facts = Vec::with_capacity(self.row_count);
-        for &slot in &self.order {
-            let (_, predicate, graph) = self.keys[slot];
-            let predicate = self.interner.resolve(predicate);
-            let graph = self.interner.resolve(graph);
-            let mut cursor = self.relations[slot].select(Bound::Any);
-            while let Some((s_id, o_id, _row)) = crate::cursor::LendingIterator::next(&mut cursor) {
-                facts.push(Fact {
-                    subject: self.interner.resolve(s_id).to_owned(),
-                    predicate: predicate.to_owned(),
-                    object: self.interner.resolve(o_id).to_owned(),
-                    graph: graph.to_owned(),
-                });
-            }
-        }
+        facts.extend(self.projected_rows().map(|(_, fact)| fact));
         facts.sort_unstable();
         facts
     }

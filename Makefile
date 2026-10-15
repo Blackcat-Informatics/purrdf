@@ -800,7 +800,31 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				promoted_field_arithmetic_is_exact \
 				thirty_two_index_fields_are_exact \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test triple_carrier -- --exact \
+				compact_statement_probes_populate_only_the_requested_ordinal_arrays \
+				compact_layout_and_all_bound_shapes \
+				owned_transfer_preserves_lexical_owner_and_flat_statement_identity \
+				conversion_refuses_every_named_role_including_empty_declarations \
+				refused_child_stops_existing_streams_and_fresh_session_is_healthy \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
+				triple_base_authority_survives_data_growth_and_layer_retraction \
+				triple_negated_base_preserves_seminaive_work_and_limits \
+				triple_no_output_runs_the_body_without_fabricating_a_fact \
+				triple_store_has_predicate_only_keys_and_transactional_original_ids \
+				triple_compiler_preserves_static_arity_and_original_admission \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test host_identity -- --exact \
+				triple_graph_support_precedes_empty_and_nested_query_shortcuts \
+				triple_local_graph_support_stops_at_the_remote_service_boundary \
+				triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test srl_language -- --exact \
+				triple_carrier_runs_the_public_rl_program_without_quad_storage \
+				triple_rl_keeps_statement_roles_and_scoped_blank_identity \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test physical_shapes -- --exact \
+				graph_free_corpus_keys_ranking_and_query graph_free_rdf12_partitions_and_named_refusal \
 				dictionary_property expanded_dictionary_and_union dictionary_cache_and_size \
 				dictionary_projection_and_aliases longest_first_reference window_property \
 				typed_series_property registered_host_and_decline prepared_and_query_forms \

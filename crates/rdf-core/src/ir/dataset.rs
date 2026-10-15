@@ -37,11 +37,25 @@ use crate::dataset_view::GraphMatch;
 // `builder.rs` keeps resolving; the single definition lives in `crate::hash`.
 pub(crate) use crate::hash::FastHasher;
 use crate::{
-    RdfAnnotation, RdfLiteral, RdfLocation, RdfQuad, RdfReifier, RdfStoreCapabilities, RdfTerm,
+    RdfAnnotation, RdfLocation, RdfQuad, RdfReifier, RdfStoreCapabilities, RdfTerm,
     RdfTextDirection, RdfTriple,
 };
 
-use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
+use super::term::{BlankScope, TermId, TermValue};
+
+/// Declare the shared sparse frozen-row location lookup on resident carriers.
+macro_rules! source_location_method {
+    ($(#[$meta:meta])*) => {
+        $(#[$meta])*
+        pub fn location_of(&self, handle: $crate::ir::dataset::QuadHandle) -> Option<&$crate::RdfLocation> {
+            self.locations
+                .binary_search_by_key(&handle, |(stored, _)| *stored)
+                .ok()
+                .map(|index| &self.locations[index].1)
+        }
+    };
+}
+pub(super) use source_location_method;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
 /// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
@@ -301,13 +315,9 @@ pub struct QuadRef<'a, Id = TermId> {
 ///
 /// All tables are boxed slices in deterministic, reproducible order; capability
 /// flags are computed once at freeze.
-#[derive(Debug)]
 pub struct RdfDataset {
-    /// The byte arena owning every interned string ONCE (P3b); `terms` hold
-    /// `StrRange`s into it, and `resolve` borrows `&str` from here.
-    arena: Box<[u8]>,
-    /// The interned term table; addressed by [`TermId::index`].
-    terms: Box<[InternedTerm]>,
+    /// Graph-independent lexical ownership shared by resident carriers.
+    dictionary: super::frozen_terms::FrozenTerms,
     /// Deduplicated quad rows in deterministic order (C0.5).
     quads: Box<[QuadRow]>,
     /// `(reifier, triple-term, graph)` bindings; many reifiers MAY bind one triple
@@ -324,14 +334,6 @@ pub struct RdfDataset {
     locations: Box<[(QuadHandle, RdfLocation)]>,
     /// Capability flags, computed ONCE at freeze.
     caps: RdfStoreCapabilities,
-    /// Store-once term hash→id index moved intact from the builder at freeze.
-    ///
-    /// Values are only dense `u32` indices into `terms`; equality resolves through
-    /// the arena, so no term strings are duplicated. Retaining the already-built
-    /// table makes every reverse term lookup immediately available without an
-    /// O(term-count) lazy rebuild on a freshly published immutable snapshot.
-    /// Derived, non-serialized, and never consulted by byte-producing paths.
-    term_index: HashTable<u32>,
     /// Lazy permutation quad indexes for indexed
     /// [`quads_for_pattern`](RdfDataset::quads_for_pattern_indexed) (P4b). SPOG
     /// is free (the `quads` table is already freeze-sorted by `(s, p, o, g)`); the
@@ -355,37 +357,6 @@ pub struct RdfDataset {
     /// operator (`GRAPH ?g`) whose spec-mandated enumeration is "every named graph
     /// in the dataset", not "every named graph with a triple".
     named_graphs: Box<[TermId]>,
-    /// Frozen side table from a content-addressed term to its decoded
-    /// [`Blake3ContentId`] (moved from the builder's [`Interner`](super::builder)
-    /// at [`materialize`](super::builder::RdfDatasetBuilder::materialize)). Empty
-    /// when content-id recognition was never configured. NON-SERIALIZED: this is a
-    /// derived side table for readers, never a byte-producing input — no
-    /// serializer or the GTS writer may fold it into their output. Egress is
-    /// sorted-by-`TermId` only (see [`content_ids`](Self::content_ids)); raw
-    /// `HashMap` iteration order must never leak to a caller.
-    content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
-    /// The caller-configured content-id recognition scheme (see
-    /// [`RdfDatasetBuilder::with_content_addressing`](super::builder::RdfDatasetBuilder::with_content_addressing)),
-    /// moved from the builder's [`Interner`](super::builder) at
-    /// [`materialize`](super::builder::RdfDatasetBuilder::materialize). `None`
-    /// when content-id recognition was never configured. NON-SERIALIZED: this is
-    /// config for readers (and for a caller re-deriving content addressing over a
-    /// rewritten copy of this dataset via [`content_id_scheme`](Self::content_id_scheme)),
-    /// never a byte-producing input — no serializer or the GTS writer may fold it
-    /// into their output.
-    content_scheme: Option<ContentIdScheme>,
-    /// The derivation-predicate IRI's frozen [`TermId`], resolved at
-    /// [`materialize`](super::builder::RdfDatasetBuilder::materialize) IFF that IRI
-    /// was already interned. `None` covers BOTH "no derivation predicate
-    /// configured" and "configured but never interned" — both mean "no
-    /// derivations present", not an error (no-fabricated-default policy).
-    derivation_predicate: Option<TermId>,
-    /// The derivation-predicate IRI the builder was configured with, kept whether or
-    /// not this dataset interned it, so a rebuild of this identity space
-    /// ([`rebuild_builder`](Self::rebuild_builder), [`union`](Self::union)) is
-    /// configured as this one was and recognizes derivations the rebuild adds.
-    /// Configuration only, like `content_scheme`: never serialized.
-    derivation_predicate_iri: Option<Box<str>>,
     /// Lazy successor→predecessors reverse index backing
     /// [`RdfDataset::predecessors`]/[`RdfDataset::predecessor_chain`]. DERIVED,
     /// NON-SERIALIZED: a pure function of the frozen `annotations` table plus
@@ -400,6 +371,98 @@ pub struct RdfDataset {
     /// NON-SERIALIZED: a pure function of the frozen statement tables, built by
     /// one pass on first use and read only by dataset-local `TermId`s.
     statement_graph_rows: OnceLock<HashTable<(TermId, usize)>>,
+}
+
+// Keep the established diagnostic representation while lexical ownership moves
+// into the common graph-independent home.
+impl std::fmt::Debug for RdfDataset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RdfDataset")
+            .field("arena", &self.dictionary.arena)
+            .field("terms", &self.dictionary.terms)
+            .field("quads", &self.quads)
+            .field("reifiers", &self.reifiers)
+            .field("annotations", &self.annotations)
+            .field("locations", &self.locations)
+            .field("caps", &self.caps)
+            .field("term_index", &self.dictionary.term_index)
+            .field("indexes", &self.indexes)
+            .field("named_graphs", &self.named_graphs)
+            .field("content_ids", &self.dictionary.content_ids)
+            .field("content_scheme", &self.dictionary.content_scheme)
+            .field(
+                "derivation_predicate",
+                &self.dictionary.derivation_predicate,
+            )
+            .field(
+                "derivation_predicate_iri",
+                &self.dictionary.derivation_predicate_iri,
+            )
+            .field("predecessor_index", &self.predecessor_index)
+            .field("statement_graph_rows", &self.statement_graph_rows)
+            .finish()
+    }
+}
+
+impl TryFrom<RdfDataset> for super::triple::TripleDataset {
+    type Error = super::triple::TripleReadError;
+
+    /// Transfer an all-default dataset without cloning or remapping its term
+    /// owner. Every named-graph source, including empty declarations, is refused
+    /// before compact row allocation. No quad table survives publication.
+    fn try_from(dataset: RdfDataset) -> Result<Self, Self::Error> {
+        use super::triple::{TripleIds, TripleTable};
+        use purrdf_lex::allocation::{Memory, Resident};
+        if !dataset.named_graphs.is_empty()
+            || dataset.quads.iter().any(|row| row.g.is_some())
+            || dataset.reifiers.iter().any(|row| row.2.is_some())
+            || dataset.annotations.iter().any(|row| row.3.is_some())
+        {
+            return Err(Self::Error::NamedGraphsUnsupported);
+        }
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let triples = memory.collect(dataset.quads.iter().map(|row| TripleIds {
+            s: row.s,
+            p: row.p,
+            o: row.o,
+        }))?;
+        let reifiers = memory.collect(dataset.reifiers.iter().map(|&(r, t, _)| (r, t)))?;
+        let annotations =
+            memory.collect(dataset.annotations.iter().map(|&(s, p, o, _)| TripleIds {
+                s,
+                p,
+                o,
+            }))?;
+        Ok(Self {
+            dictionary: dataset.dictionary,
+            triples: TripleTable::new(memory.boxed_slice(triples)?),
+            reifiers: memory.boxed_slice(reifiers)?,
+            reifier_targets: OnceLock::new(),
+            annotations: TripleTable::new(memory.boxed_slice(annotations)?),
+            locations: dataset.locations,
+            caps: dataset.caps,
+        })
+    }
+}
+
+/// The one fallible dense-ordinal sort used by resident carrier permutations.
+pub(super) fn build_ordinal_permutation<T, S, E: From<purrdf_lex::allocation::StorageError>>(
+    rows: &[T],
+    capacity: super::builder::LocalCapacity,
+    storage: &mut S,
+    reserve: impl FnOnce(&mut S, &mut Vec<u32>, usize) -> Result<(), E>,
+    freeze: impl FnOnce(&mut S, Vec<u32>) -> Result<Box<[u32]>, E>,
+    mut compare: impl FnMut(&T, &T) -> Ordering,
+) -> Result<Box<[u32]>, E> {
+    use purrdf_lex::allocation::{CapacitySpace, StorageError};
+    capacity.required(CapacitySpace::Permutation, rows.len(), 0)?;
+    let len = u32::try_from(rows.len()).map_err(|_| StorageError::SizeOverflow)?;
+    let mut ordinals = Vec::new();
+    reserve(storage, &mut ordinals, rows.len())?;
+    ordinals.extend(0..len);
+    ordinals.sort_unstable_by(|&a, &b| compare(&rows[a as usize], &rows[b as usize]));
+    freeze(storage, ordinals)
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
@@ -860,35 +923,23 @@ impl RdfDataset {
     /// [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_parts(
-        arena: Box<[u8]>,
-        terms: Box<[InternedTerm]>,
+        dictionary: super::frozen_terms::FrozenTerms,
         quads: Box<[QuadRow]>,
         reifiers: Box<[ReifierRow]>,
         annotations: Box<[AnnotationRow]>,
         locations: Box<[(QuadHandle, RdfLocation)]>,
         caps: RdfStoreCapabilities,
         named_graphs: Box<[TermId]>,
-        term_index: HashTable<u32>,
-        content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
-        content_scheme: Option<ContentIdScheme>,
-        derivation_predicate: Option<TermId>,
-        derivation_predicate_iri: Option<Box<str>>,
     ) -> Self {
         Self {
-            arena,
-            terms,
+            dictionary,
             quads,
             reifiers,
             annotations,
             locations,
             caps,
-            term_index,
             indexes: QuadIndexes::default(),
             named_graphs,
-            content_ids,
-            content_scheme,
-            derivation_predicate,
-            derivation_predicate_iri,
             predecessor_index: OnceLock::new(),
             statement_graph_rows: OnceLock::new(),
         }
@@ -1203,18 +1254,14 @@ impl RdfDataset {
         freeze: impl FnOnce(&mut S, Vec<u32>) -> Result<Box<[u32]>, E>,
     ) -> Result<Box<[u32]>, E> {
         let axes = permutation.axes();
-        use purrdf_lex::allocation::{CapacitySpace, StorageError};
-        self.indexes
-            .capacity
-            .required(CapacitySpace::Permutation, self.quads.len(), 0)?;
-        let len = u32::try_from(self.quads.len()).map_err(|_| StorageError::SizeOverflow)?;
-        let mut ordinals = Vec::new();
-        reserve(storage, &mut ordinals, self.quads.len())?;
-        ordinals.extend(0..len);
-        ordinals.sort_unstable_by(|&a, &b| {
-            compare_quads(axes, &self.quads[a as usize], &self.quads[b as usize])
-        });
-        freeze(storage, ordinals)
+        build_ordinal_permutation(
+            &self.quads,
+            self.indexes.capacity,
+            storage,
+            reserve,
+            freeze,
+            |a, b| compare_quads(axes, a, b),
+        )
     }
 
     /// The contiguous candidate run for an `(s, p, o, g)` pattern: the chosen
@@ -1487,42 +1534,16 @@ impl RdfDataset {
         matches.map(|q| QuadIds::from(*q))
     }
 
-    /// Whether a term known to be an interned IRI equals `expected` (zero-alloc).
-    fn iri_matches(&self, id: TermId, expected: &str) -> bool {
-        matches!(&self.terms[id.index()], InternedTerm::Iri(iri) if arena_str(&self.arena, *iri) == expected)
-    }
-
-    fn find_term_hashed(
-        &self,
-        hash: u64,
-        mut matches: impl FnMut(TermId) -> bool,
-    ) -> Option<TermId> {
-        self.term_index
-            .find(hash, |&index| {
-                matches(TermId::from_index(index).expect("stored term index is representable"))
-            })
-            .copied()
-            .map(|index| TermId::from_index(index).expect("stored term index is representable"))
-    }
-
     /// The id of an interned IRI, without allocating an owned [`TermValue`].
     #[must_use]
     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
-        self.find_term_hashed(crate::hash::hash_iri_for_interner(iri), |id| {
-            self.iri_matches(id, iri)
-        })
+        self.dictionary.term_id_by_iri(iri)
     }
 
     /// The id of an interned blank node, without allocating its label.
     #[must_use]
     pub fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {
-        self.find_term_hashed(crate::hash::hash_blank_for_interner(label, scope.0), |id| {
-            matches!(
-                &self.terms[id.index()],
-                InternedTerm::Blank { label: stored, scope: stored_scope }
-                    if arena_str(&self.arena, *stored) == label && *stored_scope == scope
-            )
-        })
+        self.dictionary.term_id_by_blank(label, scope)
     }
 
     /// The id of an interned literal, borrowing all string components.
@@ -1543,32 +1564,8 @@ impl RdfDataset {
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
     ) -> Option<TermId> {
-        // A language tag names the datatype whatever the explicit one says (C0.1),
-        // identical to `RdfDatasetBuilder::intern_literal_parts`.
-        let datatype = if language.is_some() {
-            RdfLiteral::language_datatype_iri(direction)
-        } else {
-            datatype
-        };
-        let language = language.map(super::term::interned_language);
-        let language = language.as_deref();
-
-        let datatype_id = self.term_id_by_iri(datatype)?;
-        let hash = crate::hash::hash_literal_for_interner(
-            lexical_form,
-            datatype_id.index() as u64,
-            language,
-            direction,
-        );
-        self.find_term_hashed(hash, |id| {
-            let InternedTerm::Literal(lit) = &self.terms[id.index()] else {
-                return false;
-            };
-            arena_str(&self.arena, lit.lexical_form) == lexical_form
-                && lit.datatype == datatype_id
-                && lit.language.map(|r| arena_str(&self.arena, r)) == language
-                && lit.direction == direction
-        })
+        self.dictionary
+            .term_id_by_literal(lexical_form, datatype, language, direction)
     }
 
     /// The id of an interned triple term from already-resolved component ids.
@@ -1577,24 +1574,7 @@ impl RdfDataset {
     /// resolve them through the corresponding borrowed lookup methods.
     #[must_use]
     pub fn term_id_by_triple(&self, s: TermId, p: TermId, o: TermId) -> Option<TermId> {
-        if s.index() >= self.terms.len()
-            || p.index() >= self.terms.len()
-            || o.index() >= self.terms.len()
-        {
-            return None;
-        }
-        let hash = crate::hash::hash_triple_for_interner(
-            s.index() as u64,
-            p.index() as u64,
-            o.index() as u64,
-        );
-        self.find_term_hashed(hash, |id| {
-            matches!(
-                self.terms[id.index()],
-                InternedTerm::Triple { s: stored_s, p: stored_p, o: stored_o }
-                    if stored_s == s && stored_p == p && stored_o == o
-            )
-        })
+        self.dictionary.term_id_by_triple(s, p, o)
     }
 
     /// The id of an interned term given its **dataset-independent** value, or
@@ -1609,32 +1589,7 @@ impl RdfDataset {
     /// a `TermRef`'s datatype/triple ids are local to whichever dataset minted them.
     #[must_use]
     pub fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        value
-            .try_fold(
-                |leaf| {
-                    match leaf {
-                        TermValue::Iri(iri) => self.term_id_by_iri(iri),
-                        TermValue::Blank { label, scope } => self.term_id_by_blank(label, *scope),
-                        TermValue::Literal {
-                            lexical_form,
-                            datatype,
-                            language,
-                            direction,
-                        } => self.term_id_by_literal(
-                            lexical_form,
-                            datatype,
-                            language.as_deref(),
-                            *direction,
-                        ),
-                        TermValue::Triple { .. } => {
-                            unreachable!("a triple term is assembled from its components")
-                        }
-                    }
-                    .ok_or(())
-                },
-                |s, p, o| self.term_id_by_triple(s, p, o).ok_or(()),
-            )
-            .ok()
+        self.dictionary.term_id_by_value(value)
     }
 
     /// Iterate quads as ID-native [`QuadIds`]. **Zero allocations, infallible, no
@@ -1678,24 +1633,7 @@ impl RdfDataset {
     /// borrowed directly from the term table.
     #[inline]
     pub fn resolve(&self, id: TermId) -> TermRef<'_> {
-        match &self.terms[id.index()] {
-            InternedTerm::Iri(iri) => TermRef::Iri(arena_str(&self.arena, *iri)),
-            InternedTerm::Blank { label, scope } => TermRef::Blank {
-                label: arena_str(&self.arena, *label),
-                scope: *scope,
-            },
-            InternedTerm::Literal(lit) => TermRef::Literal {
-                lexical: arena_str(&self.arena, lit.lexical_form),
-                datatype: lit.datatype,
-                language: lit.language.map(|r| arena_str(&self.arena, r)),
-                direction: lit.direction,
-            },
-            InternedTerm::Triple { s, p, o } => TermRef::Triple {
-                s: *s,
-                p: *p,
-                o: *o,
-            },
-        }
+        self.dictionary.resolve(id)
     }
 
     /// Iterate `(reifier, triple-term)` bindings, graph slot dropped. Zero allocation,
@@ -1949,14 +1887,10 @@ impl RdfDataset {
         base.chain(reifiers).chain(annotations)
     }
 
-    /// The source location attached to a quad, if any. `O(log n)` binary search over
-    /// the handle-sorted sparse table. The handle addresses the quad's FROZEN
-    /// ordinal (the position it occupies in [`quads`](Self::quads)).
-    pub fn location_of(&self, handle: QuadHandle) -> Option<&RdfLocation> {
-        self.locations
-            .binary_search_by_key(&handle, |(h, _)| *h)
-            .ok()
-            .map(|i| &self.locations[i].1)
+    source_location_method! {
+        /// The source location attached to a quad, if any. `O(log n)` binary search over
+        /// the handle-sorted sparse table. The handle addresses the quad's FROZEN
+        /// ordinal (the position it occupies in [`quads`](Self::quads)).
     }
 
     /// A fresh builder configured as `datasets` agree (the rule
@@ -2083,20 +2017,14 @@ impl RdfDataset {
     /// permutation/derivation caches rebuild on demand.
     fn clone_dataset(&self) -> Self {
         Self {
-            arena: self.arena.clone(),
-            terms: self.terms.clone(),
+            dictionary: self.dictionary.clone(),
             quads: self.quads.clone(),
             reifiers: self.reifiers.clone(),
             annotations: self.annotations.clone(),
             locations: self.locations.clone(),
             caps: self.caps,
-            term_index: self.term_index.clone(),
             indexes: QuadIndexes::default(),
             named_graphs: self.named_graphs.clone(),
-            content_ids: self.content_ids.clone(),
-            content_scheme: self.content_scheme.clone(),
-            derivation_predicate: self.derivation_predicate,
-            derivation_predicate_iri: self.derivation_predicate_iri.clone(),
             predecessor_index: OnceLock::new(),
             statement_graph_rows: OnceLock::new(),
         }
@@ -2111,7 +2039,7 @@ impl RdfDataset {
     /// The number of distinct interned terms.
     #[inline]
     pub fn term_count(&self) -> usize {
-        self.terms.len()
+        self.dictionary.terms.len()
     }
 
     /// The number of deduplicated quads.
@@ -2129,7 +2057,7 @@ impl RdfDataset {
     /// UTF-8 arena bytes retained by the RDF term dictionary.
     #[must_use]
     pub fn rdf_text_bytes(&self) -> usize {
-        self.arena.len()
+        self.dictionary.arena.len()
     }
 
     /// Bytes occupied by the immutable RDF arena, term/record tables and graph
@@ -2137,8 +2065,8 @@ impl RdfDataset {
     /// sidecars; this is a payload measurement, not process RSS.
     #[must_use]
     pub fn rdf_payload_bytes(&self) -> usize {
-        self.arena.len()
-            + size_of_val(self.terms.as_ref())
+        self.dictionary.arena.len()
+            + size_of_val(self.dictionary.terms.as_ref())
             + size_of_val(self.quads.as_ref())
             + size_of_val(self.reifiers.as_ref())
             + size_of_val(self.annotations.as_ref())
@@ -2155,9 +2083,9 @@ impl RdfDataset {
     #[must_use]
     pub fn query_retained_bytes(&self) -> Option<usize> {
         if !self.locations.is_empty()
-            || !self.content_ids.is_empty()
-            || self.content_scheme.is_some()
-            || self.derivation_predicate_iri.is_some()
+            || !self.dictionary.content_ids.is_empty()
+            || self.dictionary.content_scheme.is_some()
+            || self.dictionary.derivation_predicate_iri.is_some()
         {
             return None;
         }
@@ -2172,7 +2100,7 @@ impl RdfDataset {
         };
         self.rdf_payload_bytes()
             .checked_add(size_of::<Self>() + 2 * size_of::<usize>())?
-            .checked_add(self.term_index.allocation_size())?
+            .checked_add(self.dictionary.term_index.allocation_size())?
             .checked_add(permutations)?
             .checked_add(histogram)
     }
@@ -2259,7 +2187,7 @@ impl RdfDataset {
     pub fn stats_fingerprint(&self) -> u64 {
         crate::hash::stats_fingerprint(
             u64::try_from(self.quads.len()).expect("local quad count fits u64"),
-            u64::try_from(self.terms.len()).expect("local term count fits u64"),
+            u64::try_from(self.dictionary.terms.len()).expect("local term count fits u64"),
         )
     }
 
@@ -2277,7 +2205,7 @@ impl RdfDataset {
     #[inline]
     #[must_use]
     pub fn content_id_scheme(&self) -> Option<&ContentIdScheme> {
-        self.content_scheme.as_ref()
+        self.dictionary.content_scheme.as_ref()
     }
 
     /// A fresh builder carrying this dataset's caller-supplied configuration — its
@@ -2297,7 +2225,10 @@ impl RdfDataset {
     /// The configured derivation predicate's IRI, the form a builder is configured
     /// with — present whether or not this dataset interned it.
     fn derivation_predicate_iri(&self) -> Option<String> {
-        self.derivation_predicate_iri.as_deref().map(str::to_owned)
+        self.dictionary
+            .derivation_predicate_iri
+            .as_deref()
+            .map(str::to_owned)
     }
 
     /// The decoded [`Blake3ContentId`] of a content-addressed term, or `None` if
@@ -2306,7 +2237,7 @@ impl RdfDataset {
     #[inline]
     #[must_use]
     pub fn content_id(&self, id: TermId) -> Option<Blake3ContentId> {
-        self.content_ids.get(&id).copied()
+        self.dictionary.content_ids.get(&id).copied()
     }
 
     /// Every content-addressed term in this dataset, as `(TermId, Blake3ContentId)`
@@ -2315,13 +2246,7 @@ impl RdfDataset {
     /// `HashMap`'s iteration order is never leaked, so any byte-producing
     /// consumer that folds over this sees a reproducible sequence.
     pub fn content_ids(&self) -> impl Iterator<Item = (TermId, Blake3ContentId)> + '_ {
-        let mut pairs: Vec<(TermId, Blake3ContentId)> = self
-            .content_ids
-            .iter()
-            .map(|(&id, &cid)| (id, cid))
-            .collect();
-        pairs.sort_unstable_by_key(|(id, _)| *id);
-        pairs.into_iter()
+        self.dictionary.content_ids()
     }
 
     /// The frozen [`TermId`] of the configured derivation-predicate IRI, or `None`
@@ -2330,7 +2255,7 @@ impl RdfDataset {
     /// derivation-traversal helpers are the intended readers.
     #[inline]
     pub(crate) fn derivation_predicate(&self) -> Option<TermId> {
-        self.derivation_predicate
+        self.dictionary.derivation_predicate
     }
 
     /// The predecessor(s) of `successor`, decoded from the annotation

@@ -24,6 +24,19 @@ pub enum DictionaryTerm<'a, I: TermIdentity> {
     Surface(&'a str),
 }
 
+/// Transform the fixed row in position order, stopping at its first refusal.
+/// Completed owners are dropped on failure; the array introduces no allocation.
+pub(crate) fn try_map_row<T, U, E, const N: usize>(
+    row: [T; N],
+    mut convert: impl FnMut(T) -> Result<U, E>,
+) -> Result<[U; N], E> {
+    let mut converted = core::array::from_fn(|_| None);
+    for (slot, value) in converted.iter_mut().zip(row) {
+        *slot = Some(convert(value)?);
+    }
+    Ok(converted.map(|value| value.expect("every successfully converted row position is present")))
+}
+
 /// Original storage refusal or original dictionary-source failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DictionaryError<E> {
@@ -73,15 +86,15 @@ pub trait TermDictionary: Send + Sync {
     fn lookup_term(&self, surface: &str) -> Result<Option<Self::Id>, Self::Error>;
     /// Pin the canonical RDF surface at a semantic or publication boundary.
     fn resolve_term(&self, id: Self::Id) -> Result<Self::Lexical<'_>, Self::Error>;
-    /// Admit four terms in caller order, then validate their dependent publication.
+    /// Admit the row terms in caller order, then validate their dependent publication.
     ///
     /// Original IDs are carried unchanged. On either interning or validation refusal,
     /// remove only identities minted by this operation and return the original error.
     /// The validator borrows the dictionary and cannot publish a partial store row.
-    fn with_interned<T>(
+    fn with_interned<T, const N: usize>(
         &mut self,
-        terms: [DictionaryTerm<'_, Self::Id>; 4],
-        validate: impl FnOnce(&Self, [Self::Id; 4]) -> Result<T, DictionaryError<Self::Error>>,
+        terms: [DictionaryTerm<'_, Self::Id>; N],
+        validate: impl FnOnce(&Self, [Self::Id; N]) -> Result<T, DictionaryError<Self::Error>>,
     ) -> Result<T, DictionaryError<Self::Error>>
     where
         Self: Sized;

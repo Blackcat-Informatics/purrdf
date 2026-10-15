@@ -49,6 +49,7 @@
 //! unique and is a pure function of the call sequence. No map iteration order reaches an
 //! output.
 
+use crate::store::{Arity, StoreShape};
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le_into;
 use purrdf_hash::hex::Digest32;
@@ -91,6 +92,12 @@ const CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-dl-clause-ir-v
 /// encoding is injective too.
 const GUARDED_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-guarded-dl-clause-ir-v1");
 
+/// Graph-free clause identity: no graph term or dataset-kind field is encoded.
+const TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-triple-clause-ir-v1");
+/// The guarded graph-free clause encoding.
+const GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
+    Domain::new(b"purrdf-datalog-guarded-triple-clause-ir-v1");
+
 /// Domain-separation tag for [`scheduled_contract_hash`].
 const SCHEDULED_CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-scheduled-contract-v1");
 
@@ -120,17 +127,23 @@ fn hash_term(hasher: &mut purrdf_hash::blake3::Hasher, term: &ClauseTerm) {
     }
 }
 
-/// Hash one clause atom: all FOUR positions, polarity included.
+/// Hash one clause atom: every stored position, polarity included.
 ///
 /// The predicate goes through [`hash_term`] exactly like the subject, the object and the
 /// graph, so a variable predicate carries the `Var` tag and a constant one the `Iri` tag:
 /// `T(?x, ?p, ?y, ?g)` and `T(?x, <p>, ?y, ?g)` are different programs and cannot share a
 /// digest. The graph position is hashed unconditionally, so two rules that differ only in
-/// which graph they read or write address differently too.
+/// which graph they read or write address differently too. Triple atoms encode three
+/// terms under their own domain, without a graph placeholder.
 ///
 /// The polarity byte is emitted for head atoms too, where it is always `0`: one atom
 /// encoder for both positions is cheaper to keep correct than two that must agree.
-fn hash_atom(hasher: &mut purrdf_hash::blake3::Hasher, atom: &ClauseAtom) {
+fn hash_atom<const N: usize>(hasher: &mut purrdf_hash::blake3::Hasher, atom: &ClauseAtom<N>) {
+    if N == 3 {
+        hasher.update(&[u8::from(
+            atom.read_source() == crate::clause::ReadSource::Base,
+        )]);
+    }
     for term in atom.terms() {
         hash_term(hasher, term);
     }
@@ -176,17 +189,23 @@ fn hash_atom(hasher: &mut purrdf_hash::blake3::Hasher, atom: &ClauseAtom) {
 ///
 /// Hashing any of the five order-insensitively would let two programs with different
 /// observable behaviour share a cached plan.
-pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
+pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
     let guarded = rules.iter().any(DlClause::is_guarded);
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    let domain = if guarded {
-        GUARDED_CLAUSE_IR_DIGEST_TAG
-    } else {
-        CLAUSE_IR_DIGEST_TAG
+    let domain = match (N, guarded) {
+        (3, false) => TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (3, true) => GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, true) => GUARDED_CLAUSE_IR_DIGEST_TAG,
+        (_, false) => CLAUSE_IR_DIGEST_TAG,
     };
     frame_le_into(&mut hasher, domain.as_bytes());
     hasher.update(&(rules.len() as u64).to_le_bytes());
     for rule in rules {
+        if N == 3 {
+            hasher.update(&[u8::from(
+                rule.head_form() == crate::clause::HeadForm::NoOutput,
+            )]);
+        }
         hasher.update(&(rule.body().len() as u64).to_le_bytes());
         for atom in rule.body() {
             hash_atom(&mut hasher, atom);
@@ -373,7 +392,7 @@ impl fmt::Display for ContractHash {
 /// the same program refused under one limit completes under a larger one. A guard-free
 /// program cannot be bound by either (see [`EvalOptions`]), so its contract hash leaves
 /// those two out.
-pub fn contract_hash(rules: &[DlClause]) -> ContractHash {
+pub fn contract_hash<const N: usize>(rules: &[DlClause<N>]) -> ContractHash {
     contract_hash_with(rules, &EvalOptions::default())
 }
 
@@ -381,7 +400,10 @@ pub fn contract_hash(rules: &[DlClause]) -> ContractHash {
 /// join-step limits are folded into every program's hash, and the term limits in force
 /// into a GUARDED program's; a guard-free program's hash is independent of the term
 /// limits.
-pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> ContractHash {
+pub fn contract_hash_with<const N: usize>(
+    rules: &[DlClause<N>],
+    options: &EvalOptions,
+) -> ContractHash {
     let digest = contract_digest(
         rules,
         CALCULUS_VERSION,
@@ -437,8 +459,8 @@ fn fold_term_generating_limit(hasher: &mut purrdf_hash::blake3::Hasher, options:
 /// but whose schedules differ can derive different facts — a negation decided before or
 /// after a rule ran — so they never share an identity. Domain-separated from
 /// [`contract_hash`], so a scheduled program and a stratified one never collide either.
-pub fn scheduled_contract_hash(
-    rules: &[DlClause],
+pub fn scheduled_contract_hash<const N: usize>(
+    rules: &[DlClause<N>],
     schedule: &Schedule,
     options: &EvalOptions,
 ) -> ContractHash {
@@ -474,8 +496,8 @@ pub fn scheduled_contract_hash(
 /// entry points supply exactly the limits in force and the real arena constant, and
 /// `the_contract_hash_is_the_recipe_over_the_limits_in_force` pins that, so this seam
 /// cannot drift away from the thing it stands in for.
-fn contract_digest(
-    rules: &[DlClause],
+fn contract_digest<const N: usize>(
+    rules: &[DlClause<N>],
     calculus_version: &str,
     max_join_steps: u64,
     max_stored_facts: u64,
@@ -508,9 +530,9 @@ pub struct PlanIdentity {
 impl PlanIdentity {
     /// Identity of the rules and every admission declaration and source.
     #[must_use]
-    pub fn with_declarations(
+    pub fn with_declarations<const N: usize>(
         contract_hash: &str,
-        rules: &[DlClause],
+        rules: &[DlClause<N>],
         declarations: &crate::admission::NeverDeriveDeclarations,
     ) -> Self {
         if declarations.is_empty() {
@@ -531,7 +553,7 @@ impl PlanIdentity {
     /// `contract_hash` is whatever digest the caller uses to identify the *configuration*
     /// a program was derived from (a vocabulary selection, an entailment regime). It is
     /// hashed, never interpreted: this crate mints no vocabulary of its own.
-    pub fn new(contract_hash: &str, rules: &[DlClause]) -> Self {
+    pub fn new<const N: usize>(contract_hash: &str, rules: &[DlClause<N>]) -> Self {
         let mut hasher = purrdf_hash::blake3::Hasher::new();
         frame_le_into(&mut hasher, PLAN_IDENTITY_TAG.as_bytes());
         frame_le_into(&mut hasher, PLAN_SOLVER_VERSION.as_bytes());
@@ -555,7 +577,7 @@ impl PlanIdentity {
 /// because that is what the planner and the range-restriction check visit; the grouping
 /// itself is not a node either of them inspects. It is a count, never a duration, so a
 /// cost report never depends on wall time or on machine load.
-fn static_planning_units(rules: &[DlClause]) -> u64 {
+fn static_planning_units<const N: usize>(rules: &[DlClause<N>]) -> u64 {
     rules.iter().fold(0_u64, |units, rule| {
         units
             .saturating_add(1)
@@ -571,9 +593,9 @@ fn static_planning_units(rules: &[DlClause]) -> u64 {
 /// reports one build and the exact number of static IR nodes inspected, a warm lookup
 /// reports zero for both. Neither observes a clock.
 #[derive(Debug, Clone)]
-pub struct PlanLookup {
+pub struct PlanLookup<const N: usize = 4> {
     /// The compiled program, or the refusal that compiling it produced.
-    plan: Result<Arc<Executable>, EvalError>,
+    plan: Result<Arc<Executable<N>>, EvalError>,
     /// Whether the entry was already cached.
     cache_hit: bool,
     /// `1` for a cold lookup, `0` for a warm one.
@@ -582,14 +604,14 @@ pub struct PlanLookup {
     planning_units: u64,
 }
 
-impl PlanLookup {
+impl<const N: usize> PlanLookup<N> {
     /// The compiled program, or the refusal that compiling it produced.
-    pub fn plan(&self) -> Result<&Arc<Executable>, &EvalError> {
+    pub fn plan(&self) -> Result<&Arc<Executable<N>>, &EvalError> {
         self.plan.as_ref()
     }
 
     /// Take ownership of the compiled program or of the refusal.
-    pub fn into_plan(self) -> Result<Arc<Executable>, EvalError> {
+    pub fn into_plan(self) -> Result<Arc<Executable<N>>, EvalError> {
         self.plan
     }
 
@@ -611,10 +633,10 @@ impl PlanLookup {
 
 /// One cached compilation.
 #[derive(Debug)]
-struct CachedPlan {
+struct CachedPlan<const N: usize = 4> {
     /// The compiled program, or the refusal — a refused program is cached too, so a
     /// repeatedly-presented bad program is diagnosed once rather than recompiled forever.
-    plan: Result<Arc<Executable>, EvalError>,
+    plan: Result<Arc<Executable<N>>, EvalError>,
     /// The use stamp that orders eviction; strictly increasing, so it is unique.
     used: u64,
 }
@@ -628,17 +650,20 @@ struct CachedPlan {
 /// use stamp, which is O(n) in a capacity the caller chose and bounded by it — the linear
 /// cost is on the rare install path, never on the hit path a hot loop takes.
 #[derive(Debug)]
-pub struct PlanCache {
+pub struct PlanCache<const N: usize = 4> {
     /// The most entries retained; the least recently used is evicted beyond it.
     capacity: usize,
     /// The entries, keyed by content address. A `BTreeMap` rather than a hash table
     /// because eviction sweeps it, so its iteration order is on an output path.
-    entries: BTreeMap<PlanIdentity, CachedPlan>,
+    entries: BTreeMap<PlanIdentity, CachedPlan<N>>,
     /// The strictly increasing use-stamp source.
     clock: u64,
 }
 
-impl PlanCache {
+impl<const N: usize> PlanCache<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// A cache retaining at most `capacity` compiled programs.
     ///
     /// # Panics
@@ -669,7 +694,11 @@ impl PlanCache {
     /// A refusal is cached exactly like a success, so a program that cannot compile is
     /// diagnosed once and then answered from the cache — the refusal is a *result*, not a
     /// failure to produce one.
-    pub fn get_or_compile(&mut self, contract_hash: &str, rules: Vec<DlClause>) -> PlanLookup {
+    pub fn get_or_compile(
+        &mut self,
+        contract_hash: &str,
+        rules: Vec<DlClause<N>>,
+    ) -> PlanLookup<N> {
         let identity = PlanIdentity::new(contract_hash, &rules);
         self.lookup_or_compile(identity, rules, None)
     }
@@ -678,9 +707,9 @@ impl PlanCache {
     pub fn get_or_compile_with_declarations(
         &mut self,
         contract_hash: &str,
-        rules: Vec<DlClause>,
+        rules: Vec<DlClause<N>>,
         declarations: &crate::admission::NeverDeriveDeclarations,
-    ) -> PlanLookup {
+    ) -> PlanLookup<N> {
         let identity = PlanIdentity::with_declarations(contract_hash, &rules, declarations);
         self.lookup_or_compile(identity, rules, Some(declarations))
     }
@@ -688,9 +717,9 @@ impl PlanCache {
     fn lookup_or_compile(
         &mut self,
         identity: PlanIdentity,
-        rules: Vec<DlClause>,
+        rules: Vec<DlClause<N>>,
         declarations: Option<&crate::admission::NeverDeriveDeclarations>,
-    ) -> PlanLookup {
+    ) -> PlanLookup<N> {
         let stamp = self.tick();
         if let Some(entry) = self.entries.get_mut(&identity) {
             entry.used = stamp;
@@ -724,7 +753,7 @@ impl PlanCache {
     }
 
     /// Install `plan`, evicting the least recently used entry if the cache is full.
-    fn insert(&mut self, identity: PlanIdentity, plan: Result<Arc<Executable>, EvalError>) {
+    fn insert(&mut self, identity: PlanIdentity, plan: Result<Arc<Executable<N>>, EvalError>) {
         if self.entries.len() >= self.capacity {
             // Use stamps come from a strictly increasing counter, so the minimum is unique
             // and the victim is a pure function of the call sequence — and the map is a
@@ -1269,7 +1298,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "capacity must be non-zero")]
     fn a_zero_capacity_cache_is_refused() {
-        let _ = PlanCache::new(0);
+        let _: PlanCache = PlanCache::new(0);
     }
 
     // ── The contract hash ───────────────────────────────────────────────────────

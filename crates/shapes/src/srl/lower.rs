@@ -17,20 +17,20 @@
 //! | triple term with variables | a guard that takes a triple term apart (body) or builds one (head) |
 //! | SHACL rule | one model-reading producer guard binding `?s ?p ?o`, head `triple(?s, ?p, ?o)` |
 //!
-//! # The graph position
+//! # Read authority
 //!
-//! Every atom addresses the evaluation graph — the store's DEFAULT graph — except a
-//! pattern that must match the BASE graph only (`WHERE DATA`, `NOT DATA`), which
-//! addresses [`BASE_GRAPH`]: a partition holding a copy of the base graph, keyed by a
-//! surface no RDF term renders to (an IRI renders `<…>`, a literal `"…"`, a blank node
-//! `_:…`, a triple term `<<(…)>>`). It is an evaluation-internal partition key, not a
-//! graph name: nothing reads it but the atoms lowered here, and it never reaches an
-//! output.
+//! Triple atoms store exactly subject, predicate and object. WHERE DATA and NOT DATA
+//! select an immutable base through metadata outside those terms; empty heads use the
+//! explicit no-output disposition. Quad lowering retains its established internal
+//! base partition and no-output marker, preserving existing quad contract identities.
+//! Neither internal quad partition reaches RDF output.
 
 use std::collections::BTreeMap;
 
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct};
 use purrdf_datalog::guard::{Guard, GuardReads, GuardSite, Negation};
+use purrdf_datalog::store::{Arity, RelationStore, ShapeFact, StoreShape, TermInterner};
+use purrdf_lex::allocation::StorageError;
 use purrdf_sparql_algebra::{Child, Expression, Function, GraphPattern, Variable};
 
 use super::ir::{
@@ -39,12 +39,118 @@ use super::ir::{
 };
 use crate::term::Term;
 
-/// The partition the base graph is mirrored into when a rule matches it alone.
-pub(crate) const BASE_GRAPH: &str = "#base";
+/// The legacy quad-only internal base partition.
+const BASE_GRAPH: &str = "#base";
+/// The legacy quad-only no-output marker; never decoded as RDF.
+const EMPTY_HEAD: &str = "#empty-head";
 
-/// The partition, subject, predicate and object of the marker an empty-headed rule
-/// derives — a surface no RDF term renders to, like [`BASE_GRAPH`].
-pub(crate) const EMPTY_HEAD: &str = "#empty-head";
+/// Carrier-specific coordinates; lowering and evaluation remain shared.
+pub(crate) trait RuleShape<const N: usize>: StoreShape<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Lower one RDF pattern with its read authority.
+    fn atom(terms: [ClauseTerm; 3], base: bool) -> ClauseAtom<N>;
+    /// Preserve the carrier's no-output contract identity.
+    fn empty_head(body: Vec<ClauseAtom<N>>) -> DlClause<N>;
+    /// Add only the coordinates this carrier physically stores.
+    fn surface_row<T: Default>(terms: [T; 3]) -> [T; N];
+    /// Whether the fact belongs to the evaluation output.
+    fn is_output(fact: &ShapeFact<N>) -> bool;
+    /// Whether a physical row belongs to the evaluation output.
+    fn is_output_row(
+        store: &RelationStore<TermInterner, N>,
+        row: &[purrdf_datalog::id::TermId; N],
+    ) -> bool;
+    /// Add the legacy mirror, if this shape needs one.
+    fn seed_base(
+        store: &mut RelationStore<TermInterner, N>,
+        terms: [&str; 3],
+    ) -> Result<(), StorageError>;
+    /// Capture a separate immutable authority, if this shape needs one.
+    fn capture_base(
+        store: RelationStore<TermInterner, N>,
+    ) -> Result<RelationStore<TermInterner, N>, StorageError>;
+}
+
+impl RuleShape<3> for Arity<3> {
+    fn atom([s, p, o]: [ClauseTerm; 3], base: bool) -> ClauseAtom<3> {
+        let atom = ClauseAtom::triple(s, p, o);
+        if base { atom.from_base() } else { atom }
+    }
+    fn empty_head(body: Vec<ClauseAtom<3>>) -> DlClause<3> {
+        DlClause::no_output(body)
+    }
+    fn surface_row<T: Default>(terms: [T; 3]) -> [T; 3] {
+        terms
+    }
+    fn is_output(_fact: &ShapeFact<3>) -> bool {
+        true
+    }
+    fn is_output_row(
+        _store: &RelationStore<TermInterner, 3>,
+        _row: &[purrdf_datalog::id::TermId; 3],
+    ) -> bool {
+        true
+    }
+    fn seed_base(
+        _store: &mut RelationStore<TermInterner, 3>,
+        _terms: [&str; 3],
+    ) -> Result<(), StorageError> {
+        Ok(())
+    }
+    fn capture_base(
+        store: RelationStore<TermInterner, 3>,
+    ) -> Result<RelationStore<TermInterner, 3>, StorageError> {
+        store.with_base_snapshot()
+    }
+}
+
+impl RuleShape<4> for Arity<4> {
+    fn atom([s, p, o]: [ClauseTerm; 3], base: bool) -> ClauseAtom<4> {
+        ClauseAtom::quad(
+            s,
+            p,
+            o,
+            if base {
+                ClauseTerm::literal(BASE_GRAPH)
+            } else {
+                ClauseTerm::DefaultGraph
+            },
+        )
+    }
+    fn empty_head(body: Vec<ClauseAtom<4>>) -> DlClause<4> {
+        let marker = || ClauseTerm::literal(EMPTY_HEAD);
+        DlClause::datalog(
+            ClauseAtom::quad(marker(), marker(), marker(), marker()),
+            body,
+        )
+    }
+    fn surface_row<T: Default>([s, p, o]: [T; 3]) -> [T; 4] {
+        [s, p, o, T::default()]
+    }
+    fn is_output(fact: &ShapeFact<4>) -> bool {
+        fact.graph == RelationStore::DEFAULT_GRAPH
+    }
+    fn is_output_row(
+        store: &RelationStore<TermInterner, 4>,
+        row: &[purrdf_datalog::id::TermId; 4],
+    ) -> bool {
+        store.term_id(RelationStore::DEFAULT_GRAPH) == Some(row[3])
+    }
+    fn seed_base(
+        store: &mut RelationStore<TermInterner, 4>,
+        [s, p, o]: [&str; 3],
+    ) -> Result<(), StorageError> {
+        store.insert(s, p, o, BASE_GRAPH)?;
+        Ok(())
+    }
+    fn capture_base(
+        store: RelationStore<TermInterner, 4>,
+    ) -> Result<RelationStore<TermInterner, 4>, StorageError> {
+        Ok(store)
+    }
+}
 
 /// How one guard of the lowered program is evaluated.
 #[derive(Debug, Clone)]
@@ -123,22 +229,25 @@ impl LoweredTriple {
 
 /// A rule set lowered onto the clause IR.
 #[derive(Debug)]
-pub(crate) struct Lowered<'r, 'a> {
+pub(crate) struct Lowered<'r, 'a, const N: usize> {
     /// One clause per IR rule, at the IR rule's index.
-    pub(crate) clauses: Vec<DlClause>,
+    pub(crate) clauses: Vec<DlClause<N>>,
     /// How every guard is evaluated, by `(clause, site)`.
     pub(crate) guards: BTreeMap<(usize, GuardSite), GuardImpl<'r, 'a>>,
-    /// Whether some atom matches [`BASE_GRAPH`].
+    /// Whether some atom reads the immutable base.
     pub(crate) uses_base: bool,
 }
 
 /// Lower `set`. `now`, when given, replaces every `NOW()` call — SPARQL 1.2 RL:
 /// "NOW() is permitted and is defined to return the same point in time throughout a rule
 /// set evaluation."
-pub(crate) fn lower<'r, 'a>(
+pub(crate) fn lower<'r, 'a, const N: usize>(
     set: &'r RuleSet<'a>,
     now: Option<&purrdf_sparql_algebra::Literal>,
-) -> Lowered<'r, 'a> {
+) -> Lowered<'r, 'a, N>
+where
+    Arity<N>: RuleShape<N>,
+{
     let mut lowered = Lowered {
         clauses: Vec::with_capacity(set.rules.len()),
         guards: BTreeMap::new(),
@@ -152,11 +261,13 @@ pub(crate) fn lower<'r, 'a>(
                     .guards
                     .insert((index, GuardSite::Body(0)), GuardImpl::Producer(producer));
                 DlClause::datalog(
-                    ClauseAtom::quad(
-                        ClauseTerm::var("?s"),
-                        ClauseTerm::var("?p"),
-                        ClauseTerm::var("?o"),
-                        ClauseTerm::DefaultGraph,
+                    Arity::<N>::atom(
+                        [
+                            ClauseTerm::var("?s"),
+                            ClauseTerm::var("?p"),
+                            ClauseTerm::var("?o"),
+                        ],
+                        false,
                     ),
                     Vec::new(),
                 )
@@ -168,7 +279,8 @@ pub(crate) fn lower<'r, 'a>(
                 )])
             }
             IrRuleBody::Elements(element_rule) => {
-                let mut builder = ClauseBuilder {
+                let mut builder = ClauseBuilder::<N> {
+                    shape: std::marker::PhantomData,
                     index,
                     now,
                     guards: Vec::new(),
@@ -214,7 +326,9 @@ pub(crate) fn constant(term: &Term) -> ClauseTerm {
 }
 
 /// Lowers one element rule.
-struct ClauseBuilder<'m, 'r, 'a> {
+struct ClauseBuilder<'m, 'r, 'a, const N: usize> {
+    /// Compile-time carrier coordinates.
+    shape: std::marker::PhantomData<Arity<N>>,
     /// The rule's index.
     index: usize,
     /// The `NOW()` replacement, if any.
@@ -225,7 +339,7 @@ struct ClauseBuilder<'m, 'r, 'a> {
     impls: &'m mut BTreeMap<(usize, GuardSite), GuardImpl<'r, 'a>>,
     /// Generated-variable counter.
     generated: usize,
-    /// Whether an atom addresses [`BASE_GRAPH`].
+    /// Whether an atom reads the immutable base.
     uses_base: bool,
     /// While lowering negation element `index`: the enclosing rule's bound clause
     /// variables. Every other variable of the element is LOCAL to it — SPARQL 1.2 RL
@@ -239,7 +353,10 @@ struct ClauseBuilder<'m, 'r, 'a> {
 /// it moved into guards.
 struct PendingTriples(Vec<(String, LoweredTriple)>);
 
-impl ClauseBuilder<'_, '_, '_> {
+impl<const N: usize> ClauseBuilder<'_, '_, '_, N>
+where
+    Arity<N>: RuleShape<N>,
+{
     /// Scope a clause variable name: inside a negation element, a variable the enclosing
     /// rule does not bind is renamed apart.
     fn scoped(&self, plain: String) -> String {
@@ -304,21 +421,12 @@ impl ClauseBuilder<'_, '_, '_> {
         pattern: &TriplePattern,
         base: bool,
         pending: &mut PendingTriples,
-    ) -> ClauseAtom {
+    ) -> ClauseAtom<N> {
         let [s, p, o] = pattern
             .positions()
             .map(|position| self.body_position(position, pending));
         self.uses_base |= base;
-        ClauseAtom::quad(
-            s,
-            p,
-            o,
-            if base {
-                ClauseTerm::literal(BASE_GRAPH)
-            } else {
-                ClauseTerm::DefaultGraph
-            },
-        )
+        Arity::<N>::atom([s, p, o], base)
     }
 
     /// Lower an expression to a SPARQL scalar query over canonical variable names, and
@@ -352,8 +460,8 @@ impl ClauseBuilder<'_, '_, '_> {
     }
 
     /// Lower an element rule.
-    fn element_rule(&mut self, rule: &ElementRule) -> DlClause {
-        let mut atoms: Vec<ClauseAtom> = Vec::new();
+    fn element_rule(&mut self, rule: &ElementRule) -> DlClause<N> {
+        let mut atoms: Vec<ClauseAtom<N>> = Vec::new();
         let mut pending = PendingTriples(Vec::new());
         // Positive patterns first: they bind before any guard runs.
         for element in &rule.body {
@@ -384,7 +492,7 @@ impl ClauseBuilder<'_, '_, '_> {
         let pattern_bound: Vec<String> = bound.clone();
         let mut authored: Vec<String> = Vec::new();
         let mut equalities: Vec<(String, String)> = Vec::new();
-        let mut negations: Vec<Negation> = Vec::new();
+        let mut negations: Vec<Negation<N>> = Vec::new();
         for element in &rule.body {
             match element {
                 Element::Pattern(pattern) => {
@@ -460,27 +568,18 @@ impl ClauseBuilder<'_, '_, '_> {
                 GuardReads::Bindings,
             ));
         }
-        let head: Vec<ClauseAtom> = rule
+        let head: Vec<ClauseAtom<N>> = rule
             .head
             .iter()
             .map(|template| {
                 let [s, p, o] = template
                     .positions()
                     .map(|position| self.head_position(position));
-                ClauseAtom::quad(s, p, o, ClauseTerm::DefaultGraph)
+                Arity::<N>::atom([s, p, o], false)
             })
             .collect();
         let clause = if head.is_empty() {
-            // `RULE {} WHERE { … }`: "A rule head is a sequence of triple templates", and
-            // the empty sequence generates nothing. The clause IR has no empty head (that
-            // is its inconsistency clause), so the rule's body still runs and derives one
-            // constant marker into the [`EMPTY_HEAD`] partition, which nothing reads and
-            // no output decodes.
-            let marker = || ClauseTerm::literal(EMPTY_HEAD);
-            DlClause::datalog(
-                ClauseAtom::quad(marker(), marker(), marker(), marker()),
-                atoms,
-            )
+            Arity::<N>::empty_head(atoms)
         } else if head.len() == 1 {
             DlClause::datalog(head.into_iter().next().expect("one head atom"), atoms)
         } else {
@@ -572,7 +671,7 @@ impl ClauseBuilder<'_, '_, '_> {
         elements: &[Element],
         base: bool,
         outer: &[String],
-    ) -> Negation {
+    ) -> Negation<N> {
         let saved = self.scope.replace((index, outer.to_vec()));
         let negation = self.negation_body(index, elements, base, outer);
         self.scope = saved;
@@ -586,8 +685,8 @@ impl ClauseBuilder<'_, '_, '_> {
         elements: &[Element],
         base: bool,
         outer: &[String],
-    ) -> Negation {
-        let mut atoms: Vec<ClauseAtom> = Vec::new();
+    ) -> Negation<N> {
+        let mut atoms: Vec<ClauseAtom<N>> = Vec::new();
         let mut pending = PendingTriples(Vec::new());
         for element in elements {
             if let Element::Pattern(pattern) = element {

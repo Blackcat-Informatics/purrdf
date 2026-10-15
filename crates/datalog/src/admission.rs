@@ -119,7 +119,10 @@ impl NeverDeriveDeclarations {
     /// # Errors
     /// Refuses a reachable protected head, or a head whose predicate cannot be
     /// established statically. A guard is never invoked as a safety proof.
-    pub fn admit(&self, rules: &[DlClause]) -> Result<NeverDeriveCertificate, AdmissionRefusal> {
+    pub fn admit<const N: usize>(
+        &self,
+        rules: &[DlClause<N>],
+    ) -> Result<NeverDeriveCertificate, AdmissionRefusal> {
         if !self.is_empty() {
             check_heads(rules, self)?;
         }
@@ -207,9 +210,9 @@ impl NeverDeriveCertificate {
     /// Re-admit under an additional profile without withdrawing earlier layers.
     /// # Errors
     /// A changed bundle, protected derivation, or unresolved head is refused.
-    pub fn extend(
+    pub fn extend<const N: usize>(
         &self,
-        rules: &[DlClause],
+        rules: &[DlClause<N>],
         additions: &NeverDeriveDeclarations,
     ) -> Result<Self, AdmissionRefusal> {
         if self.program != crate::cache::canonical_rule_hash(rules) {
@@ -221,8 +224,8 @@ impl NeverDeriveCertificate {
     }
 }
 
-fn check_heads(
-    rules: &[DlClause],
+fn check_heads<const N: usize>(
+    rules: &[DlClause<N>],
     declarations: &NeverDeriveDeclarations,
 ) -> Result<(), AdmissionRefusal> {
     let mut protected = Vec::new();
@@ -304,7 +307,7 @@ fn check_heads(
     })
 }
 
-fn reads_predicate(rule: &DlClause, symbol: &str) -> bool {
+fn reads_predicate<const N: usize>(rule: &DlClause<N>, symbol: &str) -> bool {
     rule.body()
         .iter()
         .chain(
@@ -315,8 +318,8 @@ fn reads_predicate(rule: &DlClause, symbol: &str) -> bool {
         .any(|atom| predicate_symbol(atom) == symbol || predicate_symbol(atom) == ANY_PREDICATE)
 }
 
-fn rule_dependencies(
-    rules: &[DlClause],
+fn rule_dependencies<const N: usize>(
+    rules: &[DlClause<N>],
 ) -> (
     BTreeMap<usize, BTreeSet<usize>>,
     BTreeMap<usize, BTreeSet<String>>,

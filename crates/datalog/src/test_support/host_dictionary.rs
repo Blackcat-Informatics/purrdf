@@ -76,10 +76,10 @@ impl TermDictionary for HostDictionary {
             live: &self.pins,
         })
     }
-    fn with_interned<T>(
+    fn with_interned<T, const N: usize>(
         &mut self,
-        terms: [DictionaryTerm<'_, u64>; 4],
-        validate: impl FnOnce(&Self, [u64; 4]) -> Result<T, DictionaryError<SourceLost>>,
+        terms: [DictionaryTerm<'_, u64>; N],
+        validate: impl FnOnce(&Self, [u64; N]) -> Result<T, DictionaryError<SourceLost>>,
     ) -> Result<T, DictionaryError<SourceLost>> {
         let ids = terms.map(|term| match term {
             DictionaryTerm::Id(id) => id,

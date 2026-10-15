@@ -245,13 +245,9 @@ test("an async job started from inside a sync callback runs and returns", async 
 // Every job runs on a stack region exactly as large as the module's own shadow stack, so
 // the two lanes run out of stack at the same depth: a request the synchronous lane
 // evaluates a job evaluates too, and a request too deep for the one is too deep for the
-// other. Nested OPTIONALs end, on both lanes, at the host-stack admission of the query
-// algebra's height (284 nested graph patterns), before the evaluator's frames for them fill a lane:
-// the deepest the synchronous lane answers is found by bisection and run as a job. Measured
-// on the shipped artifact through `evidence.async.stackHighWaterBytes` (the deepest poll
-// below the region's top): 140 nested OPTIONALs reach about 198 600 bytes, 250 about
-// 344 700 and 280 about 384 500, so the deepest admitted polls more than a third of the
-// region down and still answers on it, as it does on the synchronous lane.
+// other. Nested OPTIONALs reach either the algebra-height admission or the evaluator's
+// stack guard. Find the synchronous lane's actual boundary and require the job to
+// answer at that depth and refuse the next with the identical typed error.
 /** The size of every job's stack region, as the module reports it. */
 const REGION_BYTES = asyncStackRegionBytes();
 /** The evaluator's own stack refusal, as a job's error carries it. */
@@ -285,13 +281,15 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
     if (answers(mid)) deepest = mid;
     else refused = mid;
   }
-  // One level more is the host-stack admission's refusal on both lanes alike.
-  const hostRefusal = (error) => {
-    assert.match(error.message, HOST_STACK_REFUSAL);
+  let refusal;
+  const sameRefusal = (error) => {
+    assert.match(error.message, /native-sparql-(evaluation|host)-stack-exhausted/);
+    if (refusal === undefined) refusal = error.message;
+    else assert.equal(error.message, refusal);
     return true;
   };
-  assert.throws(() => engine.select(chain, nestedOptional(refused)), hostRefusal);
-  await assert.rejects(engine.queryAsync(chain, nestedOptional(refused)), hostRefusal);
+  assert.throws(() => engine.select(chain, nestedOptional(refused)), sameRefusal);
+  await assert.rejects(engine.queryAsync(chain, nestedOptional(refused)), sameRefusal);
   assert.equal(stackPointer(), IDLE);
   const query = nestedOptional(deepest);
   assert.equal(engine.select(chain, query).rowCount, 200, "the synchronous lane answers it");
@@ -355,13 +353,12 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
   assert.equal(treeFalse.result.rowCount, 0, "its false neighbour answers nothing on the region too");
   assert.equal(stackPointer(), IDLE);
   // The same answer across many resumptions, with the region's floor restored each time.
-  const started = performance.now();
   const yielding = await new QueryEngine().queryGovernedAsync(chain, deepChain, { yieldEveryPolls: 4096 });
   assert.equal(yielding.isComplete, true);
   assert.equal(yielding.result.rowCount, 200);
   const { polls, yields } = yielding.evidence.async;
   assert.ok(yields > 16 && polls >= yields * 10, `${polls} polls, ${yields} yields`);
-  t.diagnostic(`deep no-poll-frame proof: ${polls} polls, ${yields} timer yields, ${Math.round(performance.now() - started)} ms nonexclusive`);
+  t.diagnostic(`deep no-poll-frame proof: ${polls} polls, ${yields} yields`);
   assert.equal(stackPointer(), IDLE);
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
 });

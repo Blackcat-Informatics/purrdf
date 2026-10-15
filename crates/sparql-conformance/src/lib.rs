@@ -74,6 +74,56 @@ pub struct Summary {
 }
 
 impl Summary {
+    /// Grade an actual carrier result with the original result comparator and xfail law.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an ambiguous expected-failure registry entry.
+    pub fn record_outcome(
+        &mut self,
+        case: &SparqlTestCase,
+        outcome: Result<run::RunOutcome, String>,
+    ) -> Result<(), String> {
+        self.record_verdict(case, verdict_of_outcome(case, outcome))
+    }
+
+    /// Record source setup failure without treating it as an expected query refusal.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an ambiguous expected-failure registry entry.
+    pub fn record_setup_failure(
+        &mut self,
+        case: &SparqlTestCase,
+        message: String,
+    ) -> Result<(), String> {
+        self.record_verdict(case, Verdict::Fail(message))
+    }
+
+    fn record_verdict(&mut self, case: &SparqlTestCase, verdict: Verdict) -> Result<(), String> {
+        match verdict {
+            Verdict::Unmodeled => self.unmodeled.push(case.iri.clone()),
+            // An ambiguous ledger entry is a hard error, not a preference — see
+            // `xfail::lookup` — so it aborts the whole manifest rather than letting
+            // one of the two matching entries win by registry order.
+            Verdict::Pass => match xfail::lookup(&case.iri)? {
+                Some(reason) => {
+                    self.unexpected_pass
+                        .push(format!("{} (xfail: {})", case.iri, reason.label()));
+                }
+                None => self.passed += 1,
+            },
+            Verdict::Fail(msg) => match xfail::lookup(&case.iri)? {
+                Some(reason) => {
+                    log_xfail(&case.iri, reason, &msg);
+                    self.xfail += 1;
+                }
+                None => self.failed.push((case.iri.clone(), msg)),
+            },
+        }
+        Ok(())
+    }
+
     /// True when the manifest passed: no unexpected passes, no unexplained
     /// failures, and no unmodeled test types (xfails are allowed).
     ///
@@ -196,27 +246,7 @@ pub fn run_manifest(manifest_path: &Path) -> Result<Summary, String> {
     let cases = manifest::load(manifest_path)?;
     let mut summary = Summary::default();
     for case in &cases {
-        match verdict_of(case) {
-            Verdict::Unmodeled => summary.unmodeled.push(case.iri.clone()),
-            // An ambiguous ledger entry is a hard error, not a preference — see
-            // `xfail::lookup` — so it aborts the whole manifest rather than letting
-            // one of the two matching entries win by registry order.
-            Verdict::Pass => match xfail::lookup(&case.iri)? {
-                Some(reason) => summary.unexpected_pass.push(format!(
-                    "{} (xfail: {})",
-                    case.iri,
-                    reason.label()
-                )),
-                None => summary.passed += 1,
-            },
-            Verdict::Fail(msg) => match xfail::lookup(&case.iri)? {
-                Some(reason) => {
-                    log_xfail(&case.iri, reason, &msg);
-                    summary.xfail += 1;
-                }
-                None => summary.failed.push((case.iri.clone(), msg)),
-            },
-        }
+        summary.record_verdict(case, verdict_of(case))?;
     }
     Ok(summary)
 }
@@ -233,7 +263,12 @@ fn verdict_of(case: &SparqlTestCase) -> Verdict {
         Ok(source) => source,
         Err(msg) => return Verdict::Fail(msg),
     };
-    match run::run(case, Some(&remote)) {
+    verdict_of_outcome(case, run::run(case, Some(&remote)))
+}
+
+/// One comparison path for the original and carrier-specific executions.
+fn verdict_of_outcome(case: &SparqlTestCase, outcome: Result<run::RunOutcome, String>) -> Verdict {
+    match outcome {
         Ok(outcome) => match compare::compare(case, &outcome) {
             Ok(()) => Verdict::Pass,
             Err(msg) => Verdict::Fail(msg),

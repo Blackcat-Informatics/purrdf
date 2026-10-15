@@ -267,6 +267,24 @@ pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
     builder: &RdfDatasetBuilder,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
+    validate_rows_with_memory(
+        builder,
+        builder.quad_rows().iter().copied(),
+        builder.reifier_rows().iter().copied(),
+        builder.annotation_rows().iter().copied(),
+        memory,
+    )
+}
+
+/// Validate carrier rows through the original positional and lexical rules.
+/// Compact carriers project one row at a time; no quad table is built.
+pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
+    builder: &RdfDatasetBuilder,
+    quads: impl IntoIterator<Item = super::dataset::QuadRow>,
+    reifiers: impl IntoIterator<Item = super::dataset::ReifierRow>,
+    annotations: impl IntoIterator<Item = super::dataset::AnnotationRow>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
     let term_count = builder.term_count();
 
     // 0. The IR-boundary absoluteness invariant. Checked FIRST, and before any
@@ -300,7 +318,7 @@ pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
     }
 
     // 3. Quad positional + id-reference validity.
-    for (i, q) in builder.quad_rows().iter().enumerate() {
+    for (i, q) in quads.into_iter().enumerate() {
         check_id_in_range_with_memory(q.s, term_count, &QuadContext(i, "subject"), memory)?;
         check_id_in_range_with_memory(q.p, term_count, &QuadContext(i, "predicate"), memory)?;
         check_id_in_range_with_memory(q.o, term_count, &QuadContext(i, "object"), memory)?;
@@ -322,46 +340,46 @@ pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
     }
 
     // 4. Reifier id-reference validity; the reified target MUST be a triple term.
-    for (i, (reifier, triple, graph)) in builder.reifier_rows().iter().enumerate() {
+    for (i, (reifier, triple, graph)) in reifiers.into_iter().enumerate() {
         check_id_in_range_with_memory(
-            *reifier,
+            reifier,
             term_count,
             &format_args!("reifier #{i} resource"),
             memory,
         )?;
         check_id_in_range_with_memory(
-            *triple,
+            triple,
             term_count,
             &format_args!("reifier #{i} target"),
             memory,
         )?;
         require_subject_with_memory(
             builder,
-            *reifier,
+            reifier,
             &format_args!("reifier #{i} resource"),
             ASSERTED_SUBJECT,
             memory,
         )?;
         if let Some(g) = graph {
             check_id_in_range_with_memory(
-                *g,
+                g,
                 term_count,
                 &format_args!("reifier #{i} graph"),
                 memory,
             )?;
             require_graph_name_with_memory(
                 builder,
-                *g,
+                g,
                 &format_args!("reifier #{i} graph"),
                 memory,
             )?;
         }
-        if !matches!(builder.term(*triple), InternedTerm::Triple { .. }) {
+        if !matches!(builder.term(triple), InternedTerm::Triple { .. }) {
             return Err(diag_with_memory(
                 "rdf-ir-reifier-not-triple",
                 format_args!(
                     "reifier #{i} must bind a triple term, but its target resolves to {}",
-                    kind_str(builder.term(*triple))
+                    kind_str(builder.term(triple))
                 ),
                 memory,
             ));
@@ -369,48 +387,48 @@ pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
     }
 
     // 5. Annotation id-reference validity + predicate-is-IRI.
-    for (i, (reifier, p, o, graph)) in builder.annotation_rows().iter().enumerate() {
+    for (i, (reifier, p, o, graph)) in annotations.into_iter().enumerate() {
         check_id_in_range_with_memory(
-            *reifier,
+            reifier,
             term_count,
             &format_args!("annotation #{i} reifier"),
             memory,
         )?;
         check_id_in_range_with_memory(
-            *p,
+            p,
             term_count,
             &format_args!("annotation #{i} predicate"),
             memory,
         )?;
         check_id_in_range_with_memory(
-            *o,
+            o,
             term_count,
             &format_args!("annotation #{i} object"),
             memory,
         )?;
         require_iri_predicate_with_memory(
             builder,
-            *p,
+            p,
             &format_args!("annotation #{i} predicate"),
             memory,
         )?;
         require_subject_with_memory(
             builder,
-            *reifier,
+            reifier,
             &format_args!("annotation #{i} reifier"),
             ASSERTED_SUBJECT,
             memory,
         )?;
         if let Some(g) = graph {
             check_id_in_range_with_memory(
-                *g,
+                g,
                 term_count,
                 &format_args!("annotation #{i} graph"),
                 memory,
             )?;
             require_graph_name_with_memory(
                 builder,
-                *g,
+                g,
                 &format_args!("annotation #{i} graph"),
                 memory,
             )?;

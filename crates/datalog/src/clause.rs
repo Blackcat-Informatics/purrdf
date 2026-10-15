@@ -5,14 +5,14 @@
 //!
 //! # The shape
 //!
-//! Every rule this crate can hold is a **DL-clause**
+//! Every logical rule this crate can hold is a **DL-clause**
 //!
 //! ```text
 //! U₁ ∧ … ∧ Uₙ  →  ∃ȳ. (C₁ ∨ … ∨ Cₘ)        where each Cᵢ = V₁ ∧ … ∧ V_k, k ≥ 1
 //! ```
 //!
 //! — a conjunction of body literals implying an existentially closed disjunction of
-//! **conjunctions** of head atoms. One shape, five head forms:
+//! **conjunctions** of head atoms. There are five logical head forms:
 //!
 //! | form | shape | what consumes it IN THIS WORKSPACE |
 //! |---|---|---|
@@ -21,6 +21,10 @@
 //! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | [`crate::chase`], which asserts a conjunction atomically |
 //! | [`Inconsistency`](HeadForm::Inconsistency) | `m = 0` (the head is `false`) | a hard error carrying a witness |
 //! | [`Disjunctive`](HeadForm::Disjunctive) | `m > 1`, `ȳ = ∅` | **refused by name here**; case-split by `purrdf-entail`'s `SHOIQ(D)` hypertableau |
+//!
+//! An explicitly operational [`NoOutput`](HeadForm::NoOutput) rule is separate from
+//! these logical forms: the scheduled evaluator runs its body but emits no fact.
+//! It does not assert the inconsistency denoted by an empty logical head.
 //!
 //! The last row is the load-bearing one. A disjunctive head needs a case split, and no
 //! evaluator in this crate performs one, so [`crate::chase`] returns
@@ -42,10 +46,11 @@
 //! this row records a deliberate boundary of THIS crate's evaluators — a case split is not a
 //! least fixpoint — rather than a gap waiting on a component.
 //!
-//! # Every atom is an arity-4 quad, and the predicate is DATA
+//! # Static triple or quad shape, and the predicate is DATA
 //!
-//! A [`ClauseAtom`] is `triple(?s, ?p, ?o, ?g)`: four ordinary [`ClauseTerm`] positions,
-//! every one of which may be a variable. The predicate is **not** a relation symbol here —
+//! A [`ClauseAtom`] defaults to `triple(?s, ?p, ?o, ?g)`; `ClauseAtom<3>` is
+//! `triple(?s, ?p, ?o)` with no graph term. Every stored position is an ordinary
+//! [`ClauseTerm`] and may be a variable. The predicate is **not** a relation symbol here —
 //! it is a term carried in the second position, exactly like the subject and the object.
 //!
 //! That is not generality kept for symmetry; it is the difference between expressing OWL 2
@@ -64,7 +69,8 @@
 //!
 //! # The graph position, and how the default graph is denoted
 //!
-//! The fourth position is the graph the atom is asserted in, and it is a `ClauseTerm` like
+//! Quad atoms have a fourth position for the graph; triple atoms have no graph coordinate.
+//! The quad graph is a `ClauseTerm` like
 //! any other: a constant graph name, or a **variable**, which is what makes a per-graph
 //! rule expressible (`T(?s, ?p, ?o, ?g) → T(?s, rdf:type, ?c, ?g)` reasons inside each
 //! graph and writes its conclusion back into the graph it came from).
@@ -248,9 +254,21 @@ impl ClauseTerm {
     }
 }
 
-/// One arity-4 atom `triple(subject, predicate, object, graph)`, optionally negated.
+/// Which immutable relation a body atom reads; this is not an RDF coordinate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum ReadSource {
+    /// The current evaluation model.
+    #[default]
+    Evaluation,
+    /// The caller's original base facts, before rules or DATA additions.
+    Base,
+}
+
+/// One statically shaped RDF atom, optionally negated.
 ///
-/// All four positions are ordinary [`ClauseTerm`]s: the predicate is carried as DATA, not
+/// The default arity is four. `ClauseAtom<3>` stores only subject, predicate and object.
+///
+/// All stored positions are ordinary [`ClauseTerm`]s: the predicate is carried as DATA, not
 /// as the relation symbol, so a variable predicate — the shape OWL 2 RL's property
 /// meta-rules need — is an ordinary variable the join binds. See the [module docs](self)
 /// for why that is load-bearing and for how the graph position and the default graph are
@@ -259,48 +277,63 @@ impl ClauseTerm {
 /// The negation flag is meaningful in a clause BODY only: it marks a negation-as-failure
 /// filter, never a join driver. [`HeadDisjunct::new`] refuses a negated atom, so an atom
 /// reached through a clause head always has `is_negated() == false`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClauseAtom {
-    /// The subject argument.
-    subject: ClauseTerm,
-    /// The predicate argument — a term, which may be a variable.
-    predicate: ClauseTerm,
-    /// The object argument.
-    object: ClauseTerm,
-    /// The graph argument — a term, which may be a variable or the default graph.
-    graph: ClauseTerm,
+#[derive(Clone, PartialEq, Eq)]
+pub struct ClauseAtom<const N: usize = 4> {
+    /// The authored positions; a triple has no fourth position.
+    positions: [ClauseTerm; N],
+    /// Body read authority, outside the RDF positions.
+    source: ReadSource,
     /// Whether the atom is negated (a body-only negation-as-failure filter).
     negated: bool,
 }
 
-impl ClauseAtom {
+impl<const N: usize> fmt::Debug for ClauseAtom<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut atom = f.debug_struct("ClauseAtom");
+        atom.field("subject", self.subject())
+            .field("predicate", self.predicate())
+            .field("object", self.object());
+        if let Some(graph) = self.positions.get(3) {
+            atom.field("graph", graph);
+        }
+        if N == 3 {
+            atom.field("source", &self.source);
+        }
+        atom.field("negated", &self.negated).finish()
+    }
+}
+
+impl ClauseAtom<3> {
+    /// Read this body atom from the immutable base of an ordered evaluation.
+    #[must_use]
+    pub const fn from_base(mut self) -> Self {
+        self.source = ReadSource::Base;
+        self
+    }
+
+    /// A graph-free atom over subject, predicate and object.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any position is [`ClauseTerm::DefaultGraph`], which is not a term.
+    pub fn triple(subject: ClauseTerm, predicate: ClauseTerm, object: ClauseTerm) -> Self {
+        Self::from_positions([subject, predicate, object])
+    }
+}
+
+impl ClauseAtom<4> {
     /// A positive quad atom over four explicit terms — the general constructor.
     ///
     /// # Panics
     ///
-    /// Panics if [`ClauseTerm::DefaultGraph`] appears in the subject, predicate or object
-    /// position. It denotes the graph that has no name, so it is meaningful in the graph
-    /// position alone; admitting it elsewhere would give the empty surface a second,
-    /// unrelated meaning. This is a construction bug, never a data state.
+    /// Panics if [`ClauseTerm::DefaultGraph`] appears in subject, predicate or object.
     pub fn quad(
         subject: ClauseTerm,
         predicate: ClauseTerm,
         object: ClauseTerm,
         graph: ClauseTerm,
     ) -> Self {
-        assert!(
-            !subject.is_default_graph()
-                && !predicate.is_default_graph()
-                && !object.is_default_graph(),
-            "the default graph is a graph name, so it is legal in the graph position only"
-        );
-        Self {
-            subject,
-            predicate,
-            object,
-            graph,
-            negated: false,
-        }
+        Self::from_positions([subject, predicate, object, graph])
     }
 
     /// A negated quad atom (a negation-as-failure filter).
@@ -343,24 +376,51 @@ impl ClauseAtom {
         }
     }
 
+    /// The graph argument, as a term — which may be a variable or the default graph.
+    pub fn graph(&self) -> &ClauseTerm {
+        &self.positions[3]
+    }
+}
+
+impl<const N: usize> ClauseAtom<N> {
+    /// The relation this body atom reads.
+    pub const fn read_source(&self) -> ReadSource {
+        self.source
+    }
+
+    /// Validate the three RDF term positions at the shared constructor home.
+    fn from_positions(positions: [ClauseTerm; N]) -> Self {
+        assert!(
+            positions[..3].iter().all(|term| !term.is_default_graph()),
+            "the default graph is a graph name, so it is legal in the graph position only"
+        );
+        Self {
+            positions,
+            source: ReadSource::Evaluation,
+            negated: false,
+        }
+    }
+
+    /// Mark this atom as a body-only negation-as-failure filter.
+    #[must_use]
+    pub const fn into_negated(mut self) -> Self {
+        self.negated = true;
+        self
+    }
+
     /// The subject argument.
     pub fn subject(&self) -> &ClauseTerm {
-        &self.subject
+        &self.positions[0]
     }
 
     /// The object argument.
     pub fn object(&self) -> &ClauseTerm {
-        &self.object
+        &self.positions[2]
     }
 
-    /// The predicate argument, as a term — which may be a variable.
+    /// The predicate argument, which may be a variable.
     pub fn predicate(&self) -> &ClauseTerm {
-        &self.predicate
-    }
-
-    /// The graph argument, as a term — which may be a variable or the default graph.
-    pub fn graph(&self) -> &ClauseTerm {
-        &self.graph
+        &self.positions[1]
     }
 
     /// The unbracketed predicate IRI, or `None` when the predicate is not a constant IRI.
@@ -368,7 +428,7 @@ impl ClauseAtom {
     /// A diagnostic or a rule inventory that wants to *name* an atom's predicate asks
     /// here, and gets `None` exactly when there is no single name to give.
     pub fn predicate_iri(&self) -> Option<&str> {
-        self.predicate.iri_value()
+        self.predicate().iri_value()
     }
 
     /// Whether the atom is negated.
@@ -376,12 +436,12 @@ impl ClauseAtom {
         self.negated
     }
 
-    /// This atom's four positions in order: subject, predicate, object, graph.
+    /// This atom's positions in order: subject, predicate, object, then graph for quads.
     ///
     /// One accessor for the arity-generic passes (variable collection, adornment, slot
     /// assignment) so none of them can quietly visit three positions and skip the fourth.
-    pub fn terms(&self) -> [&ClauseTerm; 4] {
-        [&self.subject, &self.predicate, &self.object, &self.graph]
+    pub fn terms(&self) -> [&ClauseTerm; N] {
+        self.positions.each_ref()
     }
 
     /// Record every variable of this atom into `into`.
@@ -411,12 +471,12 @@ impl ClauseAtom {
 /// `body → false`, while an empty DISJUNCT is the empty conjunction — `true` — which
 /// would make the whole head trivially satisfiable and the clause silently inert.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeadDisjunct {
+pub struct HeadDisjunct<const N: usize = 4> {
     /// The conjuncts `V₁ ∧ … ∧ V_k`, in authored order; never empty, never negated.
-    atoms: Vec<ClauseAtom>,
+    atoms: Vec<ClauseAtom<N>>,
 }
 
-impl HeadDisjunct {
+impl<const N: usize> HeadDisjunct<N> {
     /// A disjunct from its conjuncts, in authored order.
     ///
     /// # Panics
@@ -427,9 +487,9 @@ impl HeadDisjunct {
     /// * `atoms` is empty — the empty conjunction is `true`, so an empty disjunct would
     ///   make the whole head trivially satisfiable; the empty HEAD (`m = 0`) is the
     ///   separate, well-formed inconsistency clause, built by [`DlClause::inconsistency`];
-    /// * an atom is negated — a negated head atom is not a rule, and admitting one would
-    ///   silently produce an unsound program.
-    pub fn new(atoms: Vec<ClauseAtom>) -> Self {
+    /// * an atom is negated or selects immutable base input — heads assert positive
+    ///   facts into the evaluation model, never mutate a read authority.
+    pub fn new(atoms: Vec<ClauseAtom<N>>) -> Self {
         assert!(
             !atoms.is_empty(),
             "a head disjunct may not be empty (an empty HEAD is the inconsistency clause)"
@@ -437,6 +497,12 @@ impl HeadDisjunct {
         assert!(
             atoms.iter().all(|atom| !atom.negated),
             "a rule head may not be negated"
+        );
+        assert!(
+            atoms
+                .iter()
+                .all(|atom| atom.source == ReadSource::Evaluation),
+            "a rule head must write the evaluation model"
         );
         Self { atoms }
     }
@@ -446,18 +512,18 @@ impl HeadDisjunct {
     /// # Panics
     ///
     /// Panics if `atom` is negated — see [`Self::new`].
-    pub fn atom(atom: ClauseAtom) -> Self {
+    pub fn atom(atom: ClauseAtom<N>) -> Self {
         Self::new(vec![atom])
     }
 
     /// The conjuncts `V₁ ∧ … ∧ V_k`, in authored order. Never empty.
-    pub fn atoms(&self) -> &[ClauseAtom] {
+    pub fn atoms(&self) -> &[ClauseAtom<N>] {
         &self.atoms
     }
 
     /// The one conjunct of a SINGLE-atom disjunct, or `None` if the disjunct is a proper
     /// conjunction.
-    pub fn single_atom(&self) -> Option<&ClauseAtom> {
+    pub fn single_atom(&self) -> Option<&ClauseAtom<N>> {
         match self.atoms.as_slice() {
             [only] => Some(only),
             _ => None,
@@ -465,17 +531,21 @@ impl HeadDisjunct {
     }
 }
 
-/// Which of the five head forms a [`DlClause`] has.
+/// Which logical or operational head form a [`DlClause`] has.
 ///
-/// The forms are decided in a fixed precedence — empty, then existential, then
+/// An explicit operational no-output rule classifies as [`NoOutput`](Self::NoOutput).
+/// Otherwise the logical forms have fixed precedence — empty, then existential, then
 /// disjunctive, then conjunctive, then atomic — so a clause that is both existential and
 /// disjunctive classifies as [`Existential`](Self::Existential). The precedence is total
 /// (a disjunct is never empty, so the last two cases exhaust `m = 1`) and
 /// content-derived, so the classification is a pure function of the clause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HeadForm {
-    /// `m = 1`, that disjunct is exactly one atom, and `ȳ = ∅`. This IS a Datalog rule,
-    /// and the only form [`crate::seminaive`] evaluates.
+    /// An explicitly operational rule whose body runs but emits no facts.
+    /// This differs from an empty logical head, which asserts inconsistency.
+    NoOutput,
+    /// `m = 1`, that disjunct is exactly one atom, and `ȳ = ∅`. This is the logical
+    /// Datalog rule form consumed by [`crate::seminaive`].
     Atomic,
     /// `ȳ ≠ ∅` — the head existentially quantifies at least one variable. A restricted
     /// chase with frontier-addressed Skolem witnesses consumes this form.
@@ -513,6 +583,7 @@ impl HeadForm {
     /// The form's name, for a diagnostic.
     fn name(self) -> &'static str {
         match self {
+            Self::NoOutput => "no-output",
             Self::Atomic => "atomic",
             Self::Existential => "existential",
             Self::Disjunctive => "disjunctive",
@@ -527,7 +598,7 @@ impl HeadForm {
     pub(crate) fn article(self) -> &'static str {
         match self {
             Self::Atomic | Self::Existential | Self::Inconsistency => "an",
-            Self::Disjunctive | Self::Conjunctive => "a",
+            Self::Disjunctive | Self::Conjunctive | Self::NoOutput => "a",
         }
     }
 }
@@ -621,25 +692,48 @@ impl std::error::Error for NonDatalogClause {}
 /// See the [module docs](self) for the five head forms and for why all five are
 /// representable while only the atomic one is evaluable here.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DlClause {
+pub struct DlClause<const N: usize = 4> {
+    /// An explicit operational no-output head; never inferred from an empty logical head.
+    no_output: bool,
     /// The body conjunction `U₁ ∧ … ∧ Uₙ`, in authored order — the order every plan
     /// coordinate and every provenance restoration is expressed against.
-    body: Vec<ClauseAtom>,
+    body: Vec<ClauseAtom<N>>,
     /// The existentially quantified head variables `ȳ`, in authored order. Empty for the
     /// atomic, disjunctive, conjunctive and inconsistency forms.
     existentials: Vec<String>,
     /// The head disjunction `C₁ ∨ … ∨ Cₘ`, in authored order. Empty means the head is
     /// `false`; each disjunct is itself a non-empty conjunction.
-    head: Vec<HeadDisjunct>,
+    head: Vec<HeadDisjunct<N>>,
     /// The body's guard literals ([`crate::guard`]), in authored order: evaluated after
     /// the positive atoms have joined, before any negation is decided.
     guards: Vec<Guard>,
     /// The body's negated conjunctions ([`crate::guard::Negation`]), in authored order:
     /// decided after the guards, alongside the negated atoms.
-    negations: Vec<Negation>,
+    negations: Vec<Negation<N>>,
 }
 
-impl DlClause {
+impl DlClause<3> {
+    /// An operational graph-free rule that evaluates its body and emits no fact.
+    ///
+    /// The ordered scheduler preserves its guards and failure behavior. This is not
+    /// a logical inconsistency clause and inserts no marker term or statement.
+    pub fn no_output(body: Vec<ClauseAtom<3>>) -> Self {
+        Self {
+            no_output: true,
+            ..Self::new(Vec::new(), Vec::new(), body)
+        }
+    }
+}
+
+impl<const N: usize> DlClause<N> {
+    /// Whether any positive or negative body probe reads the original base.
+    pub fn reads_base(&self) -> bool {
+        self.body
+            .iter()
+            .chain(self.negations.iter().flat_map(Negation::atoms))
+            .any(|atom| atom.read_source() == ReadSource::Base)
+    }
+
     /// A DL-clause with the general head `∃existentials. (C₁ ∨ … ∨ Cₘ)`.
     ///
     /// A disjunct's own well-formedness — non-empty, and no negated atom — is carried by
@@ -660,7 +754,11 @@ impl DlClause {
     /// * an existential name also occurs in the body — a body-occurring head variable is
     ///   universally quantified (it is a frontier variable), so the same name cannot also
     ///   be existential.
-    pub fn new(head: Vec<HeadDisjunct>, existentials: Vec<String>, body: Vec<ClauseAtom>) -> Self {
+    pub fn new(
+        head: Vec<HeadDisjunct<N>>,
+        existentials: Vec<String>,
+        body: Vec<ClauseAtom<N>>,
+    ) -> Self {
         let mut head_variables = BTreeSet::new();
         for atom in head.iter().flat_map(HeadDisjunct::atoms) {
             atom.collect_variables(&mut head_variables);
@@ -687,6 +785,7 @@ impl DlClause {
         }
 
         Self {
+            no_output: false,
             body,
             existentials,
             head,
@@ -725,7 +824,7 @@ impl DlClause {
     ///   earlier guard of the group — and a group guard's output must be fresh in the
     ///   group.
     #[must_use]
-    pub fn with_negations(mut self, negations: Vec<Negation>) -> Self {
+    pub fn with_negations(mut self, negations: Vec<Negation<N>>) -> Self {
         self.negations = negations;
         self.assert_scoped();
         self
@@ -784,7 +883,7 @@ impl DlClause {
     }
 
     /// The body's negated conjunctions, in authored order.
-    pub fn negations(&self) -> &[Negation] {
+    pub fn negations(&self) -> &[Negation<N>] {
         &self.negations
     }
 
@@ -817,24 +916,24 @@ impl DlClause {
     /// # Panics
     ///
     /// Panics if `head` is negated — see [`HeadDisjunct::new`].
-    pub fn datalog(head: ClauseAtom, body: Vec<ClauseAtom>) -> Self {
+    pub fn datalog(head: ClauseAtom<N>, body: Vec<ClauseAtom<N>>) -> Self {
         Self::new(vec![HeadDisjunct::atom(head)], Vec::new(), body)
     }
 
     /// An inconsistency clause: the body implies `false`.
     ///
     /// A body match is an inconsistency witness, never a derivation.
-    pub fn inconsistency(body: Vec<ClauseAtom>) -> Self {
+    pub fn inconsistency(body: Vec<ClauseAtom<N>>) -> Self {
         Self::new(Vec::new(), Vec::new(), body)
     }
 
     /// The body conjunction, in authored order.
-    pub fn body(&self) -> &[ClauseAtom] {
+    pub fn body(&self) -> &[ClauseAtom<N>] {
         &self.body
     }
 
     /// The head disjunction, in authored order; empty means the head is `false`.
-    pub fn head_disjuncts(&self) -> &[HeadDisjunct] {
+    pub fn head_disjuncts(&self) -> &[HeadDisjunct<N>] {
         &self.head
     }
 
@@ -846,7 +945,7 @@ impl DlClause {
     /// ask "which atoms does this head mention", never "how are they grouped". For the
     /// atomic form the sequence is exactly the one head atom, so those passes are
     /// unchanged by the nesting.
-    pub fn head_atoms(&self) -> impl Iterator<Item = &ClauseAtom> {
+    pub fn head_atoms(&self) -> impl Iterator<Item = &ClauseAtom<N>> {
         self.head.iter().flat_map(HeadDisjunct::atoms)
     }
 
@@ -861,6 +960,9 @@ impl DlClause {
     /// then disjunctive, then conjunctive, then atomic. Every clause matches one of them,
     /// because a [`HeadDisjunct`] is never empty.
     pub fn head_form(&self) -> HeadForm {
+        if self.no_output {
+            return HeadForm::NoOutput;
+        }
         let Some((first, rest)) = self.head.split_first() else {
             return HeadForm::Inconsistency;
         };
@@ -881,12 +983,13 @@ impl DlClause {
     /// This is the one accessor the semi-naive pipeline reads, so a non-Datalog clause
     /// cannot be mistaken for an atomic one by a caller that simply forgot to check: there
     /// is no "the head" to take.
-    pub fn datalog_head(&self) -> Option<&ClauseAtom> {
+    pub fn datalog_head(&self) -> Option<&ClauseAtom<N>> {
         match self.head_form() {
             HeadForm::Atomic => self.head.first().and_then(HeadDisjunct::single_atom),
             HeadForm::Existential
             | HeadForm::Disjunctive
             | HeadForm::Conjunctive
+            | HeadForm::NoOutput
             | HeadForm::Inconsistency => None,
         }
     }
@@ -1299,6 +1402,14 @@ mod tests {
         ]);
     }
 
+    #[test]
+    #[should_panic(expected = "a rule head must write the evaluation model")]
+    fn an_immutable_base_read_is_not_a_rule_head() {
+        let _ = HeadDisjunct::atom(
+            ClauseAtom::triple(v("?X"), ClauseTerm::iri(P), v("?Y")).from_base(),
+        );
+    }
+
     /// An EMPTY DISJUNCT is refused, and it is a different thing from an empty HEAD: the
     /// empty head is the well-formed inconsistency clause, built first here to show the
     /// two are not confused.
@@ -1307,7 +1418,7 @@ mod tests {
     fn an_empty_disjunct_is_refused_though_an_empty_head_is_not() {
         let empty_head = DlClause::inconsistency(vec![atom("?X", P, "?Y")]);
         assert_eq!(empty_head.head_form(), HeadForm::Inconsistency);
-        let _ = HeadDisjunct::new(Vec::new());
+        let _: HeadDisjunct = HeadDisjunct::new(Vec::new());
     }
 
     #[test]

@@ -12,7 +12,7 @@ use super::{Cow, EvalError, HeadKey, HeadTerm, RelationStore, SourceRow, factors
 use crate::dictionary::{TermDictionary, TermIdentity};
 use crate::evidence::DerivationEvidence;
 use crate::id::TermId;
-use crate::store::TermInterner;
+use crate::store::{Arity, StoreShape, TermInterner};
 
 /// Caller-declared semantic scope for negative body predicates.
 ///
@@ -28,7 +28,10 @@ pub struct NegationScope {
     pub missing_scope_reason: ReasonId,
 }
 
-pub(super) trait RuleEvidence<D: TermDictionary = TermInterner> {
+pub(super) trait RuleEvidence<D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     fn source(&mut self, row: crate::id::RowId) -> Result<EvidenceId, EvalError<D::Error>>;
     fn combine(
         &mut self,
@@ -42,29 +45,35 @@ pub(super) trait RuleEvidence<D: TermDictionary = TermInterner> {
     ) -> Result<(EvidenceId, bool), EvalError<D::Error>>;
     fn conjunction(
         &mut self,
-        sources: &[SourceRow<D::Id>],
+        sources: &[SourceRow<D::Id, N>],
     ) -> Result<EvidenceId, EvalError<D::Error>>;
     fn product(
         &mut self,
-        factors: &[&Frontier<'_, D::Id>],
+        factors: &[&Frontier<'_, D::Id, N>],
     ) -> Result<EvidenceId, EvalError<D::Error>>;
     fn emit(
         &mut self,
-        key: &HeadKey<'_, D::Id>,
+        key: &HeadKey<'_, D::Id, N>,
         witness: EvidenceId,
         uses_absence: bool,
     ) -> Result<(), EvalError<D::Error>>;
-    fn commit(&mut self, store: &RelationStore<D>) -> Result<bool, EvalError<D::Error>>;
+    fn commit(&mut self, store: &RelationStore<D, N>) -> Result<bool, EvalError<D::Error>>;
 }
 
 /// Pending head owners precede the aligned row table and its original grant.
-pub(super) struct Capture<S: Admission, I: TermIdentity = TermId> {
-    pending: Vec<(HeadKey<'static, I>, EvidenceId)>,
+pub(super) struct Capture<S: Admission, I: TermIdentity = TermId, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    pending: Vec<(HeadKey<'static, I, N>, EvidenceId)>,
     pub(super) rows: DerivationEvidence<S>,
     scope: NegationScope,
 }
 
-impl<S: Admission, I: TermIdentity> Capture<S, I> {
+impl<S: Admission, I: TermIdentity, const N: usize> Capture<S, I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     pub(super) fn new(rows: DerivationEvidence<S>, scope: NegationScope) -> Self {
         Self {
             pending: Vec::new(),
@@ -123,7 +132,7 @@ impl<S: Admission, I: TermIdentity> Capture<S, I> {
 
     fn emit_native(
         &mut self,
-        key: &HeadKey<'_, I>,
+        key: &HeadKey<'_, I, N>,
         mut witness: EvidenceId,
         uses_absence: bool,
     ) -> Result<(), EvidenceWorkspaceError> {
@@ -172,10 +181,7 @@ impl<S: Admission, I: TermIdentity> Capture<S, I> {
                         })
                     };
                 Ok::<_, EvidenceWorkspaceError>(HeadKey {
-                    subject: copy(&key.subject)?,
-                    predicate: copy(&key.predicate)?,
-                    object: copy(&key.object)?,
-                    graph: copy(&key.graph)?,
+                    positions: crate::dictionary::try_map_row(key.terms(), &mut copy)?,
                 })
             })?;
             pending.push((owned, witness));
@@ -185,7 +191,7 @@ impl<S: Admission, I: TermIdentity> Capture<S, I> {
 
     fn product_native(
         &mut self,
-        factors: &[&Frontier<'_, I>],
+        factors: &[&Frontier<'_, I, N>],
     ) -> Result<EvidenceId, EvidenceWorkspaceError> {
         let mut groups = Vec::new();
         for factor in factors {
@@ -238,7 +244,7 @@ impl<S: Admission, I: TermIdentity> Capture<S, I> {
 
     fn commit_native<D: TermDictionary<Id = I>>(
         &mut self,
-        store: &RelationStore<D>,
+        store: &RelationStore<D, N>,
     ) -> Result<bool, EvalError<D::Error>> {
         store.interner().check_read().map_err(EvalError::Source)?;
         let original_rows = self.rows.row_count();
@@ -271,7 +277,7 @@ impl<S: Admission, I: TermIdentity> Capture<S, I> {
         self.rows.workspace_mut().native_operation(|_, memory| {
             let mut pending = pending;
             while let Some((key, _)) = pending.pop() {
-                for term in [key.subject, key.predicate, key.object, key.graph] {
+                for term in key.positions {
                     if let HeadTerm::Fresh(Cow::Owned(surface)) = term {
                         memory.release_string(surface)?;
                     }
@@ -285,37 +291,36 @@ impl<S: Admission, I: TermIdentity> Capture<S, I> {
 }
 
 /// Resolve newly interned head constants without copying their retained text.
-fn stored_row<D: TermDictionary>(
-    key: &HeadKey<'_, D::Id>,
-    store: &RelationStore<D>,
-) -> Result<Option<crate::id::RowId>, D::Error> {
+fn stored_row<D: TermDictionary, const N: usize>(
+    key: &HeadKey<'_, D::Id, N>,
+    store: &RelationStore<D, N>,
+) -> Result<Option<crate::id::RowId>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
     store.interner().check_read()?;
     let resolve = |term: &HeadTerm<'_, D::Id>| match term {
         HeadTerm::Interned(id) => Ok(Some(*id)),
         HeadTerm::Fresh(surface) => store.interner().lookup_term(surface),
     };
-    let ids = [
-        resolve(&key.subject)?,
-        resolve(&key.predicate)?,
-        resolve(&key.object)?,
-        resolve(&key.graph)?,
-    ];
+    let ids = crate::dictionary::try_map_row(key.terms(), resolve)?;
     store.interner().check_read()?;
-    let [Some(subject), Some(predicate), Some(object), Some(graph)] = ids else {
+    if ids.iter().any(Option::is_none) {
         return Ok(None);
-    };
+    }
     super::present_row(
         &HeadKey {
-            subject: HeadTerm::Interned(subject),
-            predicate: HeadTerm::Interned(predicate),
-            object: HeadTerm::Interned(object),
-            graph: HeadTerm::Interned(graph),
+            positions: ids
+                .map(|id| HeadTerm::Interned(id.expect("all row positions were checked"))),
         },
         store,
     )
 }
 
-impl<S: Admission, D: TermDictionary> RuleEvidence<D> for Capture<S, D::Id> {
+impl<S: Admission, D: TermDictionary, const N: usize> RuleEvidence<D, N> for Capture<S, D::Id, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     fn source(&mut self, row: crate::id::RowId) -> Result<EvidenceId, EvalError<D::Error>> {
         self.rows
             .rows()
@@ -347,7 +352,7 @@ impl<S: Admission, D: TermDictionary> RuleEvidence<D> for Capture<S, D::Id> {
     }
     fn conjunction(
         &mut self,
-        sources: &[SourceRow<D::Id>],
+        sources: &[SourceRow<D::Id, N>],
     ) -> Result<EvidenceId, EvalError<D::Error>> {
         self.rows
             .conjunction(sources.iter().map(|source| source.row))
@@ -356,14 +361,14 @@ impl<S: Admission, D: TermDictionary> RuleEvidence<D> for Capture<S, D::Id> {
 
     fn product(
         &mut self,
-        factors: &[&Frontier<'_, D::Id>],
+        factors: &[&Frontier<'_, D::Id, N>],
     ) -> Result<EvidenceId, EvalError<D::Error>> {
         self.product_native(factors).map_err(EvalError::Evidence)
     }
 
     fn emit(
         &mut self,
-        key: &HeadKey<'_, D::Id>,
+        key: &HeadKey<'_, D::Id, N>,
         witness: EvidenceId,
         uses_absence: bool,
     ) -> Result<(), EvalError<D::Error>> {
@@ -371,7 +376,7 @@ impl<S: Admission, D: TermDictionary> RuleEvidence<D> for Capture<S, D::Id> {
             .map_err(EvalError::Evidence)
     }
 
-    fn commit(&mut self, store: &RelationStore<D>) -> Result<bool, EvalError<D::Error>> {
+    fn commit(&mut self, store: &RelationStore<D, N>) -> Result<bool, EvalError<D::Error>> {
         self.commit_native(store)
     }
 }
