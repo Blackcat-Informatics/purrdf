@@ -63,6 +63,13 @@ table allocator; cached payloads and escaped pins keep their original grants.
 
 ## Measured layout controls
 
+The byte and peak figures in this section were recorded on main at
+`0d075201f`, before data profile 2 added the authenticated statistics sections.
+They are historical layout measurements, not current profile-2 size claims.
+The unchanged 2,000/200,000-claim query control passes profile 2's answer,
+touched-value and live-byte limits; new section sizes must be measured before
+publishing a profile-2 compression comparison.
+
 The `segmented_query` integration control builds 200,000 RDF 1.2 claims, each
 with a reifier and an annotation. It has 600,260 terms and a 9,291,797-byte
 compact pack. Each image is reopened from a native file, queried through the
