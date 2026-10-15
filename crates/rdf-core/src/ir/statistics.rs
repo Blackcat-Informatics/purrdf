@@ -704,5 +704,26 @@ mod tests {
             read.read_error(),
             Some(super::super::triple::TripleReadError::NamedGraphsUnsupported)
         );
+        for subject in [None, Some(predicates[0])] {
+            for predicate in [None, Some(predicates[0])] {
+                let fresh = compact.read().unwrap();
+                assert!(
+                    fresh
+                        .statistics()
+                        .unwrap()
+                        .pattern(crate::ProbePattern {
+                            s: subject,
+                            p: predicate,
+                            o: None,
+                            g: scopes[2],
+                        })
+                        .is_none()
+                );
+                assert_eq!(
+                    fresh.read_error(),
+                    Some(super::super::triple::TripleReadError::NamedGraphsUnsupported)
+                );
+            }
+        }
     }
 }

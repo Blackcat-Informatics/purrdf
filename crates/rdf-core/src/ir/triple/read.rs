@@ -99,6 +99,11 @@ impl crate::SnapshotStatistics<TermId> for TripleRead<'_> {
         crate::SnapshotStatistics::fingerprint(&self.dataset.statistics)
     }
 
+    fn pattern(&self, pattern: crate::ProbePattern) -> Option<crate::StatisticCount> {
+        self.graph(pattern.g).ok()?;
+        crate::SnapshotStatistics::pattern(&self.dataset.statistics, pattern)
+    }
+
     fn predicate(
         &self,
         predicate: TermId,
