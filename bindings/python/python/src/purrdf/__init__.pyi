@@ -1521,7 +1521,8 @@ class RdfDataset:
     def quad_count(self) -> int: ...
     def term_count(self) -> int: ...
     def __len__(self) -> int: ...
-    # Canonical (RDFC-1.0) flat N-Quads — the readable surface of a frozen
+    # Canonical flat N-Quads under the shipped RDF 1.2 profile (RDFC-1.0 on its
+    # RDF 1.1 subset) — the readable surface of a frozen
     # dataset, and the same serializer the shared string boundary uses. N-Triples
     # is a syntactic subset, so a default-graph-only dataset serializes to a valid
     # N-Triples document; one that names graphs keeps the graph term. There is
@@ -2158,7 +2159,7 @@ class entail:
         max_join_steps: int | None = None,
     ) -> tuple[RdfDataset, str]: ...
     # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
-    # document in, canonical (RDFC-1.0) N-Quads plus the rendered report out,
+    # document in, canonical flat N-Quads under the shipped profile plus the report out,
     # under the same two evaluation limits.
     @staticmethod
     def materialize_nt(
