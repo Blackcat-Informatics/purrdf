@@ -1,0 +1,75 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/hash)
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/lex)
+   Compiling hybrid-array v0.4.15
+   Compiling crossbeam-utils v0.8.21
+   Compiling rustversion v1.0.22
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/iri)
+   Compiling digest v0.11.3
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/xsd)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-events)
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/cdt)
+   Compiling syn v2.0.118
+   Compiling sha2 v0.11.0
+   Compiling bumpalo v3.20.3
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/deflate)
+   Compiling rayon-core v1.13.0
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling once_cell v1.21.4
+   Compiling either v1.16.0
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-algebra)
+   Compiling rayon v1.12.0
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/alloc-probe)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/testkit)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 45s
+     Running tests/statement_indexes.rs (/opt/.cargo/e1/865da58a2aa3eb/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/aa0a8bc02af07f99/out/statement_indexes-aa0a8bc02af07f99.wasm)
+
+running 2 tests
+test native_and_compact_statement_queries_keep_answers_and_candidate_work ... FAILED
+
+failures:
+
+---- native_and_compact_statement_queries_keep_answers_and_candidate_work stdout ----
+thread 'native_and_compact_statement_queries_keep_answers_and_candidate_work' raised a JavaScript exception:
+Error: Date.now is sealed: host clocks and entropy sources are withdrawn inside purrdf_testkit::harness::without_host_clock_or_entropy
+    at sealedError (/opt/.cargo/e1/865da58a2aa3eb/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/aa0a8bc02af07f99/out/wasm-test-runner/statement_indexes-aa0a8bc02af07f99.9lqHwU/driver.cjs:20:3)
+    at Proxy.sealed (/opt/.cargo/e1/865da58a2aa3eb/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/aa0a8bc02af07f99/out/wasm-test-runner/statement_indexes-aa0a8bc02af07f99.9lqHwU/driver.cjs:26:11)
+    at __wbg_now_7055c5bf7ae696bd (/opt/.cargo/e1/865da58a2aa3eb/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/aa0a8bc02af07f99/out/wasm-test-runner/statement_indexes-aa0a8bc02af07f99.9lqHwU/module.js:42:30)
+    at statement_indexes-aa0a8bc02af07f99.wasm.<purrdf_sparql_eval[917a6710a4fc2c26]::eval::EvalCtx>::new_admitted (wasm://wasm/statement_indexes-aa0a8bc02af07f99.wasm-06eaba02:wasm-function[3226]:0xcdba9a)
+    at statement_indexes-aa0a8bc02af07f99.wasm.<purrdf_sparql_eval[917a6710a4fc2c26]::engine::NativeSparqlEngine>::eval_ctx::<purrdf_core[1c90afae4c16b852]::ir::dataset::RdfDataset> (wasm://wasm/statement_indexes-aa0a8bc02af07f99.wasm-06eaba02:wasm-function[6054]:0x102d23f)
+    at statement_indexes-aa0a8bc02af07f99.wasm.<purrdf_sparql_eval[917a6710a4fc2c26]::engine::NativeSparqlEngine>::explain_prepared::<purrdf_core[1c90afae4c16b852]::ir::dataset::RdfDataset> (wasm://wasm/statement_indexes-aa0a8bc02af07f99.wasm-06eaba02:wasm-function[457]:0x537157)
+    at statement_indexes-aa0a8bc02af07f99.wasm.<purrdf_core[1c90afae4c16b852]::ir::dataset::RdfDataset as purrdf_core[1c90afae4c16b852]::dataset_view::DatasetView>::checked_read::<(core[e8e77cc1e90bd3b0]::result::Result<purrdf_sparql_eval[917a6710a4fc2c26]::governor::ledger::QueryExplanation, purrdf_sparql_eval[917a6710a4fc2c26]::engine::EvaluationFailure>, core[e8e77cc1e90bd3b0]::option::Option<(purrdf_sparql_eval[917a6710a4fc2c26]::engine::bounded_workspace::ReportingWorkspace<purrdf_core[1c90afae4c16b852]::dataset_view::NoopReservation<!>, !>, core[e8e77cc1e90bd3b0]::option::Option<purrdf_sparql_eval[917a6710a4fc2c26]::engine::bounded_workspace::ExecutionWorkspace<purrdf_core[1c90afae4c16b852]::dataset_view::NoopReservation<!>, !>>)>), purrdf_sparql_eval[917a6710a4fc2c26]::engine::checked_query_read_with_permit<purrdf_core[1c90afae4c16b852]::ir::dataset::RdfDataset, purrdf_sparql_eval[917a6710a4fc2c26]::governor::ledger::QueryExplanation, purrdf_sparql_eval[917a6710a4fc2c26]::engine::EvaluationFailure, core[e8e77cc1e90bd3b0]::option::Option<(purrdf_sparql_eval[917a6710a4fc2c26]::engine::bounded_workspace::ReportingWorkspace<purrdf_core[1c90afae4c16b852]::dataset_view::NoopReservation<!>, !>, core[e8e77cc1e90bd3b0]::option::Option<purrdf_sparql_eval[917a6710a4fc2c26]::engine::bounded_workspace::ExecutionWorkspace<purrdf_core[1c90afae4c16b852]::dataset_view::NoopReservation<!>, !>>)>, <purrdf_sparql_eval[917a6710a4fc2c26]::engine::NativeSparqlEngine>::explain_for<purrdf_core[1c90afae4c16b852]::ir::dataset::RdfDataset>::{closure#0}>::{closure#0}> (wasm://wasm/statement_indexes-aa0a8bc02af07f99.wasm-06eaba02:wasm-function[5708]:0xfda50e)
+    at statement_indexes-aa0a8bc02af07f99.wasm.<purrdf_sparql_eval[917a6710a4fc2c26]::engine::NativeSparqlEngine>::explain_for::<purrdf_core[1c90afae4c16b852]::ir::dataset::RdfDataset> (wasm://wasm/statement_indexes-aa0a8bc02af07f99.wasm-06eaba02:wasm-function[10474]:0x12ed0c7)
+    at statement_indexes-aa0a8bc02af07f99.wasm.<purrdf_sparql_eval[917a6710a4fc2c26]::engine::NativeSparqlEngine>::explain_query (wasm://wasm/statement_indexes-aa0a8bc02af07f99.wasm-06eaba02:wasm-function[17986]:0x149fddb)
+    at statement_indexes-aa0a8bc02af07f99.wasm.purrdf_testkit[4f89d0232258e3f]::harness::without_host_clock_or_entropy::<(), statement_indexes[42df708bf68e47c9]::native_and_compact_statement_queries_keep_answers_and_candidate_work::{closure#0}> (wasm://wasm/statement_indexes-aa0a8bc02af07f99.wasm-06eaba02:wasm-function[499]:0x57d065)
+
+
+failures:
+    native_and_compact_statement_queries_keep_answers_and_candidate_work
+
+note: 1 case not run: a panic ends a wasm32 run at the case that panicked
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test statement_indexes`

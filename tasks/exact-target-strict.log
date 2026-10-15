@@ -1,0 +1,31 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+   Compiling getrandom v0.3.4
+    Checking either v1.16.0
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-algebra)
+    Checking crossbeam-epoch v0.9.18
+    Checking crossbeam-deque v0.8.6
+    Checking rayon v1.12.0
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-eval)
+error: items after a test module
+   --> crates/sparql-eval/src/statement_layer.rs:91:1
+    |
+ 91 |   mod tests {
+    |   ^^^^^^^^^
+...
+167 | / pub(crate) fn visit_quads<D: DatasetView>(
+168 | |     dataset: &D,
+169 | |     probe: StatementProbe<D::Id>,
+170 | |     mut emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
+171 | | ) {
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

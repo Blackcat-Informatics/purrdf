@@ -1,0 +1,49 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 33,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- `reifiers_of(triple)` is a range lookup (test: equals the filtered full scan; benchmark: sublinear in table size).",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 34,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- With 10^7 reifiers and 6 annotations each, `?r rdf:reifies <<( :s :p ?o )>>` and `?r :producer :x` touch only matching rows (governor evidence: candidates examined proportional to matches).",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 35,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- The same lookups work on `RdfDataset`, packs, paged and segmented datasets (or report their scanning default honestly in EXPLAIN).",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B4",
+      "line": 36,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Results unchanged across the RDF 1.2 conformance suites.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}

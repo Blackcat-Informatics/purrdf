@@ -1,0 +1,44 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized] target(s) in 38m 29s
+     Running tests/fallible_query.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-sparql-eval/8867b3a01342eaf1/out/fallible_query-8867b3a01342eaf1)
+
+running 17 tests
+test a_failed_paged_view_outranks_an_explain_stop_signal ... ok
+test fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure ... ok
+test cold_and_warm_bgp_planning_have_identical_demand_paging_evidence ... ok
+test fallible_explain_options_measure_the_same_registered_relation_as_resident ... ok
+test every_required_query_form_and_operator_propagates_page_failure ... ok
+test operational_root_cause_wins_over_a_derived_evaluator_error ... ok
+test identical_executions_have_identical_results_status_and_evidence ... ok
+test parse_failure_remains_an_ordinary_query_error_with_evidence ... ok
+test operational_failure_taxonomy_is_not_an_empty_answer ... ok
+test prepared_entry_uses_the_same_completeness_boundary ... ok
+test query_fallible_view_dispatches_a_registered_relation_with_options ... ok
+test healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entries ... ok
+test query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_matched_registry_answers ... ok
+test query_time_failure_cannot_masquerade_as_an_empty_result ... ok
+test production_query_budget_boundaries_are_exact_and_distinct ... ok
+test successful_and_empty_results_are_explicitly_complete ... ok
+test resident_and_pack_views_keep_the_ordinary_byte_identical_result_path ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/service_resolver.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-sparql-eval/40ff5678bdaf92e8/out/service_resolver-40ff5678bdaf92e8)
+
+running 13 tests
+test a_catalog_gates_a_service_nested_inside_a_forwarded_body_too ... ok
+test a_catalogued_profile_that_adds_nothing_also_sends_nothing_extra ... ok
+test a_profiles_headers_and_credential_reach_the_transport_in_order ... ok
+test a_source_with_no_catalog_sends_exactly_what_it_always_did ... ok
+test a_nested_capability_denial_reaches_the_outer_clause_as_a_denial ... ok
+test an_in_process_service_is_answered_without_the_network_transport_being_touched ... ok
+test a_relative_service_iri_is_refused_without_a_base_and_resolved_with_one ... ok
+test an_unrouted_service_is_denied_by_the_router_and_silent_answers_it ... ok
+test silent_swallows_an_unreachable_endpoint_through_both_resolvers ... ok
+test the_silent_flag_reaches_the_resolver ... ok
+test silent_answers_a_capability_denial_with_the_join_identity_through_either_resolver ... ok
+test withholding_the_network_capability_prevents_the_exchange_rather_than_discarding_it ... ok
+test fallible_explain_measures_its_request_source_and_preserves_service_outcomes ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

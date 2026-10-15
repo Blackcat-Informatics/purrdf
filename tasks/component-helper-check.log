@@ -1,0 +1,5 @@
+helper-census --check: 4 finding(s)
+  capacity proof crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed [source:bcb4a119fb003223]: stale, duplicate or incomplete source proof (0 matching sinks); review the actual owner and constructor closure
+  capacity proof crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed [source:bcb4a119fb003223]: stale, duplicate or incomplete source proof (0 matching sinks); review the actual owner and constructor closure
+  job `logical-capacity-panic`: crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed (crates/rdf-core/src/ir/frozen_terms.rs:67) outside home purrdf-lex: rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]
+  job `logical-capacity-panic`: crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed (crates/rdf-core/src/ir/frozen_terms.rs:70) outside home purrdf-lex: rule:logical-capacity-panic: logical-capacity refusal is converted to panic; propagate the typed error [source:bcb4a119fb003223]

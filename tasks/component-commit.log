@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against eb824c0e20ef (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/491-rdf-1-2-index-reifiers-by-triple-term d0f544f49] perf(rdf): index structural reifiers and annotation values
+ 25 files changed, 1564 insertions(+), 304 deletions(-)
+ create mode 100644 crates/sparql-eval/tests/statement_indexes.rs
+ create mode 100644 crates/sparql-eval/tests/support/statement_claims.rs

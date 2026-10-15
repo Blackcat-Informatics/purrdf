@@ -1,0 +1,27 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/datalog)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/text)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/columnar)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/hnsw)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/entail)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/mime)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/retrieval)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/shex)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/json)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/conformance-kit)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/purrdf)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 6m 18s
+     Running tests/evaluator_trace.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-sparql-conformance/baa6f57b0aa21a6f/out/evaluator_trace-baa6f57b0aa21a6f)
+
+running 1 test
+test regenerate_evaluator_trace ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 22.33s
+

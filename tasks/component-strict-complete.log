@@ -1,0 +1,5 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 32.20s

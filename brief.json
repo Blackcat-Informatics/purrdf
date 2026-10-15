@@ -1,0 +1,130 @@
+{
+  "issue": 491,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "RDF 1.2: index reifiers by triple term and annotations by (predicate, object); reifiers_of is a linear scan",
+  "state": "OPEN",
+  "adrs": [
+    {
+      "id": "ADR-0038",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    }
+  ],
+  "linked_issues": {
+    "484": "Planner statistics: per-predicate, per-class, distinct and multi-column counts, including reifier and annotation rows, mergeable across segments",
+    "288": "fix(rdf): canonical output of a reifier is refused by the canonicalizer",
+    "401": "Update transfers preserve RDF 1.2 identity: per-document LOAD blank scoping and typed record transfer",
+    "479": "rules: two rdf:type patterns with disjoint subjects are joined as a cross product (quadratic memory in SPARQL 1.2 RL)",
+    "483": "sparql-eval: never materialize a cross product (factorized components) and give every plan a guaranteed output bound",
+    "349": "A selectivity-only statistic narrows a retrieval plan but is not recorded on its snapshot",
+    "491": "RDF 1.2: index reifiers by triple term and annotations by (predicate, object); reifiers_of is a linear scan"
+  },
+  "link_relations": {
+    "484": "mentions",
+    "288": "mentions",
+    "401": "mentions",
+    "479": "2-hop",
+    "483": "2-hop",
+    "349": "2-hop",
+    "491": "2-hop"
+  },
+  "related": [
+    {
+      "number": 496,
+      "title": "Benchmarks: measured evidence at 10^8-10^9 triples, including a reifier-heavy RDF 1.2 claims workload",
+      "state": "OPEN"
+    },
+    {
+      "number": 487,
+      "title": "sparql-eval: vectorized execution over batches of term ids with selection vectors",
+      "state": "OPEN"
+    },
+    {
+      "number": 492,
+      "title": "Triple-only carrier for RDF 1.2 consumers that use no named graphs (rows, permutations, Datalog atoms, identities)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "CLOSED"
+    },
+    {
+      "number": 286,
+      "title": "perf: retain shared dataset views through pipeline bundles and GTS ingestion",
+      "state": "CLOSED"
+    },
+    {
+      "number": 457,
+      "title": "Paged tier: an LSM-style stack of sealed delta generations with removals, read as one snapshot",
+      "state": "CLOSED"
+    },
+    {
+      "number": 383,
+      "title": "Read one named graph of a native dataset as the default graph",
+      "state": "CLOSED"
+    },
+    {
+      "number": 93,
+      "title": "Discussion: HDT-style succinct queryable-while-compressed codec for read-only reference bundles",
+      "state": "CLOSED"
+    },
+    {
+      "number": 495,
+      "title": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment",
+      "state": "CLOSED"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 80,
+      "title": "Add semantic RDF visualization SVG exports and library APIs",
+      "state": "CLOSED"
+    },
+    {
+      "number": 92,
+      "title": "gts replication: inventory-diff \u2192 segment-range fetch helper and streaming-fold index-builder conveniences",
+      "state": "CLOSED"
+    },
+    {
+      "number": 105,
+      "title": "feat(rdf): unify JSON-LD/YAML-LD into the native format registry",
+      "state": "CLOSED"
+    },
+    {
+      "number": 356,
+      "title": "SHACL Processor does not distinguish between built-in and custom functions",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 24,
+    "bug": 2,
+    "performance": 2,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/491-rdf-1-2-index-reifiers-by-triple-term"
+  },
+  "coverage": [
+    "issue #491 + 0 comment(s) via github",
+    "link crawl: 7 issue(s) within 2 hop(s) of `#N` references",
+    "ADR-0038 cited by the issue but no file in docs/adr/",
+    "ADRs: 1 cited; 0 resolved on disk",
+    "forge search on ['index', 'reifiers', 'triple']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 4 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #491 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #491: 0",
+    "requirement candidates: 4 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 11 path(s) (5 on disk), 9 identifier(s), 1 workspace package(s), 0 URL(s)"
+  ]
+}

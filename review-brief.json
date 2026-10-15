@@ -1,0 +1,50 @@
+{
+  "issue": 491,
+  "branch": "paudley/491-rdf-1-2-index-reifiers-by-triple-term",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "d0f544f498d75205dde2fc605441f288e80f2cb6",
+      "subject": "perf(rdf): index structural reifiers and annotation values",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "078f9c973f3f57567fcd41c0df1de7a85ec7fdf1",
+      "subject": "Route exact reifier targets through native statement indexes",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "3e6bab72d9dd28929db62bf702430aeec44fbe42",
+      "subject": "Index resident reifier targets with admitted ordinal ranges",
+      "date": "2026-10-15"
+    }
+  ],
+  "files": [
+    "Makefile",
+    "crates/rdf-core/src/dataset_view.rs",
+    "crates/rdf-core/src/ir/builder/triple.rs",
+    "crates/rdf-core/src/ir/dataset.rs",
+    "crates/rdf-core/src/ir/frozen_terms.rs",
+    "crates/rdf-core/src/ir/triple.rs",
+    "crates/rdf-core/src/ir/triple/read.rs",
+    "crates/rdf-core/src/lib.rs",
+    "crates/rdf-core/tests/native_regex_storage.rs",
+    "crates/rdf-core/tests/triple_carrier.rs",
+    "crates/sparql-eval/Cargo.toml",
+    "crates/sparql-eval/src/bgp.rs",
+    "crates/sparql-eval/src/bgp/window.rs",
+    "crates/sparql-eval/src/engine.rs",
+    "crates/sparql-eval/src/governor/ledger.rs",
+    "crates/sparql-eval/src/governor/mod.rs",
+    "crates/sparql-eval/src/path_relation.rs",
+    "crates/sparql-eval/src/statement_layer.rs",
+    "crates/sparql-eval/tests/governed_query.rs",
+    "crates/sparql-eval/tests/statement_indexes.rs",
+    "crates/sparql-eval/tests/support/mod.rs",
+    "crates/sparql-eval/tests/support/statement_claims.rs",
+    "docs/SPARQL-GOVERNOR-PROFILE.md",
+    "docs/design/purrdf-backend-contract.md",
+    "helpers-ledger.toml"
+  ],
+  "adrs_touched": []
+}

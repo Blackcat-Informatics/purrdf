@@ -1,0 +1,21 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+error[E0311]: the parameter type `I` may not live long enough
+   --> crates/rdf-core/src/ir/triple/read.rs:175:5
+    |
+175 | /     fn project_bindings<I: Iterator<Item = TripleReifierRow>>(
+176 | |         &self,
+    | |         ----- the parameter type `I` must be valid for the anonymous lifetime defined here...
+177 | |         rows: Result<I, TripleReadError>,
+178 | |     ) -> impl Iterator<Item = QuadIds> + '_ {
+    | |___________________________________________^ ...so that the type `I` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+175 ~     fn project_bindings<'a, I: Iterator<Item = TripleReifierRow> + 'a>(
+176 ~         &'a self,
+177 |         rows: Result<I, TripleReadError>,
+178 ~     ) -> impl Iterator<Item = QuadIds> + 'a {
+    |
+
+For more information about this error, try `rustc --explain E0311`.
+error: could not compile `purrdf-core` (lib) due to 1 previous error

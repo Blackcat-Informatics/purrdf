@@ -1,0 +1,25 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-eval)
+error[E0061]: this function takes 9 arguments but 8 arguments were supplied
+    --> crates/sparql-eval/src/bgp/window.rs:154:21
+     |
+ 154 |                     emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies, graph, |quad| {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^                           ------- argument #6 of type `[Option<I>; 3]` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/bgp.rs:2674:4
+     |
+2674 | fn emit_virtual_candidates<D: DatasetView>(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^
+...
+2680 |     components: [Option<D::Id>; 3],
+     |     ------------------------------
+help: provide the argument
+     |
+ 154 |                     emit_virtual_candidates(ctx.dataset, cp, s, p, o, /* [Option<I>; 3] */, reifies, graph, |quad| {
+     |                                                                       +++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error

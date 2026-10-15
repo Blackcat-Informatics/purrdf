@@ -1,0 +1,48 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/hash)
+    Checking typenum v1.20.1
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+   Compiling libc v0.2.186
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/lex)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-events)
+    Checking digest v0.11.3
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/xsd)
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/deflate)
+    Checking hashbrown v0.17.1
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/cdt)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/alloc-probe)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/stack)
+error: manual `Debug` impl does not include all fields
+   --> crates/rdf-core/src/ir/dataset.rs:379:1
+    |
+379 | / impl std::fmt::Debug for RdfDataset {
+380 | |     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+381 | |         f.debug_struct("RdfDataset")
+382 | |             .field("arena", &self.dictionary.arena)
+...   |
+406 | | }
+    | |_^
+    |
+note: this field is unused
+   --> crates/rdf-core/src/ir/dataset.rs:330:5
+    |
+330 |     reifier_targets: OnceLock<Box<[u32]>>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: consider including all fields in this `Debug` impl
+    = help: consider calling `.finish_non_exhaustive()` if you intend to ignore fields
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#missing_fields_in_debug
+    = note: `-D clippy::missing-fields-in-debug` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::missing_fields_in_debug)]`
+
+error: could not compile `purrdf-core` (lib) due to 1 previous error

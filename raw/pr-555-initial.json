@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "eb824c0e20efabd70cc173a9c6a2c3d93d760a7b",
+  "headRefName": "paudley/491-rdf-1-2-index-reifiers-by-triple-term",
+  "headRefOid": "d0f544f498d75205dde2fc605441f288e80f2cb6",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 555,
+  "state": "OPEN",
+  "title": "Index structural reifiers and annotation values",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/555"
+}

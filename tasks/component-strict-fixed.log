@@ -1,0 +1,53 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-eval)
+error[E0061]: this method takes 4 arguments but 3 arguments were supplied
+    --> crates/sparql-eval/tests/governed_query.rs:1371:14
+     |
+1371 |             .query_governed(
+     |              ^^^^^^^^^^^^^^
+...
+1374 |                 &QueryGovernors::UNBOUNDED.with_fuel(128),
+     |                 ----------------------------------------- argument #3 of type `purrdf_sparql_eval::QueryOptions<'_>` is missing
+     |
+note: method defined here
+    --> crates/sparql-eval/src/engine.rs:2058:12
+     |
+2058 |     pub fn query_governed(
+     |            ^^^^^^^^^^^^^^
+help: provide the argument
+     |
+1371 |             .query_governed(
+1372 |                 dataset,
+1373 |                 request(query),
+1374 ~                 /* QueryOptions<'_> */,
+1375 ~                 &QueryGovernors::UNBOUNDED.with_fuel(128),
+     |
+
+error[E0061]: this method takes 4 arguments but 3 arguments were supplied
+    --> crates/sparql-eval/tests/governed_query.rs:1384:10
+     |
+1384 |         .query_governed(
+     |          ^^^^^^^^^^^^^^
+...
+1387 |             &QueryGovernors::UNBOUNDED.with_fuel(128),
+     |             ----------------------------------------- argument #3 of type `purrdf_sparql_eval::QueryOptions<'_>` is missing
+     |
+note: method defined here
+    --> crates/sparql-eval/src/engine.rs:2058:12
+     |
+2058 |     pub fn query_governed(
+     |            ^^^^^^^^^^^^^^
+help: provide the argument
+     |
+1384 |         .query_governed(
+1385 |             dataset,
+1386 |             request(seeded),
+1387 ~             /* QueryOptions<'_> */,
+1388 ~             &QueryGovernors::UNBOUNDED.with_fuel(128),
+     |
+
+For more information about this error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (test "governed_query") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

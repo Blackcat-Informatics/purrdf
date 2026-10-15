@@ -1,0 +1,2781 @@
+diff --git crates/rdf-core/src/dataset_view.rs crates/rdf-core/src/dataset_view.rs
+index 9d909ca66..38c58cc35 100644
+--- crates/rdf-core/src/dataset_view.rs
++++ crates/rdf-core/src/dataset_view.rs
+@@ -227,6 +227,27 @@ pub struct ProbePattern<Id = TermId> {
+     pub g: GraphMatch<Id>,
+ }
+ 
++/// Physical statement access implemented by this exact view. Defaults report
++/// scans, including wrappers that do not forward an inner carrier's indexes.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct StatementIndexSupport {
++    /// Exact triple-term to reifier ranges.
++    pub reifier_targets: bool,
++    /// Ranges for every bound triple-component mask.
++    pub reifier_components: bool,
++    /// Annotation predicate, object and predicate/object ranges.
++    pub annotation_values: bool,
++}
++
++impl StatementIndexSupport {
++    /// All three access families are physically indexed.
++    pub const INDEXED: Self = Self {
++        reifier_targets: true,
++        reifier_components: true,
++        annotation_values: true,
++    };
++}
++
+ /// Measured residency of a selected access path, including multi-tier reads.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+ pub enum ReadResidency {
+@@ -1133,6 +1154,55 @@ pub trait DatasetView {
+             .filter(move |quad| quad.o == target)
+     }
+ 
++    /// Physical access of this view's statement probes, for honest EXPLAIN.
++    /// A wrapper must forward both the probes and this descriptor to claim its
++    /// inner implementation. This describes access, not RDF capabilities.
++    fn statement_indexes(&self) -> StatementIndexSupport {
++        StatementIndexSupport::default()
++    }
++
++    /// Snapshot-local statement cardinality from cheap access summaries. It
++    /// may conservatively include residual matches; it is not a sound output
++    /// certificate. `None` reports that the view has no such estimate without
++    /// scanning. Operational failures must retain the session's first cause.
++    fn statement_cardinality_estimate(
++        &self,
++        pattern: ProbePattern<Self::Id>,
++        components: [Option<Self::Id>; 3],
++    ) -> Option<u64> {
++        let _ = (pattern, components);
++        None
++    }
++
++    /// Candidate reifier declarations for a structural triple pattern. Indexed
++    /// implementations narrow bound components before visiting rows. The default
++    /// retains graph pruning and returns a conservative superset, leaving exact
++    /// structural unification to the caller. It never performs a second term
++    /// walk that could obscure the original consumer's typed read failure.
++    fn reifier_quads_for_components(
++        &self,
++        components: [Option<Self::Id>; 3],
++        graph: GraphMatch<Self::Id>,
++    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        let _ = components;
++        self.reifier_quads_in_graph(graph)
++    }
++
++    /// Annotation rows matching the predicate/object bounds and graph scope.
++    /// Default backends scan their graph-pruned stream. Indexed backends narrow
++    /// the key range first. Views certifying probe order must preserve their
++    /// original statement-row order for this restricted stream too.
++    fn annotation_quads_for_pattern(
++        &self,
++        predicate: Option<Self::Id>,
++        object: Option<Self::Id>,
++        graph: GraphMatch<Self::Id>,
++    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.annotation_quads_in_graph(graph).filter(move |quad| {
++            predicate.is_none_or(|id| quad.p == id) && object.is_none_or(|id| quad.o == id)
++        })
++    }
++
+     /// The RDF 1.2 annotation side-table AS resolved virtual triples: each
+     /// `(reifier, predicate, object)` annotation becomes a quad carrying its own graph
+     /// slot. Capability-gated: a backend with no annotation layer yields nothing.
+@@ -1850,6 +1920,35 @@ impl DatasetView for RdfDataset {
+         Self::reifier_quads_for_target(self, target, graph)
+     }
+ 
++    fn statement_indexes(&self) -> StatementIndexSupport {
++        StatementIndexSupport::INDEXED
++    }
++
++    fn statement_cardinality_estimate(
++        &self,
++        pattern: ProbePattern,
++        components: [Option<TermId>; 3],
++    ) -> Option<u64> {
++        Self::statement_cardinality_estimate(self, pattern, components)
++    }
++
++    fn reifier_quads_for_components(
++        &self,
++        components: [Option<TermId>; 3],
++        graph: GraphMatch,
++    ) -> impl Iterator<Item = QuadIds> + '_ {
++        Self::reifier_quads_for_components(self, components, graph)
++    }
++
++    fn annotation_quads_for_pattern(
++        &self,
++        predicate: Option<TermId>,
++        object: Option<TermId>,
++        graph: GraphMatch,
++    ) -> impl Iterator<Item = QuadIds> + '_ {
++        Self::annotation_quads_for_pattern(self, predicate, object, graph)
++    }
++
+     #[inline]
+     fn annotations_of_with_graph(
+         &self,
+@@ -2076,6 +2175,35 @@ impl<T: DatasetView> DatasetView for Arc<T> {
+         (**self).reifier_quads_for_target(target, graph)
+     }
+ 
++    fn statement_indexes(&self) -> StatementIndexSupport {
++        (**self).statement_indexes()
++    }
++
++    fn statement_cardinality_estimate(
++        &self,
++        pattern: ProbePattern<Self::Id>,
++        components: [Option<Self::Id>; 3],
++    ) -> Option<u64> {
++        (**self).statement_cardinality_estimate(pattern, components)
++    }
++
++    fn reifier_quads_for_components(
++        &self,
++        components: [Option<Self::Id>; 3],
++        graph: GraphMatch<Self::Id>,
++    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        (**self).reifier_quads_for_components(components, graph)
++    }
++
++    fn annotation_quads_for_pattern(
++        &self,
++        predicate: Option<Self::Id>,
++        object: Option<Self::Id>,
++        graph: GraphMatch<Self::Id>,
++    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        (**self).annotation_quads_for_pattern(predicate, object, graph)
++    }
++
+     #[inline]
+     fn annotations_of_with_graph(
+         &self,
+diff --git crates/rdf-core/src/ir/builder/triple.rs crates/rdf-core/src/ir/builder/triple.rs
+index a93ff9b60..eea4b553e 100644
+--- crates/rdf-core/src/ir/builder/triple.rs
++++ crates/rdf-core/src/ir/builder/triple.rs
+@@ -313,6 +313,7 @@ impl TripleDatasetBuilder {
+             triples: TripleTable::new(self.triples.freeze(memory)?),
+             reifiers: self.reifiers.freeze(memory)?,
+             reifier_targets: std::sync::OnceLock::new(),
++            reifier_components: std::array::from_fn(|_| std::sync::OnceLock::new()),
+             annotations: TripleTable::new(self.annotations.freeze(memory)?),
+             locations: Box::default(),
+             caps,
+diff --git crates/rdf-core/src/ir/dataset.rs crates/rdf-core/src/ir/dataset.rs
+index c6467091d..e9cfd45bc 100644
+--- crates/rdf-core/src/ir/dataset.rs
++++ crates/rdf-core/src/ir/dataset.rs
+@@ -32,7 +32,7 @@ use hashbrown::HashTable;
+ 
+ use crate::backend::DatasetHandle;
+ use crate::content_id::{Blake3ContentId, ContentIdScheme};
+-use crate::dataset_view::GraphMatch;
++use crate::dataset_view::{GraphMatch, ProbePattern};
+ // Re-exported `pub(crate)` so the sibling `super::dataset::FastHasher` path used by
+ // `builder.rs` keeps resolving; the single definition lives in `crate::hash`.
+ pub(crate) use crate::hash::FastHasher;
+@@ -42,6 +42,7 @@ use crate::{
+ };
+ 
+ use super::term::{BlankScope, TermId, TermValue};
++use super::triple::{OrdinalRows, compare_masked, component_mask, masked_permutation, masked_rows};
+ 
+ /// Declare the shared sparse frozen-row location lookup on resident carriers.
+ macro_rules! source_location_method {
+@@ -328,9 +329,13 @@ pub struct RdfDataset {
+     reifiers: Box<[ReifierRow]>,
+     /// Reifier ordinals ordered by `(triple, reifier, graph)`.
+     reifier_targets: OnceLock<Box<[u32]>>,
++    /// One lazy ordinal order per bound component mask, preserving row order.
++    reifier_components: [OnceLock<Box<[u32]>>; 7],
+     /// `(reifier, predicate, object, graph)` annotations, deduplicated (C0.5). The
+     /// `graph` slot mirrors [`Self::reifiers`].
+     annotations: Box<[AnnotationRow]>,
++    /// Predicate, object and predicate/object orders, preserving frozen row order.
++    annotation_orders: [OnceLock<Box<[u32]>>; 3],
+     /// Sparse source locations, sorted by handle for binary-search lookup.
+     locations: Box<[(QuadHandle, RdfLocation)]>,
+     /// Capability flags, computed ONCE at freeze.
+@@ -384,7 +389,9 @@ impl std::fmt::Debug for RdfDataset {
+             .field("quads", &self.quads)
+             .field("reifiers", &self.reifiers)
+             .field("reifier_targets", &self.reifier_targets)
++            .field("reifier_components", &self.reifier_components)
+             .field("annotations", &self.annotations)
++            .field("annotation_orders", &self.annotation_orders)
+             .field("locations", &self.locations)
+             .field("caps", &self.caps)
+             .field("term_index", &self.dictionary.term_index)
+@@ -441,6 +448,7 @@ impl TryFrom<RdfDataset> for super::triple::TripleDataset {
+             triples: TripleTable::new(memory.boxed_slice(triples)?),
+             reifiers: memory.boxed_slice(reifiers)?,
+             reifier_targets: OnceLock::new(),
++            reifier_components: std::array::from_fn(|_| OnceLock::new()),
+             annotations: TripleTable::new(memory.boxed_slice(annotations)?),
+             locations: dataset.locations,
+             caps: dataset.caps,
+@@ -480,10 +488,26 @@ pub(super) fn cached_permutation<'a, T>(
+     }
+     let mut resident = Resident;
+     let mut memory = Memory::new(&mut resident);
++    cache_permutation_with_memory(cell, rows, capacity, &mut memory, compare)
++}
++
++/// The same cache publication under the original owner's admission. Bounded
++/// callers hold exclusive payload access until all indexes are published.
++fn cache_permutation_with_memory<'a, T, S: purrdf_lex::allocation::Admission + ?Sized>(
++    cell: &'a OnceLock<Box<[u32]>>,
++    rows: &[T],
++    capacity: super::builder::LocalCapacity,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    compare: impl FnMut(&T, &T) -> Ordering,
++) -> Result<&'a [u32], purrdf_lex::allocation::StorageError> {
++    use purrdf_lex::allocation::Memory;
++    if let Some(ordinals) = cell.get() {
++        return Ok(ordinals);
++    }
+     let ordinals = build_ordinal_permutation(
+         rows,
+         capacity,
+-        &mut memory,
++        memory,
+         Memory::reserve,
+         Memory::boxed_slice,
+         compare,
+@@ -500,6 +524,10 @@ fn compare_reifier_targets(a: &ReifierRow, b: &ReifierRow) -> Ordering {
+     (a.1, a.0, a.2).cmp(&(b.1, b.0, b.2))
+ }
+ 
++fn annotation_components(row: &AnnotationRow) -> [TermId; 3] {
++    [row.0, row.1, row.2]
++}
++
+ /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
+ /// (P4b). Each is a `u32`-per-quad ordinal-indirection array: `arr[i]` is the
+ /// ordinal into the [`RdfDataset`] quads table of the `i`-th quad in that permutation's
+@@ -971,7 +999,9 @@ impl RdfDataset {
+             quads,
+             reifiers,
+             reifier_targets: OnceLock::new(),
++            reifier_components: std::array::from_fn(|_| OnceLock::new()),
+             annotations,
++            annotation_orders: std::array::from_fn(|_| OnceLock::new()),
+             locations,
+             caps,
+             indexes: QuadIndexes::default(),
+@@ -1254,21 +1284,13 @@ impl RdfDataset {
+         &self,
+         perm: QuadPermutation,
+     ) -> Result<&[u32], purrdf_lex::allocation::StorageError> {
+-        let cell = self.permutation_cell(perm);
+-        if cell.get().is_none() {
+-            let mut resident = purrdf_lex::allocation::Resident;
+-            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+-            let ordinals = self.build_permutation(
+-                perm,
+-                &mut memory,
+-                purrdf_lex::allocation::Memory::reserve,
+-                purrdf_lex::allocation::Memory::boxed_slice,
+-            )?;
+-            let _ = cell.set(ordinals);
+-        }
+-        Ok(cell
+-            .get()
+-            .expect("this call or a concurrent reader installed the index"))
++        let axes = perm.axes();
++        cached_permutation(
++            self.permutation_cell(perm),
++            &self.quads,
++            self.indexes.capacity,
++            |a, b| compare_quads(axes, a, b),
++        )
+     }
+ 
+     fn permutation_cell(&self, perm: QuadPermutation) -> &OnceLock<Box<[u32]>> {
+@@ -1282,24 +1304,6 @@ impl RdfDataset {
+         }
+     }
+ 
+-    fn build_permutation<S, E: From<purrdf_lex::allocation::StorageError>>(
+-        &self,
+-        permutation: QuadPermutation,
+-        storage: &mut S,
+-        reserve: impl FnOnce(&mut S, &mut Vec<u32>, usize) -> Result<(), E>,
+-        freeze: impl FnOnce(&mut S, Vec<u32>) -> Result<Box<[u32]>, E>,
+-    ) -> Result<Box<[u32]>, E> {
+-        let axes = permutation.axes();
+-        build_ordinal_permutation(
+-            &self.quads,
+-            self.indexes.capacity,
+-            storage,
+-            reserve,
+-            freeze,
+-            |a, b| compare_quads(axes, a, b),
+-        )
+-    }
+-
+     /// The contiguous candidate run for an `(s, p, o, g)` pattern: the chosen
+     /// permutation and the `[lo, hi)` bounds of the index slice whose `prefix`
+     /// leading keys match the bound positions. Pick the permutation whose sort
+@@ -1741,7 +1745,10 @@ impl RdfDataset {
+         self.reifier_rows_for_target(triple).map(|(r, _, _)| r)
+     }
+ 
+-    fn reifier_rows_for_target(&self, triple: TermId) -> impl Iterator<Item = ReifierRow> + '_ {
++    fn reifier_rows_for_target(
++        &self,
++        triple: TermId,
++    ) -> impl ExactSizeIterator<Item = ReifierRow> + '_ {
+         let order = self
+             .try_reifier_targets()
+             .expect("host cannot allocate a resident reifier index");
+@@ -1761,6 +1768,38 @@ impl RdfDataset {
+         )
+     }
+ 
++    fn try_reifier_components(
++        &self,
++        pattern: [Option<TermId>; 3],
++    ) -> Result<OrdinalRows<'_, ReifierRow>, purrdf_lex::allocation::StorageError> {
++        let mask = component_mask(pattern);
++        masked_rows(
++            &self.reifiers,
++            mask.checked_sub(1)
++                .map(|index| &self.reifier_components[index]),
++            self.indexes.capacity,
++            pattern,
++            |row| self.dictionary.triple_components(row.1),
++        )
++    }
++
++    fn try_annotation_rows(
++        &self,
++        predicate: Option<TermId>,
++        object: Option<TermId>,
++    ) -> Result<OrdinalRows<'_, AnnotationRow>, purrdf_lex::allocation::StorageError> {
++        let pattern = [None, predicate, object];
++        let mask = component_mask(pattern) >> 1;
++        masked_rows(
++            &self.annotations,
++            mask.checked_sub(1)
++                .map(|index| &self.annotation_orders[index]),
++            self.indexes.capacity,
++            pattern,
++            annotation_components,
++        )
++    }
++
+     /// The `(predicate, object)` statement annotations attached to a reifier
+     /// resource (RDF 1.2 annotation syntax) — the single source for a reified
+     /// statement's annotation triples (e.g. confidence, provenance, x-purrdf tags).
+@@ -1911,6 +1950,92 @@ impl RdfDataset {
+             })
+     }
+ 
++    /// Reifier declarations whose triple components match the supplied local IDs.
++    /// Every bound mask addresses its own range and preserves frozen row order.
++    pub fn reifier_quads_for_components(
++        &self,
++        components: [Option<TermId>; 3],
++        graph: GraphMatch,
++    ) -> impl Iterator<Item = QuadIds> + '_ {
++        self.assert_reifier_table_invariant();
++        self.rdf_reifies_id()
++            .into_iter()
++            .flat_map(move |predicate| {
++                self.try_reifier_components(components)
++                    .expect("host cannot allocate a resident component index")
++                    .filter(move |row| graph.matches(row.2))
++                    .map(move |(reifier, triple, g)| QuadIds {
++                        s: reifier,
++                        p: predicate,
++                        o: triple,
++                        g,
++                    })
++            })
++    }
++
++    /// Annotation rows in the matching predicate/object run and graph scope.
++    /// The range retains the frozen order of matching declarations.
++    pub fn annotation_quads_for_pattern(
++        &self,
++        predicate: Option<TermId>,
++        object: Option<TermId>,
++        graph: GraphMatch,
++    ) -> impl Iterator<Item = QuadIds> + '_ {
++        self.try_annotation_rows(predicate, object)
++            .expect("host cannot allocate a resident annotation index")
++            .filter(move |row| graph.matches(row.3))
++            .map(|(s, p, o, g)| QuadIds { s, p, o, g })
++    }
++
++    /// Conservative statement cardinality from the selected ordinal ranges.
++    /// Residual graph, target and component restrictions can lower the answer;
++    /// this is a planner estimate, never an allocation or output certificate.
++    #[must_use]
++    pub fn statement_cardinality_estimate(
++        &self,
++        pattern: ProbePattern,
++        components: [Option<TermId>; 3],
++    ) -> Option<u64> {
++        if self.reifiers.is_empty() && self.annotations.is_empty() {
++            return Some(0);
++        }
++        if let GraphMatch::Named(graph) = pattern.g
++            && !self.has_named_graph(graph)
++        {
++            return Some(0);
++        }
++        let can_reify = pattern
++            .p
++            .is_none_or(|predicate| Some(predicate) == self.rdf_reifies_id());
++        let reifiers = if !can_reify || self.reifiers.is_empty() {
++            0
++        } else if let Some(reifier) = pattern.s {
++            self.reifiers.partition_point(|row| row.0 <= reifier)
++                - self.reifiers.partition_point(|row| row.0 < reifier)
++        } else if let Some(target) = pattern.o {
++            self.reifier_rows_for_target(target).len()
++        } else if component_mask(components) == 0 {
++            self.reifiers.len()
++        } else {
++            self.try_reifier_components(components)
++                .expect("host cannot allocate a resident component index")
++                .len()
++        };
++        let annotations = if let Some(reifier) = pattern.s {
++            self.annotations.partition_point(|row| row.0 <= reifier)
++                - self.annotations.partition_point(|row| row.0 < reifier)
++        } else if pattern.p.is_none() && pattern.o.is_none() {
++            self.annotations.len()
++        } else {
++            self.try_annotation_rows(pattern.p, pattern.o)
++                .expect("host cannot allocate a resident annotation index")
++                .len()
++        };
++        u64::try_from(reifiers)
++            .ok()?
++            .checked_add(u64::try_from(annotations).ok()?)
++    }
++
+     /// Iterate the annotation side-table AS resolved virtual quads: each
+     /// `(reifier, predicate, object, graph)` annotation becomes a
+     /// `(reifier, predicate, object)` quad in the graph that asserted it (`g == None`
+@@ -2094,7 +2219,9 @@ impl RdfDataset {
+             quads: self.quads.clone(),
+             reifiers: self.reifiers.clone(),
+             reifier_targets: OnceLock::new(),
++            reifier_components: std::array::from_fn(|_| OnceLock::new()),
+             annotations: self.annotations.clone(),
++            annotation_orders: std::array::from_fn(|_| OnceLock::new()),
+             locations: self.locations.clone(),
+             caps: self.caps,
+             indexes: QuadIndexes::default(),
+@@ -2153,7 +2280,8 @@ impl RdfDataset {
+     /// Query builders carry RDF data only. A graph with configured content or
+     /// derivation metadata is not a query-output certificate and returns `None`.
+     /// Quad permutations use five boxed `u32` ordinal arrays sorted in place;
+-    /// the reifier target order uses one more ordinal per reifier binding.
++    /// target/component orders use eight ordinals per reifier binding, and the
++    /// annotation predicate/object masks use three per annotation.
+     /// [`Self::warm_query_indexes`] finishes those allocations before publication.
+     #[must_use]
+     pub fn query_retained_bytes(&self) -> Option<usize> {
+@@ -2165,7 +2293,8 @@ impl RdfDataset {
+             return None;
+         }
+         let permutations = self.quads.len().checked_mul(5 * size_of::<u32>())?;
+-        let reifier_targets = self.reifiers.len().checked_mul(size_of::<u32>())?;
++        let reifier_orders = self.reifiers.len().checked_mul(size_of::<[u32; 8]>())?;
++        let annotation_orders = self.annotations.len().checked_mul(3 * size_of::<u32>())?;
+         // A statement histogram can hold at most one entry per named graph.
+         // The fill home reserves this exact entry bound in hashbrown's table;
+         // share its checked physical bucket/control layout certificate.
+@@ -2178,7 +2307,8 @@ impl RdfDataset {
+             .checked_add(size_of::<Self>() + 2 * size_of::<usize>())?
+             .checked_add(self.dictionary.term_index.allocation_size())?
+             .checked_add(permutations)?
+-            .checked_add(reifier_targets)?
++            .checked_add(reifier_orders)?
++            .checked_add(annotation_orders)?
+             .checked_add(histogram)
+     }
+ 
+@@ -2201,6 +2331,30 @@ impl RdfDataset {
+         if !self.reifiers.is_empty() || !self.annotations.is_empty() {
+             self.try_reifier_targets()
+                 .map_err(QueryIndexAllocationError::Permutation)?;
++            if !self.reifiers.is_empty() {
++                for (index, cell) in self.reifier_components.iter().enumerate() {
++                    masked_permutation(
++                        cell,
++                        &self.reifiers,
++                        self.indexes.capacity,
++                        index + 1,
++                        |row| self.dictionary.triple_components(row.1),
++                    )
++                    .map_err(QueryIndexAllocationError::Permutation)?;
++                }
++            }
++            if !self.annotations.is_empty() {
++                for (index, cell) in self.annotation_orders.iter().enumerate() {
++                    masked_permutation(
++                        cell,
++                        &self.annotations,
++                        self.indexes.capacity,
++                        (index + 1) << 1,
++                        annotation_components,
++                    )
++                    .map_err(QueryIndexAllocationError::Permutation)?;
++                }
++            }
+             self.try_statement_graph_rows()
+                 .map_err(QueryIndexAllocationError::StatementHistogram)?;
+         }
+@@ -2224,31 +2378,49 @@ impl RdfDataset {
+             QuadPermutation::Gpos,
+             QuadPermutation::Gosp,
+         ] {
+-            if self.permutation_cell(permutation).get().is_some() {
+-                continue;
+-            }
+-            let ordinals = self.build_permutation(
+-                permutation,
++            let axes = permutation.axes();
++            cache_permutation_with_memory(
++                self.permutation_cell(permutation),
++                &self.quads,
++                self.indexes.capacity,
+                 memory,
+-                purrdf_lex::allocation::Memory::reserve,
+-                purrdf_lex::allocation::Memory::boxed_slice,
++                |a, b| compare_quads(axes, a, b),
+             )?;
+-            self.permutation_cell(permutation)
+-                .set(ordinals)
+-                .expect("exclusive native construction owns the empty index cell");
+         }
+-        if !self.reifiers.is_empty() && self.reifier_targets.get().is_none() {
+-            let ordinals = build_ordinal_permutation(
++        if !self.reifiers.is_empty() {
++            cache_permutation_with_memory(
++                &self.reifier_targets,
+                 &self.reifiers,
+                 self.indexes.capacity,
+                 memory,
+-                purrdf_lex::allocation::Memory::reserve,
+-                purrdf_lex::allocation::Memory::boxed_slice,
+                 compare_reifier_targets,
+             )?;
+-            self.reifier_targets
+-                .set(ordinals)
+-                .expect("exclusive native construction owns the empty reifier index cell");
++        }
++        if !self.reifiers.is_empty() {
++            for (index, cell) in self.reifier_components.iter().enumerate() {
++                cache_permutation_with_memory(
++                    cell,
++                    &self.reifiers,
++                    self.indexes.capacity,
++                    memory,
++                    |a, b| {
++                        compare_masked(a, b, index + 1, &|row: &ReifierRow| {
++                            self.dictionary.triple_components(row.1)
++                        })
++                    },
++                )?;
++            }
++        }
++        if !self.annotations.is_empty() {
++            for (index, cell) in self.annotation_orders.iter().enumerate() {
++                cache_permutation_with_memory(
++                    cell,
++                    &self.annotations,
++                    self.indexes.capacity,
++                    memory,
++                    |a, b| compare_masked(a, b, (index + 1) << 1, &annotation_components),
++                )?;
++            }
+         }
+         if (!self.reifiers.is_empty() || !self.annotations.is_empty())
+             && self.statement_graph_rows.get().is_none()
+@@ -2632,10 +2804,10 @@ mod tests {
+         }
+         dataset.indexes.capacity = LocalCapacity::Native;
+         dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
+-        assert_eq!(memory.admitted_bytes(), 3 * size_of::<u32>());
++        assert_eq!(memory.admitted_bytes(), 3 * 8 * size_of::<u32>());
+         assert_eq!(dataset.reifiers_of(target).count(), 3);
+         dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
+-        assert_eq!(memory.admitted_bytes(), 3 * size_of::<u32>());
++        assert_eq!(memory.admitted_bytes(), 3 * 8 * size_of::<u32>());
+     }
+ 
+     #[test]
+diff --git crates/rdf-core/src/ir/frozen_terms.rs crates/rdf-core/src/ir/frozen_terms.rs
+index 23e98a77f..aeea45d17 100644
+--- crates/rdf-core/src/ir/frozen_terms.rs
++++ crates/rdf-core/src/ir/frozen_terms.rs
+@@ -35,6 +35,14 @@ pub(crate) struct FrozenTerms {
+ }
+ 
+ impl FrozenTerms {
++    /// Reifier targets have already passed the frozen triple-term validation.
++    pub(super) fn triple_components(&self, target: TermId) -> [TermId; 3] {
++        match self.terms[target.index()] {
++            InternedTerm::Triple { s, p, o } => [s, p, o],
++            _ => panic!("a validated reifier target must be a triple term"),
++        }
++    }
++
+     pub(super) fn content_ids(&self) -> impl Iterator<Item = (TermId, Blake3ContentId)> + '_ {
+         let mut pairs: Vec<(TermId, Blake3ContentId)> = self
+             .content_ids
+diff --git crates/rdf-core/src/ir/triple.rs crates/rdf-core/src/ir/triple.rs
+index 28b1ac5ce..a9715a6dd 100644
+--- crates/rdf-core/src/ir/triple.rs
++++ crates/rdf-core/src/ir/triple.rs
+@@ -4,6 +4,7 @@
+ //! Explicit graph-free resident RDF 1.2 storage.
+ 
+ use std::cmp::Ordering;
++use std::ops::Range;
+ use std::sync::OnceLock;
+ 
+ use purrdf_lex::allocation::StorageError;
+@@ -50,12 +51,110 @@ pub struct TripleStorageLayout {
+     pub annotation_orders: [usize; 2],
+     /// Reifier bindings ordered by target, zero until first target probe.
+     pub reifier_targets: usize,
++    /// Component-mask ordinal payloads in mask order (S=1, P=2, O=4).
++    pub reifier_components: [usize; 7],
+ }
+ 
+ fn permutation_bytes(cell: &OnceLock<Box<[u32]>>) -> usize {
+     cell.get().map_or(0, |rows| size_of_val(rows.as_ref()))
+ }
+ 
++pub(super) fn component_mask(pattern: [Option<TermId>; 3]) -> usize {
++    usize::from(pattern[0].is_some())
++        | (usize::from(pattern[1].is_some()) << 1)
++        | (usize::from(pattern[2].is_some()) << 2)
++}
++
++fn masked_key(components: [TermId; 3], mask: usize) -> [Option<TermId>; 3] {
++    std::array::from_fn(|index| (mask & (1 << index) != 0).then_some(components[index]))
++}
++
++pub(super) fn compare_masked<T: Ord>(
++    a: &T,
++    b: &T,
++    mask: usize,
++    components: &impl Fn(&T) -> [TermId; 3],
++) -> Ordering {
++    masked_key(components(a), mask)
++        .cmp(&masked_key(components(b), mask))
++        .then_with(|| a.cmp(b))
++}
++
++/// One mask order preserves the frozen row order within every matching key.
++pub(super) fn masked_permutation<'a, T: Ord>(
++    cell: &'a OnceLock<Box<[u32]>>,
++    rows: &[T],
++    capacity: LocalCapacity,
++    mask: usize,
++    components: impl Fn(&T) -> [TermId; 3],
++) -> Result<&'a [u32], StorageError> {
++    cached_permutation(cell, rows, capacity, |a, b| {
++        compare_masked(a, b, mask, &components)
++    })
++}
++
++/// Borrowed physical rows addressed by an identity or ordinal range.
++#[derive(Debug)]
++pub(super) struct OrdinalRows<'a, T> {
++    rows: &'a [T],
++    ordinals: Option<&'a [u32]>,
++    range: Range<usize>,
++}
++
++impl<T: Copy> Iterator for OrdinalRows<'_, T> {
++    type Item = T;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        self.range
++            .next()
++            .map(|index| self.rows[self.ordinals.map_or(index, |order| order[index] as usize)])
++    }
++
++    fn size_hint(&self) -> (usize, Option<usize>) {
++        self.range.size_hint()
++    }
++}
++
++impl<T: Copy> ExactSizeIterator for OrdinalRows<'_, T> {}
++
++pub(super) fn ordinal_range<'a, T>(
++    rows: &'a [T],
++    ordinals: Option<&'a [u32]>,
++    compare: impl Fn(&T) -> Ordering,
++) -> OrdinalRows<'a, T> {
++    let (lower, upper) = match ordinals {
++        Some(order) => (
++            order.partition_point(|&index| compare(&rows[index as usize]) == Ordering::Less),
++            order.partition_point(|&index| compare(&rows[index as usize]) != Ordering::Greater),
++        ),
++        None => (
++            rows.partition_point(|row| compare(row) == Ordering::Less),
++            rows.partition_point(|row| compare(row) != Ordering::Greater),
++        ),
++    };
++    OrdinalRows {
++        rows,
++        ordinals,
++        range: lower..upper,
++    }
++}
++
++pub(super) fn masked_rows<'a, T: Copy + Ord>(
++    rows: &'a [T],
++    cell: Option<&'a OnceLock<Box<[u32]>>>,
++    capacity: LocalCapacity,
++    pattern: [Option<TermId>; 3],
++    components: impl Fn(&T) -> [TermId; 3],
++) -> Result<OrdinalRows<'a, T>, StorageError> {
++    let mask = component_mask(pattern);
++    let ordinals = cell
++        .map(|cell| masked_permutation(cell, rows, capacity, mask, &components))
++        .transpose()?;
++    Ok(ordinal_range(rows, ordinals, |row| {
++        masked_key(components(row), mask).cmp(&pattern)
++    }))
++}
++
+ /// The three physical access orders of a graph-free table.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum TripleOrder {
+@@ -132,7 +231,7 @@ impl TripleTable {
+         let ordinals = self.permutation(order)?;
+         let ordered = order.ordered(pattern);
+         let prefix = ordered.iter().take_while(|value| value.is_some()).count();
+-        let compare = |row: TripleIds| {
++        let compare = |row: &TripleIds| {
+             for (actual, expected) in order
+                 .ordered([row.s, row.p, row.o])
+                 .into_iter()
+@@ -148,26 +247,8 @@ impl TripleTable {
+             }
+             Ordering::Equal
+         };
+-        let (lower, upper) = match ordinals {
+-            Some(ordinals) => (
+-                ordinals
+-                    .partition_point(|&index| compare(self.rows[index as usize]) == Ordering::Less),
+-                ordinals.partition_point(|&index| {
+-                    compare(self.rows[index as usize]) != Ordering::Greater
+-                }),
+-            ),
+-            None => (
+-                self.rows
+-                    .partition_point(|&row| compare(row) == Ordering::Less),
+-                self.rows
+-                    .partition_point(|&row| compare(row) != Ordering::Greater),
+-            ),
+-        };
+         Ok(TripleRows {
+-            rows: &self.rows,
+-            ordinals,
+-            next: lower,
+-            end: upper,
++            rows: ordinal_range(&self.rows, ordinals, compare),
+             pattern,
+         })
+     }
+@@ -176,10 +257,7 @@ impl TripleTable {
+ /// Borrowed ID-native matching rows, with no per-row lexical allocation.
+ #[derive(Debug)]
+ pub struct TripleRows<'a> {
+-    rows: &'a [TripleIds],
+-    ordinals: Option<&'a [u32]>,
+-    next: usize,
+-    end: usize,
++    rows: OrdinalRows<'a, TripleIds>,
+     pattern: [Option<TermId>; 3],
+ }
+ 
+@@ -187,21 +265,17 @@ impl Iterator for TripleRows<'_> {
+     type Item = TripleIds;
+ 
+     fn next(&mut self) -> Option<Self::Item> {
+-        while self.next < self.end {
+-            let ordinal = self
+-                .ordinals
+-                .map_or(self.next, |values| values[self.next] as usize);
+-            self.next += 1;
+-            let row = self.rows[ordinal];
+-            if [row.s, row.p, row.o]
++        let pattern = self.pattern;
++        self.rows.find(|row| {
++            [row.s, row.p, row.o]
+                 .into_iter()
+-                .zip(self.pattern)
++                .zip(pattern)
+                 .all(|(actual, expected)| expected.is_none_or(|expected| actual == expected))
+-            {
+-                return Some(row);
+-            }
+-        }
+-        None
++        })
++    }
++
++    fn size_hint(&self) -> (usize, Option<usize>) {
++        (0, Some(self.rows.len()))
+     }
+ }
+ 
+@@ -213,6 +287,7 @@ pub struct TripleDataset {
+     pub(super) triples: TripleTable,
+     pub(super) reifiers: Box<[TripleReifierRow]>,
+     pub(super) reifier_targets: OnceLock<Box<[u32]>>,
++    pub(super) reifier_components: [OnceLock<Box<[u32]>>; 7],
+     pub(super) annotations: TripleTable,
+     pub(super) locations: Box<[(QuadHandle, RdfLocation)]>,
+     pub(super) caps: RdfStoreCapabilities,
+@@ -235,6 +310,7 @@ impl TripleDataset {
+                 permutation_bytes(&self.annotations.osp),
+             ],
+             reifier_targets: permutation_bytes(&self.reifier_targets),
++            reifier_components: self.reifier_components.each_ref().map(permutation_bytes),
+         }
+     }
+     /// Number of distinct asserted triples, excluding the statement layer.
+@@ -346,6 +422,26 @@ impl TripleDataset {
+         }))
+     }
+ 
++    /// Bindings whose target's components match the supplied local IDs.
++    /// Matching bindings retain frozen reifier order without lexical allocation.
++    ///
++    /// # Errors
++    /// Returns typed ordinal-capacity or physical allocation refusal.
++    pub fn reifiers_for_components(
++        &self,
++        pattern: [Option<TermId>; 3],
++    ) -> Result<impl ExactSizeIterator<Item = TripleReifierRow> + '_, StorageError> {
++        let mask = component_mask(pattern);
++        masked_rows(
++            &self.reifiers,
++            mask.checked_sub(1)
++                .map(|index| &self.reifier_components[index]),
++            LocalCapacity::Native,
++            pattern,
++            |row| self.dictionary.triple_components(row.1),
++        )
++    }
++
+     /// Every annotation as `(reifier, predicate, object)`.
+     pub fn annotations(&self) -> impl ExactSizeIterator<Item = TripleIds> + '_ {
+         self.annotations.rows.iter().copied()
+diff --git crates/rdf-core/src/ir/triple/read.rs crates/rdf-core/src/ir/triple/read.rs
+index 661f583f3..85f2c26c0 100644
+--- crates/rdf-core/src/ir/triple/read.rs
++++ crates/rdf-core/src/ir/triple/read.rs
+@@ -3,7 +3,7 @@
+ 
+ //! Operation-local graph support and first-cause ownership over compact payloads.
+ 
+-use super::{TripleDataset, TripleIds, TripleOrder};
++use super::{TripleDataset, TripleIds, TripleOrder, TripleReifierRow};
+ use crate::dataset_view::{
+     DatasetView, FallibleDatasetView, GraphMatch, ViewOperationStatus, WorkspaceReservation,
+ };
+@@ -164,20 +164,45 @@ impl TripleRead<'_> {
+         reifier: Option<TermId>,
+         target: Option<TermId>,
+     ) -> impl Iterator<Item = QuadIds> + '_ {
++        let rows = self.ready().and_then(|()| {
++            self.dataset
++                .reifiers_for_pattern(reifier, target)
++                .map_err(|error| self.latch(error.into()))
++        });
++        self.project_bindings(rows)
++    }
++
++    fn project_bindings<'a, I: Iterator<Item = TripleReifierRow> + 'a>(
++        &'a self,
++        rows: Result<I, TripleReadError>,
++    ) -> impl Iterator<Item = QuadIds> + 'a {
+         let predicate = self
+             .dataset
+             .dictionary
+             .term_id_by_iri(purrdf_iri::vocab::rdf::REIFIES);
+-        let rows = self.ready().and_then(|()| {
++        rows.ok()
++            .into_iter()
++            .flatten()
++            .take_while(|_| self.ready().is_ok())
++            .filter_map(move |(s, o)| predicate.map(|p| QuadIds { s, p, o, g: None }))
++    }
++
++    fn annotation_rows(
++        &self,
++        pattern: [Option<TermId>; 3],
++        graph: GraphMatch,
++    ) -> impl Iterator<Item = QuadIds> + '_ {
++        let rows = self.graph(graph).and_then(|()| {
+             self.dataset
+-                .reifiers_for_pattern(reifier, target)
++                .annotations
++                .probe(pattern)
+                 .map_err(|error| self.latch(error.into()))
+         });
+         rows.ok()
+             .into_iter()
+             .flatten()
+             .take_while(|_| self.ready().is_ok())
+-            .filter_map(move |(s, o)| predicate.map(|p| QuadIds { s, p, o, g: None }))
++            .map(Self::project)
+     }
+ }
+ 
+@@ -318,21 +343,83 @@ impl DatasetView for TripleRead<'_> {
+         self.binding_rows(None, Some(target))
+     }
+ 
++    fn statement_indexes(&self) -> crate::StatementIndexSupport {
++        crate::StatementIndexSupport::INDEXED
++    }
++
++    fn statement_cardinality_estimate(
++        &self,
++        pattern: crate::ProbePattern,
++        components: [Option<TermId>; 3],
++    ) -> Option<u64> {
++        self.graph(pattern.g).ok()?;
++        if self.dataset.reifiers.is_empty() && self.dataset.annotations.rows.is_empty() {
++            return Some(0);
++        }
++        let can_reify = pattern.p.is_none_or(|predicate| {
++            Some(predicate)
++                == self
++                    .dataset
++                    .dictionary
++                    .term_id_by_iri(purrdf_iri::vocab::rdf::REIFIES)
++        });
++        let reifiers = if !can_reify || self.dataset.reifiers.is_empty() {
++            0
++        } else if pattern.s.is_some() || pattern.o.is_some() {
++            self.dataset
++                .reifiers_for_pattern(pattern.s, pattern.o)
++                .map_err(|error| self.latch(error.into()))
++                .ok()?
++                .size_hint()
++                .1?
++        } else {
++            self.dataset
++                .reifiers_for_components(components)
++                .map_err(|error| self.latch(error.into()))
++                .ok()?
++                .len()
++        };
++        let annotations = self
++            .dataset
++            .annotations
++            .probe([pattern.s, pattern.p, pattern.o])
++            .map_err(|error| self.latch(error.into()))
++            .ok()?
++            .size_hint()
++            .1?;
++        u64::try_from(reifiers)
++            .ok()?
++            .checked_add(u64::try_from(annotations).ok()?)
++    }
++
++    fn reifier_quads_for_components(
++        &self,
++        components: [Option<TermId>; 3],
++        graph: GraphMatch,
++    ) -> impl Iterator<Item = QuadIds> + '_ {
++        let rows = self.graph(graph).and_then(|()| {
++            self.dataset
++                .reifiers_for_components(components)
++                .map_err(|error| self.latch(error.into()))
++        });
++        self.project_bindings(rows)
++    }
++
++    fn annotation_quads_for_pattern(
++        &self,
++        predicate: Option<TermId>,
++        object: Option<TermId>,
++        graph: GraphMatch,
++    ) -> impl Iterator<Item = QuadIds> + '_ {
++        self.annotation_rows([None, predicate, object], graph)
++    }
++
+     fn annotations_of_with_graph(
+         &self,
+         reifier: TermId,
+     ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
+-        let rows = self.ready().and_then(|()| {
+-            self.dataset
+-                .annotations
+-                .probe([Some(reifier), None, None])
+-                .map_err(|error| self.latch(error.into()))
+-        });
+-        rows.ok()
+-            .into_iter()
+-            .flatten()
+-            .take_while(|_| self.ready().is_ok())
+-            .map(|row| (row.p, row.o, None))
++        self.annotation_rows([Some(reifier), None, None], GraphMatch::Any)
++            .map(|quad| (quad.p, quad.o, quad.g))
+     }
+ 
+     fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+diff --git crates/rdf-core/src/lib.rs crates/rdf-core/src/lib.rs
+index 71b7f48f2..e9f93c0ef 100644
+--- crates/rdf-core/src/lib.rs
++++ crates/rdf-core/src/lib.rs
+@@ -170,8 +170,8 @@ pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
+ pub use dataset_view::{
+     AccessCost, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView,
+     GraphMatch, GraphMatchValue, GraphSelector, NoopReservation, OwnedWorkspaceReservation,
+-    ProbePattern, ReadResidency, ResolvedQuad, TermGuard, TermLookupError, ViewOperationStatus,
+-    ViewTermId, WorkspaceReservation, checkpointed_drain,
++    ProbePattern, ReadResidency, ResolvedQuad, StatementIndexSupport, TermGuard, TermLookupError,
++    ViewOperationStatus, ViewTermId, WorkspaceReservation, checkpointed_drain,
+ };
+ pub use describe::{Describer, describe};
+ pub use diagnostic::{
+diff --git crates/rdf-core/tests/native_regex_storage.rs crates/rdf-core/tests/native_regex_storage.rs
+index dc3977621..2dc7cf245 100644
+--- crates/rdf-core/tests/native_regex_storage.rs
++++ crates/rdf-core/tests/native_regex_storage.rs
+@@ -74,12 +74,15 @@ fn reifier_target_order_uses_original_admission_and_warmed_probes_allocate_nothi
+         builder
+             .push_reifier_in_graph_with_memory(reifier, target, None, &mut memory)
+             .unwrap();
++        builder
++            .push_annotation_in_graph_with_memory(reifier, predicate, subject, None, &mut memory)
++            .unwrap();
+     }
+     let mut dataset = builder.freeze_with_memory(&mut memory).unwrap();
+     let frozen = memory.admitted_bytes();
+-    let bytes = 3 * size_of::<u32>();
++    let bytes = 3 * (8 + 3) * size_of::<u32>();
+     let certificate = dataset.query_retained_bytes().unwrap();
+-    memory.admission_mut().limit = frozen + bytes - 1;
++    memory.admission_mut().limit = frozen + 3 * size_of::<u32>() - 1;
+     let window = CurrentThreadWindow::open();
+     assert_eq!(
+         dataset.warm_query_indexes_with_memory(&mut memory),
+@@ -88,17 +91,45 @@ fn reifier_target_order_uses_original_admission_and_warmed_probes_allocate_nothi
+     let refused = window.close();
+     assert_eq!(refused.allocations, 0);
+     assert_eq!(memory.admitted_bytes(), frozen);
++    memory.admission_mut().limit = frozen + 3 * size_of::<u32>();
++    assert_eq!(
++        dataset.warm_query_indexes_with_memory(&mut memory),
++        Err(StorageError::AdmissionFailed)
++    );
++    assert_eq!(memory.admitted_bytes(), frozen + 3 * size_of::<u32>());
+     memory.admission_mut().limit = frozen + bytes;
+     let window = CurrentThreadWindow::open();
+     dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
+     let warmed = window.close();
+-    assert_eq!(usize::try_from(warmed.retained_bytes).unwrap(), bytes);
++    assert_eq!(
++        usize::try_from(warmed.retained_bytes).unwrap(),
++        bytes - 3 * size_of::<u32>()
++    );
+     assert_eq!(memory.admitted_bytes(), frozen + bytes);
+     assert!(memory.admitted_bytes() <= certificate);
+     let window = CurrentThreadWindow::open();
+     for _ in 0..32 {
+         assert_eq!(dataset.reifiers_of(target).count(), 3);
+         assert_eq!(dataset.reifiers_of(subject).count(), 0);
++        assert_eq!(
++            dataset
++                .annotation_quads_for_pattern(
++                    Some(predicate),
++                    Some(subject),
++                    purrdf_core::GraphMatch::Default,
++                )
++                .count(),
++            3
++        );
++        assert_eq!(
++            dataset
++                .reifier_quads_for_components(
++                    [Some(subject), Some(predicate), Some(subject)],
++                    purrdf_core::GraphMatch::Any,
++                )
++                .count(),
++            3
++        );
+         dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
+     }
+     let probes = window.close();
+diff --git crates/rdf-core/tests/triple_carrier.rs crates/rdf-core/tests/triple_carrier.rs
+index 8dcf0ef40..859c5cb3a 100644
+--- crates/rdf-core/tests/triple_carrier.rs
++++ crates/rdf-core/tests/triple_carrier.rs
+@@ -148,6 +148,33 @@ fn compact_statement_probes_populate_only_the_requested_ordinal_arrays() {
+         }
+     }
+     assert_eq!(dataset.storage_layout().reifier_targets, 4 * 8);
++    assert_eq!(dataset.storage_layout().reifier_components, [0; 7]);
++    for mask in 0..8 {
++        for target in targets.iter().copied().chain([ids[7]]) {
++            let parts = match dataset.resolve(target) {
++                TermRef::Triple { s, p, o } => [s, p, o],
++                _ => [target; 3],
++            };
++            let pattern =
++                std::array::from_fn(|index| (mask & (1 << index) != 0).then_some(parts[index]));
++            let expected: Vec<_> = dataset
++                .reifiers()
++                .filter(|&(_, target)| {
++                    let TermRef::Triple { s, p, o } = dataset.resolve(target) else {
++                        panic!("validated triple target");
++                    };
++                    [s, p, o]
++                        .into_iter()
++                        .zip(pattern)
++                        .all(|(actual, bound)| bound.is_none_or(|value| value == actual))
++                })
++                .collect();
++            let actual = dataset.reifiers_for_components(pattern).unwrap();
++            assert_eq!(actual.len(), expected.len());
++            assert_eq!(actual.collect::<Vec<_>>(), expected);
++        }
++    }
++    assert_eq!(dataset.storage_layout().reifier_components, [4 * 8; 7]);
+     let read = Arc::new(dataset.read().unwrap());
+     for &target in targets.iter().chain(ids.iter()) {
+         let expected: Vec<_> = read
+@@ -407,7 +434,100 @@ fn refused_child_stops_existing_streams_and_fresh_session_is_healthy() {
+     assert_eq!(selector.resolve(&quad), Ok(None));
+ }
+ 
++fn statement_mask_probes_preserve_frozen_order_and_graph_multiplicity() {
++    let mut builder = RdfDatasetBuilder::new();
++    let ids: Vec<_> = (0..9)
++        .map(|index| builder.intern_iri(&format!("urn:mask:{index}")).unwrap())
++        .collect();
++    for index in 0..64 {
++        let point = (index * 37) % 64;
++        let target = builder
++            .intern_triple(ids[point / 16], ids[(point / 4) % 4], ids[point % 4])
++            .unwrap();
++        let reifier = ids[4 + index % 4];
++        let graph = (index % 3 == 0).then_some(ids[8]);
++        builder
++            .push_reifier_in_graph(reifier, target, graph)
++            .unwrap();
++        builder
++            .push_annotation_in_graph(reifier, ids[(point / 8) % 4], ids[point % 4], graph)
++            .unwrap();
++        if point % 5 == 0 {
++            builder
++                .push_reifier_in_graph(reifier, target, None)
++                .unwrap();
++            builder
++                .push_reifier_in_graph(reifier, target, Some(ids[8]))
++                .unwrap();
++        }
++    }
++    let dataset = builder.freeze().unwrap();
++    for mask in 0..8 {
++        for point in 0..=64 {
++            let parts = if point == 64 {
++                [ids[8]; 3]
++            } else {
++                [ids[point / 16], ids[(point / 4) % 4], ids[point % 4]]
++            };
++            let pattern =
++                std::array::from_fn(|index| (mask & (1 << index) != 0).then_some(parts[index]));
++            for graph in [
++                GraphMatch::Any,
++                GraphMatch::Default,
++                GraphMatch::Named(ids[8]),
++                GraphMatch::Named(ids[0]),
++            ] {
++                let expected: Vec<_> = dataset
++                    .reifier_quads()
++                    .filter(|quad| {
++                        let TermRef::Triple { s, p, o } = dataset.as_ref().resolve(quad.o) else {
++                            panic!("validated target");
++                        };
++                        graph.matches(quad.g)
++                            && [s, p, o]
++                                .into_iter()
++                                .zip(pattern)
++                                .all(|(actual, bound)| bound.is_none_or(|value| value == actual))
++                    })
++                    .collect();
++                assert_eq!(
++                    dataset
++                        .reifier_quads_for_components(pattern, graph)
++                        .collect::<Vec<_>>(),
++                    expected
++                );
++            }
++        }
++    }
++    for predicate in std::iter::once(None).chain(ids.iter().copied().map(Some)) {
++        for object in std::iter::once(None).chain(ids.iter().copied().map(Some)) {
++            for graph in [
++                GraphMatch::Any,
++                GraphMatch::Default,
++                GraphMatch::Named(ids[8]),
++                GraphMatch::Named(ids[0]),
++            ] {
++                let expected: Vec<_> = dataset
++                    .annotation_quads()
++                    .filter(|quad| {
++                        predicate.is_none_or(|value| value == quad.p)
++                            && object.is_none_or(|value| value == quad.o)
++                            && graph.matches(quad.g)
++                    })
++                    .collect();
++                assert_eq!(
++                    dataset
++                        .annotation_quads_for_pattern(predicate, object, graph)
++                        .collect::<Vec<_>>(),
++                    expected
++                );
++            }
++        }
++    }
++}
++
+ purrdf_testkit::harness_main!(
++    statement_mask_probes_preserve_frozen_order_and_graph_multiplicity,
+     compact_statement_probes_populate_only_the_requested_ordinal_arrays,
+     compact_layout_and_all_bound_shapes,
+     owned_transfer_preserves_lexical_owner_and_flat_statement_identity,
+diff --git crates/sparql-eval/src/bgp.rs crates/sparql-eval/src/bgp.rs
+index 41717a51a..cc41508f7 100644
+--- crates/sparql-eval/src/bgp.rs
++++ crates/sparql-eval/src/bgp.rs
+@@ -741,25 +741,36 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
+                     // the probe binds `?g` under `GRAPH ?g`: a default-graph reifier
+                     // shows only when the scope admits the default graph (unchanged),
+                     // and a `GRAPH :g`-scoped reifier shows only under that named graph.
+-                    emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies_id, *gm, |quad| {
+-                        if acc.is_full() || ctx.stop_check().is_some() {
+-                            return ControlFlow::Break(());
+-                        }
+-                        *fuel = fuel.saturating_add(1);
+-                        match bind_row(row, cp, &quad, ctx) {
+-                            Ok(Some(extended)) => acc.push(extended),
+-                            Ok(None) => {}
+-                            Err(error) => {
+-                                acc.fail(error);
++                    let components = components_of(&cp.o, |part| query_id(part, row));
++                    emit_virtual_candidates(
++                        ctx.dataset,
++                        cp,
++                        s,
++                        p,
++                        o,
++                        components,
++                        reifies_id,
++                        *gm,
++                        |quad| {
++                            if acc.is_full() || ctx.stop_check().is_some() {
+                                 return ControlFlow::Break(());
+                             }
+-                        }
+-                        if acc.is_full() {
+-                            ControlFlow::Break(())
+-                        } else {
+-                            ControlFlow::Continue(())
+-                        }
+-                    });
++                            *fuel = fuel.saturating_add(1);
++                            match bind_row(row, cp, &quad, ctx) {
++                                Ok(Some(extended)) => acc.push(extended),
++                                Ok(None) => {}
++                                Err(error) => {
++                                    acc.fail(error);
++                                    return ControlFlow::Break(());
++                                }
++                            }
++                            if acc.is_full() {
++                                ControlFlow::Break(())
++                            } else {
++                                ControlFlow::Continue(())
++                            }
++                        },
++                    );
+                 }
+                 // A FROM/USING-merged default graph: union the per-graph reads, but
+                 // RDF-merge unions *triples*, so a triple present in two merged graphs
+@@ -1363,7 +1374,24 @@ fn visit_access_costs<D: DatasetView>(
+     let mut graph = |g| {
+         let probe = purrdf_core::ProbePattern { s, p, o, g };
+         let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+-        visit(probe, dataset.cost(probe, &plan));
++        let cost = dataset.cost(probe, &plan);
++        let statements = dataset
++            .statement_cardinality_estimate(probe, components_of(&pattern.o, constant_of))
++            .unwrap_or(0);
++        if statements == 0 {
++            visit(probe, cost);
++        } else {
++            let ordinary = cost
++                .cardinality_fallback()
++                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, g));
++            // Statement summaries provide row counts, not a conversion into a
++            // host's physical work unit. Use the explicit cardinality fallback
++            // for this complete probe instead of inventing a statement page fee.
++            visit(
++                probe,
++                purrdf_core::AccessCost::from_cardinality(ordinary.saturating_add(statements)),
++            );
++        }
+     };
+     match scope {
+         GraphScope::One(g) => graph(*g),
+@@ -1440,12 +1468,20 @@ fn base_cardinality<D: DatasetView>(
+     let s = constant_of(&cp.s);
+     let p = constant_of(&cp.p);
+     let o = constant_of(&cp.o);
++    let cardinality = |g| {
++        let probe = purrdf_core::ProbePattern { s, p, o, g };
++        dataset.cardinality_estimate(s, p, o, g).saturating_add(
++            dataset
++                .statement_cardinality_estimate(probe, components_of(&cp.o, constant_of))
++                .unwrap_or(0),
++        )
++    };
+     match scope {
+-        GraphScope::One(gm) => dataset.cardinality_estimate(s, p, o, *gm),
++        GraphScope::One(gm) => cardinality(*gm),
+         GraphScope::Merge(gs) => gs
+             .iter()
+-            .map(|&g| dataset.cardinality_estimate(s, p, o, GraphMatch::Named(g)))
+-            .sum(),
++            .map(|&g| cardinality(GraphMatch::Named(g)))
++            .fold(0, u64::saturating_add),
+     }
+ }
+ 
+@@ -1458,6 +1494,16 @@ fn constant_of<I: ViewTermId>(pos: &Pos<I>) -> Option<I> {
+     }
+ }
+ 
++fn components_of<I: ViewTermId>(
++    position: &Pos<I>,
++    resolve: impl Fn(&Pos<I>) -> Option<I>,
++) -> [Option<I>; 3] {
++    match position {
++        Pos::Triple(triple) => [resolve(&triple.s), resolve(&triple.p), resolve(&triple.o)],
++        Pos::Bound(_) | Pos::Slot(_) => [None; 3],
++    }
++}
++
+ /// How many of a pattern's three top-level positions are already bound by an
+ /// earlier-scheduled pattern — each is an equality-join axis (selectivity ~`1/T`).
+ /// Ground constants are excluded: their selectivity is already folded into the
+@@ -2656,6 +2702,7 @@ fn emit_virtual_candidates<D: DatasetView>(
+     s: Option<D::Id>,
+     p: Option<D::Id>,
+     o: Option<D::Id>,
++    components: [Option<D::Id>; 3],
+     reifies_id: Option<D::Id>,
+     gm: GraphMatch<D::Id>,
+     emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
+@@ -2666,18 +2713,15 @@ fn emit_virtual_candidates<D: DatasetView>(
+     // free variable (`Pos::Slot`). A literal/IRI object constant can never be a triple
+     // term, so the reifier scan is skipped. The residual `bind_row` enforces the exact
+     // object match.
+-    let predicate_can_reify = reifies_id.is_some_and(|reifies| match &cp.p {
+-        Pos::Slot(_) => true,
+-        Pos::Bound(id) => *id == reifies,
+-        // A quoted triple is never a predicate position.
+-        Pos::Triple(_) => false,
+-    });
++    let predicate_can_reify =
++        reifies_id.is_some_and(|reifies| p.is_none_or(|bound| bound == reifies));
+     statement_layer::visit_quads(
+         dataset,
+         StatementProbe {
+             s,
+             p,
+             o,
++            components,
+             graph: gm,
+             scan_reifier_rows: predicate_can_reify && object_can_be_triple_term(&cp.o, dataset),
+         },
+diff --git crates/sparql-eval/src/bgp/window.rs crates/sparql-eval/src/bgp/window.rs
+index 4b62e79f1..d9922e34b 100644
+--- crates/sparql-eval/src/bgp/window.rs
++++ crates/sparql-eval/src/bgp/window.rs
+@@ -4,7 +4,7 @@
+ //! Once-read candidate indexes for the original BGP loop. The row binder,
+ //! selected join order, row sink, checkpoints and final FILTER are unchanged.
+ 
+-use super::{BgpOrder, CompiledPattern, Pos, emit_virtual_candidates, query_id};
++use super::{BgpOrder, CompiledPattern, Pos, components_of, emit_virtual_candidates, query_id};
+ use crate::dataset_spec::GraphScope;
+ use crate::eval::EvalCtx;
+ use crate::parsed_value::ParsedValue;
+@@ -132,6 +132,7 @@ impl<I: ViewTermId> PreparedWindow<I> {
+             let s = constants(&cp.s);
+             let p = constants(&cp.p);
+             let o = constants(&cp.o);
++            let components = components_of(&cp.o, constants);
+             let mut scan_graph = |ordinal, graph| -> Result<(), EvalError> {
+                 let mut virtual_ordinal = 0;
+                 for quad in ctx.dataset.quads_for_pattern(s, p, o, graph) {
+@@ -151,33 +152,43 @@ impl<I: ViewTermId> PreparedWindow<I> {
+                 }
+                 if matches!(scope, GraphScope::One(_)) {
+                     let mut failure = None;
+-                    emit_virtual_candidates(ctx.dataset, cp, s, p, o, reifies, graph, |quad| {
+-                        if failure.is_some() || ctx.stop_check().is_some() {
+-                            return ControlFlow::Break(());
+-                        }
+-                        let added = (|| {
+-                            result.visits = result
+-                                .visits
+-                                .checked_add(1)
+-                                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+-                            candidates.push(Candidate {
+-                                quad,
+-                                graph: ordinal,
+-                                virtual_ordinal: Some(virtual_ordinal),
+-                                numeric: None,
+-                            })?;
+-                            virtual_ordinal = virtual_ordinal
+-                                .checked_add(1)
+-                                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+-                            Ok::<_, EvalError>(())
+-                        })();
+-                        if let Err(error) = added {
+-                            failure = Some(error);
+-                            ControlFlow::Break(())
+-                        } else {
+-                            ControlFlow::Continue(())
+-                        }
+-                    });
++                    emit_virtual_candidates(
++                        ctx.dataset,
++                        cp,
++                        s,
++                        p,
++                        o,
++                        components,
++                        reifies,
++                        graph,
++                        |quad| {
++                            if failure.is_some() || ctx.stop_check().is_some() {
++                                return ControlFlow::Break(());
++                            }
++                            let added = (|| {
++                                result.visits = result
++                                    .visits
++                                    .checked_add(1)
++                                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
++                                candidates.push(Candidate {
++                                    quad,
++                                    graph: ordinal,
++                                    virtual_ordinal: Some(virtual_ordinal),
++                                    numeric: None,
++                                })?;
++                                virtual_ordinal = virtual_ordinal
++                                    .checked_add(1)
++                                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
++                                Ok::<_, EvalError>(())
++                            })();
++                            if let Err(error) = added {
++                                failure = Some(error);
++                                ControlFlow::Break(())
++                            } else {
++                                ControlFlow::Continue(())
++                            }
++                        },
++                    );
+                     if let Some(error) = failure {
+                         return Err(error);
+                     }
+diff --git crates/sparql-eval/src/engine.rs crates/sparql-eval/src/engine.rs
+index 46b702586..5491b271e 100644
+--- crates/sparql-eval/src/engine.rs
++++ crates/sparql-eval/src/engine.rs
+@@ -3667,7 +3667,7 @@ impl NativeSparqlEngine {
+             registered,
+             registered_aggregates,
+             state.evidence(),
+-            shapes,
++            (shapes, dataset.statement_indexes()),
+         ))
+     }
+ 
+diff --git crates/sparql-eval/src/governor/ledger.rs crates/sparql-eval/src/governor/ledger.rs
+index 5029fd001..0e9fb0391 100644
+--- crates/sparql-eval/src/governor/ledger.rs
++++ crates/sparql-eval/src/governor/ledger.rs
+@@ -417,6 +417,8 @@ pub struct QueryExplanation {
+     aggregates: AdmittedRecords<AggDescriptor>,
+     /// Exact selected strategies at original logical nodes, with actual work.
+     shapes: AdmittedVec<crate::shapes::ShapeReport>,
++    /// Available access in the exact view whose statement probes were executed.
++    statement_indexes: purrdf_core::StatementIndexSupport,
+     /// The whole execution's consumption and ceilings, so a reader can check the ledger's
+     /// fuel column against the total it decomposes.
+     evidence: purrdf_core::GovernorEvidence,
+@@ -493,7 +495,7 @@ impl Clone for QueryExplanation {
+             self.relations.to_vec(),
+             self.aggregates.to_vec(),
+             self.evidence.clone(),
+-            self.shapes.to_vec(),
++            (self.shapes.to_vec(), self.statement_indexes),
+         )
+     }
+ }
+@@ -505,7 +507,10 @@ impl QueryExplanation {
+         relations: Vec<PfDescriptor>,
+         aggregates: Vec<AggDescriptor>,
+         evidence: purrdf_core::GovernorEvidence,
+-        shapes: Vec<crate::shapes::ShapeReport>,
++        (shapes, statement_indexes): (
++            Vec<crate::shapes::ShapeReport>,
++            purrdf_core::StatementIndexSupport,
++        ),
+     ) -> Self {
+         Self {
+             profile: ProfileIdentity::current(),
+@@ -514,6 +519,7 @@ impl QueryExplanation {
+             relations: AdmittedRecords::resident(relations),
+             aggregates: AdmittedRecords::resident(aggregates),
+             shapes: AdmittedVec::from_parts(shapes, None, &crate::WorkspaceCapability::resident()),
++            statement_indexes,
+             evidence,
+             _profile_allocation: None,
+         }
+@@ -527,7 +533,10 @@ impl QueryExplanation {
+         relations: AdmittedRecords<PfDescriptor>,
+         aggregates: AdmittedRecords<AggDescriptor>,
+         evidence: purrdf_core::GovernorEvidence,
+-        shapes: AdmittedVec<crate::shapes::ShapeReport>,
++        (shapes, statement_indexes): (
++            AdmittedVec<crate::shapes::ShapeReport>,
++            purrdf_core::StatementIndexSupport,
++        ),
+     ) -> Self {
+         Self {
+             profile: profile.0,
+@@ -536,6 +545,7 @@ impl QueryExplanation {
+             relations,
+             aggregates,
+             shapes,
++            statement_indexes,
+             evidence,
+             _profile_allocation: Some(profile.1),
+         }
+@@ -557,6 +567,13 @@ impl QueryExplanation {
+         &self.join_orders
+     }
+ 
++    /// Available statement indexes of the actual evaluated view. A scan-only
++    /// wrapper stays visible even when its underlying payload has native indexes.
++    #[must_use]
++    pub const fn statement_indexes(&self) -> purrdf_core::StatementIndexSupport {
++        self.statement_indexes
++    }
++
+     /// One line per algebra node, in the plan's pre-order.
+     #[must_use]
+     pub fn ledger(&self) -> &[NodeCharges] {
+@@ -691,6 +708,14 @@ impl QueryExplanation {
+         for pattern in self.join_orders.iter() {
+             let _ = writeln!(out, "  {pattern}");
+         }
++        let access = |indexed| if indexed { "range" } else { "scan-default" };
++        let _ = writeln!(
++            out,
++            "statement-indexes reifier-target={} reifier-components={} annotation-values={}",
++            access(self.statement_indexes.reifier_targets),
++            access(self.statement_indexes.reifier_components),
++            access(self.statement_indexes.annotation_values)
++        );
+         if !self.shapes.is_empty() {
+             let _ = writeln!(out, "physical-shapes");
+             for shape in &self.shapes {
+diff --git crates/sparql-eval/src/governor/mod.rs crates/sparql-eval/src/governor/mod.rs
+index 997d17131..27a857592 100644
+--- crates/sparql-eval/src/governor/mod.rs
++++ crates/sparql-eval/src/governor/mod.rs
+@@ -1849,7 +1849,16 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
+ /// charge their actual numeric work and scratch instead of the former bounded or
+ /// zero-cost path. Even when a query's answer is unchanged, its fuel and scratch
+ /// cut points can move; consumers must remeasure those ceilings.
+-pub const GOVERNOR_PROFILE_VERSION: u32 = 18;
++///
++/// # v19
++///
++/// The point schedule stays unchanged. Structural reifier probes narrow bound
++/// triple components before emitting BGP candidates, so unrelated reifier rows
++/// no longer consume candidate fuel. Annotation predicate/object ranges preserve
++/// the same emitted candidates while reducing source rows visited. Statement
++/// estimates also participate in join planning. Consumers must remeasure fuel,
++/// scratch and intermediate cut points against their actual statement queries.
++pub const GOVERNOR_PROFILE_VERSION: u32 = 19;
+ 
+ /// The charge schedule, as data rather than as scattered literals.
+ ///
+@@ -2889,7 +2898,7 @@ mod tests {
+             *GOVERNOR_PROFILE_DIGEST, pinned,
+             "the published digest is derived from the shipped table"
+         );
+-        assert_eq!(GOVERNOR_PROFILE_VERSION, 18);
++        assert_eq!(GOVERNOR_PROFILE_VERSION, 19);
+         assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
+         let historical = &CHARGE_SCHEDULE[..17];
+         assert_eq!(
+diff --git crates/sparql-eval/src/path_relation.rs crates/sparql-eval/src/path_relation.rs
+index aec6e1f10..b6a11aae2 100644
+--- crates/sparql-eval/src/path_relation.rs
++++ crates/sparql-eval/src/path_relation.rs
+@@ -1124,6 +1124,7 @@ fn canonical_edges<D: DatasetView>(
+                     s: None,
+                     p: Some(predicate_id),
+                     o: None,
++                    components: [None; 3],
+                     graph,
+                     scan_reifier_rows: matches!(predicate, TermValue::Iri(iri) if iri == RDF_REIFIES),
+                 },
+diff --git crates/sparql-eval/src/statement_layer.rs crates/sparql-eval/src/statement_layer.rs
+index 302255056..2685e0a3f 100644
+--- crates/sparql-eval/src/statement_layer.rs
++++ crates/sparql-eval/src/statement_layer.rs
+@@ -73,6 +73,9 @@ pub(crate) struct StatementProbe<I: ViewTermId> {
+     pub p: Option<I>,
+     /// The bound object, or `None` when the object is free.
+     pub o: Option<I>,
++    /// Bound first-level components of a structural triple object. Deeper
++    /// structure remains the caller's exact unification responsibility.
++    pub components: [Option<I>; 3],
+     /// The active graph scope, applied to each row's own graph slot — so a `GRAPH ?g`
+     /// probe binds `?g` to the graph the reifier or annotation was declared in.
+     pub graph: GraphMatch<I>,
+@@ -102,6 +105,7 @@ pub(crate) fn visit_quads<D: DatasetView>(
+         s,
+         p,
+         o,
++        components,
+         graph,
+         scan_reifier_rows,
+     } = probe;
+@@ -145,6 +149,16 @@ pub(crate) fn visit_quads<D: DatasetView>(
+                     }
+                 }
+             }
++            (None, None) if components.iter().any(Option::is_some) => {
++                for quad in dataset
++                    .reifier_quads_for_components(components, graph)
++                    .filter(unkeyed_residual)
++                {
++                    if emit(quad).is_break() {
++                        return;
++                    }
++                }
++            }
+             (None, None) => {
+                 for quad in dataset
+                     .reifier_quads_in_graph(graph)
+@@ -177,10 +191,7 @@ pub(crate) fn visit_quads<D: DatasetView>(
+             }
+         }
+         None => {
+-            for quad in dataset
+-                .annotation_quads_in_graph(graph)
+-                .filter(unkeyed_residual)
+-            {
++            for quad in dataset.annotation_quads_for_pattern(p, o, graph) {
+                 if emit(quad).is_break() {
+                     return;
+                 }
+@@ -195,6 +206,87 @@ mod tests {
+     use purrdf_alloc_probe::CurrentThreadWindow;
+     use purrdf_core::RdfDatasetBuilder;
+ 
++    #[test]
++    fn component_and_annotation_walks_materialize_only_selected_orders() {
++        let mut builder = RdfDatasetBuilder::new();
++        let terms: Vec<_> = (0..9)
++            .map(|index| {
++                builder
++                    .intern_iri(&format!("http://example.org/key/{index}"))
++                    .unwrap()
++            })
++            .collect();
++        for index in 0..257 {
++            let reifier = builder
++                .intern_iri(&format!("http://example.org/claim/{index}"))
++                .unwrap();
++            let target = builder
++                .intern_triple(
++                    if index % 17 == 0 { terms[0] } else { terms[3] },
++                    if index % 2 == 0 { terms[1] } else { terms[4] },
++                    terms[2],
++                )
++                .unwrap();
++            builder.push_reifier(reifier, target).unwrap();
++            builder
++                .push_annotation(
++                    reifier,
++                    if index % 23 == 0 { terms[5] } else { terms[6] },
++                    if index % 2 == 0 { terms[7] } else { terms[8] },
++                )
++                .unwrap();
++        }
++        let dataset = builder.freeze().unwrap();
++        let reifies = dataset
++            .term_id_by_iri(purrdf_iri::vocab::rdf::REIFIES)
++            .unwrap();
++        for round in 0..2 {
++            for annotation in [false, true] {
++                let probe = StatementProbe {
++                    s: None,
++                    p: Some(if annotation { terms[5] } else { reifies }),
++                    o: annotation.then_some(terms[7]),
++                    components: if annotation {
++                        [None; 3]
++                    } else {
++                        [Some(terms[0]), Some(terms[1]), None]
++                    },
++                    graph: GraphMatch::Any,
++                    scan_reifier_rows: !annotation,
++                };
++                let mut count = 0;
++                let window = CurrentThreadWindow::open();
++                visit_quads(&dataset, probe, |quad| {
++                    assert_eq!(Some(quad.p), probe.p);
++                    if annotation {
++                        assert_eq!(quad.o, terms[7]);
++                    } else {
++                        let purrdf_core::TermRef::Triple { s, p, .. } =
++                            dataset.as_ref().resolve(quad.o)
++                        else {
++                            panic!("triple target")
++                        };
++                        assert_eq!([s, p], [terms[0], terms[1]]);
++                    }
++                    count += 1;
++                    ControlFlow::Continue(())
++                });
++                let measured = window.close();
++                assert_eq!(count, if annotation { 6 } else { 8 });
++                let arrays = if round == 0 {
++                    if annotation { 1 } else { 2 }
++                } else {
++                    0
++                };
++                assert_eq!(measured.allocations, arrays);
++                assert_eq!(
++                    measured.retained_bytes,
++                    i64::try_from(arrays * 257 * 4).unwrap()
++                );
++            }
++        }
++    }
++
+     #[test]
+     fn exact_target_walk_materializes_the_target_order_then_reuses_it() {
+         let mut builder = RdfDatasetBuilder::new();
+@@ -239,6 +331,7 @@ mod tests {
+                     s: None,
+                     p: None,
+                     o: Some(target),
++                    components: [None; 3],
+                     graph: scope,
+                     scan_reifier_rows: true,
+                 },
+diff --git crates/sparql-eval/tests/governed_query.rs crates/sparql-eval/tests/governed_query.rs
+index 0944796af..d1fca9728 100644
+--- crates/sparql-eval/tests/governed_query.rs
++++ crates/sparql-eval/tests/governed_query.rs
+@@ -1288,6 +1288,272 @@ fn candidate_quads(explanation: &QueryExplanation) -> u64 {
+         .sum()
+ }
+ 
++/// One population serves the small controls and the actual large execution.
++/// Matching keys stay fixed while unrelated claims and six annotations grow.
++fn statement_claims(population: usize) -> Arc<RdfDataset> {
++    use std::fmt::Write as _;
++    let mut builder = RdfDatasetBuilder::new();
++    let mut intern = |name: &str| {
++        builder
++            .intern_iri(&format!("http://example.org/{name}"))
++            .unwrap()
++    };
++    let focus = intern("focus");
++    let other = intern("other");
++    let predicate = intern("p");
++    let alternative = intern("q");
++    let producer = intern("producer");
++    let selected = intern("selected");
++    let remainder = intern("remainder");
++    let value = intern("value");
++    let annotations = ["observed", "valid", "confidence", "operation", "standpoint"].map(intern);
++    let mut spelling = String::new();
++    for index in 0..population {
++        spelling.clear();
++        write!(spelling, "http://example.org/claim/{index}").unwrap();
++        let reifier = builder.intern_iri(&spelling).unwrap();
++        spelling.clear();
++        write!(spelling, "http://example.org/object/{index}").unwrap();
++        let object = builder.intern_iri(&spelling).unwrap();
++        let target = builder
++            .intern_triple(
++                if index < 4 { focus } else { other },
++                if index % 2 == 0 {
++                    predicate
++                } else {
++                    alternative
++                },
++                object,
++            )
++            .unwrap();
++        builder.push_reifier(reifier, target).unwrap();
++        builder
++            .push_annotation(
++                reifier,
++                producer,
++                if index < 3 { selected } else { remainder },
++            )
++            .unwrap();
++        for annotation in annotations {
++            builder.push_annotation(reifier, annotation, value).unwrap();
++        }
++    }
++    builder.freeze().unwrap()
++}
++
++const STATEMENT_RANGE_QUERIES: [(&str, u64); 2] = [
++    (
++        "SELECT ?r ?o WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/focus> <http://example.org/p> ?o )>> }",
++        2,
++    ),
++    (
++        "SELECT ?r WHERE { ?r <http://example.org/producer> <http://example.org/selected> }",
++        3,
++    ),
++];
++
++fn assert_statement_query_ranges(dataset: &Arc<RdfDataset>) {
++    let engine = NativeSparqlEngine::new();
++    for (query, matches) in STATEMENT_RANGE_QUERIES {
++        let measured = engine.explain_query(dataset, query, None).unwrap();
++        assert_eq!(candidate_quads(&measured), matches);
++        assert_eq!(
++            measured.statement_indexes(),
++            purrdf_core::StatementIndexSupport::INDEXED
++        );
++        assert!(measured.render().contains("statement-indexes reifier-target=range reifier-components=range annotation-values=range"));
++        assert!(
++            measured
++                .ledger()
++                .iter()
++                .filter_map(|node| node.estimate.as_ref())
++                .any(|estimate| estimate.rows == matches)
++        );
++        let bounded = engine
++            .query_governed(
++                dataset,
++                request(query),
++                QueryOptions::EMPTY,
++                &QueryGovernors::UNBOUNDED.with_fuel(128),
++            )
++            .unwrap();
++        let GovernedOutcome::Complete { result, .. } = bounded else {
++            panic!("a fixed matching range fits the fixed fuel ceiling")
++        };
++        assert_eq!(row_count(&result), usize::try_from(matches).unwrap());
++    }
++    let seeded = "SELECT ?r ?o WHERE { VALUES ?s { <http://example.org/focus> } ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <http://example.org/p> ?o )>> }";
++    let result = engine
++        .query_governed(
++            dataset,
++            request(seeded),
++            QueryOptions::EMPTY,
++            &QueryGovernors::UNBOUNDED.with_fuel(128),
++        )
++        .unwrap();
++    let GovernedOutcome::Complete { result, .. } = result else {
++        panic!("bound driver components use the matching range")
++    };
++    assert_eq!(row_count(&result), 2);
++}
++
++#[test]
++fn statement_queries_charge_matching_ranges_and_forecast_statement_rows() {
++    for population in [128, 4096] {
++        assert_statement_query_ranges(&statement_claims(population));
++    }
++}
++
++#[test]
++fn statement_scan_defaults_remain_visible_in_explain() {
++    use purrdf_core::{
++        PackBuilder, PackView, SegmentedBuildLimits, SegmentedImage, SegmentedLayer,
++        SegmentedLayerMetadata, SegmentedReadLimits, SegmentedStack,
++    };
++    let dataset = statement_claims(64);
++    let bytes = PackBuilder::build_view_bytes(dataset.as_ref()).unwrap();
++    let pack = PackView::from_bytes(&bytes).unwrap();
++    let image = SegmentedImage::from_pack_v1(
++        &bytes,
++        SegmentedBuildLimits::new(4096, 500_000, 4096, 16_384, 64).unwrap(),
++    )
++    .unwrap();
++    let limits = SegmentedReadLimits::new(8_000_000, 2, 2048, 20_000_000, 8);
++    let mut stack = SegmentedStack::default();
++    stack
++        .publish(
++            vec![Arc::new(
++                SegmentedLayer::new(
++                    Arc::new(image.provider()),
++                    image.receipt().clone(),
++                    SegmentedLayerMetadata::default(),
++                )
++                .unwrap(),
++            )],
++            limits,
++        )
++        .unwrap();
++    let snapshot = stack.snapshot().unwrap();
++    let paged =
++        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![dataset]))).unwrap();
++    let engine = NativeSparqlEngine::new();
++    for (query, matches) in STATEMENT_RANGE_QUERIES {
++        let resident = engine.explain_query_view(&paged, query, None).unwrap();
++        assert_scanning_statement_indexes(&resident, matches);
++        let packed = engine.explain_query_view(&pack, query, None).unwrap();
++        assert_scanning_statement_indexes(&packed, matches);
++        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++        let operational = engine
++            .explain_query_fallible_view(&view, query, None)
++            .unwrap();
++        assert_eq!(
++            operational.0.statement_indexes(),
++            resident.statement_indexes()
++        );
++        assert_eq!(candidate_quads(&operational.0), candidate_quads(&resident));
++        let segmented = support::segmented::open(&image, 8_000_000);
++        let measured = engine
++            .explain_query_fallible_view(&segmented, query, None)
++            .unwrap();
++        assert_scanning_statement_indexes(&measured.0, matches);
++        let stacked = snapshot.query(limits).unwrap();
++        let measured = engine
++            .explain_query_fallible_view(&stacked, query, None)
++            .unwrap();
++        assert_scanning_statement_indexes(&measured.0, matches);
++    }
++}
++
++fn assert_scanning_statement_indexes(explanation: &QueryExplanation, matches: u64) {
++    assert_eq!(
++        explanation.statement_indexes(),
++        purrdf_core::StatementIndexSupport::default()
++    );
++    assert!(explanation.render().contains("statement-indexes reifier-target=scan-default reifier-components=scan-default annotation-values=scan-default"));
++    assert!(candidate_quads(explanation) >= matches);
++}
++
++#[test]
++#[ignore = "actual ten-million-claim execution with sixty million annotations"]
++fn statement_ranges_at_ten_million_claims() {
++    let dataset = statement_claims(10_000_000);
++    assert_eq!(dataset.reifiers().count(), 10_000_000);
++    assert_eq!(dataset.annotations().count(), 60_000_000);
++    eprintln!(
++        "claims=10000000 annotations=60000000 payload_bytes={} terms={}",
++        dataset.rdf_payload_bytes(),
++        dataset.term_count()
++    );
++    assert_statement_query_ranges(&dataset);
++}
++
++/// Fixed work for external instruction counting. Both modes build and warm the
++/// identical population; subtract control from query for each population/kind.
++/// There is no timer, adaptive sampling or throughput claim in this probe.
++#[test]
++#[ignore = "explicit fixed-work instruction probe; requires population, iterations, kind and mode"]
++fn statement_fixed_work_probe() {
++    use std::hint::black_box;
++    let population: usize = std::env::var("PURRDF_STATEMENT_PROBE_ROWS")
++        .expect("set rows")
++        .parse()
++        .unwrap();
++    let iterations: usize = std::env::var("PURRDF_STATEMENT_PROBE_ITERATIONS")
++        .expect("set iterations")
++        .parse()
++        .unwrap();
++    let kind = std::env::var("PURRDF_STATEMENT_PROBE_KIND")
++        .expect("set target, components or annotations");
++    let control = match std::env::var("PURRDF_STATEMENT_PROBE_MODE")
++        .expect("set query or control")
++        .as_str()
++    {
++        "query" => false,
++        "control" => true,
++        _ => panic!("mode must be query or control"),
++    };
++    assert!(population >= 4 && iterations > 0);
++    let dataset = statement_claims(population);
++    let engine = NativeSparqlEngine::new();
++    let prepared =
++        STATEMENT_RANGE_QUERIES.map(|(query, _)| engine.prepare_query(query, None).unwrap());
++    for (index, query) in prepared.iter().enumerate() {
++        let result = engine
++            .query_prepared_view(dataset.as_ref(), query, &[], QueryOptions::EMPTY)
++            .unwrap();
++        assert_eq!(
++            row_count(&result),
++            usize::try_from(STATEMENT_RANGE_QUERIES[index].1).unwrap()
++        );
++    }
++    let target = dataset.reifiers().next().unwrap().1;
++    assert_eq!(dataset.reifiers_of(target).count(), 1);
++    let (query, expected) = match kind.as_str() {
++        "target" => (None, 1),
++        "components" => (Some(&prepared[0]), 2),
++        "annotations" => (Some(&prepared[1]), 3),
++        _ => panic!("kind must be target, components or annotations"),
++    };
++    let mut checksum = 0_usize;
++    for _ in 0..iterations {
++        let rows = if control {
++            black_box(expected)
++        } else if let Some(query) = query {
++            let result = engine
++                .query_prepared_view(dataset.as_ref(), black_box(query), &[], QueryOptions::EMPTY)
++                .unwrap();
++            row_count(black_box(&result))
++        } else {
++            dataset.reifiers_of(black_box(target)).count()
++        };
++        checksum = checksum.checked_add(black_box(rows)).unwrap();
++    }
++    assert_eq!(checksum, iterations.checked_mul(expected).unwrap());
++    eprintln!(
++        "rows={population} iterations={iterations} kind={kind} control={control} checksum={checksum}"
++    );
++}
++
+ #[test]
+ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
+     // The claim under test is *prevention*, not truncation. A cap applied only at the root
+diff --git docs/SPARQL-GOVERNOR-PROFILE.md docs/SPARQL-GOVERNOR-PROFILE.md
+index 88be340d9..1358b1d17 100644
+--- docs/SPARQL-GOVERNOR-PROFILE.md
++++ docs/SPARQL-GOVERNOR-PROFILE.md
+@@ -3,7 +3,7 @@
+ 
+ # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
+ 
+-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 18
++**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 19
+ &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
+ 
+ Every value in this document is readable from the library rather than only from
+@@ -255,6 +255,13 @@ Where the fuel went is readable per algebra node: `explain_query` runs under
+ total per node and per charge point, beside the cost planner's estimate for each
+ basic graph pattern.
+ 
++The explanation also reports `statement-indexes`: the exact view's available
++reifier-target, triple-component and annotation-value access families. `range`
++means that view implements the indexed probe; `scan-default` means it retains
++the graph-pruned scanning default. This is availability, not a claim that an
++unbound probe selected a key range. Wrappers report the access they actually
++forward, rather than inheriting a capability from a hidden inner dataset.
++
+ The two `aggregate-*` points are the third half of the same argument, for the third
+ producer whose per-group work an outside party — the data, not the plan — sizes: an
+ aggregate, built-in or a registered custom aggregate alike, folds a group's rows into
+@@ -525,7 +532,7 @@ next and produce an intermittent, essentially undiscoverable bug.
+ | Constant | Value / how to read it |
+ |---|---|
+ | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
+-| `GOVERNOR_PROFILE_VERSION` | `18` |
++| `GOVERNOR_PROFILE_VERSION` | `19` |
+ | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
+ | `STOP_POLL_FUEL` | `4093` |
+ 
+@@ -542,7 +549,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
+ therefore recompute it from this document alone:
+ 
+ ```sh
+-{ printf 'purrdf-sparql-governors\n18\n'
++{ printf 'purrdf-sparql-governors\n19\n'
+   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
+     path-frontier-expansion row-expression-evaluation user-function-invocation \
+     remote-request-issued remote-row-ingested update-mutated-quad \
+@@ -551,7 +558,7 @@ therefore recompute it from this document alone:
+     exists-probe-answered exists-definition-answered \
+     exists-inner-solutions-consumed property-function-work native-function-work
+ } | sha256sum
+-# 37dc8ab3f6505ede9167817441a9162852fd2453bfdaa29b967d213f065d9674
++# 8f256fbd39c945b841ef6c2df028881c27fe5af0f5c84c22d4b60ba5d73ef342
+ ```
+ 
+ SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
+@@ -694,6 +701,7 @@ increment it. That restraint is what makes the number worth pinning.
+ | **16** | Appends `native-function-work`. A native extension kernel admits its physical storage and charges its documented internal work chunks through the same caller's governor, polling between chunks. The previous seventeen labels retain their order and unit costs. Queries without these native calls retain their schedule. Remeasure ceilings for the selected kernel and profile. |
+ | **17** | The schedule is unchanged. Default exact-branch division now keeps a terminating quotient at its full scale and otherwise rounds to eighteen fractional digits, half to even. Its tower work and AVG's final division can move fuel and scratch cut points even for operands that previously took the bounded numeric path. Remeasure numeric ceilings against the new default. |
+ | **18** | The schedule is unchanged. Exact-only numeric values and exact temporal seconds flow through admitted evaluator arithmetic, comparison, timezone adjustment and rendering. Those operations now charge their arbitrary-precision work and retained scratch rather than the former bounded or zero-cost path. Remeasure fuel and scratch ceilings for numeric and temporal queries, including unchanged answers. |
++| **19** | The schedule is unchanged. Native structural reifier probes narrow bound triple components before emitting BGP candidates, removing unrelated candidate charges. Annotation predicate/object ranges reduce physical rows visited while preserving emitted candidates. Statement-row estimates participate in join planning. Remeasure fuel, scratch and intermediate cut points for statement queries; complete RDF answers retain their bag multiplicity. |
+ 
+ Version **15** keeps the charge schedule unchanged. Evidence-bearing
+ `EXISTS`/`NOT EXISTS` evaluates the original body, retaining every alternative
+@@ -711,7 +719,7 @@ ceilings and stop cut points.
+ A version bump is not a drop-in upgrade, and the list is short because each item is
+ a thing a pinned number can silently stop meaning:
+ 
+-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `18` — the version
++1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `19` — the version
+    this section describes, and the one every other step below re-verifies against —
+    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
+    intend to price against. If the digest moved but the version did not, the build is
+@@ -749,7 +757,7 @@ them at no extra cost.
+ | Field | Source |
+ |---|---|
+ | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
+-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `18` |
++| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `19` |
+ | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
+ | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
+ | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 7536b5222..05450afcb 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3063,11 +3063,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3079,11 +3079,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3095,11 +3095,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3111,11 +3111,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3127,11 +3127,11 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3144,11 +3144,11 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+     "crates/rdf-core/src/ir/composite.rs=source:cc7b4e0f23efed5b",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3161,59 +3161,59 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+     "crates/rdf-core/src/ir/composite.rs=source:cc7b4e0f23efed5b",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/dataset.rs"
+ symbol = "crates/rdf-core/src/ir/dataset.rs::permutation"
+-line = 1249
++line = 1279
+ sink = "source:93359fa72451a90c"
+ class = "resident-permutation"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/frozen_terms.rs"
+ symbol = "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed"
+-line = 59
++line = 67
+ sink = "source:bcb4a119fb003223"
+ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/frozen_terms.rs"
+ symbol = "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed"
+-line = 62
++line = 70
+ sink = "source:bcb4a119fb003223"
+ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3227,7 +3227,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9222812ca2ca7b2c",
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3242,7 +3242,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+     "crates/rdf-core/src/ir/embedding/writer.rs=source:e7a6e4ab2aa72bfb",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3257,7 +3257,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+     "crates/rdf-core/src/ir/embedding/writer.rs=source:e7a6e4ab2aa72bfb",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3269,12 +3269,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/mutable.rs=source:e4f8856894eec38b",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3286,12 +3286,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/mutable.rs=source:e4f8856894eec38b",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3303,12 +3303,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:fa58b593345e30bd",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3320,12 +3320,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:fa58b593345e30bd",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3337,12 +3337,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:fa58b593345e30bd",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3354,12 +3354,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:fa58b593345e30bd",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3371,12 +3371,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
+     "crates/rdf-core/src/ir/event_sink.rs=source:06dde97381917c60",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3389,7 +3389,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3402,7 +3402,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3414,12 +3414,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/ingest.rs=source:6d25c8ef05608ae9",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3431,12 +3431,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/ingest.rs=source:6d25c8ef05608ae9",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3448,12 +3448,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3465,12 +3465,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3482,13 +3482,13 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/paged/query.rs=source:78f12f89da9a7989",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:bc81c9dead13bb4e",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3500,13 +3500,13 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/paged/query.rs=source:78f12f89da9a7989",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:bc81c9dead13bb4e",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3520,7 +3520,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:6204eb5ed490bb22",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "Stack snapshot enumerates retained GlobalDictionary resident term vectors. This is not a foreign logical interval; the private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3532,12 +3532,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:bc81c9dead13bb4e",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3549,12 +3549,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:bc81c9dead13bb4e",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3566,12 +3566,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:bc81c9dead13bb4e",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3583,12 +3583,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:bc81c9dead13bb4e",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3600,14 +3600,14 @@ class = "segmented-checked-interval"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+     "crates/rdf-core/src/ir/segmented/build.rs=source:e97630f3cd48fc1e",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:95a57403e33b2538",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3619,14 +3619,14 @@ class = "segmented-checked-interval"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+     "crates/rdf-core/src/ir/segmented/build.rs=source:e97630f3cd48fc1e",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:95a57403e33b2538",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3638,14 +3638,14 @@ class = "segmented-checked-interval"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+     "crates/rdf-core/src/ir/segmented/build.rs=source:e97630f3cd48fc1e",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:95a57403e33b2538",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3657,14 +3657,14 @@ class = "segmented-checked-interval"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+     "crates/rdf-core/src/ir/segmented/build.rs=source:e97630f3cd48fc1e",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:95a57403e33b2538",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "encode_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3676,12 +3676,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+     "crates/rdf-core/src/ir/validate.rs=source:bb7eaea66da9a620",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -3693,12 +3693,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+     "crates/rdf-core/src/ir/validate.rs=source:bb7eaea66da9a620",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -3710,10 +3710,10 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:d9c86bdfd5cd6373",
+     "crates/rdf-core/src/ir/builder.rs=source:285ec037c8fdd275",
+-    "crates/rdf-core/src/ir/dataset.rs=source:4e1f0ff657b4100c",
+-    "crates/rdf-core/src/ir/frozen_terms.rs=source:6e6f2414525e9c15",
++    "crates/rdf-core/src/ir/dataset.rs=source:c2f787bdf3e6b61d",
++    "crates/rdf-core/src/ir/frozen_terms.rs=source:fa1a37afca887087",
+     "crates/rdf-core/src/ir/term.rs=source:ed7e314cb633b6d4",
+     "crates/rdf-core/src/turtle_render.rs=source:709dd6553dd0b117",
+ ]
+-constructors = "source:5c714f0c9ebc192b"
++constructors = "source:d60ecd8bd6966086"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."

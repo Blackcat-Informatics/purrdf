@@ -1,0 +1,157 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 7.13s
+     Running tests/sparql_conformance.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-sparql-conformance/4c864f13b9f280c0/out/sparql_conformance-4c864f13b9f280c0)
+
+running 74 tests
+[suite/purrdf-smoke/manifest.ttl] 9 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/purrdf-list-functions/manifest.ttl] 8 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::purrdf-smoke/manifest.ttl ... ok
+test run_manifest_case::purrdf-list-functions/manifest.ttl ... ok
+[suite/purrdf-property-functions/manifest.ttl] 14 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::purrdf-property-functions/manifest.ttl ... ok
+[suite/purrdf-update/manifest.ttl] 3 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::purrdf-update/manifest.ttl ... ok
+[suite/w3c-sparql10/ask/manifest.ttl] 4 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/ask/manifest.ttl ... ok
+[suite/w3c-sparql10/bnode-coreference/manifest.ttl] 1 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/bnode-coreference/manifest.ttl ... ok
+[suite/w3c-sparql10/algebra/manifest.ttl] 14 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/algebra/manifest.ttl ... ok
+[suite/w3c-sparql10/bound/manifest.ttl] 1 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/purrdf-extend/manifest.ttl] 56 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/bound/manifest.ttl ... ok
+test run_manifest_case::purrdf-extend/manifest.ttl ... ok
+[suite/w3c-sparql10/basic/manifest.ttl] 27 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/basic/manifest.ttl ... ok
+[suite/w3c-sparql10/cast/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/cast/manifest.ttl ... ok
+[suite/w3c-sparql10/boolean-effective-value/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/boolean-effective-value/manifest.ttl ... ok
+[suite/w3c-sparql10/construct/manifest.ttl] 5 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/construct/manifest.ttl ... ok
+[suite/w3c-sparql10/distinct/manifest.ttl] 11 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/distinct/manifest.ttl ... ok
+[suite/w3c-sparql10/dataset/manifest.ttl] 12 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/dataset/manifest.ttl ... ok
+[suite/w3c-sparql10/expr-equals/manifest.ttl] 15 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/expr-equals/manifest.ttl ... ok
+[suite/w3c-sparql10/expr-ops/manifest.ttl] 18 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/expr-ops/manifest.ttl ... ok
+[suite/w3c-sparql10/expr-builtin/manifest.ttl] 25 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/expr-builtin/manifest.ttl ... ok
+[suite/w3c-sparql10/i18n/manifest.ttl] 5 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/i18n/manifest.ttl ... ok
+[suite/w3c-sparql10/optional-filter/manifest.ttl] 5 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/w3c-sparql10/graph/manifest.ttl] 17 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/optional-filter/manifest.ttl ... ok
+test run_manifest_case::w3c-sparql10/graph/manifest.ttl ... ok
+[suite/w3c-sparql10/optional/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/w3c-sparql10/open-world/manifest.ttl] 18 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/optional/manifest.ttl ... ok
+test run_manifest_case::w3c-sparql10/open-world/manifest.ttl ... ok
+[suite/w3c-sparql10/reduced/manifest.ttl] 2 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/reduced/manifest.ttl ... ok
+[suite/w3c-sparql10/regex/manifest.ttl] 21 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/regex/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql1/manifest.ttl] 81 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql1/manifest.ttl ... ok
+[suite/w3c-sparql10/solution-seq/manifest.ttl] 13 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/solution-seq/manifest.ttl ... ok
+[suite/w3c-sparql10/sort/manifest.ttl] 14 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/sort/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql4/manifest.ttl] 12 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql4/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql2/manifest.ttl] 53 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql2/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql5/manifest.ttl] 2 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql5/manifest.ttl ... ok
+[suite/w3c-sparql10/syntax-sparql3/manifest.ttl] 51 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/syntax-sparql3/manifest.ttl ... ok
+[suite/w3c-sparql10/triple-match/manifest.ttl] 4 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/triple-match/manifest.ttl ... ok
+[suite/w3c-sparql11/add/manifest.ttl] 8 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/add/manifest.ttl ... ok
+[suite/w3c-sparql11/basic-update/manifest.ttl] 13 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/basic-update/manifest.ttl ... ok
+[suite/w3c-sparql11/bind/manifest.ttl] 10 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/bind/manifest.ttl ... ok
+[suite/w3c-sparql11/bindings/manifest.ttl] 11 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/bindings/manifest.ttl ... ok
+[suite/w3c-sparql11/aggregates/manifest.ttl] 47 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/w3c-sparql11/cast/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/aggregates/manifest.ttl ... ok
+test run_manifest_case::w3c-sparql11/cast/manifest.ttl ... ok
+[suite/w3c-sparql10/type-promotion/manifest.ttl] 30 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql10/type-promotion/manifest.ttl ... ok
+[suite/w3c-sparql11/clear/manifest.ttl] 4 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/clear/manifest.ttl ... ok
+[suite/w3c-sparql11/construct/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/w3c-sparql11/copy/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/construct/manifest.ttl ... ok
+test run_manifest_case::w3c-sparql11/copy/manifest.ttl ... ok
+[suite/w3c-sparql11/delete-data/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/delete-data/manifest.ttl ... ok
+[suite/w3c-sparql11/delete-where/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/delete-where/manifest.ttl ... ok
+[suite/w3c-sparql11/delete/manifest.ttl] 19 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/delete/manifest.ttl ... ok
+[suite/w3c-sparql11/drop/manifest.ttl] 4 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/drop/manifest.ttl ... ok
+[suite/w3c-sparql11/delete-insert/manifest.ttl] 17 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/delete-insert/manifest.ttl ... ok
+[suite/w3c-sparql11/exists/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/exists/manifest.ttl ... ok
+[suite/w3c-sparql11/grouping/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/grouping/manifest.ttl ... ok
+[suite/w3c-sparql11/move/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/move/manifest.ttl ... ok
+[suite/w3c-sparql11/negation/manifest.ttl] 12 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/negation/manifest.ttl ... ok
+[suite/w3c-sparql11/project-expression/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/project-expression/manifest.ttl ... ok
+[suite/w3c-sparql11/service/manifest.ttl] 7 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/service/manifest.ttl ... ok
+[suite/w3c-sparql11/subquery/manifest.ttl] 1 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/subquery/manifest.ttl ... ok
+[suite/w3c-sparql11/syntax-fed/manifest.ttl] 3 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/syntax-fed/manifest.ttl ... ok
+[suite/w3c-sparql11/property-path/manifest.ttl] 33 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/property-path/manifest.ttl ... ok
+[suite/w3c-sparql11/functions/manifest.ttl] 75 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/functions/manifest.ttl ... ok
+[suite/w3c-sparql11/syntax-update-1/manifest.ttl] 54 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/syntax-update-1/manifest.ttl ... ok
+[suite/w3c-sparql11/syntax-update-2/manifest.ttl] 1 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/w3c-sparql11/syntax-query/manifest.ttl] 94 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/syntax-update-2/manifest.ttl ... ok
+test run_manifest_case::w3c-sparql11/syntax-query/manifest.ttl ... ok
+[suite/w3c-sparql11/update-silent/manifest.ttl] 13 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/update-silent/manifest.ttl ... ok
+[suite/w3c-sparql12/codepoint-escapes/manifest.ttl] 14 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/codepoint-escapes/manifest.ttl ... ok
+[suite/w3c-sparql12/grouping/manifest.ttl] 2 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/grouping/manifest.ttl ... ok
+[suite/w3c-sparql12/expression/manifest.ttl] 5 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/expression/manifest.ttl ... ok
+[suite/w3c-sparql12/rdf11/manifest.ttl] 3 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/rdf11/manifest.ttl ... ok
+[suite/w3c-sparql12/lang-basedir/manifest.ttl] 11 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/lang-basedir/manifest.ttl ... ok
+[suite/w3c-sparql12/syntax/manifest.ttl] 6 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/syntax/manifest.ttl ... ok
+[suite/w3c-sparql12/syntax-triple-terms-negative/manifest.ttl] 65 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/syntax-triple-terms-negative/manifest.ttl ... ok
+[suite/w3c-sparql12/eval-triple-terms/manifest.ttl] 41 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+[suite/w3c-sparql10/manifest.ttl] index of 29 manifests, each run as its own case
+test run_manifest_case::w3c-sparql12/eval-triple-terms/manifest.ttl ... ok
+test index_manifest::w3c-sparql10/manifest.ttl ... ok
+[suite/w3c-sparql12/version/manifest.ttl] 9 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/version/manifest.ttl ... ok
+[suite/w3c-sparql12/syntax-triple-terms-positive/manifest.ttl] 113 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/syntax-triple-terms-positive/manifest.ttl ... ok
+[suite/w3c-sparql11/entailment/manifest.ttl] 70 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql11/entailment/manifest.ttl ... ok
+
+test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+

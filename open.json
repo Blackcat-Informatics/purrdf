@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 491,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term",
+  "branch": "paudley/491-rdf-1-2-index-reifiers-by-triple-term",
+  "slug": "rdf-1-2-index-reifiers-by-triple-term",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/.stage/rdf-1-2-index-reifiers-by-triple-term",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "eb824c0e20efabd70cc173a9c6a2c3d93d760a7b",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term",
+    "branch:paudley/491-rdf-1-2-index-reifiers-by-triple-term",
+    "stage:/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/.stage/rdf-1-2-index-reifiers-by-triple-term",
+    "issue:/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/.stage/rdf-1-2-index-reifiers-by-triple-term/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-15T05:21:58-0600"
+}

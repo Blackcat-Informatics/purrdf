@@ -1,0 +1,19 @@
+9 changed cases among 712. Only candidate charges, total fuel and budget-prefix progression differ.
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#graphs-1> Reified triples - GRAPH
+  complete fuel 28 -> 27; solution bytes and other node charges unchanged
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-1> Reified triples - Asserted and reified triple
+  complete fuel 38 -> 28; solution bytes and other node charges unchanged
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-10> Reified triples - Pattern - literals or triple terms
+  complete fuel 137 -> 71; solution bytes and other node charges unchanged
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-2> Reified triples - Asserted and reified triple
+  complete fuel 41 -> 28; solution bytes and other node charges unchanged
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-5> Reified triples - Pattern - match variables in triple terms
+  complete fuel 137 -> 59; solution bytes and other node charges unchanged
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-6> Reified triples - Pattern - Nesting 1
+  complete fuel 65 -> 7; solution bytes and other node charges unchanged
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-7> Reified triples - Pattern - Nesting 2
+  complete fuel 71 -> 7; solution bytes and other node charges unchanged
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-8> Reified triples - Pattern - Match and nesting
+  complete fuel 18 -> 8; solution bytes and other node charges unchanged
+w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-8-nomatch> Reified triples - Pattern - Match for non-equal reifier and nesting
+  complete fuel 14 -> 3; solution bytes and other node charges unchanged

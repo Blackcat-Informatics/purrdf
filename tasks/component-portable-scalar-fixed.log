@@ -1,0 +1,10 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 13.73s
+     Running tests/statement_indexes.rs (/opt/.cargo/e1/865da58a2aa3eb/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/aa0a8bc02af07f99/out/statement_indexes-aa0a8bc02af07f99.wasm)
+
+running 2 tests
+test native_and_compact_statement_queries_keep_answers_and_candidate_work ... ok
+test named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

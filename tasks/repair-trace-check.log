@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized] target(s) in 15.68s
+     Running tests/evaluator_trace.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-sparql-conformance/baa6f57b0aa21a6f/out/evaluator_trace-baa6f57b0aa21a6f)
+
+running 4 tests
+test regenerate_evaluator_trace ... ignored, regeneration path: writes the committed golden
+test regenerate_update_trace ... ignored, regeneration path: writes the committed golden
+test the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden ... ok
+test the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden ... ok
+
+test result: ok. 2 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 14.56s
+

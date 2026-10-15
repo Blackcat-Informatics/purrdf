@@ -1,0 +1,43 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/hash)
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling libc v0.2.186
+   Compiling hybrid-array v0.4.15
+   Compiling cfg-if v1.0.4
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/lex)
+   Compiling digest v0.11.3
+   Compiling regex-automata v0.4.14
+   Compiling sha2 v0.11.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/iri)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-events)
+   Compiling regex v1.12.4
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/cdt)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/testkit)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/deflate)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/stack)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/alloc-probe)
+    Finished `test` profile [optimized] target(s) in 58.88s
+     Running unittests src/lib.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 11 tests
+test ir::dataset::tests::target_index_capacity_refuses_without_publication_and_retries ... ok
+test blank_label::tests::encode_output_is_always_legal_under_the_target_alphabet ... ok
+test ir::embedding::identity::tests::target_set_order_is_identity_significant ... ok
+test ir::embedding::metadata::tests::target_encoding_ignores_insertion_order ... ok
+test ir::embedding::target::tests::extension_target_payload_digest_is_verified ... ok
+test blank_label::tests::retarget_owned_label_equals_a_direct_encode ... ok
+test ir::embedding::target::tests::retained_target_identities_require_the_kind_schema ... ok
+test ir::embedding::target::tests::target_sets_sort_and_reject_duplicates ... ok
+test ir::validate::tests::freeze_err_on_reifier_target_not_triple ... ok
+test ir::mutable::tests::normalization_preserves_delta_target_ordinal_through_undo ... ok
+test ir::dataset::tests::target_ranges_preserve_filtered_reifier_order_and_graph_multiplicity ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1342 filtered out; finished in 0.00s
+

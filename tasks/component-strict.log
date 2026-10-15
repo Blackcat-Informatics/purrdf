@@ -1,0 +1,36 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+error: usage of `size_of::<T>()` to obtain the size of `T` in bits
+    --> crates/rdf-core/src/ir/dataset.rs:2322:62
+     |
+2322 |         let reifier_orders = self.reifiers.len().checked_mul(8 * size_of::<u32>())?;
+     |                                                              ^^^^^^^^^^^^^^^^^^^^ help: consider using: `(u32::BITS as usize)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_bits
+     = note: `-D clippy::manual-bits` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::manual_bits)]`
+
+error: manual implementation of `Iterator::find`
+   --> crates/rdf-core/src/ir/triple.rs:268:9
+    |
+268 | /         for row in self.rows.by_ref() {
+269 | |             if [row.s, row.p, row.o]
+270 | |                 .into_iter()
+271 | |                 .zip(self.pattern)
+...   |
+277 | |         None
+    | |____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_find
+    = note: `-D clippy::manual-find` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_find)]`
+help: replace with an iterator
+    |
+268 ~         self.rows.by_ref().find(|&row| [row.s, row.p, row.o]
+269 +                 .into_iter()
+270 +                 .zip(self.pattern)
+271 +                 .all(|(actual, expected)| expected.is_none_or(|expected| actual == expected)))
+    |
+
+error: could not compile `purrdf-core` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

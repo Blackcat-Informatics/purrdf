@@ -1,0 +1,200 @@
+{
+  "paths": [
+    {
+      "ref": "crates/rdf-core/src/ir/dataset.rs:279-288",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/ir/dataset.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 4423,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "525b3cf1b Add a graph-free RDF carrier and rule execution",
+        "15bc79027 Propagate typed capacity failures through workspace consumers",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "f49c2f1a5 Carry query evidence and scoped ranked retrieval through physical shapes",
+        "c3171c015 Admit complete operational SPARQL storage before allocation",
+        "4e484ce24 fix(core): make the snapshot charge exact for composite literals and tags",
+        "20614b654 Restore the agreement-rule doc to agreed_content_addressing",
+        "485c666a3 Keep live row counts for touched graphs instead of scanning at publication",
+        "bb61bb389 Materialize delta and composite views under their sources' configuration",
+        "bf095b0f7 Keep a configured derivation predicate the dataset never interned"
+      ]
+    },
+    {
+      "ref": "dataset.rs:1730",
+      "path": "/home/paudley/Active/purrdf/dataset.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "dataset.rs:1635",
+      "path": "/home/paudley/Active/purrdf/dataset.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "ir/pack/side.rs:563",
+      "path": "/home/paudley/Active/purrdf/ir/pack/side.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "dataset.rs:1609-1617",
+      "path": "/home/paudley/Active/purrdf/dataset.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "dataset.rs:282-284",
+      "path": "/home/paudley/Active/purrdf/dataset.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/sparql-eval/src/statement_layer.rs:126-168",
+      "path": "/home/paudley/Active/purrdf/crates/sparql-eval/src/statement_layer.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 179,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "47725646e Stop bounded statement scans and index segmented source probes",
+        "9c53340b1 feat(license): offer MulanPSL-2.0 as a third license option (#352)",
+        "eb03ab702 fix(331): narrow the RDF 1.2 side tables by graph before the scan",
+        "8b9e30946 feat(sparql-eval,purrdf,cli,python)!: bind path witnesses as property functions over the closure (#224)"
+      ]
+    },
+    {
+      "ref": "crates/rdf-core/src/ir/dataset.rs",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/ir/dataset.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 4423,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "525b3cf1b Add a graph-free RDF carrier and rule execution",
+        "15bc79027 Propagate typed capacity failures through workspace consumers",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "f49c2f1a5 Carry query evidence and scoped ranked retrieval through physical shapes",
+        "c3171c015 Admit complete operational SPARQL storage before allocation",
+        "4e484ce24 fix(core): make the snapshot charge exact for composite literals and tags",
+        "20614b654 Restore the agreement-rule doc to agreed_content_addressing",
+        "485c666a3 Keep live row counts for touched graphs instead of scanning at publication",
+        "bb61bb389 Materialize delta and composite views under their sources' configuration",
+        "bf095b0f7 Keep a configured derivation predicate the dataset never interned"
+      ]
+    },
+    {
+      "ref": "ir/pack/side.rs",
+      "path": "/home/paudley/Active/purrdf/ir/pack/side.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/sparql-eval/src/statement_layer.rs",
+      "path": "/home/paudley/Active/purrdf/crates/sparql-eval/src/statement_layer.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 179,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "47725646e Stop bounded statement scans and index segmented source probes",
+        "9c53340b1 feat(license): offer MulanPSL-2.0 as a third license option (#352)",
+        "eb03ab702 fix(331): narrow the RDF 1.2 side tables by graph before the scan",
+        "8b9e30946 feat(sparql-eval,purrdf,cli,python)!: bind path witnesses as property functions over the closure (#224)"
+      ]
+    },
+    {
+      "ref": "crates/rdf-core/src/dataset_view.rs",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/dataset_view.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 2508,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "525b3cf1b Add a graph-free RDF carrier and rule execution",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "f49c2f1a5 Carry query evidence and scoped ranked retrieval through physical shapes",
+        "c3171c015 Admit complete operational SPARQL storage before allocation",
+        "1ef59cbf9 Address GRAPH <iri> only when the IRI names a graph",
+        "d6f94f62a Preserve concrete blank identity across governed runtime allocation",
+        "04e516a1a feat!: establish v3 storage and distribution contracts",
+        "8d61324db refactor!: one home each for the triple-term and schema nesting bounds",
+        "b8b661d2a refactor: one body per job across the foundation crates",
+        "bf1282f00 refactor: one body per job across the query, reasoning and index engines"
+      ]
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "DatasetView",
+      "files": 302
+    },
+    {
+      "name": "main",
+      "files": 2070
+    },
+    {
+      "name": "reifier_quads_of",
+      "files": 32
+    },
+    {
+      "name": "annotations_of_with_graph",
+      "files": 34
+    },
+    {
+      "name": "reifiers_of",
+      "files": 3
+    },
+    {
+      "name": "reifier_quads_in_graph",
+      "files": 18
+    },
+    {
+      "name": "annotation_quads_in_graph",
+      "files": 19
+    },
+    {
+      "name": "cardinality_estimate",
+      "files": 28
+    },
+    {
+      "name": "RdfDataset",
+      "files": 743
+    }
+  ],
+  "packages": [
+    "purrdf"
+  ],
+  "urls": [],
+  "truncated": []
+}

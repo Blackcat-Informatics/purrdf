@@ -1,0 +1,14 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 05s
+     Running unittests src/lib.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 6 tests
+test bgp::tests::reifies_pattern_inner_mismatch_is_empty ... ok
+test bgp::tests::reifies_pattern_on_plain_graph_is_empty ... ok
+test bgp::tests::reifies_pattern_binds_reifier_and_inner_variables ... ok
+test bgp::tests::open_pattern_enumerates_assertions_reifies_edge_and_annotations ... ok
+test bgp::tests::reifies_pattern_repeated_inner_variable_enforced ... ok
+test bgp::tests::reifies_pattern_with_partly_ground_inner ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1625 filtered out; finished in 0.00s
+

@@ -1,0 +1,18 @@
+
+running 4 tests
+test statement_fixed_work_probe ... ignored, explicit fixed-work instruction probe; requires population, iterations, kind and mode
+test statement_queries_charge_matching_ranges_and_forecast_statement_rows ... ok
+test statement_ranges_at_ten_million_claims ... ignored, actual ten-million-claim execution with sixty million annotations
+test statement_scan_defaults_remain_visible_in_explain ... 
+thread 'statement_scan_defaults_remain_visible_in_explain' (1730778) panicked at crates/sparql-eval/tests/governed_query.rs:1462:14:
+called `Result::unwrap()` on an `Err` value: Operational { error: EvidenceExhausted, evidence: SegmentedEvidence { snapshot: SegmentedStackSnapshot { layers: [SegmentedLayer { provider: SegmentedBytes { snapshot: SegmentedSnapshot([10, 209, 223, 221, 105, 69, 162, 74, 254, 71, 154, 233, 139, 178, 250, 155, 215, 173, 32, 253, 251, 133, 252, 34, 48, 119, 107, 58, 233, 0, 167, 180]), .. }, receipt: SegmentedReceipt { snapshot: SegmentedSnapshot([10, 209, 223, 221, 105, 69, 162, 74, 254, 71, 154, 233, 139, 178, 250, 155, 215, 173, 32, 253, 251, 133, 252, 34, 48, 119, 107, 58, 233, 0, 167, 180]), root: [124, 208, 199, 97, 235, 10, 151, 114, 207, 157, 133, 248, 111, 130, 165, 125, 88, 111, 41, 35, 218, 1, 202, 133, 163, 179, 229, 11, 50, 51, 156, 191], block_bytes: 16384, block_count: 12, leaf_count: 16, byte_len: 197632 }, metadata: SegmentedLayerMetadata { removals: None, declarations: None, max_owned_term_bytes: 0 } }], head: None }, state: Mutex { data: SegmentedReadState { cache_blocks: 2, requests: 2045, error: Some(EvidenceExhausted), io_bytes: 6753408, evictions: 407, .. }, poisoned: false, .. }, prefix: 2045, hash: [245, 95, 149, 178, 121, 183, 18, 130, 182, 151, 168, 137, 110, 225, 189, 218, 227, 140, 78, 26, 172, 203, 248, 59, 113, 177, 209, 105, 127, 214, 116, 217], io_bytes: 6753408, live_bytes: 121812, unpinned_cache_bytes: 33120, bookkeeping_bytes: 49748, peak_bytes: 1175393, evictions: 407, _base: SegmentedReservation { budget: Budget { state: Mutex { data: Residency { live: 121636, peak: 1175393, pins: 0 }, poisoned: false, .. }, limit: 8000000, max_pins: 8 }, bytes: 18864, control: 0, cache: None, base: None } } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    statement_scan_defaults_remain_visible_in_explain
+
+test result: FAILED. 1 passed; 1 failed; 2 ignored; 0 measured; 27 filtered out; finished in 0.04s
+

@@ -1,0 +1,20 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/sparql-eval)
+error[E0609]: no field `result` on type `(purrdf_sparql_eval::RetainedQueryExplanation, purrdf_core::PagedQueryEvidence)`
+    --> crates/sparql-eval/tests/governed_query.rs:1425:25
+     |
+1425 |             operational.result.statement_indexes(),
+     |                         ^^^^^^ unknown field
+     |
+     = note: available fields are: `0`, `1`
+
+error[E0609]: no field `result` on type `(purrdf_sparql_eval::RetainedQueryExplanation, purrdf_core::PagedQueryEvidence)`
+    --> crates/sparql-eval/tests/governed_query.rs:1429:42
+     |
+1429 |             candidate_quads(&operational.result),
+     |                                          ^^^^^^ unknown field
+     |
+     = note: available fields are: `0`, `1`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `purrdf-sparql-eval` (test "governed_query") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

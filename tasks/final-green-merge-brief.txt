@@ -1,0 +1,2 @@
+checks     /home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/.stage/rdf-1-2-index-reifiers-by-triple-term/pr-checks.txt   state=pass
+comments   /home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/.stage/rdf-1-2-index-reifiers-by-triple-term/pr-comments.md  (5)

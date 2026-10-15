@@ -1,0 +1,11 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 3m 04s
+     Running unittests src/lib.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 2 tests
+test ir::canon::tests::permutations_are_lexicographic_identity_first ... ok
+test ir::dataset::tests::lazy_permutation_capacity_refuses_before_allocation_and_retries ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1351 filtered out; finished in 0.00s
+

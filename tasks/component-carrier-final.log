@@ -1,0 +1,14 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/491-rdf-1-2-index-reifiers-by-triple-term/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1.50s
+     Running tests/triple_carrier.rs (/opt/.cargo/e1/865da58a2aa3eb/debug/build/purrdf-core/b8de4aea1edcda05/out/triple_carrier-b8de4aea1edcda05)
+
+running 6 tests
+test compact_statement_probes_populate_only_the_requested_ordinal_arrays ... ok
+test conversion_refuses_every_named_role_including_empty_declarations ... ok
+test refused_child_stops_existing_streams_and_fresh_session_is_healthy ... ok
+test owned_transfer_preserves_lexical_owner_and_flat_statement_identity ... ok
+test compact_layout_and_all_bound_shapes ... ok
+test statement_mask_probes_preserve_frozen_order_and_graph_multiplicity ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
