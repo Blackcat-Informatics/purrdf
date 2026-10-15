@@ -323,10 +323,11 @@ pub struct RdfDataset {
     /// `(reifier, triple-term, graph)` bindings; many reifiers MAY bind one triple
     /// (C0.4). The `graph` slot (`None` = default graph) records the named graph the
     /// reifier declaration was asserted in — so a reifier inside a TriG `GRAPH g { … }`
-    /// block binds `?g` under `GRAPH ?g`. Frozen sorted by `(reifier, triple, graph)`,
-    /// so `reifiers_of` (keyed on `triple`) and `annotations_of` (keyed on `reifier`)
-    /// stay range-addressable.
+    /// block binds `?g` under `GRAPH ?g`. Frozen sorted by `(reifier, triple, graph)`;
+    /// target probes use the separate lazy target ordinal order.
     reifiers: Box<[ReifierRow]>,
+    /// Reifier ordinals ordered by `(triple, reifier, graph)`.
+    reifier_targets: OnceLock<Box<[u32]>>,
     /// `(reifier, predicate, object, graph)` annotations, deduplicated (C0.5). The
     /// `graph` slot mirrors [`Self::reifiers`].
     annotations: Box<[AnnotationRow]>,
@@ -382,6 +383,7 @@ impl std::fmt::Debug for RdfDataset {
             .field("terms", &self.dictionary.terms)
             .field("quads", &self.quads)
             .field("reifiers", &self.reifiers)
+            .field("reifier_targets", &self.reifier_targets)
             .field("annotations", &self.annotations)
             .field("locations", &self.locations)
             .field("caps", &self.caps)
@@ -463,6 +465,39 @@ pub(super) fn build_ordinal_permutation<T, S, E: From<purrdf_lex::allocation::St
     ordinals.extend(0..len);
     ordinals.sort_unstable_by(|&a, &b| compare(&rows[a as usize], &rows[b as usize]));
     freeze(storage, ordinals)
+}
+
+/// Publish a resident carrier's deterministic ordinal order on first access.
+pub(super) fn cached_permutation<'a, T>(
+    cell: &'a OnceLock<Box<[u32]>>,
+    rows: &[T],
+    capacity: super::builder::LocalCapacity,
+    compare: impl FnMut(&T, &T) -> Ordering,
+) -> Result<&'a [u32], purrdf_lex::allocation::StorageError> {
+    use purrdf_lex::allocation::{Memory, Resident};
+    if let Some(ordinals) = cell.get() {
+        return Ok(ordinals);
+    }
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let ordinals = build_ordinal_permutation(
+        rows,
+        capacity,
+        &mut memory,
+        Memory::reserve,
+        Memory::boxed_slice,
+        compare,
+    )?;
+    // A competing successful publication owns the same deterministic order.
+    // Refusal never poisons the immutable payload's cache.
+    let _ = cell.set(ordinals);
+    Ok(cell
+        .get()
+        .expect("a successful permutation publication initialized the cell"))
+}
+
+fn compare_reifier_targets(a: &ReifierRow, b: &ReifierRow) -> Ordering {
+    (a.1, a.0, a.2).cmp(&(b.1, b.0, b.2))
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
@@ -935,6 +970,7 @@ impl RdfDataset {
             dictionary,
             quads,
             reifiers,
+            reifier_targets: OnceLock::new(),
             annotations,
             locations,
             caps,
@@ -1698,15 +1734,27 @@ impl RdfDataset {
     /// reifies this statement", used by the SARIF/annotation threading and validate
     /// lints instead of re-deriving it.
     ///
-    /// A **linear** scan: the reifier table is sorted by `(reifier, triple)`, so the
-    /// `triple` argument is the *secondary* key — entries for one triple are not
-    /// contiguous and a binary search does not apply. The table is small (a few
-    /// bindings per statement), so this is not a hot path.
+    /// The first target probe materializes a deterministic ordinal order. Later
+    /// probes locate the target run in `O(log n)` and visit only matching rows.
+    /// Graph-distinct bindings retain their multiplicity and reifier/graph order.
     pub fn reifiers_of(&self, triple: TermId) -> impl Iterator<Item = TermId> + '_ {
-        self.reifiers
+        let order = self
+            .try_reifier_targets()
+            .expect("host cannot allocate a resident reifier index");
+        let start = order.partition_point(|&index| self.reifiers[index as usize].1 < triple);
+        let end = order.partition_point(|&index| self.reifiers[index as usize].1 <= triple);
+        order[start..end]
             .iter()
-            .filter(move |(_, t, _)| *t == triple)
-            .map(|(r, _, _)| *r)
+            .map(|&index| self.reifiers[index as usize].0)
+    }
+
+    fn try_reifier_targets(&self) -> Result<&[u32], purrdf_lex::allocation::StorageError> {
+        cached_permutation(
+            &self.reifier_targets,
+            &self.reifiers,
+            self.indexes.capacity,
+            compare_reifier_targets,
+        )
     }
 
     /// The `(predicate, object)` statement annotations attached to a reifier
@@ -2020,6 +2068,7 @@ impl RdfDataset {
             dictionary: self.dictionary.clone(),
             quads: self.quads.clone(),
             reifiers: self.reifiers.clone(),
+            reifier_targets: OnceLock::new(),
             annotations: self.annotations.clone(),
             locations: self.locations.clone(),
             caps: self.caps,
@@ -2078,7 +2127,8 @@ impl RdfDataset {
     ///
     /// Query builders carry RDF data only. A graph with configured content or
     /// derivation metadata is not a query-output certificate and returns `None`.
-    /// Permutations use five boxed `u32` ordinal arrays sorted in place.
+    /// Quad permutations use five boxed `u32` ordinal arrays sorted in place;
+    /// the reifier target order uses one more ordinal per reifier binding.
     /// [`Self::warm_query_indexes`] finishes those allocations before publication.
     #[must_use]
     pub fn query_retained_bytes(&self) -> Option<usize> {
@@ -2090,6 +2140,7 @@ impl RdfDataset {
             return None;
         }
         let permutations = self.quads.len().checked_mul(5 * size_of::<u32>())?;
+        let reifier_targets = self.reifiers.len().checked_mul(size_of::<u32>())?;
         // A statement histogram can hold at most one entry per named graph.
         // The fill home reserves this exact entry bound in hashbrown's table;
         // share its checked physical bucket/control layout certificate.
@@ -2102,6 +2153,7 @@ impl RdfDataset {
             .checked_add(size_of::<Self>() + 2 * size_of::<usize>())?
             .checked_add(self.dictionary.term_index.allocation_size())?
             .checked_add(permutations)?
+            .checked_add(reifier_targets)?
             .checked_add(histogram)
     }
 
@@ -2122,6 +2174,8 @@ impl RdfDataset {
                 .map_err(QueryIndexAllocationError::Permutation)?;
         }
         if !self.reifiers.is_empty() || !self.annotations.is_empty() {
+            self.try_reifier_targets()
+                .map_err(QueryIndexAllocationError::Permutation)?;
             self.try_statement_graph_rows()
                 .map_err(QueryIndexAllocationError::StatementHistogram)?;
         }
@@ -2157,6 +2211,19 @@ impl RdfDataset {
             self.permutation_cell(permutation)
                 .set(ordinals)
                 .expect("exclusive native construction owns the empty index cell");
+        }
+        if !self.reifiers.is_empty() && self.reifier_targets.get().is_none() {
+            let ordinals = build_ordinal_permutation(
+                &self.reifiers,
+                self.indexes.capacity,
+                memory,
+                purrdf_lex::allocation::Memory::reserve,
+                purrdf_lex::allocation::Memory::boxed_slice,
+                compare_reifier_targets,
+            )?;
+            self.reifier_targets
+                .set(ordinals)
+                .expect("exclusive native construction owns the empty reifier index cell");
         }
         if (!self.reifiers.is_empty() || !self.annotations.is_empty())
             && self.statement_graph_rows.get().is_none()
@@ -2452,6 +2519,84 @@ mod tests {
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}")).unwrap()
+    }
+
+    #[test]
+    fn target_ranges_preserve_filtered_reifier_order_and_graph_multiplicity() {
+        for count in [0, 1, 257, 4096] {
+            let mut builder = RdfDatasetBuilder::new();
+            let subject = iri(&mut builder, "s");
+            let predicate = iri(&mut builder, "p");
+            let object = iri(&mut builder, "o");
+            let graph = iri(&mut builder, "g");
+            let target = builder.intern_triple(subject, predicate, object).unwrap();
+            let other = builder.intern_triple(object, predicate, subject).unwrap();
+            for index in 0..count {
+                let reifier = iri(&mut builder, &format!("r{index}"));
+                let bound = if index % 7 == 0 { target } else { other };
+                builder.push_reifier(reifier, bound).unwrap();
+                if index % 11 == 0 {
+                    builder
+                        .push_reifier_in_graph(reifier, bound, Some(graph))
+                        .unwrap();
+                }
+            }
+            let dataset = builder.freeze().unwrap();
+            for wanted in [target, other, subject] {
+                let expected: Vec<_> = dataset
+                    .reifiers
+                    .iter()
+                    .filter(|row| row.1 == wanted)
+                    .map(|row| row.0)
+                    .collect();
+                assert_eq!(dataset.reifiers_of(wanted).collect::<Vec<_>>(), expected);
+            }
+            assert_eq!(
+                dataset.reifier_targets.get().unwrap().len(),
+                dataset.reifiers.len()
+            );
+        }
+    }
+
+    #[test]
+    fn target_index_capacity_refuses_without_publication_and_retries() {
+        use crate::ir::builder::LocalCapacity;
+        use purrdf_lex::allocation::{
+            CapacityError, CapacitySpace, Memory, Resident, StorageError,
+        };
+
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = iri(&mut builder, "s");
+        let predicate = iri(&mut builder, "p");
+        let target = builder.intern_triple(subject, predicate, subject).unwrap();
+        for name in ["r0", "r1", "r2"] {
+            let reifier = iri(&mut builder, name);
+            builder.push_reifier(reifier, target).unwrap();
+        }
+        let mut dataset = Arc::try_unwrap(builder.freeze().unwrap()).unwrap();
+        dataset.indexes.capacity = LocalCapacity::Reduced {
+            terms: u32::MAX,
+            text: u32::MAX,
+            rows: 2,
+        };
+        let expected = StorageError::Capacity(CapacityError::new(CapacitySpace::Permutation, 3, 2));
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        for _ in 0..3 {
+            assert_eq!(dataset.try_reifier_targets(), Err(expected));
+            assert_eq!(
+                dataset.warm_query_indexes_with_memory(&mut memory),
+                Err(expected)
+            );
+            assert!(dataset.reifier_targets.get().is_none());
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+        dataset.indexes.capacity = LocalCapacity::Native;
+        dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 3 * size_of::<u32>());
+        assert_eq!(dataset.reifiers_of(target).count(), 3);
+        dataset.warm_query_indexes_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 3 * size_of::<u32>());
     }
 
     #[test]

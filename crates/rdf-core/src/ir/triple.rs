@@ -6,10 +6,10 @@
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
-use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use purrdf_lex::allocation::StorageError;
 
 use super::builder::LocalCapacity;
-use super::dataset::{QuadHandle, TermRef, build_ordinal_permutation};
+use super::dataset::{QuadHandle, TermRef, cached_permutation};
 use super::frozen_terms::FrozenTerms;
 use super::term::{TermId, TermValue};
 use crate::{RdfLocation, RdfStoreCapabilities};
@@ -50,32 +50,6 @@ pub struct TripleStorageLayout {
     pub annotation_orders: [usize; 2],
     /// Reifier bindings ordered by target, zero until first target probe.
     pub reifier_targets: usize,
-}
-
-fn cached_permutation<'a, T>(
-    cell: &'a OnceLock<Box<[u32]>>,
-    rows: &[T],
-    compare: impl FnMut(&T, &T) -> Ordering,
-) -> Result<&'a [u32], StorageError> {
-    if let Some(ordinals) = cell.get() {
-        return Ok(ordinals);
-    }
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    let ordinals = build_ordinal_permutation(
-        rows,
-        LocalCapacity::Native,
-        &mut memory,
-        Memory::reserve,
-        Memory::boxed_slice,
-        compare,
-    )?;
-    // A competing successful publication owns the same deterministic order.
-    // Refusal never poisons the immutable payload's cache.
-    let _ = cell.set(ordinals);
-    Ok(cell
-        .get()
-        .expect("a successful permutation publication initialized the cell"))
 }
 
 fn permutation_bytes(cell: &OnceLock<Box<[u32]>>) -> usize {
@@ -135,7 +109,7 @@ impl TripleTable {
             TripleOrder::Pos => &self.pos,
             TripleOrder::Osp => &self.osp,
         };
-        cached_permutation(cell, &self.rows, |a, b| {
+        cached_permutation(cell, &self.rows, LocalCapacity::Native, |a, b| {
             order
                 .ordered([a.s, a.p, a.o])
                 .cmp(&order.ordered([b.s, b.p, b.o]))
@@ -346,6 +320,7 @@ impl TripleDataset {
             Some(cached_permutation(
                 &self.reifier_targets,
                 &self.reifiers,
+                LocalCapacity::Native,
                 |a, b| (a.1, a.0).cmp(&(b.1, b.0)),
             )?)
         } else {
