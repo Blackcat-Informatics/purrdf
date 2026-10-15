@@ -3262,6 +3262,7 @@ pub(crate) struct PlanSurvey {
     /// Immutable statistical inputs behind the surveyed BGP forecasts. These
     /// retain exactness separately from the heuristic join/output estimates.
     pub(crate) statistics: AdmittedRecords<String>,
+    pub(crate) record_statistics: bool,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
     pub(crate) estimates: AdmittedVec<Option<PlanEstimate>>,
@@ -3290,6 +3291,7 @@ impl PlanSurvey {
         Ok(Self {
             orders: AdmittedRecords::new(workspace),
             statistics: AdmittedRecords::new(workspace),
+            record_statistics: false,
             estimates,
             shape: shape.clone(),
             workspace: workspace.clone(),
@@ -3803,6 +3805,9 @@ fn record_bgp_statistics<D: DatasetView>(
     survey: &mut PlanSurvey,
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
+    if !survey.record_statistics {
+        return Ok(());
+    }
     let Some(statistics) = dataset.statistics() else {
         return Ok(());
     };
@@ -5566,6 +5571,10 @@ mod tests {
             &workspace,
         )
         .expect("resident cardinality replay");
+        // Without provider domains, admission retains the original relation-
+        // local calibration: 7 * 20, then /20 * 5, then /5 * 1. Order search's
+        // global-term heuristic is intentionally a different approximation.
+        assert_eq!(expected, (7, 140));
         let actual = replay_cost_estimate_from_admitted(
             &compiled,
             &host,

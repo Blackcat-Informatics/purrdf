@@ -969,7 +969,9 @@ impl DatasetView for PagedQueryView<'_> {
     }
 
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<GlobalTermId>> {
-        (!self.failed()).then_some(&self.dataset.statistics.values)
+        self.read_error()
+            .is_none()
+            .then_some(&self.dataset.statistics.values)
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
@@ -1364,6 +1366,24 @@ mod tests {
         let object = builder.intern_iri("http://example.org/o").unwrap();
         builder.push_quad(subject, predicate, object, None).unwrap();
         builder.freeze().expect("valid test page")
+    }
+
+    #[test]
+    fn statistics_point_reads_latch_generation_drift() {
+        let provider = Arc::new(MutableGenerationProvider {
+            page: page(),
+            generation: AtomicU64::new(1),
+            generation_reads: AtomicUsize::new(0),
+        });
+        let paged = PagedDataset::from_provider(provider.clone()).unwrap();
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        assert!(view.statistics().is_some());
+        provider.generation.store(2, Ordering::Relaxed);
+        assert!(view.statistics().is_none());
+        let cause = view.read_error().expect("metadata read latches the drift");
+        provider.generation.store(1, Ordering::Relaxed);
+        assert!(view.statistics().is_none());
+        assert_eq!(view.read_error(), Some(cause));
     }
 
     #[test]

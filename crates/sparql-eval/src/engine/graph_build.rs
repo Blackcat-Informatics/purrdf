@@ -448,6 +448,7 @@ impl NativeSparqlEngine {
                         dataset,
                         &prepared.query,
                         options.property_functions(),
+                        false,
                         workspace,
                     )
                     .map_err(GraphBuildError::Evaluation)?

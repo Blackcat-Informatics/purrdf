@@ -3622,7 +3622,8 @@ impl NativeSparqlEngine {
         let capability = workspace.capability();
         let relations = options.property_functions();
         let aggregates = options.aggregates();
-        let survey = self.survey_plan_admitted(dataset, &prepared.query, relations, workspace)?;
+        let survey =
+            self.survey_plan_admitted(dataset, &prepared.query, relations, true, workspace)?;
         // All immutable metadata and the terminal ledger destination exist before
         // measuring. A sticky operational refusal requires no snapshot allocation.
         let profile = crate::ProfileIdentity::current_admitted(&capability)?;
@@ -3676,6 +3677,7 @@ impl NativeSparqlEngine {
         dataset: &D,
         query: &Query,
         relations: &crate::property_fn::PropertyFunctionRegistry,
+        record_statistics: bool,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<crate::bgp::PlanSurvey, crate::EvalError> {
         let _ = self;
@@ -3688,6 +3690,7 @@ impl NativeSparqlEngine {
         )?;
         let tree = crate::plan::Tree::build_admitted(query_pattern(query), &capability)?;
         let mut survey = crate::bgp::PlanSurvey::for_shape_admitted(tree.shape(), &capability)?;
+        survey.record_statistics = record_statistics;
         crate::bgp::survey_pattern_plans_admitted(
             dataset,
             &active_dataset,
@@ -3760,7 +3763,8 @@ impl NativeSparqlEngine {
             return None;
         }
         let limit = state.limits().get(dimension);
-        let estimate = match self.survey_plan_admitted(dataset, query, relations, workspace) {
+        let estimate = match self.survey_plan_admitted(dataset, query, relations, false, workspace)
+        {
             Ok(survey) => survey.peak_cells(),
             Err(error) => return Some(Err(EvaluationFailure::Evaluation(error))),
         };
@@ -7104,6 +7108,45 @@ fn resolve_governed<D: DatasetView + Sync>(
 // The compatibility tests still name both `ShaclPrebinding` values.
 #[allow(deprecated)]
 mod tests {
+    #[test]
+    fn only_explain_survey_retains_statistical_evidence() {
+        let mut builder = RdfDatasetBuilder::new();
+        let [subject, predicate, object] = ["s", "p", "o"].map(|name| {
+            builder
+                .intern_iri(&format!("http://example.org/{name}"))
+                .unwrap()
+        });
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine
+            .prepare_query("SELECT ?s WHERE { ?s <http://example.org/p> ?o }", None)
+            .unwrap();
+        let workspace = crate::workspace::QueryWorkspace::resident();
+        let relations = crate::property_fn::PropertyFunctionRegistry::new();
+        let admission = engine
+            .survey_plan_admitted(
+                dataset.as_ref(),
+                &prepared.query,
+                &relations,
+                false,
+                &workspace,
+            )
+            .unwrap();
+        let explanation = engine
+            .survey_plan_admitted(
+                dataset.as_ref(),
+                &prepared.query,
+                &relations,
+                true,
+                &workspace,
+            )
+            .unwrap();
+        assert!(admission.statistics.is_empty());
+        assert!(!explanation.statistics.is_empty());
+        assert_eq!(admission.peak_cells(), explanation.peak_cells());
+    }
+
     #[test]
     fn public_cursor_refuses_contextual_application_and_accepts_ordinary_call() {
         use crate::property_fn::{MemoryRelation, PropertyFunctionRegistry};
