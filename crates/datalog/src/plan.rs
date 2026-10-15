@@ -52,7 +52,8 @@
 //! Every associative structure on this path is a `BTreeMap`/`BTreeSet`, and every
 //! remaining choice is broken by an explicit total order (authored position, then
 //! lexical name). No hash map participates, so a plan is a pure function of the rule
-//! program: the same rules always compile to the same plan, on every target.
+//! program and, when supplied explicitly, immutable snapshot statistics. The same
+//! rules and statistical inputs compile to the same plan on every target.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -366,7 +367,8 @@ fn atom_has_repeated_variable<const N: usize>(atom: &ClauseAtom<N>) -> bool {
 fn atom_priority<const N: usize>(
     atom: &ClauseAtom<N>,
     bound: &BTreeSet<String>,
-) -> (bool, usize, usize, usize) {
+    estimate: &impl Fn(&ClauseAtom<N>) -> Option<purrdf_core::StatisticCount>,
+) -> (bool, usize, usize, usize, u64) {
     let connected = atom
         .terms()
         .into_iter()
@@ -386,6 +388,7 @@ fn atom_priority<const N: usize>(
         known,
         constants,
         usize::from(atom_has_repeated_variable(atom)),
+        estimate(atom).map_or(0, |count| u64::MAX - count.value),
     )
 }
 
@@ -395,7 +398,7 @@ fn atom_priority<const N: usize>(
 /// extends the binding frontier before the next choice; no store history participates.
 fn binding_aware_order<T>(
     mut remaining: Vec<T>,
-    priority: impl Fn(&T, &BTreeSet<String>) -> (bool, usize, usize, usize, usize),
+    priority: impl Fn(&T, &BTreeSet<String>) -> (bool, usize, usize, usize, u64, usize),
     bind: impl Fn(&T, &mut BTreeSet<String>),
 ) -> Vec<T> {
     let mut bound = BTreeSet::new();
@@ -417,14 +420,26 @@ fn binding_aware_order<T>(
 /// Deterministic sideways-information-passing order for an acyclic positive body.
 ///
 /// Connected atoms run first; ties retain the known/constant/repeated-variable preference
-/// and finally authored position. After a choice, all of its variables become bound.
-fn sips_order<const N: usize>(rule: &DlClause<N>, positive: &[usize]) -> Vec<usize> {
+/// then available statistical counts and authored position. After a choice, all
+/// of its variables become bound.
+fn sips_order<const N: usize>(
+    rule: &DlClause<N>,
+    positive: &[usize],
+    estimate: &impl Fn(&ClauseAtom<N>) -> Option<purrdf_core::StatisticCount>,
+) -> Vec<usize> {
     binding_aware_order(
         (0..positive.len()).collect(),
         |&position, bound| {
-            let (connected, known, constants, repeated) =
-                atom_priority(&rule.body()[positive[position]], bound);
-            (connected, known, constants, repeated, usize::MAX - position)
+            let (connected, known, constants, repeated, statistical) =
+                atom_priority(&rule.body()[positive[position]], bound, estimate);
+            (
+                connected,
+                known,
+                constants,
+                repeated,
+                statistical,
+                usize::MAX - position,
+            )
         },
         |&position, bound| bind_atom_variables(&rule.body()[positive[position]], bound),
     )
@@ -790,14 +805,18 @@ impl JoinGroup {
 /// A group connects when ANY member shares a bound variable. Its best member supplies
 /// the remaining selectivity preferences, and its earliest authored atom breaks ties.
 /// Selecting a cycle binds all of its variables without changing its internal descent.
-fn sips_group_order<const N: usize>(rule: &DlClause<N>, groups: Vec<JoinGroup>) -> Vec<JoinGroup> {
+fn sips_group_order<const N: usize>(
+    rule: &DlClause<N>,
+    groups: Vec<JoinGroup>,
+    estimate: &impl Fn(&ClauseAtom<N>) -> Option<purrdf_core::StatisticCount>,
+) -> Vec<JoinGroup> {
     binding_aware_order(
         groups,
         |group, bound| {
             let atoms = group.atoms();
-            let (connected, known, constants, repeated) = atoms
+            let (connected, known, constants, repeated, statistical) = atoms
                 .iter()
-                .map(|atom| atom_priority(&rule.body()[atom.body_index], bound))
+                .map(|atom| atom_priority(&rule.body()[atom.body_index], bound, estimate))
                 .max()
                 .expect("a join group contains at least one atom");
             (
@@ -805,6 +824,7 @@ fn sips_group_order<const N: usize>(rule: &DlClause<N>, groups: Vec<JoinGroup>) 
                 known,
                 constants,
                 repeated,
+                statistical,
                 usize::MAX - atoms[0].positive_position,
             )
         },
@@ -1131,6 +1151,13 @@ impl<const N: usize> RulePlan<N> {
     /// rule layout without changing the positive operators. For the atomic head this crate
     /// evaluates, "the head atoms" is the one head atom.
     pub(crate) fn for_rule(rule: &DlClause<N>) -> Self {
+        Self::for_rule_with_estimates(rule, &|_| None)
+    }
+
+    fn for_rule_with_estimates(
+        rule: &DlClause<N>,
+        estimate: &impl Fn(&ClauseAtom<N>) -> Option<purrdf_core::StatisticCount>,
+    ) -> Self {
         let mut positive = Vec::new();
         let mut negated = Vec::new();
         for (i, atom) in rule.body().iter().enumerate() {
@@ -1183,7 +1210,7 @@ impl<const N: usize> RulePlan<N> {
         };
 
         if cyclic.is_empty() {
-            let execution_order = sips_order(rule, &positive);
+            let execution_order = sips_order(rule, &positive, estimate);
             let operators = lower_operators(rule, &positive, &execution_order, &slots);
             let operator_source_order_swaps = restore_body_order_swaps(&execution_order);
             return Self {
@@ -1224,7 +1251,7 @@ impl<const N: usize> RulePlan<N> {
             }
         }
 
-        let join_groups = sips_group_order(rule, join_groups);
+        let join_groups = sips_group_order(rule, join_groups, estimate);
         let execution_source_order: Vec<usize> = join_groups
             .iter()
             .flat_map(|group| group.atoms().iter().map(|atom| atom.positive_position))
@@ -1436,7 +1463,32 @@ pub struct Stratified<const N: usize = 4> {
 impl<const N: usize> Stratified<N> {
     /// Precompute one complete store-independent [`RulePlan`] per rule.
     pub fn plan(self) -> Planned<N> {
-        let plans: Vec<RulePlan<N>> = self.rules.iter().map(RulePlan::for_rule).collect();
+        self.plan_with_estimates(&|_| None)
+    }
+
+    /// Plan with immutable RDF snapshot statistics as a connected-order tie-break.
+    /// The caller resolves each atom into the provider's own identity space;
+    /// no RDF identity is stored in the resulting executable or remapped at joins.
+    /// Unknown estimates preserve authored ordering. Connectivity and existing
+    /// binding preferences take precedence, and proof sources retain authored order.
+    /// Estimates select an order; they are never output or allocation certificates.
+    pub fn plan_with_statistics<I: purrdf_core::ViewTermId>(
+        self,
+        statistics: &dyn purrdf_core::SnapshotStatistics<I>,
+        probe: impl Fn(&ClauseAtom<N>) -> Option<purrdf_core::ProbePattern<I>>,
+    ) -> Planned<N> {
+        self.plan_with_estimates(&|atom| statistics.pattern(probe(atom)?))
+    }
+
+    fn plan_with_estimates(
+        self,
+        estimate: &impl Fn(&ClauseAtom<N>) -> Option<purrdf_core::StatisticCount>,
+    ) -> Planned<N> {
+        let plans = self
+            .rules
+            .iter()
+            .map(|rule| RulePlan::for_rule_with_estimates(rule, estimate))
+            .collect();
         Planned {
             admission: self.admission,
             rules: self.rules,
@@ -1601,6 +1653,83 @@ mod tests {
     /// The lexical surface of an IRI — the predicate SYMBOL a stratum is keyed by.
     fn surface(iri: &str) -> String {
         format!("<{iri}>")
+    }
+
+    #[test]
+    fn snapshot_statistics_change_connected_order_and_preserve_native_proofs() {
+        use crate::seminaive::evaluate;
+        use crate::store::RelationStore;
+        use purrdf_core::{DatasetView, GraphMatch, ProbePattern, RdfDatasetBuilder};
+
+        let rule = DlClause::datalog(
+            atom("?x", S, "?q"),
+            vec![
+                atom("?x", P, "?p"),
+                atom("?x", Q, "?q"),
+                atom("?u", R, "?v"),
+            ],
+        );
+        let mut builder = RdfDatasetBuilder::new();
+        let mut input = RelationStore::new();
+        for (predicate, count) in [(P, 5), (Q, 1), (R, 1)] {
+            let p = builder.intern_iri(predicate).unwrap();
+            for index in 0..count {
+                let subject = format!("https://example.org/subject/{index}");
+                let object = format!("https://example.org/object/{index}");
+                let s = builder.intern_iri(&subject).unwrap();
+                let o = builder.intern_iri(&object).unwrap();
+                builder.push_quad(s, p, o, None).unwrap();
+                input
+                    .insert(
+                        &surface(&subject),
+                        &surface(predicate),
+                        &surface(&object),
+                        RelationStore::DEFAULT_GRAPH,
+                    )
+                    .unwrap();
+            }
+        }
+        let dataset = builder.freeze().unwrap();
+        let parsed = Parsed::new(vec![rule]).unwrap().stratify().unwrap();
+        let ordinary = parsed.clone().plan().into_executable();
+        let statistical = parsed
+            .plan_with_statistics(dataset.statistics().unwrap(), |atom| {
+                Some(ProbePattern {
+                    s: None,
+                    p: Some(dataset.term_id_by_iri(atom.predicate_iri()?)?),
+                    o: None,
+                    g: GraphMatch::Default,
+                })
+            })
+            .into_executable();
+        let order = |executable: &Executable| {
+            executable
+                .rule_entry(0)
+                .1
+                .operators()
+                .iter()
+                .map(AtomOperator::positive_position)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(order(&ordinary), [0, 1, 2]);
+        // The disconnected one-row atom cannot outrank the connected five-row atom.
+        assert_eq!(order(&statistical), [1, 0, 2]);
+        let baseline = evaluate(&ordinary, input.clone()).unwrap();
+        let actual = evaluate(&statistical, input).unwrap();
+        assert_eq!(actual.facts().row_count(), baseline.facts().row_count());
+        assert_eq!(actual.facts().row_count(), 8);
+        assert_eq!(actual.derivations().len(), 1);
+        let proof = &actual.derivations()[0];
+        assert_eq!(proof.fact(), baseline.derivations()[0].fact());
+        assert_eq!(proof.sources(), baseline.derivations()[0].sources());
+        assert_eq!(
+            proof
+                .sources()
+                .iter()
+                .map(|source| source.predicate.as_str())
+                .collect::<Vec<_>>(),
+            [surface(P), surface(Q), surface(R)]
+        );
     }
 
     /// The three-atom triangle `p(X,Y), q(Y,Z), r(Z,X)` — the canonical cyclic body.
