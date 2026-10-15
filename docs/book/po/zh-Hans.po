@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-14T23:50:18-06:00\n"
+"POT-Creation-Date: 2026-10-15T04:19:43-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -142,7 +142,7 @@ msgstr "SHACL"
 msgid "Prepared Shapes Products"
 msgstr "预备形状产物"
 
-#: src/SUMMARY.md:42 src/reference/python-api.md:397 src/validation/shex.md:6
+#: src/SUMMARY.md:42 src/reference/python-api.md:398 src/validation/shex.md:6
 msgid "ShEx"
 msgstr "ShEx"
 
@@ -763,7 +763,7 @@ msgstr "// 在驻留的 TermId 空间中构建数据集。\n"
 
 #: src/getting-started/rust.md:33 src/getting-started/python.md:40
 #: src/reference/python-api.md:49 src/reference/python-api.md:51
-#: src/reference/python-api.md:89 src/reference/python-api.md:528
+#: src/reference/python-api.md:89 src/reference/python-api.md:529
 #: src/validation/shex.md:60 src/validation/shex.md:80
 msgid "\"https://example.org/alice\""
 msgstr "\"https://example.org/alice\""
@@ -782,7 +782,7 @@ msgstr "\"http://xmlns.com/foaf/0.1/name\""
 
 #: src/getting-started/rust.md:37 src/reference/python-api.md:39
 #: src/reference/python-api.md:90 src/reference/python-api.md:105
-#: src/reference/python-api.md:530
+#: src/reference/python-api.md:531
 msgid "\"Alice\""
 msgstr "\"Alice\""
 
@@ -1978,7 +1978,7 @@ msgstr ""
 "    sh:property [ sh:path ex:name; sh:minCount 1 ] .\n"
 "'''"
 
-#: src/reference/python-api.md:326 src/reference/python-api.md:522
+#: src/reference/python-api.md:326 src/reference/python-api.md:523
 msgid "'<https://example.org/alice> <https://example.org/name> \"Alice\" .'"
 msgstr "'<https://example.org/alice> <https://example.org/name> \"Alice\" .'"
 
@@ -2092,19 +2092,21 @@ msgid ""
 "plus inferred triples. It differs from `purrdf.entail.materialize`, which "
 "uses a regime's rule table without a shapes graph. `shapes.apply_rules` runs "
 "an SRL document and returns only the inference graph, with proof text when "
-"`explain=True`. `check_rules` admits a rule set at the requested level and "
-"reports declarations, imports, versions and strata. Stored-fact, join-step, "
-"generated-term and generating-round controls are explicit keyword arguments; "
-"exhaustion raises a limit-specific `ValueError`."
+"`explain=True`. `check_rules` admits a rule set at the selected checking "
+"level: `level` accepts `syntax`, `well-formed` or `stratified`; omission "
+"selects `stratified`. It reports declarations, imports, versions and strata. "
+"Stored-fact, join-step, generated-term and generating-round controls are "
+"explicit keyword arguments; exhaustion raises a limit-specific `ValueError`."
 msgstr ""
 "`shapes.entail` 应用形状图的默认规则集，返回基底与推导三元组。它不同于 "
 "`purrdf.entail.materialize`，后者使用蕴涵机制的规则表，不需要形状图。"
 "`shapes.apply_rules` 运行 SRL 文档，仅返回推理图；`explain=True` 时另有证明文"
-"本。`check_rules` 在请求级别准入规则集，并报告声明、导入、版本和分层。存储事"
-"实数、连接步数、生成词项数和生成轮数均由显式关键字参数限制；耗尽时引发对应限"
-"制的 `ValueError`。"
+"本。`check_rules` 按所选检查级别准入规则集：`level` 接受 `syntax`、`well-"
+"formed` 或 `stratified`；省略时选择 `stratified`。它报告声明、导入、版本和分"
+"层。存储事实数、连接步数、生成词项数和生成轮数均由显式关键字参数限制；耗尽时"
+"引发对应限制的 `ValueError`。"
 
-#: src/reference/python-api.md:389
+#: src/reference/python-api.md:390
 msgid ""
 "`eval_node_expr` selects exactly one expression: a named IRI/blank label, a "
 "unique walk from `expr_at` through `expr_via`, or a one-root inline "
@@ -2122,7 +2124,7 @@ msgstr ""
 "断。完整契约见 [SHACL](../validation/shacl.md) 与[预备产物](../validation/"
 "shapes-products.md)。"
 
-#: src/reference/python-api.md:399
+#: src/reference/python-api.md:400
 msgid ""
 "`purrdf.shex.parse` converts ShExC or ShExJ into canonical ShExJ text. "
 "`shex.validate` takes a schema, data and a fixed shape map. Each `(node, "
@@ -2142,11 +2144,11 @@ msgstr ""
 "相对 IRI。被所选 XPath 规则拒绝的模式使该条目不符合；原生资源拒绝则对整个映射"
 "引发异常。参见 [ShEx](../validation/shex.md)。"
 
-#: src/reference/python-api.md:409
+#: src/reference/python-api.md:410
 msgid "Entailment, decisions and proofs"
 msgstr "蕴涵、判定与证明"
 
-#: src/reference/python-api.md:411
+#: src/reference/python-api.md:412
 msgid ""
 "`purrdf.entail.Regime` names `SIMPLE`, `RDF`, `RDFS`, `OWL_RL`, "
 "`OWL_DIRECT`, `RIF` and `D`; functions also accept the lowercase CLI "
@@ -2168,7 +2170,7 @@ msgstr ""
 "`implemented_rules` 和 `extensions` 分别提供规范规则表、已实现子集和具名非规"
 "范扩展。"
 
-#: src/reference/python-api.md:422
+#: src/reference/python-api.md:423
 msgid ""
 "Chase reports describe rule coverage; OWL Direct-Semantics services return "
 "decision certificates. An incomplete rule table differs from a decision that "
@@ -2177,93 +2179,93 @@ msgstr ""
 "chase 报告描述规则覆盖情况；OWL Direct-Semantics 服务返回判定证书。规则表不完"
 "整与判定耗尽工作上限是两回事。应解包证书并与答案一起保留。"
 
-#: src/reference/python-api.md:426
+#: src/reference/python-api.md:427
 msgid "Service"
 msgstr "服务"
 
-#: src/reference/python-api.md:426
+#: src/reference/python-api.md:427
 msgid "Question"
 msgstr "问题"
 
-#: src/reference/python-api.md:428
+#: src/reference/python-api.md:429
 msgid "`consistency`"
 msgstr "`consistency`"
 
-#: src/reference/python-api.md:428
+#: src/reference/python-api.md:429
 msgid "Whether the knowledge base has a model; false and unknown are distinct."
 msgstr "知识库是否存在模型；假与未知是不同结果。"
 
-#: src/reference/python-api.md:429
+#: src/reference/python-api.md:430
 msgid "`classify`"
 msgstr "`classify`"
 
-#: src/reference/python-api.md:429
+#: src/reference/python-api.md:430
 msgid ""
 "Named-class equivalence, transitive subsumption, direct edges and "
 "unsatisfiable classes."
 msgstr "具名类等价、传递包含、直接边和不可满足类。"
 
-#: src/reference/python-api.md:430
+#: src/reference/python-api.md:431
 msgid "`realize`"
 msgstr "`realize`"
 
-#: src/reference/python-api.md:430
+#: src/reference/python-api.md:431
 msgid "Entailed individual types and most-specific direct types."
 msgstr "蕴涵的个体类型，以及最具体的直接类型。"
 
-#: src/reference/python-api.md:431
+#: src/reference/python-api.md:432
 msgid "`instances`"
 msgstr "`instances`"
 
-#: src/reference/python-api.md:431
+#: src/reference/python-api.md:432
 msgid "Named instances of one class, supplied as an N-Triples term."
 msgstr "以 N-Triples 词项传入一个类，查询其具名实例。"
 
-#: src/reference/python-api.md:432
+#: src/reference/python-api.md:433
 msgid "`entails`"
 msgstr "`entails`"
 
-#: src/reference/python-api.md:432
+#: src/reference/python-api.md:433
 msgid ""
 "Whether one OWL RDF-mapping axiom is entailed; different from "
 "`graph_entails`."
 msgstr "是否蕴涵一个 OWL RDF 映射公理；不同于 `graph_entails`。"
 
-#: src/reference/python-api.md:433 src/validation/shapes-products.md:719
+#: src/reference/python-api.md:434 src/validation/shapes-products.md:719
 msgid "`profile`"
 msgstr "`profile`"
 
-#: src/reference/python-api.md:433
+#: src/reference/python-api.md:434
 msgid ""
 "Syntactic OWL profile certification and blockers, without decision search."
 msgstr "OWL 语法配置（profile）的认证与阻碍项，不执行判定搜索。"
 
-#: src/reference/python-api.md:434
+#: src/reference/python-api.md:435
 msgid "`extract_module`"
 msgstr "`extract_module`"
 
-#: src/reference/python-api.md:434
+#: src/reference/python-api.md:435
 msgid "A locality module for a seed signature under `bot`, `top` or `star`."
 msgstr "在 `bot`、`top` 或 `star` 下，为种子签名提取局部性模块。"
 
-#: src/reference/python-api.md:435
+#: src/reference/python-api.md:436
 msgid "`justify`"
 msgstr "`justify`"
 
-#: src/reference/python-api.md:435
+#: src/reference/python-api.md:436
 msgid ""
 "A sufficient minimal axiom subset, with sufficiency/minimality re-decided."
 msgstr "充分且极小的公理子集，并重新判定充分性与极小性。"
 
-#: src/reference/python-api.md:436
+#: src/reference/python-api.md:437
 msgid "`explain_conclusion`"
 msgstr "`explain_conclusion`"
 
-#: src/reference/python-api.md:436
+#: src/reference/python-api.md:437
 msgid "A checkable chase derivation, not a tableau justification."
 msgstr "可检查的 chase 推导，不是 tableau 论证。"
 
-#: src/reference/python-api.md:438
+#: src/reference/python-api.md:439
 msgid ""
 "`step_cap` and `work_cap` only narrow the decision engine's derived caps; "
 "zero selects its own cap, not zero work. Certificates report rounds, work, "
@@ -2278,7 +2280,7 @@ msgstr ""
 "预算耗尽为 `unknown`，不是否定定理。除 `consistency` 外，判定服务拒绝没有模型"
 "的本体，不会把空真蕴涵作为普通答案。未提及的类可以返回空实例答案，不必报错。"
 
-#: src/reference/python-api.md:446
+#: src/reference/python-api.md:447
 msgid ""
 "`entail.Reasoner` retains parsed data, lazily builds a knowledge base when "
 "needed and reuses both across corresponding service methods. Caps are fixed "
@@ -2297,7 +2299,7 @@ msgstr ""
 "记录的证明绝不会通过验证。空答案或空证书请求较弱的检查，报告会明确说明。论证"
 "与执行证明回答不同问题。"
 
-#: src/reference/python-api.md:456
+#: src/reference/python-api.md:457
 msgid ""
 "`certain_answers` asks for substitutions true in every model, not just "
 "matches in one closure. Predicate variables and variables inside triple "
@@ -2315,7 +2317,7 @@ msgstr ""
 "`verify_entailment` 根据原样前提复查现有凭据。这些调用要求导入和前提 IRI，并"
 "拒绝签名无法表达所需输入的机制。字面量数据类型位置上的变量会被拒绝。"
 
-#: src/reference/python-api.md:465
+#: src/reference/python-api.md:466
 msgid ""
 "`Store.query_entailment_governed` has two phases. Stopped closure "
 "construction produces `EntailmentQueryOutcome.phase == \"closure-stopped\"`, "
@@ -2332,11 +2334,11 @@ msgstr ""
 "若 OWL Direct 闭包通过遍历暴露生成的存在见证，则以 `reasoning-closure-"
 "relation-witness` 拒绝。完整服务与证书语法见[蕴涵](../entailment.md)。"
 
-#: src/reference/python-api.md:473
+#: src/reference/python-api.md:474
 msgid "Geographic sessions"
 msgstr "地理会话"
 
-#: src/reference/python-api.md:475
+#: src/reference/python-api.md:476
 msgid ""
 "`purrdf.geo.GeoProfile` owns an immutable strict geographic profile; "
 "`to_json` returns its canonical version-one record with explicit limits. "
@@ -2350,7 +2352,7 @@ msgstr ""
 "略时选择标准 CRS84 配置。`profile()` 返回所选配置。查询、更新和预备方法通过 "
 "`geo` 接受相同选择。"
 
-#: src/reference/python-api.md:481
+#: src/reference/python-api.md:482
 msgid ""
 "`GeoSession.call` evaluates a strict scalar/batch JSON request; "
 "`point_index` constructs immutable native point buckets and returns "
@@ -2364,11 +2366,11 @@ msgstr ""
 "规范 JSON；操作性拒绝引发 `ValueError`。这些路径使用共享 Rust 编解码器，没有 "
 "Python 几何实现。参见 [GeoSPARQL](../sparql/geosparql.md)。"
 
-#: src/reference/python-api.md:488
+#: src/reference/python-api.md:489
 msgid "GTS containers and immutable datasets"
 msgstr "GTS 容器与不可变数据集"
 
-#: src/reference/python-api.md:490
+#: src/reference/python-api.md:491
 msgid ""
 "The GTS functions are available at the package root and grouped under "
 "`purrdf.gts`; the namespace aliases refer to the same operations and types. "
@@ -2381,7 +2383,7 @@ msgstr ""
 "`transform` 和 `base` 将 RDF 字节摄入快照。`snapshot_content_id_native` 读取"
 "对应快照身份。"
 
-#: src/reference/python-api.md:496
+#: src/reference/python-api.md:497
 msgid ""
 "`compile_gts_native` accepts the base document, optional RDF 1.2 layer, "
 "named graphs and their scopes, document/report blobs and slice artifacts. "
@@ -2396,7 +2398,7 @@ msgstr ""
 "节、媒体类型和表示；切片产物行还包含切片 IRI、名称、角色和逻辑路径。必须保留"
 "声明的元组位置，不能根据最后一项的类型猜测。"
 
-#: src/reference/python-api.md:503
+#: src/reference/python-api.md:504
 msgid ""
 "`compile_gts_with_report` returns `GtsCompileResult`, pairing "
 "`snapshot_bytes` with the ingestion receipt from that same parse and intern "
@@ -2417,7 +2419,7 @@ msgstr ""
 "明没有丢失声明。`feedback_bundle_native` 将报告 blob 附加到所提供的 RDF 输"
 "入。"
 
-#: src/reference/python-api.md:513
+#: src/reference/python-api.md:514
 msgid ""
 "`RdfDataset` owns a frozen parsed dataset. Its `quad_count`, `term_count` "
 "and length are inspection methods. `to_nquads` provides the canonical flat "
@@ -2433,15 +2435,15 @@ msgstr ""
 "`to_parquet_files` 导出同一个原生载体。字典的数值词项标识符只属于该所有者；跨"
 "独立数据集时应解析词项。"
 
-#: src/reference/python-api.md:530
+#: src/reference/python-api.md:531
 msgid "\"https://example.org/name\""
 msgstr "\"https://example.org/name\""
 
-#: src/reference/python-api.md:533
+#: src/reference/python-api.md:534
 msgid "Fold views and language selection"
 msgstr "折叠视图与语言选择"
 
-#: src/reference/python-api.md:535
+#: src/reference/python-api.md:536
 msgid ""
 "`GtsFoldViewNative.from_bytes` reads a container; `from_parts` admits caller-"
 "supplied term, quad, reifier and annotation tables. Both refuse a term that "
@@ -2450,11 +2452,11 @@ msgid ""
 "mappings; only the documented W3C namespaces are built in."
 msgstr ""
 "`GtsFoldViewNative.from_bytes` 读取容器；`from_parts` 准入调用方提供的词项、"
-"四元组、具体化节点（reifier）和注解表。两者都以 `gts-self-reaching-term` 拒绝能够到达自身"
-"的词项，不会暴露无限递归的渲染器。`curie_prefixes` 提供宿主的 CURIE 映射；只"
-"有文档列出的 W3C 命名空间是内置的。"
+"四元组、具体化节点（reifier）和注解表。两者都以 `gts-self-reaching-term` 拒绝"
+"能够到达自身的词项，不会暴露无限递归的渲染器。`curie_prefixes` 提供宿主的 "
+"CURIE 映射；只有文档列出的 W3C 命名空间是内置的。"
 
-#: src/reference/python-api.md:541
+#: src/reference/python-api.md:542
 msgid ""
 "The four count methods report table sizes. `term_tuple`, `is_iri`, "
 "`is_bnode`, `is_literal`, `iri`, `lex`, `lang`, `datatype`, `nq_token` and "
@@ -2472,7 +2474,7 @@ msgstr ""
 "`scope`。`reifiers` 和 `annotations` 返回各自的陈述层表。不要把其中的整数 ID "
 "与另一个独立构建视图的 ID 比较。"
 
-#: src/reference/python-api.md:549
+#: src/reference/python-api.md:550
 msgid ""
 "Omitted scope or `None` selects the default graph. `purrdf.GTS_ALL_SCOPE` "
 "selects all graphs; a named-graph IRI selects that graph, and an unknown IRI "
@@ -2481,7 +2483,7 @@ msgstr ""
 "省略作用域或传 `None` 时选择默认图。`purrdf.GTS_ALL_SCOPE` 选择所有图；命名"
 "图 IRI 选择该图，未知 IRI 没有匹配行。全图哨兵不是命名图 IRI。"
 
-#: src/reference/python-api.md:553
+#: src/reference/python-api.md:554
 msgid ""
 "`tag_map` and `available_languages` expose the view's language choices. "
 "`public_text` and `public_literal` select the public value; the "
@@ -2495,11 +2497,11 @@ msgstr ""
 "使用后备值。`public_texts` 返回请求的多个选择及该元数据。如果展示依赖于所请求"
 "译文是否实际存在，应保留语言和后备字段。"
 
-#: src/reference/python-api.md:560
+#: src/reference/python-api.md:561
 msgid "Relational and Parquet exports"
 msgstr "关系式与 Parquet 导出"
 
-#: src/reference/python-api.md:562
+#: src/reference/python-api.md:563
 msgid ""
 "`relational_rows` and `gts_relational_rows_from_bytes` return "
 "`GtsRelationalRows`: terms, quads, reifiers, annotations and blobs, with the "
@@ -2509,12 +2511,12 @@ msgid ""
 "value-order identifiers need not equal the original GTS IDs."
 msgstr ""
 "`relational_rows` 和 `gts_relational_rows_from_bytes` 返回 "
-"`GtsRelationalRows`：词项、四元组、具体化节点、注解和 blob；其中 `directions` "
-"数组与 `terms` 按位置对应。方向不是附加在位置词项元组末尾的新字段。"
-"`ColumnarRows` 则携带原生 v1 结构和投影后的五表行，其按值排序的稠密标识符不必"
-"等于原始 GTS ID。"
+"`GtsRelationalRows`：词项、四元组、具体化节点、注解和 blob；其中 "
+"`directions` 数组与 `terms` 按位置对应。方向不是附加在位置词项元组末尾的新字"
+"段。`ColumnarRows` 则携带原生 v1 结构和投影后的五表行，其按值排序的稠密标识符"
+"不必等于原始 GTS ID。"
 
-#: src/reference/python-api.md:569
+#: src/reference/python-api.md:570
 msgid ""
 "`gts_columnar_rows_from_bytes` returns that projection; "
 "`gts_columnar_parquet_from_bytes` and `RdfDataset.to_parquet_files` return "
@@ -2533,11 +2535,11 @@ msgstr ""
 "取器，不是写出器。参见 [GTS](../gts.md) 与[列式配置（profile）](https://"
 "github.com/Blackcat-Informatics/purrdf/blob/main/docs/COLUMNAR.md)。"
 
-#: src/reference/python-api.md:577
+#: src/reference/python-api.md:578
 msgid "Graph and tabular projection packages"
 msgstr "图与表格投影包"
 
-#: src/reference/python-api.md:579
+#: src/reference/python-api.md:580
 msgid ""
 "`project` takes RDF text/bytes, its `RdfFormat`, an explicit "
 "`ProjectionProfile` and strict configuration JSON. It returns "
@@ -2553,7 +2555,7 @@ msgstr ""
 "`source`、`target`、`note` 和可选 `location`；应检查记录，不要假定每种配置都"
 "能往返。可选 `assets` 输入属于包配置。"
 
-#: src/reference/python-api.md:586
+#: src/reference/python-api.md:587
 msgid ""
 "The profiles are `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-"
 "exact`, `csvw-terms`, `okf-terms`, `obo-graphs`, `skos`, `croissant-1.1`, "
@@ -2569,7 +2571,7 @@ msgstr ""
 "`ProjectionLift.dataset` 和损失；把单向配置名传给 `lift` 不会使它变成双向配"
 "置。"
 
-#: src/reference/python-api.md:593
+#: src/reference/python-api.md:594
 msgid ""
 "For streamed LPG artifacts, `project_artifacts` invokes the artifact "
 "callback with `(event, path, chunk)`. The `ArtifactEvent` values delimit the "
@@ -2591,11 +2593,11 @@ msgstr ""
 "受数据的 SPARQL 关系声明。各配置的严格设置和往返契约见[投影](../concepts/"
 "projections.md)。"
 
-#: src/reference/python-api.md:604
+#: src/reference/python-api.md:605
 msgid "SSSOM mapping documents"
 msgstr "SSSOM 映射文档"
 
-#: src/reference/python-api.md:606
+#: src/reference/python-api.md:607
 msgid ""
 "`validate_sssom` returns `SssomDiagnostic` dictionaries containing severity, "
 "code, message, check and optional instance. A clean document yields `[]`; a "
@@ -2612,11 +2614,11 @@ msgstr ""
 "写出已解析的映射文档，`sssom_default_validation_types` 提供原生默认验证类型。"
 "这些是原生 SSSOM 编解码功能，不会导入外部 `sssom` 包。"
 
-#: src/reference/python-api.md:614
+#: src/reference/python-api.md:615
 msgid "Slice catalogs and ownership"
 msgstr "切片目录与所有权"
 
-#: src/reference/python-api.md:616
+#: src/reference/python-api.md:617
 msgid ""
 "`purrdf.slice.SliceCatalog.discover(root, namespace)` reads manifests using "
 "the caller's namespace. `records` contains `SliceRecord` values with "
@@ -2627,12 +2629,12 @@ msgid ""
 "semantic digest and content."
 msgstr ""
 "`purrdf.slice.SliceCatalog.discover(root, namespace)` 使用调用方命名空间读取"
-"清单。`records` 包含带清单、清单路径、切片目录和产物目录的 `SliceRecord` 值；"
+"清单。`records` 包含带清单、清单路径、切片目录和产物记录列表的 `SliceRecord` 值；"
 "`core_slice_iris` 报告核心成员。`ManifestView` 提供标识符、切片 IRI、标签、标"
 "题、层级、创建者和使用者。`ArtifactRecord` 提供角色、逻辑路径、媒体类型、原始"
 "摘要、语义摘要和内容。"
 
-#: src/reference/python-api.md:623
+#: src/reference/python-api.md:624
 msgid ""
 "`fix_deps()` returns `ManifestPatch` values with original and proposed text; "
 "the caller decides when to write those patches. `OwnershipAnalyzer` performs "
@@ -2649,11 +2651,11 @@ msgstr ""
 "误、缺陷标志，以及含来源、目标、语义或物理状态和协调信息的 `DependencyEdge`。"
 "这是清单与产物所有权，不是根据目录名推断。参见[切片](../slices.md)。"
 
-#: src/reference/python-api.md:632
+#: src/reference/python-api.md:633
 msgid "Ranked retrieval and exact fusion"
 msgstr "排序检索与精确融合"
 
-#: src/reference/python-api.md:634
+#: src/reference/python-api.md:635
 msgid ""
 "`purrdf.retrieval` exposes `plan`, `compile` and `search`, plus cold "
 "document checks and fusion-law design queries. `plan` executes nothing. It "
@@ -2669,7 +2671,7 @@ msgstr ""
 "整的计划、编译、执行和融合流程。Python 没有分别暴露 execute 与 fuse 的流句柄"
 "入口。"
 
-#: src/reference/python-api.md:641
+#: src/reference/python-api.md:642
 msgid ""
 "Text producers map a producer IRI to `(stratum, predicate, graph, "
 "analyzer)`. The analyzer requires its `lexicon` choice and declares the "
@@ -2688,7 +2690,7 @@ msgstr ""
 "异常。索引证明声明为 `(generation, incompleteness)`，保真度为 "
 "`(completeness, order)`；二者描述不同事实。"
 
-#: src/reference/python-api.md:650
+#: src/reference/python-api.md:651
 msgid ""
 "`knn_producers` and `hnsw_producers` register exact scan and approximate "
 "graph search over caller-supplied `(IRI, vector)` rows, seeded by an entity "
@@ -2711,7 +2713,7 @@ msgstr ""
 "供统计的 `source` 与 `revision`；基数和以百万分比整数表示的选择率是可选的。未"
 "知测量值为 `None`，不是零。"
 
-#: src/reference/python-api.md:662
+#: src/reference/python-api.md:663
 msgid ""
 "The request is a sequence of typed tuples; producer applicability is "
 "reported by planning, so writing a request kind does not invent a producer "
@@ -2720,27 +2722,27 @@ msgstr ""
 "请求是带类型元组的序列；生成方适用性由计划阶段报告，因此写出请求类型并不会为"
 "它自动创建生成方。"
 
-#: src/reference/python-api.md:665
+#: src/reference/python-api.md:666
 msgid "Kind"
 msgstr "种类"
 
-#: src/reference/python-api.md:665
+#: src/reference/python-api.md:666
 msgid "Tuple"
 msgstr "元组"
 
-#: src/reference/python-api.md:667
+#: src/reference/python-api.md:668
 msgid "Lexical"
 msgstr "词法"
 
-#: src/reference/python-api.md:667
+#: src/reference/python-api.md:668
 msgid "`(\"lexical\", text, language_or_none, predicate_or_none)`"
 msgstr "`(\"lexical\", text, language_or_none, predicate_or_none)`"
 
-#: src/reference/python-api.md:668
+#: src/reference/python-api.md:669
 msgid "Vector"
 msgstr "向量"
 
-#: src/reference/python-api.md:668
+#: src/reference/python-api.md:669
 msgid ""
 "`(\"vector\", components, metric, hint_or_none)`, with request metric "
 "`cosine`, `dot` or `euclidean`"
@@ -2748,40 +2750,40 @@ msgstr ""
 "`(\"vector\", components, metric, hint_or_none)`，请求度量为 `cosine`、`dot` "
 "或 `euclidean`"
 
-#: src/reference/python-api.md:669
+#: src/reference/python-api.md:670
 msgid "Spatial"
 msgstr "空间"
 
-#: src/reference/python-api.md:669
+#: src/reference/python-api.md:670
 msgid "`(\"spatial\", geometry, predicate, max_distance_raw_or_none)`"
 msgstr "`(\"spatial\", geometry, predicate, max_distance_raw_or_none)`"
 
-#: src/reference/python-api.md:670
+#: src/reference/python-api.md:671
 msgid "Temporal"
 msgstr "时间"
 
-#: src/reference/python-api.md:670
+#: src/reference/python-api.md:671
 msgid "`(\"temporal\", predicate, lower_or_none, upper_or_none)`"
 msgstr "`(\"temporal\", predicate, lower_or_none, upper_or_none)`"
 
-#: src/reference/python-api.md:671
+#: src/reference/python-api.md:672
 msgid "Numeric"
 msgstr "数值"
 
-#: src/reference/python-api.md:671
+#: src/reference/python-api.md:672
 msgid "`(\"numeric\", predicate, lower_raw_or_none, upper_raw_or_none)`"
 msgstr "`(\"numeric\", predicate, lower_raw_or_none, upper_raw_or_none)`"
 
-#: src/reference/python-api.md:672
+#: src/reference/python-api.md:673
 msgid "Entity"
 msgstr "实体"
 
-#: src/reference/python-api.md:672
+#: src/reference/python-api.md:673
 msgid ""
 "`(\"entity\", term)`, including an N-Triples IRI term for a vector-space seed"
 msgstr "`(\"entity\", term)`，包括用作向量空间种子的 N-Triples IRI 词项"
 
-#: src/reference/python-api.md:674
+#: src/reference/python-api.md:675
 msgid ""
 "Candidate domains are either unrestricted (`None`) or one distinct host "
 "domain tag. Empty or multiple distinct tags are refused; repeated copies of "
@@ -2795,7 +2797,7 @@ msgstr ""
 "把某个候选列在不相交域中，就属于错误；不能在分数认证后默默扩大声明。唯一流中"
 "重复的候选也会被拒绝。"
 
-#: src/reference/python-api.md:683
+#: src/reference/python-api.md:684
 msgid ""
 "'''\n"
 "<https://example.org/a> <https://example.org/note> \"the quick brown "
@@ -2809,72 +2811,72 @@ msgstr ""
 "<https://example.org/b> <https://example.org/note> \"a quick red fox\" .\n"
 "'''"
 
-#: src/reference/python-api.md:689
+#: src/reference/python-api.md:690
 msgid "\"lexical\""
 msgstr "\"lexical\""
 
-#: src/reference/python-api.md:689
+#: src/reference/python-api.md:690
 msgid "\"quick fox\""
 msgstr "\"quick fox\""
 
-#: src/reference/python-api.md:689 src/reference/python-api.md:693
+#: src/reference/python-api.md:690 src/reference/python-api.md:694
 #: src/sparql/full-text.md:79
 msgid "\"https://example.org/note\""
 msgstr "\"https://example.org/note\""
 
-#: src/reference/python-api.md:691 src/sparql/full-text.md:88
+#: src/reference/python-api.md:692 src/sparql/full-text.md:88
 msgid "\"https://example.org/pf/search\""
 msgstr "\"https://example.org/pf/search\""
 
-#: src/reference/python-api.md:692 src/reference/python-api.md:696
+#: src/reference/python-api.md:693 src/reference/python-api.md:697
 msgid "\"https://example.org/stratum/lexical\""
 msgstr "\"https://example.org/stratum/lexical\""
 
-#: src/reference/python-api.md:693
+#: src/reference/python-api.md:694
 msgid "\"any\""
 msgstr "\"any\""
 
-#: src/reference/python-api.md:693
+#: src/reference/python-api.md:694
 msgid "\"lexicon\""
 msgstr "\"lexicon\""
 
-#: src/reference/python-api.md:693
+#: src/reference/python-api.md:694
 msgid "\"empty\""
 msgstr "\"empty\""
 
-#: src/reference/python-api.md:697
+#: src/reference/python-api.md:698
 msgid "\"source\""
 msgstr "\"source\""
 
-#: src/reference/python-api.md:697
+#: src/reference/python-api.md:698
 msgid "\"host-statistics\""
 msgstr "\"host-statistics\""
 
-#: src/reference/python-api.md:697
+#: src/reference/python-api.md:698
 msgid "\"revision\""
 msgstr "\"revision\""
 
-#: src/reference/python-api.md:697
+#: src/reference/python-api.md:698
 msgid "\"r1\""
 msgstr "\"r1\""
 
-#: src/reference/python-api.md:698
+#: src/reference/python-api.md:699
 msgid "\"reciprocal_rank\""
 msgstr "\"reciprocal_rank\""
 
-#: src/reference/python-api.md:700 src/reference/python-api.md:701
+#: src/reference/python-api.md:701 src/reference/python-api.md:702
 msgid "\"rows\""
 msgstr "\"rows\""
 
-#: src/reference/python-api.md:701
+#: src/reference/python-api.md:702
 msgid "\"score\""
 msgstr "\"score\""
 
-#: src/reference/python-api.md:704
+#: src/reference/python-api.md:705
 msgid "Law, depths and document checks"
 msgstr "规则、深度与文档检查"
 
-#: src/reference/python-api.md:706
+#: src/reference/python-api.md:707
 msgid ""
 "Weights are Python integers in raw fixed-point units: `SCALE` is one whole "
 "unit and `SCALE_DIGITS` its exponent. Scores and contributions return exact "
@@ -2891,7 +2893,7 @@ msgstr ""
 "`weighted_reciprocal_rank` 对加权商只舍入一次。两者是不同的内容寻址规则。将原"
 "始权重 `1` 与按 `SCALE` 倍数表示的权重混用，会使权重比例改变该倍数。"
 
-#: src/reference/python-api.md:714
+#: src/reference/python-api.md:715
 msgid ""
 "`top_k` is also a planning input. Over disjoint candidate domains it can "
 "narrow reads while preserving the answer. A compiled unit's `depth` is the "
@@ -2902,12 +2904,12 @@ msgid ""
 "together; without a law, no rank-resolution claim is invented."
 msgstr ""
 "`top_k` 也是计划输入。在不相交候选域上，它可以在保留答案的同时减少读取。编译"
-"单元的 `depth` 是可报告的行界限；其 SPARQL `LIMIT` 多含一行探测行。不要将探测"
+"单元的 `depth` 是可报告的行界限；其 SPARQL `LIMIT` 比该界限多一行，用于探测。不要将探测"
 "行报告为值，也不要从查询文本读取界限。`declared_rows=None` 表示没有声明行数，"
 "不是零。调用 `compile` 时，`weights`、`k` 和 `decay` 必须同时提供或同时省略；"
 "没有规则时不会编造排名分辨率声明。"
 
-#: src/reference/python-api.md:722
+#: src/reference/python-api.md:723
 msgid ""
 "`canonical_bytes` and `plan_id` identify a plan. `certify_plan` checks a "
 "received document's recorded depth derivations and consulted-statistics "
@@ -2921,7 +2923,7 @@ msgstr ""
 "的限制原因，不执行认证。对被拒文档应按 `retrieval.PlanDocumentError.refusal` "
 "分支。"
 
-#: src/reference/python-api.md:728
+#: src/reference/python-api.md:729
 msgid ""
 "The design-time queries are `weight_for_depth`, `class_width`, "
 "`deepest_rank_within_width` and `crossing_rank_at`. They ask respectively "
@@ -2939,11 +2941,11 @@ msgstr ""
 "果，不是测得的极大数。输入必须满足规则对正权重、排名、平滑参数和容差的约束。"
 "宽度容差查询遍历非单调曲线并持有 GIL，应在设计时使用，不放在热点循环中。"
 
-#: src/reference/python-api.md:737
+#: src/reference/python-api.md:738
 msgid "Reading ranking evidence"
 msgstr "读取排名证据"
 
-#: src/reference/python-api.md:739
+#: src/reference/python-api.md:740
 msgid ""
 "Keep the three identities: `plan_id` names the question and planning inputs, "
 "`profile_id` names the fusion law, and `evidence_id` names the answering "
@@ -2957,7 +2959,7 @@ msgstr ""
 "前深度；`observed_resolution` 报告已读取排名、碰撞、排除查找和物化行数。提前"
 "认证可使实际工作更少，但这不是对计划的修正。"
 
-#: src/reference/python-api.md:746
+#: src/reference/python-api.md:747
 msgid ""
 "Read each stratum's terminal `statuses` with its `fidelities`. `exhausted` "
 "means its search produced no more rows, not that a lossy search found every "
@@ -2973,7 +2975,7 @@ msgstr ""
 "接口的 `supplied_query_ended`、`execution_failed` 和 `terms_rejected`；不要将"
 "它们合并为空结果标志。"
 
-#: src/reference/python-api.md:753
+#: src/reference/python-api.md:754
 msgid ""
 "`attestations` records index generation and admitted incompleteness; "
 "`fidelities` independently records complete/lossy search and faithful/"
@@ -2985,7 +2987,7 @@ msgstr ""
 "搜索、忠实或扰动顺序，以及生成方自身的原因。未声明索引完整性不能证明覆盖整个"
 "语料。即使 HNSW 图由所提供向量精确构建，它仍是有损生成方。"
 
-#: src/reference/python-api.md:759
+#: src/reference/python-api.md:760
 msgid ""
 "`exactness` names deficit, inflation and unbounded strata. Missing "
 "candidates can move other candidates up in rank, so degraded evidence can "
@@ -3008,11 +3010,11 @@ msgstr ""
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/retrieval/"
 "README.md)。"
 
-#: src/reference/python-api.md:770
+#: src/reference/python-api.md:771
 msgid "Errors and boundary choices"
 msgstr "错误与边界选择"
 
-#: src/reference/python-api.md:772
+#: src/reference/python-api.md:773
 msgid ""
 "Invalid configuration, resource refusal, expression error and certified "
 "partial results are different outcomes. Preserve structured diagnostic "
@@ -3028,7 +3030,7 @@ msgstr ""
 "`PlanDocumentError.refusal` 分别是对应的稳定区分字段。不要解析本地化消息文本"
 "来判断结果是否完整。未绑定 SELECT 单元格既不是缺失列，也不一定是异常。"
 
-#: src/reference/python-api.md:780
+#: src/reference/python-api.md:781
 msgid ""
 "Use the [rdflib compatibility chapter](../interop/rdflib.md) when porting an "
 "rdflib consumer. `query_rdflib` accepts its named/default graph controls, "

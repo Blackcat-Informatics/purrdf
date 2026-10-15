@@ -381,8 +381,9 @@ validation does not redefine that checkpoint.
 inferred triples. It differs from `purrdf.entail.materialize`, which uses a
 regime's rule table without a shapes graph. `shapes.apply_rules` runs an SRL
 document and returns only the inference graph, with proof text when
-`explain=True`. `check_rules` admits a rule set at the requested level and
-reports declarations, imports, versions and strata. Stored-fact, join-step,
+`explain=True`. `check_rules` admits a rule set at the selected checking level:
+`level` accepts `syntax`, `well-formed` or `stratified`; omission selects
+`stratified`. It reports declarations, imports, versions and strata. Stored-fact, join-step,
 generated-term and generating-round controls are explicit keyword arguments;
 exhaustion raises a limit-specific `ValueError`.
 
