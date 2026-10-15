@@ -98,6 +98,34 @@ pub struct Error {
     column: usize,
 }
 
+impl purrdf_hash::error::StructuredError for ErrorKind {
+    purrdf_hash::error_visit! {
+        Syntax(expected) => "yaml-syntax" { "expected" => Text(expected) },
+        Tab => "yaml-tab" {},
+        Tag => "yaml-tag" {},
+        Alias => "yaml-alias-disabled" {},
+        UnknownAlias => "yaml-unknown-alias" {},
+        NonStringKey => "yaml-non-string-key" {},
+        DuplicateKey => "yaml-duplicate-key" {},
+        NonFinite => "yaml-non-finite" {},
+        Escape => "yaml-escape" {},
+        MultipleDocuments => "yaml-multiple-documents" {},
+        Depth { limit } => "yaml-depth-limit" { "limit" => Unsigned(*limit as u128) },
+        Nodes { limit } => "yaml-node-limit" { "limit" => Unsigned(u128::from(*limit)) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Error {
+    purrdf_hash::error_visit! {
+        @record self { kind, offset, line, column } => "yaml-document" {
+            "kind" => Cause(&self.kind),
+            "offset" => ByteCount(self.offset as u128),
+            "line" => Unsigned(self.line as u128),
+            "column" => Unsigned(self.column as u128),
+        }
+    }
+}
+
 impl Error {
     /// What is wrong.
     pub const fn kind(&self) -> ErrorKind {

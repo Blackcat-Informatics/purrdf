@@ -118,3 +118,122 @@ fn parser_reports_original_escape_reason_and_byte_offset() {
         ("variant", ErrorValue::Code("json-escape-unpaired-low"))
     ));
 }
+
+#[test]
+fn yaml_and_scalar_decoders_publish_native_positions_and_limits() {
+    let yaml = purrdf_lex::yaml::read_with(
+        "[[0]]",
+        purrdf_lex::yaml::Limits {
+            max_depth: 1,
+            ..purrdf_lex::yaml::Limits::DEFAULT
+        },
+    )
+    .expect_err("the nested sequence exceeds the original depth limit");
+    let mut location = Fields::default();
+    yaml.visit(&mut location);
+    assert_eq!(location.entries.len(), 5);
+    assert!(
+        matches!(location.entries[2], ("offset", ErrorValue::ByteCount(n)) if n == yaml.offset() as u128)
+    );
+    assert!(
+        matches!(location.entries[3], ("line", ErrorValue::Unsigned(n)) if n == yaml.line() as u128)
+    );
+    assert!(
+        matches!(location.entries[4], ("column", ErrorValue::Unsigned(n)) if n == yaml.column() as u128)
+    );
+    let ErrorValue::Cause(kind) = location.entries[1].1 else {
+        panic!("YAML must retain its original limit refusal");
+    };
+    let mut limit = Fields::default();
+    kind.visit(&mut limit);
+    assert!(matches!(
+        limit.entries[0],
+        ("variant", ErrorValue::Code("yaml-depth-limit"))
+    ));
+    assert!(matches!(
+        limit.entries[1],
+        ("limit", ErrorValue::Unsigned(1))
+    ));
+
+    let percent = purrdf_lex::percent::decode("%G0").expect_err("not a hexadecimal pair");
+    let crockford = purrdf_lex::crockford::parse_u128("x").expect_err("not 26 digits");
+    let uchar = purrdf_lex::terminals::decode_uchar(br"\uD800")
+        .expect_err("a surrogate is not a Unicode scalar");
+    let cases: [(&dyn StructuredError, &str); 3] = [
+        (&percent, "percent-malformed"),
+        (&crockford, "crockford-length"),
+        (&uchar, "uchar-not-a-scalar"),
+    ];
+    for (error, expected) in cases {
+        let mut fields = Fields::default();
+        error.visit(&mut fields);
+        assert!(
+            matches!(fields.entries[0], ("variant", ErrorValue::Code(code)) if code == expected)
+        );
+        match expected {
+            "percent-malformed" => assert!(matches!(
+                fields.entries[1],
+                ("offset", ErrorValue::ByteCount(0))
+            )),
+            "crockford-length" => assert!(matches!(
+                fields.entries[1],
+                ("found", ErrorValue::ByteCount(1))
+            )),
+            _ => assert_eq!(fields.entries.len(), 1),
+        }
+    }
+}
+
+#[test]
+fn diagnostic_inspection_retains_typed_arguments_and_optional_detail() {
+    use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
+
+    let detail = DiagnosticPresentation::new("example-detail", "detail", vec![])
+        .expect("a fixed template without arguments");
+    let presentation = DiagnosticPresentation::new(
+        "example-count",
+        "count {count}",
+        vec![DiagnosticParameter::new(
+            "count",
+            DiagnosticValue::Unsigned(u64::MAX),
+        )],
+    )
+    .expect("the named counter exists")
+    .with_detail(detail)
+    .expect("one detail level is allowed");
+    let mut fields = Fields::default();
+    presentation.visit(&mut fields);
+    assert_eq!(fields.lists, [(Some("parameters"), 1)]);
+    assert_eq!(fields.list_ends, 1);
+    assert!(matches!(
+        fields.entries[1],
+        ("message_id", ErrorValue::Code("example-count"))
+    ));
+    let ErrorValue::Record(parameter) = fields.entries[2].1 else {
+        panic!("the list must retain structured parameters");
+    };
+    let mut argument = Fields::default();
+    parameter.visit(&mut argument);
+    assert!(matches!(
+        argument.entries[1],
+        ("name", ErrorValue::Text("count"))
+    ));
+    let ErrorValue::Record(value) = argument.entries[2].1 else {
+        panic!("the counter must not be replaced with rendered English");
+    };
+    let mut counter = Fields::default();
+    value.visit(&mut counter);
+    assert!(
+        matches!(counter.entries[1], ("value", ErrorValue::Unsigned(n)) if n == u128::from(u64::MAX))
+    );
+    let ErrorValue::Record(detail) = fields.entries[4].1 else {
+        panic!("the original secondary detail must remain structured");
+    };
+    let mut secondary = Fields::default();
+    detail.visit(&mut secondary);
+    assert_eq!(secondary.lists, [(Some("parameters"), 0)]);
+    assert!(matches!(
+        secondary.entries[3],
+        ("detail", ErrorValue::Absent)
+    ));
+}
