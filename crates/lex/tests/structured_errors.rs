@@ -237,3 +237,110 @@ fn diagnostic_inspection_retains_typed_arguments_and_optional_detail() {
         ("detail", ErrorValue::Absent)
     ));
 }
+
+#[test]
+fn xml_namespace_producers_retain_typed_reasons_and_existing_messages() {
+    use purrdf_lex::xml::{Document, XML_NAMESPACE, XMLNS_NAMESPACE};
+
+    let cases = [
+        (
+            "<a xmlns:xmlns='https://example.org/'/>".to_owned(),
+            "xml-xmlns-prefix-declaration",
+            "the `xmlns` prefix cannot be declared",
+        ),
+        (
+            "<a xmlns:xml='https://example.org/'/>".to_owned(),
+            "xml-prefix-namespace-mismatch",
+            "the `xml` prefix is bound to the XML namespace",
+        ),
+        (
+            format!("<a xmlns:x='{XML_NAMESPACE}'/>"),
+            "xml-namespace-prefix-mismatch",
+            "only `xml` may be bound to the XML namespace",
+        ),
+        (
+            format!("<a xmlns='{XML_NAMESPACE}'/>"),
+            "xml-namespace-prefix-mismatch",
+            "only `xml` may be bound to the XML namespace",
+        ),
+        (
+            format!("<a xmlns:x='{XMLNS_NAMESPACE}'/>"),
+            "xml-xmlns-namespace-declaration",
+            "the xmlns namespace cannot be declared",
+        ),
+        (
+            "<xmlns:a/>".to_owned(),
+            "xml-xmlns-element-prefix",
+            "an element cannot have the `xmlns` prefix",
+        ),
+    ];
+    for (text, expected, message) in cases {
+        let error = Document::parse(&text).expect_err("a reserved namespace is refused");
+        assert_eq!(
+            error.kind().to_string(),
+            format!("reserved namespace misuse: {message}")
+        );
+        let mut document = Fields::default();
+        error.visit(&mut document);
+        assert!(
+            matches!(document.entries[2], ("offset", ErrorValue::ByteCount(n)) if n == error.offset() as u128)
+        );
+        let ErrorValue::Cause(kind) = document.entries[1].1 else {
+            panic!("XML must retain its typed kind");
+        };
+        let mut refusal = Fields::default();
+        kind.visit(&mut refusal);
+        assert!(matches!(
+            refusal.entries[0],
+            ("variant", ErrorValue::Code("xml-reserved-namespace"))
+        ));
+        let ErrorValue::Cause(reason) = refusal.entries[1].1 else {
+            panic!("namespace refusals must retain the producer's reason");
+        };
+        let mut reason_fields = Fields::default();
+        reason.visit(&mut reason_fields);
+        assert_eq!(reason_fields.entries.len(), 1);
+        assert!(
+            matches!(reason_fields.entries[0], ("variant", ErrorValue::Code(code)) if code == expected)
+        );
+    }
+}
+
+#[test]
+fn html_inspection_preserves_reference_ranges_and_destination_refusal() {
+    use purrdf_lex::html::{Mode, resolution_layout, resolve_preallocated, resolve_strict};
+
+    let diagnostics =
+        resolve_strict("a&#0;b", Mode::Text).expect_err("a null reference is diagnosed");
+    assert_eq!(diagnostics.len(), 1);
+    let mut diagnostic = Fields::default();
+    diagnostics[0].visit(&mut diagnostic);
+    assert!(matches!(
+        diagnostic.entries[2],
+        ("source_start", ErrorValue::ByteCount(1))
+    ));
+    assert!(matches!(
+        diagnostic.entries[3],
+        ("source_end", ErrorValue::ByteCount(5))
+    ));
+    let ErrorValue::Cause(kind) = diagnostic.entries[1].1 else {
+        panic!("HTML must retain the standard reference classification");
+    };
+    let mut classification = Fields::default();
+    kind.visit(&mut classification);
+    assert!(matches!(
+        classification.entries[0],
+        ("variant", ErrorValue::Code("null-character-reference"))
+    ));
+
+    let layout = resolution_layout("&#65;", Mode::Text).expect("a finite reference");
+    let refusal = resolve_preallocated("&#65;", Mode::Text, layout, String::new(), vec![], vec![])
+        .expect_err("the original caller destination has no capacity");
+    let mut destination = Fields::default();
+    refusal.visit(&mut destination);
+    assert_eq!(destination.entries.len(), 1);
+    assert!(matches!(
+        destination.entries[0],
+        ("variant", ErrorValue::Code("html-destination-capacity"))
+    ));
+}
