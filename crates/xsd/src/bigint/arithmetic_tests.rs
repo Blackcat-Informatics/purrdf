@@ -55,6 +55,32 @@ mod tests {
     }
 
     #[test]
+    fn recursive_division_admits_transform_products_for_dense_quotients() {
+        let bits = 65_536 * 64;
+        let power = BigInt::one().shl(bits);
+        let divisor = power.sub(&BigInt::one());
+        // (B²-B-1)/(B-1) = B-1, remainder B-2. No product constructs
+        // either the input or its independent expected quotient/remainder.
+        let dividend = BigInt::one().shl(bits * 2).sub(&power).sub(&BigInt::one());
+        let expected_remainder = divisor.sub(&BigInt::one());
+        let layout = crate::exact::cost::integer_division_layout(
+            dividend.limb_len() as u64,
+            divisor.limb_len() as u64,
+        )
+        .unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let (quotient, remainder) = dividend.div_rem(&divisor).unwrap();
+        let measurement = window.close();
+        assert_eq!(quotient, divisor);
+        assert_eq!(remainder, expected_remainder);
+        assert!(
+            u64::try_from(measurement.peak_working_bytes).unwrap()
+                <= layout.required_bytes() as u64,
+            "{measurement:?}, {layout:?}"
+        );
+    }
+
+    #[test]
     fn block_division_reconstructs_threshold_product_and_remainder() {
         let mut state = 0x0042_4C4F_434B_u64;
         for divisor_limbs in [2_047, 2_048, 2_049] {

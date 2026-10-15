@@ -10,9 +10,11 @@
 use core::{cmp::Ordering, fmt};
 mod compat;
 mod division;
+mod ntt;
 pub use compat::KARATSUBA_THRESHOLD;
 pub(crate) use compat::TOOM3_THRESHOLD;
 pub(crate) use division::{DIVISION_BLOCK_THRESHOLD, normalized_divisor_limbs};
+pub(crate) use ntt::{THRESHOLD as NTT_THRESHOLD, selected_length as transform_product_len};
 #[cfg(test)]
 mod arithmetic_tests;
 pub(crate) mod scratch;

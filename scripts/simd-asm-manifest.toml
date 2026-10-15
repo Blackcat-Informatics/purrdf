@@ -1865,7 +1865,7 @@ summary = "`numeric::canonical_double`, the xsd:double canonical lexical form"
 
 [[site]]
 id = "xsd.exact-arith"
-summary = "`bigint::BigInt::mul_fast` and `bigint::BigInt::div_rem`, the limb products and long division under the arbitrary-precision tower (`exact`)"
+summary = "The single arbitrary-precision product/division dispatch and its exact modular transform"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1881,6 +1881,15 @@ summary = "`bigint::BigInt::mul_fast` and `bigint::BigInt::div_rem`, the limb pr
   label = "div_rem"
   crate = "purrdf_xsd"
   symbol = "<purrdf_xsd::bigint::BigInt>::div_rem"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "transform"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::bigint::ntt::transform"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

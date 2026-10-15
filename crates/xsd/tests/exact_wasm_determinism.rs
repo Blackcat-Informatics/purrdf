@@ -288,6 +288,17 @@ fn large_decimal_group_parse_replays_on_this_target() {
 }
 
 fn large_binary_products_match_the_schoolbook_oracle() {
+    // (2^k-1)(2^k+1) = 2^(2k)-1, independent of any product algorithm.
+    // Exercise the public tower around the transform cutoff without changing
+    // the original frozen schoolbook transcript or rendering enormous values.
+    for limbs in [32_767_u32, 32_768, 32_769] {
+        let bits = limbs * 64;
+        let power = BigInt::one().shl(bits);
+        let left = Integer::from_bigint(power.sub(&BigInt::one()));
+        let right = Integer::from_bigint(power.add(&BigInt::one()).negated());
+        let expected = BigInt::one().shl(bits * 2).sub(&BigInt::one()).negated();
+        assert_eq!(&left * &right, Integer::from_bigint(expected));
+    }
     let mut transcript = String::new();
     let operand = |limbs: usize, mut state: u64| {
         let mut value = BigInt::from_i128(1);

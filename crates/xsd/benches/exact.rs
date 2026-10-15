@@ -334,6 +334,16 @@ fn bench_karatsuba(c: &mut Bench) {
             bench.iter(|| black_box(black_box(&a).mul_fast(black_box(&b))));
         });
     }
+    // Keep the original fixtures and their draw sequence intact. These larger
+    // balanced rows measure the transform range through the same public route.
+    for digits in [160_000, 320_000, 640_000] {
+        let a = BigInt::from_digits(&digit_string(&mut state, digits)).expect("digits");
+        let b = BigInt::from_digits(&digit_string(&mut state, digits)).expect("digits");
+        group.throughput(Throughput::Elements(a.limb_len() as u64));
+        group.bench_function(format!("transform_range/{digits}"), |bench| {
+            bench.iter(|| black_box(black_box(&a).mul_fast(black_box(&b))));
+        });
+    }
     group.finish();
 }
 

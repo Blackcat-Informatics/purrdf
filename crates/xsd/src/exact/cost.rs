@@ -14,9 +14,10 @@
 //!
 //! * [`Cost::work`] is an upper bound on binary `u64` limb operations (one
 //!   multiply-add, compare or division step). Decimal parsing and rendering
-//!   include their quadratic base conversion; arithmetic uses the operand lengths
+//!   include their base conversion; recursive arithmetic uses operand lengths
 //!   for multiplication (Karatsuba stays below it from
-//!   [`crate::bigint::KARATSUBA_THRESHOLD`] limbs up); quotient length times
+//!   [`crate::bigint::KARATSUBA_THRESHOLD`] limbs up), with N log N work for
+//!   an exact transform; quotient length times
 //!   divisor length for division; quadratic in the result for powers.
 //! * [`Cost::bytes`] is an upper bound on the heap bytes of the value the
 //!   operation produces — the memory it mints and hands back.
@@ -203,13 +204,25 @@ pub fn integer_operation_layout(
             if result <= 3 {
                 return Ok(NumericOperationLayout::INLINE);
             }
+            if let Some(length) = crate::bigint::transform_product_len(la, lb) {
+                return NumericOperationLayout::words(
+                    length.checked_mul(2).ok_or(SizeOverflow)?,
+                    result,
+                );
+            }
             if la.min(lb) < crate::bigint::KARATSUBA_THRESHOLD as u64 {
                 return NumericOperationLayout::words(result, result);
             }
-            // Two-way and balanced three-way recursion share the eight-result
-            // working envelope. The three-way path begins at 1024 limbs;
-            // asymmetric products retain the original two-way/chunked route.
-            let peak = result.checked_mul(8).ok_or(SizeOverflow)?;
+            // Two-way and three-way paths share the eight-result envelope.
+            // Beyond the field's supported root order, recursive descendants
+            // can still select transforms; sixteen results include their
+            // arrays and the parent's live operands.
+            let factor = if la.min(lb) >= crate::bigint::NTT_THRESHOLD {
+                16
+            } else {
+                8
+            };
+            let peak = result.checked_mul(factor).ok_or(SizeOverflow)?;
             // Recombination adds one explicit carry word to the output.
             let retained = result.checked_add(1).ok_or(SizeOverflow)?;
             NumericOperationLayout::words(peak, retained)
@@ -263,12 +276,18 @@ const fn division_words(la: u64, lb: u64) -> Result<u64, crate::bigint::LimbScra
         };
         let quotient = la - lb + 1;
         // The top level retains normalized operands, the final quotient and
-        // one 2n block. D2n1n's maximum is 25n/2 further live words: D3n2n
+        // one 2n block. Further live words are 9h plus product scratch, h=n/2: D3n2n
         // holds one h-word estimate, a 3h-word assembled dividend, one h-word
-        // copied low divisor and the existing multiplication's 16h-word peak;
+        // copied low divisor and multiplication's 16h-word peak (32h when
+        // transform-sized descendants are possible);
         // D2n1n's second D3n2n retains its h-word first quotient and 3h-word
         // second dividend. Recursive halves have a strictly smaller peak.
-        let Some(inner) = (n / 2).checked_mul(25) else {
+        let factor = if n / 2 >= crate::bigint::NTT_THRESHOLD {
+            41
+        } else {
+            25
+        };
+        let Some(inner) = (n / 2).checked_mul(factor) else {
             return Err(SizeOverflow);
         };
         let Some(block) = n.checked_mul(2) else {
@@ -792,10 +811,23 @@ pub(crate) const fn add(la: u64, lb: u64) -> Cost {
     Cost::new(result, limb_bytes(result))
 }
 
-/// A product's recursive two-way and balanced three-way paths retain split
-/// operands and partial products along a geometric path.
+/// Recursive products retain split operands and partial products geometrically.
+/// A selected transform uses three N log2 N butterfly passes, linear input,
+/// pointwise, inverse-scale and carry passes, and at most two N-word arrays.
 #[must_use]
 pub(crate) const fn mul(la: u64, lb: u64) -> Cost {
+    if let Some(length) = crate::bigint::transform_product_len(la, lb) {
+        // Each butterfly uses two folded field products and modular add/sub;
+        // 64 operations per element/stage covers all three transforms and
+        // root powers at the minimum selected length. 128N covers the linear
+        // passes. The shared dispatch keeps N <= 2^32 and both inputs >=32768.
+        let work = length.saturating_mul(
+            (length.trailing_zeros() as u64)
+                .saturating_mul(64)
+                .saturating_add(128),
+        );
+        return Cost::new(work, limb_bytes(length.saturating_mul(2)));
+    }
     let result = la.saturating_add(lb);
     let shorter = if la < lb { la } else { lb };
     // Five child products and point/interpolation work fit this conservative
@@ -809,7 +841,9 @@ pub(crate) const fn mul(la: u64, lb: u64) -> Cost {
         .saturating_mul(lb)
         .saturating_add(result.saturating_mul(linear))
         .saturating_add(1);
-    let working = if shorter >= crate::bigint::KARATSUBA_THRESHOLD as u64 {
+    let working = if shorter >= crate::bigint::NTT_THRESHOLD {
+        16
+    } else if shorter >= crate::bigint::KARATSUBA_THRESHOLD as u64 {
         8
     } else {
         2

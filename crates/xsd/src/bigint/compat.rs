@@ -300,14 +300,14 @@ impl BigInt {
         self.add(other)
     }
 
-    /// Schoolbook small products, then Karatsuba and balanced Toom-3 products.
+    /// Schoolbook small products, Karatsuba, Toom-3 and exact transforms.
     #[must_use]
     pub fn mul_fast(&self, other: &Self) -> Self {
         self.mul_fast_using(other, &super::Unbounded)
             .expect("unbounded integer storage")
     }
 
-    /// The same schoolbook/Karatsuba/Toom-3 dispatch with explicit destinations.
+    /// The same product dispatch with explicit destinations.
     pub(crate) fn mul_fast_using(
         &self,
         other: &Self,
@@ -328,6 +328,17 @@ impl BigInt {
                     .div_ceil(3)
                     .saturating_mul(2)
         {
+            // Reuse the existing balanced-large admission. Small recursive
+            // products do not pay another algorithm-selection branch.
+            if let Some(length) =
+                super::transform_product_len(self.limb_len() as u64, other.limb_len() as u64)
+            {
+                let length = usize::try_from(length).map_err(|_| SizeOverflow)?;
+                return super::ntt::product(&self.magnitude, &other.magnitude, length, storage)
+                    .map(|words| {
+                        Self::from_parts(self.is_negative() != other.is_negative(), words)
+                    });
+            }
             return self.mul_toom3_using(other, storage);
         }
         let (long, short) = if self.limb_len() >= other.limb_len() {
