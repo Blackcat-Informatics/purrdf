@@ -1535,9 +1535,9 @@ fn cost_base<D: DatasetView>(
         let mut rows = 0_u64;
         let mut work = 0_u128;
         let mut cardinality_only = true;
-        visit_access_costs(pattern, dataset, scope, &mut |probe, cost| {
+        visit_access_costs(pattern, dataset, scope, &mut |probe, cost, statistic| {
             cardinality_only &= cost.cardinality_fallback().is_some();
-            let cardinality = provider_cardinality(dataset, pattern, probe).map_or_else(
+            let cardinality = statistic.map_or_else(
                 || {
                     cost.cardinality_fallback()
                         .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g))
@@ -1570,7 +1570,11 @@ fn visit_access_costs<D: DatasetView>(
     pattern: &CompiledPattern<D::Id>,
     dataset: &D,
     scope: &GraphScope<D::Id>,
-    visit: &mut dyn FnMut(purrdf_core::ProbePattern<D::Id>, purrdf_core::AccessCost),
+    visit: &mut dyn FnMut(
+        purrdf_core::ProbePattern<D::Id>,
+        purrdf_core::AccessCost,
+        Option<purrdf_core::StatisticCount>,
+    ),
 ) {
     let s = constant_of(&pattern.s);
     let p = constant_of(&pattern.p);
@@ -1579,12 +1583,14 @@ fn visit_access_costs<D: DatasetView>(
         let probe = purrdf_core::ProbePattern { s, p, o, g };
         let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
         let cost = dataset.cost(probe, &plan);
+        let statistic = provider_cardinality(dataset, pattern, probe);
         if cost.cardinality_fallback().is_some()
-            && let Some(count) = provider_cardinality(dataset, pattern, probe)
+            && let Some(count) = statistic
         {
             visit(
                 probe,
                 purrdf_core::AccessCost::from_cardinality(count.value),
+                statistic,
             );
             return;
         }
@@ -1592,7 +1598,7 @@ fn visit_access_costs<D: DatasetView>(
             .statement_cardinality_estimate(probe, components_of(&pattern.o, constant_of))
             .unwrap_or(0);
         if statements == 0 {
-            visit(probe, cost);
+            visit(probe, cost, statistic);
         } else {
             let ordinary = cost
                 .cardinality_fallback()
@@ -1603,6 +1609,7 @@ fn visit_access_costs<D: DatasetView>(
             visit(
                 probe,
                 purrdf_core::AccessCost::from_cardinality(ordinary.saturating_add(statements)),
+                statistic,
             );
         }
     };
@@ -1631,7 +1638,7 @@ pub(crate) fn visit_shape_cost<D: DatasetView + Sync>(
             &pattern,
             ctx.dataset,
             &ctx.active_dataset.scope_for(ctx.active_graph),
-            &mut |_, cost| visit(cost),
+            &mut |_, cost, _| visit(cost),
         ),
         None => visit(purrdf_core::AccessCost::from_cardinality(0)),
     }
@@ -1695,21 +1702,35 @@ fn base_cardinality<D: DatasetView>(
     }
 }
 
-/// Marginal predicate statistics cannot erase an existing structural component
-/// restriction. That probe retains its component-range estimate until the
-/// provider has the corresponding joint statistic.
+/// Structural statistics preserve native component-range estimates and include
+/// all three RDF streams on backends without those physical ranges.
 fn provider_cardinality<D: DatasetView>(
     dataset: &D,
     pattern: &CompiledPattern<D::Id>,
     probe: purrdf_core::ProbePattern<D::Id>,
 ) -> Option<purrdf_core::StatisticCount> {
-    if components_of(&pattern.o, constant_of)
-        .iter()
-        .any(Option::is_some)
-    {
-        return None;
+    let statistics = dataset.statistics()?;
+    if matches!(pattern.o, Pos::Triple(_)) {
+        let components = components_of(&pattern.o, constant_of);
+        let mut count = statistics.structural_pattern(probe, components)?;
+        if dataset.statement_indexes().reifier_components {
+            let indexed = dataset
+                .cardinality_estimate(probe.s, probe.p, probe.o, probe.g)
+                .saturating_add(dataset.statement_cardinality_estimate(probe, components)?);
+            count.value = count.value.min(indexed);
+        }
+        return Some(count);
     }
-    dataset.statistics()?.pattern(probe)
+    let mut count = statistics.pattern(probe)?;
+    if count.accuracy == purrdf_core::StatisticsAccuracy::UpperBound
+        && dataset.statement_indexes() == purrdf_core::StatementIndexSupport::INDEXED
+    {
+        let indexed = dataset
+            .cardinality_estimate(probe.s, probe.p, probe.o, probe.g)
+            .saturating_add(dataset.statement_cardinality_estimate(probe, [None; 3])?);
+        count.value = count.value.min(indexed);
+    }
+    Some(count)
 }
 
 /// The ground id of a position, or `None` for a slot or (conservatively) a nested

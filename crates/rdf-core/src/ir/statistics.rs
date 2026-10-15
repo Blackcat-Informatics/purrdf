@@ -792,6 +792,23 @@ impl<I: StatisticsId> crate::SnapshotStatistics<I> for LocalStatistics<I> {
         self.fingerprint
     }
 
+    fn stream_rows(
+        &self,
+        graph: GraphMatch<I>,
+        stream: crate::StatisticsStream,
+    ) -> Option<StatisticCount> {
+        let scope = match graph {
+            GraphMatch::Any => Scope::Any,
+            GraphMatch::Default => Scope::Graph(None),
+            GraphMatch::Named(graph) => Scope::Graph(Some(graph)),
+        };
+        self.predicates
+            .iter()
+            .filter(|entry| entry.key.0 == relation(stream) && entry.key.1 == scope)
+            .try_fold(0_u64, |rows, entry| rows.checked_add(entry.rows))
+            .map(exact)
+    }
+
     fn predicate(
         &self,
         predicate: I,
@@ -946,6 +963,23 @@ mod tests {
 
     fn assert_rows<D: DatasetView>(view: &D, predicates: &[D::Id], scopes: &[GraphMatch<D::Id>]) {
         let statistics = view.statistics().unwrap();
+        for &graph in scopes {
+            let total = view
+                .quads()
+                .chain(view.reifier_quads())
+                .chain(view.annotation_quads())
+                .filter(|row| graph.matches(row.g))
+                .count();
+            assert_eq!(
+                statistics.pattern(crate::ProbePattern {
+                    s: None,
+                    p: None,
+                    o: None,
+                    g: graph
+                }),
+                Some(exact(total as u64))
+            );
+        }
         let class = view
             .term_id_by_value(&crate::TermValue::iri(purrdf_iri::vocab::rdf::TYPE))
             .unwrap();
@@ -959,6 +993,14 @@ mod tests {
                 StatisticsStream::Reifiers => view.reifier_quads().collect(),
                 StatisticsStream::Annotations => view.annotation_quads().collect(),
             };
+            for &graph in scopes {
+                assert_eq!(
+                    statistics.stream_rows(graph, stream),
+                    Some(exact(
+                        rows.iter().filter(|row| graph.matches(row.g)).count() as u64
+                    ))
+                );
+            }
             for &predicate in predicates {
                 for &graph in scopes {
                     let selected: Vec<_> = rows

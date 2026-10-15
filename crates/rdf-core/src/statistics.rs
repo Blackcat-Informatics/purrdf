@@ -74,6 +74,16 @@ pub trait SnapshotStatistics<I: ViewTermId>: Sync {
     /// A host must change it whenever any returned count or exactness changes.
     fn fingerprint(&self) -> u64;
 
+    /// Total rows in one effective stream and graph scope. Unknown providers
+    /// retain None; a stored zero certifies absence in that stream.
+    fn stream_rows(
+        &self,
+        _graph: GraphMatch<I>,
+        _stream: StatisticsStream,
+    ) -> Option<StatisticCount> {
+        None
+    }
+
     /// Visit sorted, unique IDs in the provider's dictionary generation. This
     /// permits exact domain union across segments without adding distinct counts.
     /// Returns false when the domain is unknown. A visitor may stop early.
@@ -92,26 +102,31 @@ pub trait SnapshotStatistics<I: ViewTermId>: Sync {
         Ok(false)
     }
 
-    /// Count a predicate-bound pattern across all three streams. This default
-    /// requires every contributing count, and leaves subject restrictions to a
-    /// provider with joint statistics rather than guessing independence.
+    /// Count a pattern across all three streams, using joint object frequencies
+    /// when available and stream totals for an unbound predicate. Residual subject
+    /// and unsupported object restrictions produce an upper bound; no independence
+    /// assumption or fabricated zero substitutes for a missing count.
     fn pattern(&self, pattern: ProbePattern<I>) -> Option<StatisticCount> {
-        if pattern.s.is_some() {
-            return None;
-        }
-        let predicate = pattern.p?;
+        let predicate = pattern.p;
         let mut total = StatisticCount {
             value: 0,
-            accuracy: StatisticsAccuracy::Exact,
+            accuracy: if pattern.s.is_some() || (predicate.is_none() && pattern.o.is_some()) {
+                StatisticsAccuracy::UpperBound
+            } else {
+                StatisticsAccuracy::Exact
+            },
         };
         for stream in [
             StatisticsStream::Asserted,
             StatisticsStream::Reifiers,
             StatisticsStream::Annotations,
         ] {
-            let count = match pattern.o {
-                Some(object) => self.predicate_object(predicate, object, pattern.g, stream)?,
-                None => self.predicate(predicate, pattern.g, stream)?.rows,
+            let count = match (predicate, pattern.o) {
+                (Some(predicate), Some(object)) => {
+                    self.predicate_object(predicate, object, pattern.g, stream)?
+                }
+                (Some(predicate), None) => self.predicate(predicate, pattern.g, stream)?.rows,
+                (None, _) => self.stream_rows(pattern.g, stream)?,
             };
             total.value = total.value.checked_add(count.value)?;
             if count.accuracy == StatisticsAccuracy::UpperBound {
@@ -119,6 +134,52 @@ pub trait SnapshotStatistics<I: ViewTermId>: Sync {
             }
         }
         Some(total)
+    }
+
+    /// Conservative candidate count for a structural triple in object position.
+    /// Object-category counts cover ordinary and annotation rows; target-predicate
+    /// counts narrow reifiers. Remaining component/subject restrictions are
+    /// residuals, so the result is explicitly an upper bound, never a joint exact
+    /// count or an allocation certificate. Missing metadata stays unknown.
+    fn structural_pattern(
+        &self,
+        pattern: ProbePattern<I>,
+        components: [Option<I>; 3],
+    ) -> Option<StatisticCount> {
+        let mut total = 0_u64;
+        for stream in [
+            StatisticsStream::Asserted,
+            StatisticsStream::Reifiers,
+            StatisticsStream::Annotations,
+        ] {
+            let mut count = match pattern.p {
+                Some(predicate) => {
+                    self.predicate_object_kind(
+                        predicate,
+                        RdfTermKind::Triple,
+                        None,
+                        pattern.g,
+                        stream,
+                    )?
+                    .value
+                }
+                None => self.stream_rows(pattern.g, stream)?.value,
+            };
+            if stream == StatisticsStream::Reifiers
+                && let Some(predicate) = components[1]
+            {
+                count = count.min(
+                    self.reifier_target_predicate(predicate, pattern.g)?
+                        .rows
+                        .value,
+                );
+            }
+            total = total.checked_add(count)?;
+        }
+        Some(StatisticCount {
+            value: total,
+            accuracy: StatisticsAccuracy::UpperBound,
+        })
     }
 
     /// Predicate row and distinct-domain counts in the requested stream/scope.

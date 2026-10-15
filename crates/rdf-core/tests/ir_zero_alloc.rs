@@ -159,6 +159,28 @@ fn sealed_predicate_statistics_and_distinct_domains_allocate_nothing() {
     fn assert_reads<I: ViewTermId>(statistics: &dyn SnapshotStatistics<I>, predicate: I) {
         let window = CurrentThreadWindow::open();
         for _ in 0..16 {
+            assert_eq!(
+                statistics
+                    .stream_rows(GraphMatch::Any, StatisticsStream::Asserted)
+                    .unwrap()
+                    .value,
+                256
+            );
+            assert_eq!(
+                statistics
+                    .structural_pattern(
+                        purrdf_core::ProbePattern {
+                            s: None,
+                            p: Some(predicate),
+                            o: None,
+                            g: GraphMatch::Any,
+                        },
+                        [None; 3]
+                    )
+                    .unwrap()
+                    .value,
+                64
+            );
             let count = statistics
                 .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
                 .unwrap();

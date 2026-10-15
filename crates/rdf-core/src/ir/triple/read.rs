@@ -163,6 +163,15 @@ impl crate::SnapshotStatistics<TermId> for TripleRead<'_> {
         )
     }
 
+    fn stream_rows(
+        &self,
+        graph: GraphMatch,
+        stream: crate::StatisticsStream,
+    ) -> Option<crate::StatisticCount> {
+        self.graph(graph).ok()?;
+        crate::SnapshotStatistics::stream_rows(&self.dataset.statistics, graph, stream)
+    }
+
     fn visit_distinct(
         &self,
         predicate: TermId,

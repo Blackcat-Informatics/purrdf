@@ -1564,6 +1564,61 @@ fn native_and_paged_statistics_plan_rare_class_before_the_common_predicate() {
     }
 }
 
+#[test]
+fn paged_structural_statistics_include_targets_and_unbound_predicate_streams() {
+    let native = statistics_plan_fixture(32);
+    let paged =
+        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![native.clone()])))
+            .unwrap();
+    let engine = NativeSparqlEngine::new();
+    for (query, expected_rows, upper) in [
+        (
+            "SELECT * WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <http://example.org/statistics/ordinary> ?o )>> }",
+            32,
+            true,
+        ),
+        (
+            "SELECT * WHERE { ?r ?p <<( ?s <http://example.org/statistics/ordinary> ?o )>> }",
+            32,
+            true,
+        ),
+        (
+            "SELECT * WHERE { <http://example.org/statistics/r0> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?t }",
+            1,
+            true,
+        ),
+        (
+            "SELECT * WHERE { ?r ?p <<( <http://example.org/statistics/r0> <http://example.org/statistics/ordinary> <http://example.org/statistics/object> )>> }",
+            32,
+            true,
+        ),
+        ("SELECT * WHERE { ?s ?p ?o }", 43, false),
+    ] {
+        for explanation in [
+            engine.explain_query(&native, query, None).unwrap(),
+            engine.explain_query_view(&paged, query, None).unwrap(),
+        ] {
+            let bgp = explanation
+                .ledger()
+                .iter()
+                .find(|node| node.label == "Bgp")
+                .unwrap();
+            assert_eq!(bgp.rows, expected_rows);
+            let estimate = bgp.estimate.as_ref().unwrap().rows;
+            assert!((expected_rows..=43).contains(&estimate));
+            assert_eq!(
+                explanation
+                    .statistics()
+                    .iter()
+                    .any(|record| { record.contains("accuracy: UpperBound") }),
+                upper,
+                "{query}: {:?}",
+                explanation.statistics()
+            );
+        }
+    }
+}
+
 /// Fixed work for external instruction counting. Both modes build and warm the
 /// identical population; subtract control from query for each population/kind.
 /// There is no timer, adaptive sampling or throughput claim in this probe.

@@ -173,6 +173,20 @@ including retained positive plans. Exact input counts do not make the joined
 output estimate exact or turn it into an allocation certificate. Domain sizes
 from overlapping streams are upper bounds unless their identities are unioned.
 
+Complete stream totals also cover an unbound predicate. Subject restrictions and
+object restrictions without a joint count retain an explicitly upper-bound
+marginal. Structural object patterns use triple-valued object counts and reifier
+target-predicate counts, including ordinary and annotation rows; tighter native
+component ranges can lower the estimate. An unavailable statistic stays unknown.
+These estimates do not authorize output allocation or certify an output bound.
+
+Native rule planning consumes the same provider through
+`purrdf_datalog::plan::Stratified::plan_with_statistics`. Its caller resolves
+authored atoms into probes in the provider's identity space. Statistical counts
+break ties after connectivity and binding preferences; the resulting executable
+retains native join identities and authored proof-source order. Programs without
+a provider retain the ordinary planning path.
+
 The graph slot is stored as `g: Option<TermId>` where `None` is the default
 graph. Because `Option<TermId>` alone cannot distinguish *any graph* from *the
 default graph*, the read view uses the dedicated three-way `GraphMatch` enum, which
