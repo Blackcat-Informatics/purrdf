@@ -116,8 +116,8 @@ def test_stub_signatures_match_the_built_bindings() -> None:
     Python's AST retains classes, properties, overloads, aliases, annotations and
     parameter kinds/defaults without a second custom signature parser. Discovery
     covers every installed stub; duplicate or missing document blocks fail.
-    The existing native comparison below additionally checks the four engines'
-    PyO3 parameter names/default presence, with its original vacuity guards.
+    The native comparison additionally checks engine namespaces and the fold-view
+    class's PyO3 parameter names/default presence, with per-type vacuity guards.
     """
     import ast
     import re
@@ -146,14 +146,14 @@ def test_stub_signatures_match_the_built_bindings() -> None:
         out: list[str] = []
         for raw in re.sub(r"\[[^]]*\]", "", params).split(","):
             param = raw.strip()
-            if not param or param in {"self", "*", "/"}:
+            if not param or param in {"self", "$self", "*", "/"}:
                 continue
             name = param.split(":")[0].split("=")[0].strip()
             has_default = "=" in param
             out.append(f"{name}=" if has_default else name)
         return out
 
-    engines = ("entail", "shapes", "shex", "retrieval")
+    engines = ("entail", "shapes", "shex", "retrieval", "GtsFoldViewNative")
     checked: dict[str, int] = dict.fromkeys(engines, 0)
     for engine in engines:
         body = re.search(rf"\nclass {engine}:\n(.*?)(?:\n\S|\Z)", text, re.DOTALL)
