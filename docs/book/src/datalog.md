@@ -79,26 +79,19 @@ refused ordinary terminating rule sets there — a single rule that copies
 each of 70,000 `ex:p` triples to `ex:q`. The default is chosen at compile time from the
 target architecture, never by a Cargo feature.
 
-The join-step default is the same on every target, for a measured reason: a
-body's candidate solutions for a round are materialised before the limit is
-checked. A body joining two unrelated atoms over 20,000 nodes (400 million
-candidates) is refused at the default in about two seconds, holding under half
-a gigabyte; at 268,435,456 join steps it had allocated about 20 GB, still
-enumerating, when it was stopped at a 24 GB address-space cap. A larger default
-would let a Cartesian body exhaust memory before it could be refused. Reach is
-the caller's to buy: the non-linear transitive closure of a thousand-node chain
-enumerates over 67 million candidates and completes when the caller raises the
-limit (`--max-join-steps` on the command line), while the linear closure of the
-same chain fits the default.
+The join-step default is the same on every target. Evaluation reserves a
+candidate's credit before expanding it, using one round-wide pool; an exhausted
+allowance stops further candidate expansion. This is a work ceiling, separate
+from retained storage: raising it can permit larger intermediate buffers,
+without raising the stored-fact or term-arena ceilings. A caller whose program
+needs more candidate work must state that allowance explicitly
+(`--max-join-steps` on the command line).
 
 The join-step limit is not what stops a divergent rule. A SHACL shape rule
 minting a new focus node every round is re-executed only for the focus nodes
-whose inputs changed, not for every earlier one, so it is refused by the term
-limits below within a few seconds, whatever the join-step limit: by the
-term-generating round limit when its new terms are of bounded length, and by
-the term-arena ceiling when each is longer than the last (a rule minting an IRI
-one character longer every round reaches 16 MiB of term surfaces after about
-5,800 rounds).
+whose inputs changed, not for every earlier one. Term generation has its own
+guards: the term-generating round limit when new terms have bounded length,
+and the term-arena ceiling when retained surfaces grow.
 
 A limit can only refuse. A run inside its limits returns the program's least
 model, the same model under every limit that admits it; a run past one returns
