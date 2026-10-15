@@ -1444,6 +1444,55 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
             );
             source.check_ready().unwrap();
             drop(source);
+            // Both side tables must use the subject-keyed logical path. Check
+            // existing and absent keys against independent counts and the
+            // resident evaluator, including the final claim in the full image.
+            for (claim, rows) in [(claims / 2, 2), (claims - 1, 2), (claims, 0)] {
+                let text = format!(
+                    "SELECT (COUNT(*) AS ?n) WHERE {{ <https://example.org/claim/{claim}> ?p ?o }}"
+                );
+                let prepared = engine.prepare_query(&text, None).unwrap();
+                let expected = support::solutions(
+                    engine
+                        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+                        .unwrap(),
+                );
+                assert_eq!(
+                    expected.1,
+                    vec![vec![Some(TermValue::typed_literal(
+                        rows.to_string(),
+                        purrdf_xsd::XsdDatatype::Integer.iri()
+                    ))]]
+                );
+                let source = snapshot
+                    .query(SegmentedReadLimits::new(
+                        256 * 1024 * 1024,
+                        4096,
+                        u32::MAX,
+                        u64::MAX,
+                        32,
+                    ))
+                    .unwrap();
+                let counted = engine
+                    .query_fallible_view(
+                        &source,
+                        SparqlRequest {
+                            query: &text,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        QueryOptions::EMPTY,
+                    )
+                    .unwrap();
+                assert_eq!(support::solutions(counted.result), expected);
+                assert!(source.touched_terms() <= 64);
+                assert!(
+                    counted.evidence.io_bytes() < 1024 * 1024,
+                    "claims={claims} key={claim}: {} bytes",
+                    counted.evidence.io_bytes()
+                );
+                source.check_ready().unwrap();
+            }
             let text = "SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }";
             let prepared = engine.prepare_query(text, None).unwrap();
             let expected = support::solutions(

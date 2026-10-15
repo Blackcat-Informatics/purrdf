@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
-use purrdf_core::TermFactory;
+use purrdf_core::{DatasetView, TermFactory};
 use purrdf_core::{
     RdfDatasetBuilder, SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError,
     SegmentedLayer, SegmentedLayerMetadata, SegmentedProvider, SegmentedReadLimits,
@@ -262,6 +262,25 @@ fn generated_chronological_publications_match_eager_typed_seals() {
             stack.publish(layers.clone(), limits()).unwrap();
             let snapshot = stack.snapshot().unwrap();
             let query = snapshot.query(limits()).unwrap();
+            // Keyed access must preserve the same historical classification,
+            // removal, graph and ordering semantics as the effective streams.
+            if let Some(reifier) = query.term_id_by_value(&TermValue::iri("urn:r")).unwrap() {
+                assert_eq!(
+                    query.reifier_quads_of(reifier).collect::<Vec<_>>(),
+                    query
+                        .reifier_quads()
+                        .filter(|row| row.s == reifier)
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    query.annotations_of_with_graph(reifier).collect::<Vec<_>>(),
+                    query
+                        .annotation_quads()
+                        .filter(|row| row.s == reifier)
+                        .map(|row| (row.p, row.o, row.g))
+                        .collect::<Vec<_>>()
+                );
+            }
             let sparse_fold = canonical_paged_seal(&query, page_rows).unwrap();
             query.check_ready().unwrap();
             let eager_fold = paged
@@ -514,7 +533,9 @@ fn chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs() {
 
 fn effective_annotation_classification_uses_original_chronology_and_first_occurrence() {
     use purrdf_core::DatasetView;
-    let annotation = statement("urn:r", "urn:value", Some("urn:g"));
+    let annotations: Vec<_> = (0..4)
+        .map(|index| statement("urn:r", &format!("urn:value:{index}"), Some("urn:g")))
+        .collect();
     let mut declaration = statement("urn:r", "urn:unused", Some("urn:g"));
     declaration.p = TermValue::iri(purrdf_iri::vocab::rdf::REIFIES);
     declaration.o = TermValue::Triple {
@@ -523,11 +544,7 @@ fn effective_annotation_classification_uses_original_chronology_and_first_occurr
         o: Box::new(TermValue::iri("urn:o")).into(),
     };
     let initial = statement_layer(
-        [
-            &[],
-            std::slice::from_ref(&declaration),
-            std::slice::from_ref(&annotation),
-        ],
+        [&[], std::slice::from_ref(&declaration), &annotations],
         SegmentedLayerMetadata::default(),
     );
     let removal = statement_layer(
@@ -538,23 +555,17 @@ fn effective_annotation_classification_uses_original_chronology_and_first_occurr
         )
         .unwrap(),
     );
-    let orphan = statement_layer(
-        [&[], &[], std::slice::from_ref(&annotation)],
-        SegmentedLayerMetadata::default(),
-    );
-    let ordinary = statement_layer(
-        [std::slice::from_ref(&annotation), &[], &[]],
-        SegmentedLayerMetadata::default(),
-    );
+    let orphan = statement_layer([&[], &[], &annotations], SegmentedLayerMetadata::default());
+    let ordinary = statement_layer([&annotations, &[], &[]], SegmentedLayerMetadata::default());
     let mut stack = SegmentedStack::default();
     for (layers, expected) in [
-        (vec![Arc::clone(&initial)], (0, 1, 1)),
-        (vec![Arc::clone(&initial), Arc::clone(&removal)], (1, 0, 0)),
+        (vec![Arc::clone(&initial)], (0, 1, 4)),
+        (vec![Arc::clone(&initial), Arc::clone(&removal)], (4, 0, 0)),
         (
             vec![Arc::clone(&initial), Arc::clone(&removal), orphan],
-            (0, 0, 1),
+            (0, 0, 4),
         ),
-        (vec![Arc::clone(&initial), ordinary], (0, 1, 1)),
+        (vec![Arc::clone(&initial), ordinary], (0, 1, 4)),
     ] {
         stack.publish(layers, limits()).unwrap();
         let snapshot = stack.snapshot().unwrap();
@@ -568,6 +579,18 @@ fn effective_annotation_classification_uses_original_chronology_and_first_occurr
             expected,
             "original operational cause: {:?}",
             query.read_error()
+        );
+        let reifier = query
+            .term_id_by_value(&TermValue::iri("urn:r"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                query.reifier_quads_of(reifier).count(),
+                query.annotations_of_with_graph(reifier).count(),
+            ),
+            (expected.1, expected.2),
+            "keyed access retains every annotation and its original classification"
         );
         query.check_ready().unwrap();
     }
