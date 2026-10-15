@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T17:21:07-06:00\n"
+"POT-Creation-Date: 2026-10-15T17:33:21-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -855,7 +855,7 @@ msgstr ""
 "层："
 
 #: src/getting-started/rust.md:74 src/getting-started/rust.md:75
-#: src/concepts/interned-dataset.md:32 src/sparql/querying.md:31
+#: src/concepts/interned-dataset.md:33 src/sparql/querying.md:31
 msgid "\"https://example.org/cat\""
 msgstr "\"https://example.org/cat\""
 
@@ -4729,19 +4729,21 @@ msgstr "项只驻留一次"
 
 #: src/concepts/interned-dataset.md:14
 msgid ""
-"Every term — IRI, blank node, literal, triple term — is stored **once** in a "
-"string arena and addressed by a copyable `TermId` (a niche-optimized "
-"`NonZeroU32`). Quads are rows of four `TermId`s. That makes term equality a "
-"single integer compare, keeps quads at a fixed small size, and means a term "
-"that appears in a million quads costs its bytes exactly once."
+"Every term — IRI, blank node, literal, triple term — is interned **once** "
+"and addressed by a copyable `TermId` (a niche-optimized `NonZeroU32`). "
+"Textual payloads use the string arena; triple terms retain their component "
+"IDs. Quads are rows of four `TermId`s. That makes term equality a single "
+"integer compare, keeps quads at a fixed small size, and means a term that "
+"appears in a million quads costs its bytes exactly once."
 msgstr ""
-"每个项——IRI、空节点、字面量、三元组项——都只在字符串区块（arena）中存储**一次"
-"**，并通过一个可复制的 `TermId`（经过 niche 优化的 `NonZeroU32`）寻址。四元组"
+"每个项——IRI、空节点、字面量、三元组项——都只驻留**一次**，并通过一个可复制的 "
+"`TermId`（经过 niche 优化的 `NonZeroU32`）寻址。文本载荷使用字符串区块（arena）；"
+"三元组项保留其组成部分的 ID。四元组"
 "是由四个 `TermId` 组成的行。这使得项的相等比较只需一次整数比较，使四元组保持"
 "固定的较小尺寸，也意味着一个出现在一百万个四元组中的项，其字节恰好只付一次代"
 "价。"
 
-#: src/concepts/interned-dataset.md:20
+#: src/concepts/interned-dataset.md:21
 msgid ""
 "Hot maps use the fixed-key `FixedHasher` — deterministic hashing is part of "
 "the [byte-determinism discipline](codecs.md), not just a speed choice."
@@ -4749,36 +4751,36 @@ msgstr ""
 "热点映射使用固定密钥的 `FixedHasher`——确定性哈希是[字节确定性纪律](codecs.md)"
 "的一部分，而不只是出于速度的选择。"
 
-#: src/concepts/interned-dataset.md:23
+#: src/concepts/interned-dataset.md:24
 msgid "Builder → freeze"
 msgstr "构建器 → 冻结"
 
-#: src/concepts/interned-dataset.md:25
+#: src/concepts/interned-dataset.md:26
 msgid "The IR has a strict two-phase life cycle:"
 msgstr "IR 具有严格的两阶段生命周期："
 
-#: src/concepts/interned-dataset.md:29
+#: src/concepts/interned-dataset.md:30
 msgid "// Intern terms once; quads are rows of copyable TermIds.\n"
 msgstr "// 项只驻留一次；四元组是由可复制的 TermId 组成的行。\n"
 
-#: src/concepts/interned-dataset.md:33 src/sparql/querying.md:32
+#: src/concepts/interned-dataset.md:34 src/sparql/querying.md:32
 msgid "\"https://example.org/says\""
 msgstr "\"https://example.org/says\""
 
-#: src/concepts/interned-dataset.md:34 src/sparql/querying.md:33
+#: src/concepts/interned-dataset.md:35 src/sparql/querying.md:33
 msgid "\"meow\""
 msgstr "\"meow\""
 
-#: src/concepts/interned-dataset.md:36
+#: src/concepts/interned-dataset.md:37
 msgid ""
 "// Freeze into the immutable, indexed dataset the engines evaluate over.\n"
 msgstr "// 冻结为各引擎在其上求值的、不可变且带索引的数据集。\n"
 
-#: src/concepts/interned-dataset.md:38
+#: src/concepts/interned-dataset.md:39
 msgid "\"well-formed dataset\""
 msgstr "\"well-formed dataset\""
 
-#: src/concepts/interned-dataset.md:42
+#: src/concepts/interned-dataset.md:44
 msgid ""
 "`RdfDatasetBuilder` is the mutable ingestion phase: intern terms, push "
 "quads, attach reifiers and annotations. `freeze()` validates the structure "
@@ -4793,7 +4795,7 @@ msgstr ""
 "节）。SPARQL、SHACL、ShEx 与蕴涵读取的都是这个冻结的数据集，经由零分配的 "
 "`DatasetView` trait。"
 
-#: src/concepts/interned-dataset.md:49
+#: src/concepts/interned-dataset.md:51
 msgid ""
 "Freezing is also what makes concurrency simple: a frozen dataset is "
 "immutable, so it can be shared and read from many threads (the C ABI exposes "
@@ -4802,11 +4804,11 @@ msgstr ""
 "冻结也让并发变得简单：冻结的数据集是不可变的，因此可以在多个线程之间共享并读"
 "取（C ABI 正是把它作为一个 `Send + Sync` 句柄提供）。"
 
-#: src/concepts/interned-dataset.md:53
+#: src/concepts/interned-dataset.md:55
 msgid "An explicit graph-free carrier"
 msgstr "显式无图名载体"
 
-#: src/concepts/interned-dataset.md:55
+#: src/concepts/interned-dataset.md:57
 msgid ""
 "Choose `TripleDatasetBuilder` when the data has no named graphs. Its "
 "asserted rows store subject, predicate and object in 12 bytes; reifier "
@@ -4818,7 +4820,7 @@ msgstr ""
 "谓词和宾语；具体化绑定占 8 字节，注释占 12 字节。它与 `RdfDatasetBuilder` 共"
 "享项驻留和验证，但不累积四元组行或图表。"
 
-#: src/concepts/interned-dataset.md:60
+#: src/concepts/interned-dataset.md:62
 msgid ""
 "`TripleDataset::try_from` moves the original term owner out of an all-"
 "default quad dataset. It refuses any named row or named graph declaration, "
@@ -4828,7 +4830,7 @@ msgstr ""
 "于任何命名行或命名图声明（包括空图），它都会以 "
 "`TripleReadError::NamedGraphsUnsupported` 拒绝转换。"
 
-#: src/concepts/interned-dataset.md:64
+#: src/concepts/interned-dataset.md:66
 msgid ""
 "Open `TripleDataset::read()` for a fallible view. Named-graph query requests "
 "refuse even when the carrier is empty or the graph name is absent. All "
@@ -4841,7 +4843,7 @@ msgstr ""
 "载体上重新打开读取会启动独立操作。引擎的普通默认图查询路径使用紧凑载体的 "
 "SPO、POS 和 OSP 顺序。"
 
-#: src/concepts/interned-dataset.md:70
+#: src/concepts/interned-dataset.md:72
 msgid ""
 "For rule materialization, `purrdf::shapes::srl::infer_triples` accepts that "
 "read and returns `Inference<TripleDataset>`. Its Datalog rows have three "
@@ -4856,36 +4858,37 @@ msgstr ""
 "`TextIndexConfig::for_triples`；文档键变为主语/语言，分区键变为语言，并采用独"
 "立的无图名身份。"
 
-#: src/concepts/interned-dataset.md:77
+#: src/concepts/interned-dataset.md:79
 msgid "Copy-on-write mutation"
 msgstr "写时复制修改"
 
-#: src/concepts/interned-dataset.md:79
+#: src/concepts/interned-dataset.md:81
 msgid ""
-"\"Immutable\" does not mean \"static\". Mutation happens through a copy-on-"
-"write delta over a frozen base: edits accumulate in a lightweight overlay, "
-"and the result freezes into a new dataset without copying the untouched base "
-"rows or re-interning shared terms. SPARQL UPDATE and the C ABI's mutable "
-"`PurrdfGraph` handle both ride this path."
+"\"Immutable\" does not mean \"static\". `MutableDataset` accumulates edits "
+"in a copy-on-write delta over a frozen base. Its `snapshot_view()` shares "
+"the unchanged base rows, terms and indexes. Its `freeze()` instead compacts "
+"the effective dataset into a new frozen dataset, re-interning surviving "
+"terms and rebuilding dense IDs. SPARQL UPDATE and the C ABI's mutable "
+"`PurrdfGraph` handle both use this mutation layer."
 msgstr ""
-"「不可变」并不意味着「静态」。修改通过冻结基底之上的写时复制增量进行：编辑累"
-"积在一个轻量的覆盖层中，而结果冻结为一个新的数据集，无需复制未被触及的基底"
-"行，也无需重新驻留共享的项。SPARQL UPDATE 与 C ABI 的可变 `PurrdfGraph` 句柄"
-"都走这条路径。"
+"「不可变」并不意味着「静态」。`MutableDataset` 在冻结基底之上的写时复制增量中"
+"累积编辑。其 `snapshot_view()` 共享未改变的基底行、项和索引。其 `freeze()` 则"
+"把有效数据集压实为一个新的冻结数据集，重新驻留仍然存在的项并重建稠密 ID。"
+"SPARQL UPDATE 与 C ABI 的可变 `PurrdfGraph` 句柄都使用这一修改层。"
 
-#: src/concepts/interned-dataset.md:85
+#: src/concepts/interned-dataset.md:88
 msgid "What else lives in the kernel"
 msgstr "内核中还有什么"
 
-#: src/concepts/interned-dataset.md:87
+#: src/concepts/interned-dataset.md:90
 msgid "Beyond the IR itself, `purrdf-core` owns:"
 msgstr "在 IR 本身之外，`purrdf-core` 还拥有："
 
-#: src/concepts/interned-dataset.md:89
+#: src/concepts/interned-dataset.md:92
 msgid "**`DatasetView`** — the static read trait every engine evaluates over."
 msgstr "**`DatasetView`**——每个引擎都在其上求值的静态读取 trait。"
 
-#: src/concepts/interned-dataset.md:90
+#: src/concepts/interned-dataset.md:93
 msgid ""
 "**Structured diagnostics** — typed `RdfDiagnostic`s with source locations "
 "(deliberately SARIF-free; the SARIF boundary is [`purrdf-validate`](https://"
@@ -4894,7 +4897,7 @@ msgstr ""
 "**结构化诊断**——带源位置的类型化 `RdfDiagnostic`（刻意不涉及 SARIF；SARIF 边"
 "界位于 [`purrdf-validate`](https://docs.rs/purrdf-validate)）。"
 
-#: src/concepts/interned-dataset.md:93
+#: src/concepts/interned-dataset.md:96
 msgid ""
 "**Canonicalization** (RDFC-1.0 on the RDF 1.1 subset; the `purrdf-rdfc12` "
 "profile over reifiers and annotations), dataset diff, and isomorphism — see "
@@ -4904,7 +4907,7 @@ msgstr ""
 "rdfc12` profile）、数据集差异比较以及同构判定——参见[规范化与差异比较]"
 "(canonicalization.md)。"
 
-#: src/concepts/interned-dataset.md:96
+#: src/concepts/interned-dataset.md:99
 msgid ""
 "**Store and engine seams** — the narrow parser-ingress, serializer-egress, "
 "and `SparqlEngine` traits that adapters implement in sibling crates."
@@ -4912,7 +4915,7 @@ msgstr ""
 "**存储与引擎扩展点**——由兄弟 crate 中的适配器实现的、窄小的解析器入口、序列化"
 "器出口与 `SparqlEngine` trait。"
 
-#: src/concepts/interned-dataset.md:98
+#: src/concepts/interned-dataset.md:101
 msgid ""
 "**Provenance and the loss ledger** — a generic provenance sidecar and the "
 "machine-readable RDF↔GTS loss matrix, plus native FnO and SSSOM codecs (see "
@@ -4921,7 +4924,7 @@ msgstr ""
 "**溯源与损失台账**——一个通用的溯源旁挂结构以及机器可读的 RDF↔GTS 损失矩阵，外"
 "加原生的 FnO 与 SSSOM 编解码器（参见[切片、映射与溯源](../slices.md)）。"
 
-#: src/concepts/interned-dataset.md:102
+#: src/concepts/interned-dataset.md:105
 msgid ""
 "Text codecs are _not_ in the kernel — parsing and serialization live one "
 "layer up in [`purrdf-rdf`](https://docs.rs/purrdf-rdf). The split keeps the "
@@ -4934,11 +4937,11 @@ msgstr ""
 "强制执行：不含 PyO3（一项卫生检查会对依赖树进行断言），`wasm32`\\-clean（可干"
 "净构建到该目标），且 IR 层不涉及文件 IO。"
 
-#: src/concepts/interned-dataset.md:108
+#: src/concepts/interned-dataset.md:111
 msgid "Why this design"
 msgstr "为何如此设计"
 
-#: src/concepts/interned-dataset.md:110
+#: src/concepts/interned-dataset.md:113
 msgid ""
 "The layout is chosen by measurement, not assertion: the bench `crates/rdf-"
 "core/benches/ir_layout.rs` compares array-of-structs, struct-of-arrays, and "
@@ -6995,11 +6998,17 @@ msgstr "\"application/n-quads\""
 msgid "\"serializes\""
 msgstr "\"serializes\""
 
-#: src/concepts/codecs.md:43
+#: src/concepts/codecs.md:41
+msgid ""
+"b\"<https://example.org/cat> <https://example.org/says> \\\"meow\\\" .\\n\""
+msgstr ""
+"b\"<https://example.org/cat> <https://example.org/says> \\\"meow\\\" .\\n\""
+
+#: src/concepts/codecs.md:44
 msgid "Open Knowledge Format bundles"
 msgstr "Open Knowledge Format bundle"
 
-#: src/concepts/codecs.md:45
+#: src/concepts/codecs.md:46
 msgid ""
 "The native OKF codec maps caller-profiled RDF 1.2 datasets to agent-facing "
 "Markdown files with YAML frontmatter and lifts them back through the RDF "
@@ -7012,7 +7021,7 @@ msgstr ""
 "OKF 是一个内存中的 bundle API，而不是又一种媒体类型：文件如何存储由调用方选"
 "择，因此同一份代码保持确定性与 wasm-clean。"
 
-#: src/concepts/codecs.md:51
+#: src/concepts/codecs.md:52
 msgid ""
 "`OkfConfig::new` requires the vocabulary namespace, document base IRI, and "
 "recognized frontmatter keys. There is no built-in ontology or namespace. Use "
@@ -7029,11 +7038,11 @@ msgstr ""
 "无损的 profile 得到空台账；写入时，命名图、非 profile/OWL 行以及无关的具体化"
 "节点或注解行都会被明确地逐一指出。"
 
-#: src/concepts/codecs.md:59 src/project/design-rules.md:39
+#: src/concepts/codecs.md:60 src/project/design-rules.md:39
 msgid "Byte determinism"
 msgstr "字节确定性"
 
-#: src/concepts/codecs.md:61
+#: src/concepts/codecs.md:62
 msgid ""
 "Every serializer is **byte-deterministic**: the same dataset always produces "
 "the same bytes, on every platform and in every language binding. This is a "
@@ -7047,7 +7056,7 @@ msgstr ""
 "赖迭代顺序、时间或随机数生成器（哈希器使用固定密钥的 `FixedHasher` 正是出于这"
 "个原因），且黄金文件测试固定了输出的字节。"
 
-#: src/concepts/codecs.md:67
+#: src/concepts/codecs.md:68
 msgid ""
 "Determinism is what makes the rest of the toolkit composable: content "
 "addressing in [GTS](../gts.md) and the [slice catalog](../slices.md), "
@@ -7058,11 +7067,11 @@ msgstr ""
 "中的内容寻址、评审中可做差异比较的序列化结果，以及可逐字节比较的跨语言一致性"
 "向量。"
 
-#: src/concepts/codecs.md:72
+#: src/concepts/codecs.md:73
 msgid "Diagnostics, not partial parses"
 msgstr "诊断，而非部分解析"
 
-#: src/concepts/codecs.md:74
+#: src/concepts/codecs.md:75
 msgid ""
 "Malformed input is a typed `RdfDiagnostic` with a source location where the "
 "codec can provide one — never a silent partial parse. Parsing can optionally "
@@ -7077,11 +7086,11 @@ msgstr ""
 "(https://docs.rs/purrdf-validate) 把它们渲染为逐字节确定性的 SARIF 2.1.0，供"
 "编辑器与 CI 使用（参见 [SHACL](../validation/shacl.md#sarif-输出)）。"
 
-#: src/concepts/codecs.md:82
+#: src/concepts/codecs.md:83
 msgid "Lossy projections are loud"
 msgstr "有损投影会显式告知"
 
-#: src/concepts/codecs.md:84
+#: src/concepts/codecs.md:85
 msgid ""
 "RDF 1.2 statement-level data (triple terms, reifier bindings, annotations) "
 "survives every star-capable round-trip. Serializing into a star-incapable "
@@ -7100,11 +7109,11 @@ msgstr ""
 "而不是凭空消失。同样的纪律也适用于 SPARQL 结果边界（[结果格式](../sparql/"
 "results.md)）与 RDF↔GTS 边界。"
 
-#: src/concepts/codecs.md:92
+#: src/concepts/codecs.md:93
 msgid "The succinct pack codec"
 msgstr "简洁 pack 编解码器"
 
-#: src/concepts/codecs.md:94
+#: src/concepts/codecs.md:95
 msgid ""
 "Alongside the text codecs above, `purrdf-core` ships a **binary** codec for "
 "a different job: a read-only, query-the-compressed-form encoding of a whole "
@@ -7124,7 +7133,7 @@ msgstr ""
 "`PackView::from_bytes(&[u8])` 在借用的切片上以零拷贝方式打开它，并直接针对打"
 "包后的字节回答模式查询，事先不需要任何解压或物化步骤。"
 
-#: src/concepts/codecs.md:104
+#: src/concepts/codecs.md:105
 msgid ""
 "Reach for a pack when a dataset is done changing and needs to be "
 "distributed, archived, or served at a scale where re-parsing text on every "
@@ -7149,11 +7158,11 @@ msgstr ""
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-"
 "backend-contract.md)中的「Pack backend」一节。"
 
-#: src/concepts/codecs.md:117
+#: src/concepts/codecs.md:118
 msgid "Deterministic embedding companions"
 msgstr "确定性的嵌入伴随文件"
 
-#: src/concepts/codecs.md:119
+#: src/concepts/codecs.md:120
 msgid ""
 "`.purremb` is the mmap-native companion for embedding projections over one "
 "exact `.purrpck`. It does not modify the pack or RDF canonical identity. Its "
@@ -7171,7 +7180,7 @@ msgstr ""
 "`EmbeddingBuilder` 接受无序的行；`EmbeddingStreamWriter` 接受规范顺序的行，矩"
 "阵工作内存有界；两者产生相同的规范字节。"
 
-#: src/concepts/codecs.md:128
+#: src/concepts/codecs.md:129
 msgid ""
 "Two subject families are first class. Large text collections use a corpus–"
 "document–chunk hierarchy: UTF-8 text remains external while target records "
@@ -7188,7 +7197,7 @@ msgstr ""
 "图与命名图、陈述、具体化节点绑定、注解、带方向的字面量、空节点以及递归三元组"
 "项。源局部的 pack 序号是经过校验的查找提示，绝不是标识。"
 
-#: src/concepts/codecs.md:136
+#: src/concepts/codecs.md:137
 msgid ""
 "Matryoshka families store only their widest dense matrix. Each declared "
 "leading prefix is a distinct `VectorSpaceId` and `ProjectionId`, so a coarse "
@@ -7204,7 +7213,7 @@ msgstr ""
 "引仍是不透明的、可重建的派生工件，绑定到一个确切的前缀投影。它们绝不取代权威"
 "矩阵。"
 
-#: src/concepts/codecs.md:143
+#: src/concepts/codecs.md:144
 msgid ""
 "Construction follows one evidence path. First obtain a "
 "`CertifiedPurrpckSource` by building or independently verifying the exact "
@@ -7225,7 +7234,7 @@ msgstr ""
 "推导出数据集、图、陈述、具体化节点、注解与项的目标。RDF-star 三元组项使用 "
 "`RdfTermTarget::Triple`；它们不进入单独的标识体系。"
 
-#: src/concepts/codecs.md:153
+#: src/concepts/codecs.md:154
 msgid ""
 "An `EmbeddingFamilyContract` defines the complete generation pipeline. A "
 "Matryoshka contract lists its allowed leading dimensions, while its "
@@ -7241,7 +7250,7 @@ msgstr ""
 "`(TargetSetId, VectorSpaceId)`，并且在比较来自相互独立输入的行之前必须调用 "
 "`require_compatible_vector_spaces`。"
 
-#: src/concepts/codecs.md:161
+#: src/concepts/codecs.md:162
 msgid ""
 "Large collections shard at artifact boundaries: each `.purremb` names its "
 "own exact source pack and local target set, while equal family contracts "
@@ -7257,7 +7266,7 @@ msgstr ""
 "`ExternalBinding::from_purrpck` 加入经独立认证的 RDF 证据。绑定携带调用方提供"
 "的角色与媒体类型。PurRDF 不为它们发明策略或本体词汇。"
 
-#: src/concepts/codecs.md:169
+#: src/concepts/codecs.md:170
 msgid ""
 "`EmbeddingView::from_bytes` borrows any stable byte slice, whether heap-"
 "owned, memory-mapped by the caller, or WebAssembly linear memory. Structural "
@@ -7271,7 +7280,7 @@ msgstr ""
 "校验以及经认证的源校验，都是显式的证据状态，而不是访问关卡。对文件做 mmap 的"
 "调用方，在视图或驻留的校验证书存在期间，必须保持底层字节不可变。"
 
-#: src/concepts/codecs.md:176
+#: src/concepts/codecs.md:177
 msgid ""
 "Embeddings and ANN structures are sensitive derived content: model "
 "inversion, membership inference, similarity probing, digest dictionary "
@@ -7286,11 +7295,11 @@ msgstr ""
 "证作者、不加密内容，也不授予访问权限。参见逐字节精确的 [PURREMB v1 规范]"
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/PURREMB.md)。"
 
-#: src/concepts/codecs.md:183
+#: src/concepts/codecs.md:184
 msgid "The columnar Parquet codec"
 msgstr "列式 Parquet 编解码器"
 
-#: src/concepts/codecs.md:185
+#: src/concepts/codecs.md:186
 msgid ""
 "`purrdf::columnar` exposes the bidirectional SQL/DataFrame interchange path. "
 "It maps any `DatasetView` plus a content-addressed blob store to five "
@@ -7306,7 +7315,7 @@ msgstr ""
 "时的情况下把这一确切 profile 读回。该映射保留 RDF 1.2 三元组项、具体化节点、"
 "注解、图作用域、带方向的字面量、空节点作用域以及显式为空的命名图。"
 
-#: src/concepts/codecs.md:192
+#: src/concepts/codecs.md:193
 msgid ""
 "The files are byte-deterministic and readable by engines such as DuckDB. See "
 "the [normative columnar schema](https://github.com/Blackcat-Informatics/"
@@ -7317,13 +7326,13 @@ msgstr ""
 "profile 见[规范性列式模式](https://github.com/Blackcat-Informatics/purrdf/"
 "blob/main/docs/COLUMNAR.md)。"
 
-#: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
+#: src/concepts/codecs.md:197 src/concepts/base-iris.md:258
 #: src/sparql/querying.md:2263 src/validation/shacl.md:1590
 #: src/validation/shex.md:98 src/entailment.md:365
 msgid "Conformance"
 msgstr "一致性"
 
-#: src/concepts/codecs.md:198
+#: src/concepts/codecs.md:199
 msgid ""
 "The codecs are gated by the W3C `rdf-tests` syntax corpus, vendored and "
 "frozen in-repo — 264/264 round-trip cases across N-Quads, N-Triples, RDF/"
@@ -7336,13 +7345,13 @@ msgstr ""
 "时记分板见 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/"
 "purrdf/blob/main/docs/CONFORMANCE.md)。"
 
-#: src/concepts/codecs.md:203 src/sparql/results.md:119
+#: src/concepts/codecs.md:204 src/sparql/results.md:119
 #: src/validation/shapes-products.md:952 src/gts.md:120 src/slices.md:95
 #: src/interop/rdflib.md:81 src/interop/rdfjs.md:116
 msgid "Related"
 msgstr "相关内容"
 
-#: src/concepts/codecs.md:205
+#: src/concepts/codecs.md:206
 msgid ""
 "[Canonicalization & Diff](canonicalization.md) — when you need a _canonical_ "
 "serialization rather than just a deterministic one."
@@ -7350,7 +7359,7 @@ msgstr ""
 "[规范化与差异比较](canonicalization.md)——当需要的是*规范的*序列化而不仅仅是确"
 "定性的序列化时。"
 
-#: src/concepts/codecs.md:207
+#: src/concepts/codecs.md:208
 msgid ""
 "[The Interned Dataset IR](interned-dataset.md) — what the text codecs parse "
 "into, and the `DatasetView` read seam the pack codec implements alongside "
@@ -13909,7 +13918,8 @@ msgid ""
 msgstr ""
 "该 crate 依赖 `purrdf-core`、`purrdf-lex` 和 `purrdf-iri`，并保持 wasm 洁净。"
 "共享的词法读取器和 IRI 验证服务于结果格式；项与 N-Triples 语法来自内核的输出"
-"原语以及共享的词法项写出器。因此，结果、编解码器和诊断使用同一个项语法权威实现。"
+"原语以及共享的词法项写出器。因此，结果、编解码器和诊断使用同一个项语法权威实"
+"现。"
 
 #: src/sparql/results.md:121
 msgid ""
