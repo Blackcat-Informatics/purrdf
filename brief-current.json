@@ -1,0 +1,79 @@
+{
+  "issue": 556,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Segmented stack reads an ordinary quad as an annotation when its subject is a reifier in another layer",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 494,
+      "title": "Evaluate at caller-supplied coordinates: host-supplied NOW(), as-of snapshots of a PagedStack, and range scans on annotation values",
+      "state": "OPEN"
+    },
+    {
+      "number": 553,
+      "title": "Segmented stack view: bound-reifier patterns drop annotations and scan the reifier table; block cache lookup is linear",
+      "state": "CLOSED"
+    },
+    {
+      "number": 551,
+      "title": "Segmented stack queries are quadratic in terms touched: Memory::reserve grows by one with a full copy",
+      "state": "CLOSED"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "CLOSED"
+    },
+    {
+      "number": 495,
+      "title": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment",
+      "state": "CLOSED"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 492,
+      "title": "Triple-only carrier for RDF 1.2 consumers that use no named graphs (rows, permutations, Datalog atoms, identities)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 375,
+      "title": "Prep v3.0 release",
+      "state": "CLOSED"
+    },
+    {
+      "number": 425,
+      "title": "Keep general semantic coverage native and focus existing WASM execution on target behavior",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 24,
+    "bug": 2,
+    "performance": 2,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/556-segmented-stack-reads-an-ordinary-quad"
+  },
+  "coverage": [
+    "issue #556 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Segmented', 'stack', 'reads']: 9 other item(s)",
+    "GhpRsq-Defect-Class trailers: 4 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #556 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #556: 0",
+    "requirement candidates: 0 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 2 path(s) (0 on disk), 9 identifier(s), 1 workspace package(s), 0 URL(s)"
+  ]
+}

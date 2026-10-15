@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Summary\n\nIn a `SegmentedStack`, an ordinary quad whose subject is the reifier of a reifier row held in a\n*different* layer is returned as an annotation of that reifier: `quads()` and\n`quads_for_pattern` do not yield it, `annotation_quads()` does, and the view records no read\nerror. The same two rows sealed into *one* image read back as written (one ordinary quad, one\nreifier, no annotation). So how rows are split across layers changes the answer.\n\n## Reproduction (purrdf `0d075201f`)\n\nTwo images built with `SegmentedBuilder` (build limits sized to the rows; 4096-byte blocks,\n32 records), stacked oldest first with `SegmentedStack::publish`, queried through\n`SegmentedStackSnapshot::query`:\n\n- image A: `push_reifier(<x>, <<( <ts> <tp> <to> )>>, None)`\n- images B1, B2: `push_quad(<x> <later> <a>)`, `push_quad(<x> <later> <b>)`, one each\n\n| stack | `quads()` | `quads_for_pattern(<x>, <later>, _)` | `reifier_quads()` | `annotation_quads()` |\n|---|---:|---:|---:|---:|\n| [A, B1, B2] | 0 | 0 | -- | 2 |\n| [B1, B2, A] | 0 | -- | 1 | -- |\n| [B1, B2] | 2 | -- | -- | -- |\n\nand in one image, `<x>`'s reifier row with `push_quad(<x> <p> <a>)`: `quads()` 1,\n`reifier_quads()` 1, `annotation_quads()` 0.\n\nOver A and one image `push_quad(<x> <p> <a>)`, `quads()` is 0; with A's reifier subject\nchanged to `<r>`, it is 1. `read_error()` after the walks over [A, B1, B2] is `None`.\n\nKatamari's reproductions:\n`crates/katamari-query-purrdf/src/layers.rs` `reifier_subjects::an_ordinary_row_on_another_layers_reifier_is_read_as_an_annotation`\nand, end to end, `crates/katamari-query-purrdf/tests/query.rs`\n`a_claim_about_a_claim_reads_back_as_written_from_its_layers` (both pinned `should_panic`\nuntil this is fixed).\n\n## Impact\n\nA claim about a claim asserts a triple whose subject is the earlier claim's reifier. Persisted\nas layers, that triple disappears from the ordinary stream and appears as an annotation, so a\npersisted graph's answers differ from the same data in one dataset. Katamari cannot persist\nits graph as segmented layers for a vault holding such claims until the stack classifies rows\nthe same way whatever the layering.\n\n## Expected\n\nA stack answers as the union of its layers' rows (less removals) would in one image: an\nordinary quad stays ordinary regardless of which layer holds a reifier row for its subject.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-15T20:26:55Z",
+  "labels": [],
+  "milestone": null,
+  "number": 556,
+  "state": "OPEN",
+  "title": "Segmented stack reads an ordinary quad as an annotation when its subject is a reifier in another layer",
+  "updatedAt": "2026-10-15T20:26:55Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/556"
+}

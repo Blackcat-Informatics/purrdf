@@ -1,0 +1,22 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 8.82s
+     Running tests/segmented_stack.rs (/opt/.cargo/bf/448bfdd2cc2aba/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 1 test
+test ordinary_quads_keep_their_authored_kind_across_layer_partitions ... FAILED
+
+failures:
+
+---- ordinary_quads_keep_their_authored_kind_across_layer_partitions stdout ----
+thread 'ordinary_quads_keep_their_authored_kind_across_layer_partitions' panicked at crates/rdf-core/tests/segmented_stack.rs:523:13:
+assertion `left == right` failed: authored ordinary rows must not depend on partitioning: None
+  left: (0, 1, 2)
+ right: (2, 1, 0)
+
+
+failures:
+    ordinary_quads_keep_their_authored_kind_across_layer_partitions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-core --test segmented_stack`

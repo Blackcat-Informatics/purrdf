@@ -1,0 +1,73 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/hash)
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling libc v0.2.186
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/lex)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/rdf-events)
+   Compiling digest v0.11.3
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling sha2 v0.11.0
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/xsd)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/testkit)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/stack)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/cdt)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/alloc-probe)
+error[E0599]: no variant, associated function, or constant named `triple` found for enum `TermValue` in the current scope
+   --> crates/rdf-core/tests/segmented_stack.rs:488:28
+    |
+488 |                 TermValue::triple(
+    |                            ^^^^^^ variant, associated function, or constant not found in `TermValue`
+    |
+note: if you're trying to build a new `TermValue` consider using one of the following associated functions:
+      TermValue::iri
+      TermValue::blank
+      TermValue::simple_literal
+      TermValue::typed_literal
+      and 6 others
+   --> crates/lex/src/constructors.rs:148:9
+    |
+148 |           $vis fn $name($text: impl ::core::convert::Into<::std::string::String>) -> Self {
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/ir/term.rs:442:1
+    |
+442 | / purrdf_lex::constructors! {
+443 | |     impl TermValue {
+444 | |         /// An IRI term from its full string.
+445 | |         #[inline]
+...   |
+448 | | }
+    | |_- in this macro invocation
+...
+494 |       pub fn blank(label: impl Into<String>) -> Self {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+503 |       pub fn simple_literal(lexical_form: impl Into<String>) -> Self {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+514 |       pub fn typed_literal(lexical_form: impl Into<String>, datatype: impl Into<String>) -> Self {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: this error originates in the macro `$crate::constructors` which comes from the expansion of the macro `purrdf_lex::constructors` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: there is a variant with a similar name
+    |
+488 -                 TermValue::triple(
+489 -                     TermValue::iri("urn:ts"),
+490 -                     TermValue::iri("urn:tp"),
+491 -                     TermValue::iri("urn:to"),
+492 -                 ),
+488 +                 TermValue::Triple { s: /* value */, p: /* value */, o: /* value */ },
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (test "segmented_stack") due to 1 previous error

@@ -1,0 +1,23 @@
+{
+  "issue": 556,
+  "branch": "paudley/556-segmented-stack-reads-an-ordinary-quad",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "cef34c8aa45716c1f04b0659b288a85a379e21cd",
+      "subject": "Preserve authored ordinary rows across sealed stack layers",
+      "date": "2026-10-15"
+    }
+  ],
+  "files": [
+    "crates/rdf-core/src/ir/mutable.rs",
+    "crates/rdf-core/src/ir/paged/stack.rs",
+    "crates/rdf-core/src/ir/segmented/query/view.rs",
+    "crates/rdf-core/tests/paged_stack.rs",
+    "crates/rdf-core/tests/segmented_stack.rs",
+    "crates/sparql-eval/tests/paged_stack_query.rs",
+    "docs/design/purrdf-backend-contract.md",
+    "helpers-ledger.toml"
+  ],
+  "adrs_touched": []
+}

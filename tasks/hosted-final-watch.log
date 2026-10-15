@@ -1,0 +1,754 @@
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+test (integration-2)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+pytest	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+pytest	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+pytest	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+pytest	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+pytest	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+pytest	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+pytest	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+pytest	pass	31m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+pytest	pass	31m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+pytest	pass	31m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+pytest	pass	31m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+test (lib)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Refreshing checks status every 30 seconds. Press Ctrl+C to quit.
+
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+pytest	pass	31m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+test (lib)	pass	33m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+test (integration-5)	pending	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+pytest	pass	31m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test	pass	3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116691982658	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+test (integration-5)	pass	34m0s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+test (lib)	pass	33m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	
+Analyze (actions)	pass	40s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672138	
+Analyze (c-cpp)	pass	1m1s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672207	
+Analyze (javascript-typescript)	pass	1m6s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671669	
+Analyze (python)	pass	1m28s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677672029	
+Analyze (rust)	pass	14m18s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809154883/job/116677671982	
+CodeQL	pass	12s	https://github.com/Blackcat-Informatics/purrdf/runs/116677905202	
+CodeRabbit	pass	0		Review completed
+aarch64	pass	16m35s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678220	
+avx512-sde	pass	9m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678221	
+capi	pass	18m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677828	
+conformance	pass	26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116683834713	
+conformance (core)	pass	14m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677908	
+conformance (python)	pass	12m33s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678510	
+conformance (shapes)	pass	8m16s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678733	
+conformance (sparql)	pass	8m26s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678186	
+cross-arch	pass	25m12s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678435	
+cross-arch-riscv64 (determinism-more-workers)	pass	20m19s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678216	
+cross-arch-riscv64 (determinism-one-worker)	pass	15m47s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678633	
+cross-arch-riscv64 (determinism-serial)	pass	17m53s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678703	
+cross-arch-riscv64 (suites)	pass	20m3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678270	
+doc	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677668	
+geo-determinism	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678383	
+miri	pass	8m50s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678060	
+msrv	pass	1m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678192	
+projection-oracles	pass	6m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678266	
+pytest	pass	31m29s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678154	
+python-publisher	pass	21s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678111	
+simd-asm	pass	31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116687963581	
+simd-asm-config (aarch64)	pass	18m48s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678499	
+simd-asm-config (aarch64-neoverse-v1)	pass	23m14s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678776	
+simd-asm-config (wasm32)	pass	15m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678497	
+simd-asm-config (wasm32-simd128)	pass	20m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678347	
+simd-asm-config (x86_64)	pass	19m20s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678328	
+simd-asm-config (x86_64-v3)	pass	24m10s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678487	
+simd-asm-config (x86_64-v4)	pass	17m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677873	
+test	pass	3s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116691982658	
+test (doc)	pass	16m52s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678342	
+test (integration-1)	pass	24m51s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677960	
+test (integration-2)	pass	28m37s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677981	
+test (integration-3)	pass	22m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678432	
+test (integration-4)	pass	22m25s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678170	
+test (integration-5)	pass	34m0s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678240	
+test (lib)	pass	33m31s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678174	
+wasm	pass	7m13s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678045	
+wasm-exec	pass	13m8s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678041	
+wasm-package	pass	21m9s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678337	
+wasm-schema-oracles	pass	8m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678202	
+windows-mtime	pass	2m38s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677678369	
+native-profile	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680344	
+native-profile-admission	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677679563	
+native-profile-comparison	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677681182	
+simd-asm-projection	skipping	0	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677680043	
+workspace	pass	18m32s	https://github.com/Blackcat-Informatics/purrdf/actions/runs/38809158043/job/116677677928	

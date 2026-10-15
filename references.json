@@ -1,0 +1,67 @@
+{
+  "paths": [
+    {
+      "ref": "crates/katamari-query-purrdf/src/layers.rs",
+      "path": "/home/paudley/Active/purrdf/crates/katamari-query-purrdf/src/layers.rs",
+      "where": "not here; exists in sibling(s): katamari",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/katamari-query-purrdf/tests/query.rs",
+      "path": "/home/paudley/Active/purrdf/crates/katamari-query-purrdf/tests/query.rs",
+      "where": "not here; exists in sibling(s): katamari",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "SegmentedStack",
+      "files": 10
+    },
+    {
+      "name": "quads_for_pattern",
+      "files": 125
+    },
+    {
+      "name": "SegmentedBuilder",
+      "files": 21
+    },
+    {
+      "name": "SegmentedStack::publish",
+      "files": 0
+    },
+    {
+      "name": "SegmentedStackSnapshot::query",
+      "files": 0
+    },
+    {
+      "name": "None",
+      "files": 2009
+    },
+    {
+      "name": "reifier_subjects::an_ordinary_row_on_another_layers_reifier_is_read_as_an_annotation",
+      "files": 0
+    },
+    {
+      "name": "a_claim_about_a_claim_reads_back_as_written_from_its_layers",
+      "files": 0
+    },
+    {
+      "name": "should_panic",
+      "files": 31
+    }
+  ],
+  "packages": [
+    "purrdf"
+  ],
+  "urls": [],
+  "truncated": []
+}

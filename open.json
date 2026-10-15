@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 556,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad",
+  "branch": "paudley/556-segmented-stack-reads-an-ordinary-quad",
+  "slug": "segmented-stack-reads-an-ordinary-quad",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/.stage/segmented-stack-reads-an-ordinary-quad",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "0d075201ffe69a473247287b814ca5846cd3c94f",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad",
+    "branch:paudley/556-segmented-stack-reads-an-ordinary-quad",
+    "stage:/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/.stage/segmented-stack-reads-an-ordinary-quad",
+    "issue:/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/.stage/segmented-stack-reads-an-ordinary-quad/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-15T14:44:20-0600"
+}

@@ -1,0 +1,13 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/556-segmented-stack-reads-an-ordinary-quad/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 31s
+     Running unittests src/lib.rs (/opt/.cargo/bf/448bfdd2cc2aba/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 5 tests
+test evidence::tests::support_cannot_prematurely_settle_contradiction_or_classification ... ok
+test evidence::answer::tests::exact_witness_questions_stop_without_any_metadata_capacity_or_false_classification ... ok
+test ir::mutable::tests::classification_collision_counts_the_actual_physical_rows ... ok
+test ir::mutable::tests::classification_restores_only_targets_it_owned ... ok
+test ir::mutable::tests::public_mutation_metrics_exclude_derived_classification ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1348 filtered out; finished in 0.00s
+
