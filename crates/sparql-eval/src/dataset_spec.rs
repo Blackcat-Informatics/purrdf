@@ -67,11 +67,16 @@ pub(crate) fn require_pattern_graph_support<D: DatasetView>(
         walk_pre_post_with_memory(
             NodeRef::Pattern(pattern),
             |visit, node, _| -> Result<Flow, purrdf_lex::allocation::StorageError> {
-                if visit == Visit::Enter
-                    && matches!(node, NodeRef::Pattern(GraphPattern::Graph { .. }))
-                {
-                    required = true;
-                    return Ok(Flow::Stop);
+                if visit == Visit::Enter {
+                    match node {
+                        // The resolver admits this body against its own dataset.
+                        NodeRef::Pattern(GraphPattern::Service { .. }) => return Ok(Flow::Skip),
+                        NodeRef::Pattern(GraphPattern::Graph { .. }) => {
+                            required = true;
+                            return Ok(Flow::Stop);
+                        }
+                        _ => {}
+                    }
                 }
                 Ok(Flow::Descend)
             },

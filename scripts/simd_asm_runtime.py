@@ -122,7 +122,7 @@ class Runner:
     def context(self, identity):
         key = digest(encoded(identity))
         root = self.root / "contexts" / key
-        lock = root / "lease.lock"
+        lock = self.root / "lease.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
         with lock.open("a+") as lease:
             while True:

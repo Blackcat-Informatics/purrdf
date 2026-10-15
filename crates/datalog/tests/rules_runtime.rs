@@ -914,6 +914,114 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
     assert_eq!(&proofs.arena().check(*root, &context).unwrap(), fact);
 }
 
+fn triple_negated_base_preserves_seminaive_work_and_limits() {
+    use purrdf_datalog::guard::{Negation, NoGuards};
+    use purrdf_datalog::schedule::{
+        Layer, NoHooks, Schedule, compile_scheduled, evaluate_scheduled,
+    };
+    use purrdf_datalog::store::TermInterner;
+
+    fn filtered_rule<const N: usize>(
+        head: ClauseAtom<N>,
+        mut body: Vec<ClauseAtom<N>>,
+        absent: ClauseAtom<N>,
+        grouped: bool,
+    ) -> DlClause<N> {
+        let negations = if grouped {
+            vec![Negation::new(vec![absent], Vec::new())]
+        } else {
+            body.push(absent.into_negated());
+            Vec::new()
+        };
+        DlClause::datalog(head, body).with_negations(negations)
+    }
+
+    const NODES: usize = 12;
+    for grouped in [false, true] {
+        let (s, m, o) = (
+            ClauseTerm::var("?s"),
+            ClauseTerm::var("?m"),
+            ClauseTerm::var("?o"),
+        );
+        let triple_rule = filtered_rule(
+            ClauseAtom::triple(s.clone(), ClauseTerm::iri("urn:path"), o.clone()),
+            vec![
+                ClauseAtom::triple(s.clone(), ClauseTerm::iri("urn:path"), m.clone()),
+                ClauseAtom::triple(m.clone(), ClauseTerm::iri("urn:path"), o.clone()),
+            ],
+            ClauseAtom::triple(s.clone(), ClauseTerm::iri("urn:blocked"), o.clone()).from_base(),
+            grouped,
+        );
+        let quad_rule = filtered_rule(
+            ClauseAtom::positive(s.clone(), "urn:path", o.clone()),
+            vec![
+                ClauseAtom::positive(s.clone(), "urn:path", m.clone()),
+                ClauseAtom::positive(m, "urn:path", o.clone()),
+            ],
+            ClauseAtom::quad(
+                s,
+                ClauseTerm::iri("urn:blocked"),
+                o,
+                ClauseTerm::iri("urn:base"),
+            ),
+            grouped,
+        );
+        let schedule = Schedule::new(vec![Layer::new(Vec::new(), vec![vec![0]])]);
+        let triple_program = compile_scheduled(vec![triple_rule], schedule.clone()).unwrap();
+        let quad_program = compile_scheduled(vec![quad_rule], schedule).unwrap();
+        let mut compact =
+            RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default())
+                .with_base_snapshot()
+                .unwrap();
+        let mut quad = RelationStore::new();
+        for index in 0..NODES - 1 {
+            let subject = format!("<urn:node{index}>");
+            let object = format!("<urn:node{}>", index + 1);
+            compact
+                .insert_row([&subject, "<urn:path>", &object])
+                .unwrap();
+            quad.insert(
+                &subject,
+                "<urn:path>",
+                &object,
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
+        }
+        let reference = evaluate_scheduled(
+            &quad_program,
+            quad,
+            &NoGuards,
+            &mut NoHooks,
+            &EvalOptions::default(),
+            None,
+        )
+        .unwrap();
+        let expected_steps = reference.budget().join_steps();
+        let actual = evaluate_scheduled(
+            &triple_program,
+            compact,
+            &NoGuards,
+            &mut NoHooks,
+            &EvalOptions::default().with_max_join_steps(expected_steps),
+            None,
+        )
+        .expect("immutable negative filters retain the quad semi-naive work bound");
+        assert_eq!(actual.budget().join_steps(), expected_steps);
+        assert_eq!(actual.facts().row_count(), NODES * (NODES - 1) / 2);
+        assert_eq!(actual.facts().row_count(), reference.facts().row_count());
+        for start in 0..NODES - 1 {
+            for end in start + 1..NODES {
+                assert!(actual.facts().contains_row([
+                    &format!("<urn:node{start}>"),
+                    "<urn:path>",
+                    &format!("<urn:node{end}>"),
+                ]));
+            }
+        }
+    }
+}
+
 fn triple_no_output_runs_the_body_without_fabricating_a_fact() {
     use purrdf_datalog::cache::canonical_rule_hash;
     use purrdf_datalog::clause::HeadForm;
@@ -1048,6 +1156,7 @@ fn triple_store_has_predicate_only_keys_and_transactional_original_ids() {
 
 purrdf_testkit::harness_main!(
     triple_base_authority_survives_data_growth_and_layer_retraction,
+    triple_negated_base_preserves_seminaive_work_and_limits,
     triple_no_output_runs_the_body_without_fabricating_a_fact,
     triple_store_has_predicate_only_keys_and_transactional_original_ids,
     triple_compiler_preserves_static_arity_and_original_admission,

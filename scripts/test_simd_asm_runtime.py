@@ -157,22 +157,22 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(self.context_root, promoted)
             self.assertEqual(self.runner.timings[self.config.name]["rustc_invocations"], 0)
 
-    def test_configuration_lease_covers_both_builds_and_verdict(self):
+    def test_shared_target_lease_covers_both_builds_and_verdict(self):
         self.graph_artifacts = [[dict()], [dict(fresh=True)]]
         execute = self.runner.execute
         evaluate = self.gate.evaluate_config
 
-        def require_lease(root):
-            with (root / "lease.lock").open("a+") as contender:
+        def require_lease():
+            with (self.root / "lease.lock").open("a+") as contender:
                 with self.assertRaises(BlockingIOError):
                     fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
         def leased_execute(cmd, env, lease, graph):
-            require_lease(self.runner.log_directory)
+            require_lease()
             return execute(cmd, env, lease, graph)
 
         def leased_evaluate(*args):
-            require_lease(self.context_root)
+            require_lease()
             return evaluate(*args)
 
         with self.two_graphs(), patch.object(self.runner, "execute", side_effect=leased_execute), \

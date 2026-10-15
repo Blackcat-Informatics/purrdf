@@ -11,6 +11,7 @@ use crate::ir::{QuadIds, TermId, TermRef, TermValue};
 use crate::{RdfDiagnostic, RdfStoreCapabilities};
 use purrdf_lex::allocation::{Memory, Resident, Shared, SharedCloneError, StorageError};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Original operational failure of one graph-free read session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,7 +63,13 @@ impl From<TripleReadError> for RdfDiagnostic {
 #[derive(Debug)]
 pub struct TripleRead<'a> {
     dataset: &'a TripleDataset,
-    failure: Shared<Mutex<Option<TripleReadError>>>,
+    failure: Shared<ReadFailure>,
+}
+
+#[derive(Debug, Default)]
+struct ReadFailure {
+    failed: AtomicBool,
+    cause: Mutex<Option<TripleReadError>>,
 }
 
 impl TripleDataset {
@@ -73,9 +80,9 @@ impl TripleDataset {
     pub fn read(&self) -> Result<TripleRead<'_>, TripleReadError> {
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        memory.add_bytes(Shared::<Mutex<Option<TripleReadError>>>::allocation_layout().size())?;
+        memory.add_bytes(Shared::<ReadFailure>::allocation_layout().size())?;
         let failure =
-            Shared::try_new(Mutex::new(None)).map_err(|_| StorageError::AllocationFailed)?;
+            Shared::try_new(ReadFailure::default()).map_err(|_| StorageError::AllocationFailed)?;
         Ok(TripleRead {
             dataset: self,
             failure,
@@ -87,9 +94,13 @@ impl TripleRead<'_> {
     fn latch(&self, error: TripleReadError) -> TripleReadError {
         let mut failure = self
             .failure
+            .cause
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *failure.get_or_insert(error)
+        let first = *failure.get_or_insert(error);
+        drop(failure);
+        self.failure.failed.store(true, Ordering::Release);
+        first
     }
 
     fn ready(&self) -> Result<(), TripleReadError> {
@@ -190,8 +201,12 @@ impl DatasetView for TripleRead<'_> {
     type ProbePlan = TripleOrder;
 
     fn read_error(&self) -> Option<Self::ReadError> {
+        if !self.failure.failed.load(Ordering::Acquire) {
+            return None;
+        }
         *self
             .failure
+            .cause
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }

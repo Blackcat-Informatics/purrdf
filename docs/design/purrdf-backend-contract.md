@@ -38,16 +38,16 @@ identified structurally by their resolved `(s, p, o)` (C0.3).
 
 #### C0.8 — `TermId` is dataset-local (the ring-fence the whole design honors)
 
-`TermId` is an opaque term identity that is **local to exactly one frozen
-`RdfDataset`**. It is deliberately:
+`TermId` is an opaque term identity that is **local to exactly one frozen term
+owner**, held by an `RdfDataset` or `TripleDataset`. It is deliberately:
 
 - **not** `Serialize` / `Deserialize`,
 - **not** merge-stable,
-- **not** meaningful across datasets.
+- **not** meaningful across independent term owners.
 
 Any consumer that needs a durable identifier MUST resolve the `TermId` to its RDF
 term value and retain the value — never the id. This is the ring-fence that the
-entire backend design is built to honor: an id names a position in one dataset's
+entire backend design is built to honor: an id names a position in one frozen owner's
 term table and nothing more. Even the low-level `TermId::index` /
 `TermId::from_index` kernel API, which exposes the dense table index so the
 sibling `purrdf` adapters (the canonical Turtle serializer in particular) can
@@ -933,7 +933,7 @@ predicate-only partition key. Immutable Base reads are source metadata outside
 the term row, and legal empty rule output is `NoOutput`, distinct from
 inconsistency. The same compiler, joins, schedule, chase and proof machinery
 also serves the unchanged four-position shape. Public SPARQL RL
-`srl::infer_triples` returns a `TripleDataset`; `srl::infer` retains its
+`srl::infer_triples` returns `Inference<TripleDataset>`; `srl::infer` retains its
 quad result.
 
 ## Determinism & wasm

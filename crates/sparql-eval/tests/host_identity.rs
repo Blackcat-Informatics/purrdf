@@ -600,10 +600,97 @@ fn triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results() 
     }
 }
 
+fn triple_local_graph_support_stops_at_the_remote_service_boundary() {
+    use purrdf_sparql_eval::InProcessServiceResolver;
+    let mut remote = RdfDatasetBuilder::new();
+    let graph = remote.intern_iri("urn:remote:graph").unwrap();
+    let subject = remote.intern_iri("urn:remote:subject").unwrap();
+    let predicate = remote.intern_iri("urn:remote:predicate").unwrap();
+    let value = remote
+        .intern_literal(purrdf_core::RdfLiteral::simple("remote-graph"))
+        .unwrap();
+    remote
+        .push_quad(subject, predicate, value, Some(graph))
+        .unwrap();
+    let resolver = InProcessServiceResolver::new().with_endpoint(
+        "https://example.org/in-process/sparql",
+        remote.freeze().unwrap(),
+    );
+    let engine = NativeSparqlEngine::new();
+    let options = QueryOptions::EMPTY.with_remote(Some(&resolver));
+
+    for populated in [false, true] {
+        let (_, triple) = carrier_pair(populated);
+        for (query, remote_only) in [
+            (
+                "SELECT ?n WHERE { SERVICE <https://example.org/in-process/sparql> { GRAPH <urn:remote:graph> { <urn:remote:subject> <urn:remote:predicate> ?n } } }",
+                true,
+            ),
+            (
+                "SELECT ?n WHERE { SERVICE SILENT <https://example.org/in-process/sparql> { GRAPH ?g { <urn:remote:subject> <urn:remote:predicate> ?n } } }",
+                true,
+            ),
+            (
+                "SELECT ?n WHERE { VALUES ?n { \"remote-graph\" } FILTER EXISTS { SERVICE <https://example.org/in-process/sparql> { GRAPH <urn:remote:graph> { <urn:remote:subject> <urn:remote:predicate> ?n } } } }",
+                true,
+            ),
+            (
+                "SELECT ?n WHERE { SERVICE <https://example.org/in-process/sparql> { GRAPH <urn:remote:graph> { <urn:remote:subject> <urn:remote:predicate> ?n } } GRAPH <urn:local:graph> {} }",
+                false,
+            ),
+            (
+                "SELECT ?n FROM NAMED <urn:local:graph> WHERE { SERVICE <https://example.org/in-process/sparql> { GRAPH <urn:remote:graph> { <urn:remote:subject> <urn:remote:predicate> ?n } } }",
+                false,
+            ),
+        ] {
+            let prepared = engine.prepare_query(query, None).unwrap();
+            for use_prepared in [false, true] {
+                let read = triple.read().unwrap();
+                let result = if use_prepared {
+                    engine.query_prepared_fallible_view(&read, &prepared, &[], options)
+                } else {
+                    engine.query_fallible_view(
+                        &read,
+                        SparqlRequest {
+                            query,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        options,
+                    )
+                };
+                if remote_only {
+                    let result = result.expect("the remote quad carrier supports named graphs");
+                    let (variables, rows) = result.result.solutions().unwrap();
+                    assert_eq!(variables, ["n"]);
+                    assert_eq!(rows.len(), 1);
+                    assert_eq!(rows[0].len(), 1);
+                    assert!(matches!(&rows[0][0],
+                        Some(TermValue::Literal { lexical_form, .. }) if lexical_form == "remote-graph"));
+                    assert_eq!(read.read_error(), None);
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(FallibleSparqlError::Operational {
+                            error: TripleReadError::NamedGraphsUnsupported,
+                            ..
+                        })
+                    ));
+                    assert_eq!(
+                        read.read_error(),
+                        Some(TripleReadError::NamedGraphsUnsupported)
+                    );
+                }
+            }
+        }
+    }
+}
+
 purrdf_testkit::harness_main!(
     original_host_ids_join_and_expand_triples_without_native_interning,
     host_deletion_discards_partial_output_and_preserves_first_typed_cause,
     certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failure,
     triple_graph_support_precedes_empty_and_nested_query_shortcuts,
+    triple_local_graph_support_stops_at_the_remote_service_boundary,
     triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results,
 );

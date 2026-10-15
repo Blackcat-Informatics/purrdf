@@ -309,12 +309,16 @@ fn refused_child_stops_existing_streams_and_fresh_session_is_healthy() {
     let mut stream = read.quads();
     let mut workspace = read.reserve_workspace(32).unwrap();
     assert!(stream.next().is_some());
-    assert_eq!(
+    let refuse_named = || {
         child
             .quads_for_pattern(None, None, None, GraphMatch::Named(p))
-            .count(),
-        0
-    );
+            .count()
+    };
+    #[cfg(not(target_family = "wasm"))]
+    let refused = std::thread::scope(|scope| scope.spawn(refuse_named).join().unwrap());
+    #[cfg(target_family = "wasm")]
+    let refused = refuse_named();
+    assert_eq!(refused, 0);
     assert_eq!(stream.next(), None);
     assert_eq!(
         workspace.resize(0),

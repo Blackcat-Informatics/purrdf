@@ -809,12 +809,14 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
 				triple_base_authority_survives_data_growth_and_layer_retraction \
+				triple_negated_base_preserves_seminaive_work_and_limits \
 				triple_no_output_runs_the_body_without_fabricating_a_fact \
 				triple_store_has_predicate_only_keys_and_transactional_original_ids \
 				triple_compiler_preserves_static_arity_and_original_admission \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test host_identity -- --exact \
 				triple_graph_support_precedes_empty_and_nested_query_shortcuts \
+				triple_local_graph_support_stops_at_the_remote_service_boundary \
 				triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test srl_language -- --exact \

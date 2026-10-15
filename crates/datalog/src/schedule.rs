@@ -69,7 +69,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::cache::{self, ContractHash};
-use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
+use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm, ReadSource};
 use crate::guard::{GuardEvaluator, Negation};
 use crate::paths::{relax_strata, shortest_path};
 use crate::plan::RulePlan;
@@ -516,9 +516,15 @@ where
             Some(seen) => {
                 let last = seen[index].replace(hi);
                 match last {
-                    // A rule whose guard reads the model may change its answer when any
-                    // fact changes: it always runs against everything.
-                    _ if rule.reads_model() || rule.reads_base() => Delta::all(hi),
+                    // Model-reading guards need the full model. Positive Base probes
+                    // have no model row-id delta; negative Base filters preserve it.
+                    _ if rule.reads_model()
+                        || rule.body().iter().any(|atom| {
+                            !atom.is_negated() && atom.read_source() == ReadSource::Base
+                        }) =>
+                    {
+                        Delta::all(hi)
+                    }
                     None => Delta::all(hi),
                     // Nothing the rule's positive join could read has changed, and a rule
                     // with no positive atom has no delta at all: its answer can only have
@@ -610,7 +616,7 @@ where
 /// variable here, so it may match anything — the conservative direction, which can only
 /// add a dependency, never lose one.
 fn may_generate<const N: usize>(pattern: &ClauseAtom<N>, template: &ClauseAtom<N>) -> bool {
-    if pattern.read_source() == crate::clause::ReadSource::Base {
+    if pattern.read_source() == ReadSource::Base {
         return false;
     }
     let mut unifier = Unifier::default();
