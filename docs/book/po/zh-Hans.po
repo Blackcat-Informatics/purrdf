@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-14T04:28:50-06:00\n"
+"POT-Creation-Date: 2026-10-14T22:45:16-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -50,152 +50,156 @@ msgstr "Rust"
 msgid "Python"
 msgstr "Python"
 
-#: src/SUMMARY.md:14 src/entailment.md:52 src/entailment.md:97
+#: src/SUMMARY.md:14 src/reference/python-api-signatures.md:4
+msgid "Python API signatures"
+msgstr "Python API 签名"
+
+#: src/SUMMARY.md:15 src/entailment.md:52 src/entailment.md:97
 msgid "JavaScript / WebAssembly"
 msgstr "JavaScript / WebAssembly"
 
-#: src/SUMMARY.md:15 src/concepts/projections.md:453 src/concepts/jsonld.md:114
+#: src/SUMMARY.md:16 src/concepts/projections.md:453 src/concepts/jsonld.md:114
 #: src/sparql/querying.md:2222 src/validation/shacl.md:405
 #: src/validation/shacl.md:440 src/validation/shacl.md:1468
 #: src/entailment.md:53 src/entailment.md:98
 msgid "C"
 msgstr "C"
 
-#: src/SUMMARY.md:17
+#: src/SUMMARY.md:18
 msgid "Concepts"
 msgstr "概念"
 
-#: src/SUMMARY.md:19 src/concepts/interned-dataset.md:6
+#: src/SUMMARY.md:20 src/concepts/interned-dataset.md:6
 msgid "The Interned Dataset IR"
 msgstr "驻留数据集 IR"
 
-#: src/SUMMARY.md:20 src/concepts/rdf12.md:6
+#: src/SUMMARY.md:21 src/concepts/rdf12.md:6
 msgid "RDF 1.2 Features"
 msgstr "RDF 1.2 特性"
 
-#: src/SUMMARY.md:21 src/concepts/visualization.md:6
+#: src/SUMMARY.md:22 src/concepts/visualization.md:6
 msgid "RDF 1.2 Visualization"
 msgstr "RDF 1.2 可视化"
 
-#: src/SUMMARY.md:22
+#: src/SUMMARY.md:23
 msgid "Graph, Tabular & Research-Object Projections"
 msgstr "图、表格与 Research Object 投影"
 
-#: src/SUMMARY.md:23 src/concepts/codecs.md:6
+#: src/SUMMARY.md:24 src/concepts/codecs.md:6
 msgid "Codecs & Determinism"
 msgstr "编解码器与确定性"
 
-#: src/SUMMARY.md:24 src/concepts/base-iris.md:6
+#: src/SUMMARY.md:25 src/concepts/base-iris.md:6
 msgid "Base IRIs & Relative References"
 msgstr "基准 IRI 与相对引用"
 
-#: src/SUMMARY.md:25 src/concepts/jsonld.md:6
+#: src/SUMMARY.md:26 src/concepts/jsonld.md:6
 msgid "JSON-LD Contexts & Compaction"
 msgstr "JSON-LD 上下文与压缩"
 
-#: src/SUMMARY.md:26 src/concepts/canonicalization.md:6
+#: src/SUMMARY.md:27 src/concepts/canonicalization.md:6
 msgid "Canonicalization & Diff"
 msgstr "规范化与差异比较"
 
-#: src/SUMMARY.md:28 src/concepts/rdf12.md:70 src/interop/rdfjs.md:60
+#: src/SUMMARY.md:29 src/concepts/rdf12.md:70 src/interop/rdfjs.md:60
 msgid "SPARQL"
 msgstr "SPARQL"
 
-#: src/SUMMARY.md:30
+#: src/SUMMARY.md:31
 msgid "Querying"
 msgstr "查询"
 
-#: src/SUMMARY.md:31
+#: src/SUMMARY.md:32
 msgid "Result Formats"
 msgstr "结果格式"
 
-#: src/SUMMARY.md:32 src/sparql/full-text.md:6
+#: src/SUMMARY.md:33 src/sparql/full-text.md:6
 msgid "Full-Text Search"
 msgstr "全文检索"
 
-#: src/SUMMARY.md:33 src/sparql/geosparql.md:6
+#: src/SUMMARY.md:34 src/sparql/geosparql.md:6
 msgid "GeoSPARQL"
 msgstr "GeoSPARQL"
 
-#: src/SUMMARY.md:34 src/sparql/embedding-knn.md:6
+#: src/SUMMARY.md:35 src/sparql/embedding-knn.md:6
 msgid "Embedding Nearest Neighbours"
 msgstr "嵌入向量最近邻"
 
-#: src/SUMMARY.md:36
+#: src/SUMMARY.md:37
 msgid "Validation"
 msgstr "验证"
 
-#: src/SUMMARY.md:38 src/concepts/rdf12.md:70 src/validation/shacl.md:6
+#: src/SUMMARY.md:39 src/concepts/rdf12.md:70 src/validation/shacl.md:6
 #: src/project/conformance.md:43
 msgid "SHACL"
 msgstr "SHACL"
 
-#: src/SUMMARY.md:39 src/validation/shapes-products.md:6
+#: src/SUMMARY.md:40 src/validation/shapes-products.md:6
 msgid "Prepared Shapes Products"
 msgstr "预备形状产物"
 
-#: src/SUMMARY.md:40 src/validation/shex.md:6
+#: src/SUMMARY.md:41 src/validation/shex.md:6
 msgid "ShEx"
 msgstr "ShEx"
 
-#: src/SUMMARY.md:42
+#: src/SUMMARY.md:43
 msgid "Reasoning & Transport"
 msgstr "推理与传输"
 
-#: src/SUMMARY.md:44 src/getting-started/python.md:49 src/entailment.md:6
+#: src/SUMMARY.md:45 src/getting-started/python.md:49 src/entailment.md:6
 #: src/project/conformance.md:46
 msgid "Entailment"
 msgstr "蕴涵"
 
-#: src/SUMMARY.md:45 src/entailment-rules.md:6
+#: src/SUMMARY.md:46 src/entailment-rules.md:6
 msgid "Entailment Rule Inventory"
 msgstr "蕴涵规则清单"
 
-#: src/SUMMARY.md:46 src/datalog.md:6
+#: src/SUMMARY.md:47 src/datalog.md:6
 msgid "Datalog: the Fixpoint Engine"
 msgstr "Datalog：不动点引擎"
 
-#: src/SUMMARY.md:47 src/gts.md:6
+#: src/SUMMARY.md:48 src/gts.md:6
 msgid "GTS Graph Transport"
 msgstr "GTS 图传输"
 
-#: src/SUMMARY.md:48 src/slices.md:6
+#: src/SUMMARY.md:49 src/slices.md:6
 msgid "Slices, Mappings & Provenance"
 msgstr "切片、映射与溯源"
 
-#: src/SUMMARY.md:50
+#: src/SUMMARY.md:51
 msgid "Interop"
 msgstr "互操作"
 
-#: src/SUMMARY.md:52 src/interop/rdflib.md:6
+#: src/SUMMARY.md:53 src/interop/rdflib.md:6
 msgid "rdflib Compatibility"
 msgstr "rdflib 兼容性"
 
-#: src/SUMMARY.md:53 src/interop/rdfjs.md:6
+#: src/SUMMARY.md:54 src/interop/rdfjs.md:6
 msgid "RDF/JS in JavaScript"
 msgstr "JavaScript 中的 RDF/JS"
 
-#: src/SUMMARY.md:55
+#: src/SUMMARY.md:56
 msgid "Project"
 msgstr "项目"
 
-#: src/SUMMARY.md:57 src/project/design-rules.md:6
+#: src/SUMMARY.md:58 src/project/design-rules.md:6
 msgid "Design Rules & Invariants"
 msgstr "设计规则与不变量"
 
-#: src/SUMMARY.md:58 src/project/conformance.md:6
+#: src/SUMMARY.md:59 src/project/conformance.md:6
 msgid "Conformance & Testing"
 msgstr "一致性与测试"
 
-#: src/SUMMARY.md:59 src/interop/rdflib.md:71 src/project/performance.md:6
+#: src/SUMMARY.md:60 src/interop/rdflib.md:71 src/project/performance.md:6
 msgid "Performance"
 msgstr "性能"
 
-#: src/SUMMARY.md:60 src/project/releases.md:6
+#: src/SUMMARY.md:61 src/project/releases.md:6
 msgid "Versioning & Releases"
 msgstr "版本管理与发布"
 
-#: src/SUMMARY.md:61 src/project/diagnostic-codes.md:6
+#: src/SUMMARY.md:62 src/project/diagnostic-codes.md:6
 msgid "Diagnostic Code Reference"
 msgstr "诊断代码参考"
 
@@ -1168,6 +1172,529 @@ msgid ""
 msgstr ""
 "[图、表格与 Research Object 投影](../concepts/projections.md)——LPG、CSVW、"
 "OBO、SKOS 与五种 Research Object 载体。"
+
+#: src/reference/python-api-signatures.md:6
+msgid ""
+"This reference records every declaration in the canonical Python stubs, "
+"including classes, properties, overloads, type aliases and namespace "
+"members. It describes the public package; underscore names also declare "
+"supporting types used in the public signatures. They do not promise "
+"separately importable constructors."
+msgstr ""
+"本参考页记录权威 Python stub 中的每个声明，包括类、属性、重载、类型别名和命名空间成员。"
+"它描述公开包；下划线名称也声明公开签名使用的辅助类型，但不保证这些类型的构造器可以单独导入。"
+
+#: src/reference/python-api-signatures.md:11
+msgid ""
+"The installed-package signature test compares both complete inventories "
+"using Python syntax trees. Parameter kinds, annotations, defaults, overloads "
+"and property decorators therefore cannot drift silently. The accompanying "
+"native parameter comparison covers the engine namespaces; inventory parity "
+"alone does not prove that every native callable implements its declared "
+"signature."
+msgstr ""
+"已安装包的签名测试用 Python 语法树比较两个完整清单，因此参数种类、注解、默认值、重载和"
+"属性装饰器不能悄悄偏离。配套的原生参数比较覆盖引擎命名空间；仅清单一致并不能证明每个原生"
+"可调用对象都实现了声明的签名。"
+
+#: src/reference/python-api-signatures.md:17
+msgid ""
+"Read [Getting Started: Python](../getting-started/python.md) for usage and "
+"the linked engine chapters for their semantic contracts. This reference "
+"preserves Python identifiers in every language."
+msgstr ""
+"用法见 [Python 入门](../getting-started/python.md)，语义契约见其中链接的引擎章节。"
+"本参考页在所有语言中都保留 Python 标识符。"
+
+#: src/reference/python-api-signatures.md:21
+msgid "`__init__.pyi`"
+msgstr "`__init__.pyi`"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+#: src/reference/python-api-signatures.md:162
+msgid "'lpg-csv'"
+msgstr "'lpg-csv'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+#: src/reference/python-api-signatures.md:162
+msgid "'neo4j-csv'"
+msgstr "'neo4j-csv'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+#: src/reference/python-api-signatures.md:162
+msgid "'open-cypher'"
+msgstr "'open-cypher'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+#: src/reference/python-api-signatures.md:162
+msgid "'graphml'"
+msgstr "'graphml'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+msgid "'csvw-exact'"
+msgstr "'csvw-exact'"
+
+#: src/reference/python-api-signatures.md:49
+msgid "'csvw-terms'"
+msgstr "'csvw-terms'"
+
+#: src/reference/python-api-signatures.md:49
+msgid "'okf-terms'"
+msgstr "'okf-terms'"
+
+#: src/reference/python-api-signatures.md:49
+msgid "'obo-graphs'"
+msgstr "'obo-graphs'"
+
+#: src/reference/python-api-signatures.md:49
+msgid "'skos'"
+msgstr "'skos'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+msgid "'croissant-1.1'"
+msgstr "'croissant-1.1'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+msgid "'ro-crate-1.3'"
+msgstr "'ro-crate-1.3'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+msgid "'datacite-4.6'"
+msgstr "'datacite-4.6'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+msgid "'dcat-3'"
+msgstr "'dcat-3'"
+
+#: src/reference/python-api-signatures.md:49
+msgid "'dcat-rdf'"
+msgstr "'dcat-rdf'"
+
+#: src/reference/python-api-signatures.md:49
+msgid "'void'"
+msgstr "'void'"
+
+#: src/reference/python-api-signatures.md:49
+#: src/reference/python-api-signatures.md:50
+msgid "'frictionless-data-package-1'"
+msgstr "'frictionless-data-package-1'"
+
+#: src/reference/python-api-signatures.md:51
+msgid "'begin-package'"
+msgstr "'begin-package'"
+
+#: src/reference/python-api-signatures.md:51
+msgid "'begin-artifact'"
+msgstr "'begin-artifact'"
+
+#: src/reference/python-api-signatures.md:51
+msgid "'chunk'"
+msgstr "'chunk'"
+
+#: src/reference/python-api-signatures.md:51
+msgid "'finish-artifact'"
+msgstr "'finish-artifact'"
+
+#: src/reference/python-api-signatures.md:51
+msgid "'commit-package'"
+msgstr "'commit-package'"
+
+#: src/reference/python-api-signatures.md:51
+msgid "'abort-package'"
+msgstr "'abort-package'"
+
+#: src/reference/python-api-signatures.md:424
+msgid "'budget'"
+msgstr "'budget'"
+
+#: src/reference/python-api-signatures.md:424
+msgid "'stopped'"
+msgstr "'stopped'"
+
+#: src/reference/python-api-signatures.md:424
+msgid "'refused'"
+msgstr "'refused'"
+
+#: src/reference/python-api-signatures.md:424
+#: src/reference/python-api-signatures.md:425
+msgid "'unknown'"
+msgstr "'unknown'"
+
+#: src/reference/python-api-signatures.md:425
+msgid "'certain'"
+msgstr "'certain'"
+
+#: src/reference/python-api-signatures.md:425
+msgid "'at-most'"
+msgstr "'at-most'"
+
+#: src/reference/python-api-signatures.md:556
+msgid "'answered'"
+msgstr "'answered'"
+
+#: src/reference/python-api-signatures.md:556
+msgid "'closure-stopped'"
+msgstr "'closure-stopped'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'json'"
+msgstr "'json'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'srj'"
+msgstr "'srj'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'sparql-json'"
+msgstr "'sparql-json'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'application/sparql-results+json'"
+msgstr "'application/sparql-results+json'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'xml'"
+msgstr "'xml'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'sparql-xml'"
+msgstr "'sparql-xml'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'application/sparql-results+xml'"
+msgstr "'application/sparql-results+xml'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'csv'"
+msgstr "'csv'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'text/csv'"
+msgstr "'text/csv'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'tsv'"
+msgstr "'tsv'"
+
+#: src/reference/python-api-signatures.md:750
+msgid "'text/tab-separated-values'"
+msgstr "'text/tab-separated-values'"
+
+#: src/reference/python-api-signatures.md:1016
+msgid ""
+"\"\"\"One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."
+"\"\"\""
+msgstr ""
+"\"\"\"One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."
+"\"\"\""
+
+#: src/reference/python-api-signatures.md:1033
+msgid "\"\"\"A SHACL validation report.\"\"\""
+msgstr "\"\"\"A SHACL validation report.\"\"\""
+
+#: src/reference/python-api-signatures.md:1058
+msgid "\"\"\"Parsed SHACL shapes, reusable across many data graphs.\"\"\""
+msgstr "\"\"\"Parsed SHACL shapes, reusable across many data graphs.\"\"\""
+
+#: src/reference/python-api-signatures.md:1076
+msgid ""
+"\"\"\"A refusal from the prepared-shapes-product admission boundary.\n"
+"\n"
+"    `dimension` is one of the codec's pinned kebab-case labels, or `None` "
+"when the\n"
+"    failure happened before any product existed (a shapes or data document "
+"that did\n"
+"    not parse was never admitted). Branch on it, never on `str(exc)`.\n"
+"    \"\"\""
+msgstr ""
+"\"\"\"A refusal from the prepared-shapes-product admission boundary.\n"
+"\n"
+"    `dimension` is one of the codec's pinned kebab-case labels, or `None` "
+"when the\n"
+"    failure happened before any product existed (a shapes or data document "
+"that did\n"
+"    not parse was never admitted). Branch on it, never on `str(exc)`.\n"
+"    \"\"\""
+
+#: src/reference/python-api-signatures.md:1085
+msgid ""
+"\"\"\"A shapes graph's `owl:imports` closure is not in hand, or the "
+"`imports` table\n"
+"    cannot be used — the one refusal every shapes-graph entry point raises, "
+"on every\n"
+"    PurRDF host alike.\n"
+"\n"
+"    `kind` is `unresolved-import` (pass the named documents in `imports`),\n"
+"    `unreached-import` (a table entry neither an import nor a data-graph "
+"link names),\n"
+"    `invalid-import` (a key that is not an absolute IRI, a key named twice, "
+"or a\n"
+"    document that is not Turtle), `incompatible-import-versions` (the "
+"closure holds two\n"
+"    versions of one series, or a graph another declares "
+"`owl:incompatibleWith`, SHACL\n"
+"    1.2 Core sections 1.3 and 6.1 — `iris` are the conflicting documents),\n"
+"    `unresolved-shapes-graph-link` (the data graph links a\n"
+"    graph with `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in "
+"hand\n"
+"    resolves — pass it in `imports`) or `invalid-shapes-graph-link` (a data-"
+"graph\n"
+"    `sh:shapesGraph` value that is not an IRI); `iris` are the IRIs (or "
+"values) it\n"
+"    names. Branch on `kind`, never on `str(exc)`.\n"
+"\n"
+"    A shapes graph prepared before the data graph was known (`Shapes`,\n"
+"    `PreparedShapes`, a product) cannot take a linked graph in: validating a "
+"data graph\n"
+"    that links one it does not hold — one that is not its base, a document "
+"its import\n"
+"    closure absorbed, or a graph it declares — raises this class with kind\n"
+"    `unheld-shapes-graph-link`.\n"
+"    \"\"\""
+msgstr ""
+"\"\"\"A shapes graph's `owl:imports` closure is not in hand, or the "
+"`imports` table\n"
+"    cannot be used — the one refusal every shapes-graph entry point raises, "
+"on every\n"
+"    PurRDF host alike.\n"
+"\n"
+"    `kind` is `unresolved-import` (pass the named documents in `imports`),\n"
+"    `unreached-import` (a table entry neither an import nor a data-graph "
+"link names),\n"
+"    `invalid-import` (a key that is not an absolute IRI, a key named twice, "
+"or a\n"
+"    document that is not Turtle), `incompatible-import-versions` (the "
+"closure holds two\n"
+"    versions of one series, or a graph another declares "
+"`owl:incompatibleWith`, SHACL\n"
+"    1.2 Core sections 1.3 and 6.1 — `iris` are the conflicting documents),\n"
+"    `unresolved-shapes-graph-link` (the data graph links a\n"
+"    graph with `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in "
+"hand\n"
+"    resolves — pass it in `imports`) or `invalid-shapes-graph-link` (a data-"
+"graph\n"
+"    `sh:shapesGraph` value that is not an IRI); `iris` are the IRIs (or "
+"values) it\n"
+"    names. Branch on `kind`, never on `str(exc)`.\n"
+"\n"
+"    A shapes graph prepared before the data graph was known (`Shapes`,\n"
+"    `PreparedShapes`, a product) cannot take a linked graph in: validating a "
+"data graph\n"
+"    that links one it does not hold — one that is not its base, a document "
+"its import\n"
+"    closure absorbed, or a graph it declares — raises this class with kind\n"
+"    `unheld-shapes-graph-link`.\n"
+"    \"\"\""
+
+#: src/reference/python-api-signatures.md:1111
+msgid ""
+"\"\"\"An immutable shape preparation, reusable across data graphs and "
+"writable as\n"
+"    a prepared product.\"\"\""
+msgstr ""
+"\"\"\"An immutable shape preparation, reusable across data graphs and "
+"writable as\n"
+"    a prepared product.\"\"\""
+
+#: src/reference/python-api-signatures.md:1127
+msgid ""
+"\"\"\"The outcome of `PreparedShapes.validate_store_changes`: the report, "
+"plus the\n"
+"    SCOPE the report describes.\n"
+"\n"
+"    Two facts rather than one, because a `ValidationReport` alone cannot say "
+"which\n"
+"    question it answered. Read `bounded` first.\n"
+"    \"\"\""
+msgstr ""
+"\"\"\"The outcome of `PreparedShapes.validate_store_changes`: the report, "
+"plus the\n"
+"    SCOPE the report describes.\n"
+"\n"
+"    Two facts rather than one, because a `ValidationReport` alone cannot say "
+"which\n"
+"    question it answered. Read `bounded` first.\n"
+"    \"\"\""
+
+#: src/reference/python-api-signatures.md:1151
+msgid ""
+"\"\"\"A prepared product whose envelope is verified and whose self-"
+"description is\n"
+"    decoded — but which has NOT been admitted.\"\"\""
+msgstr ""
+"\"\"\"A prepared product whose envelope is verified and whose self-"
+"description is\n"
+"    decoded — but which has NOT been admitted.\"\"\""
+
+#: src/reference/python-api-signatures.md:1233
+msgid "\"\"\"A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`).\"\"\""
+msgstr ""
+"\"\"\"A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`).\"\"\""
+
+#: src/reference/python-api-signatures.md:1564
+msgid "'empty'"
+msgstr "'empty'"
+
+#: src/reference/python-api-signatures.md:1564
+msgid "'baseline'"
+msgstr "'baseline'"
+
+#: src/reference/python-api-signatures.md:1564
+msgid "'dictionary'"
+msgstr "'dictionary'"
+
+#: src/reference/python-api-signatures.md:1568
+msgid "'preserve'"
+msgstr "'preserve'"
+
+#: src/reference/python-api-signatures.md:1568
+msgid "'latin-greek-cyrillic'"
+msgstr "'latin-greek-cyrillic'"
+
+#: src/reference/python-api-signatures.md:1568
+msgid "'latin-greek-cyrillic-arabic-hebrew'"
+msgstr "'latin-greek-cyrillic-arabic-hebrew'"
+
+#: src/reference/python-api-signatures.md:1568
+msgid "'latin'"
+msgstr "'latin'"
+
+#: src/reference/python-api-signatures.md:1568
+msgid "'greek'"
+msgstr "'greek'"
+
+#: src/reference/python-api-signatures.md:1568
+msgid "'cyrillic'"
+msgstr "'cyrillic'"
+
+#: src/reference/python-api-signatures.md:1568
+msgid "'hebrew'"
+msgstr "'hebrew'"
+
+#: src/reference/python-api-signatures.md:1568
+msgid "'arabic'"
+msgstr "'arabic'"
+
+#: src/reference/python-api-signatures.md:1569
+msgid "'none'"
+msgstr "'none'"
+
+#: src/reference/python-api-signatures.md:1569
+msgid "'english'"
+msgstr "'english'"
+
+#: src/reference/python-api-signatures.md:1570
+msgid "'plain'"
+msgstr "'plain'"
+
+#: src/reference/python-api-signatures.md:1570
+msgid "'html-text'"
+msgstr "'html-text'"
+
+#: src/reference/python-api-signatures.md:1570
+msgid "'html-attribute'"
+msgstr "'html-attribute'"
+
+#: src/reference/python-api-signatures.md:1573
+msgid "'lexical'"
+msgstr "'lexical'"
+
+#: src/reference/python-api-signatures.md:1573
+msgid "'han'"
+msgstr "'han'"
+
+#: src/reference/python-api-signatures.md:1585
+msgid ""
+"\"\"\"A refusal from the plan-document boundary: `certify_plan`, "
+"`explain_depth`.\n"
+"\n"
+"    `refusal` is one of the engine's pinned kebab-case names. Decode side:\n"
+"    `version`, `truncated`, `trailing-bytes`, `invalid-tag`, `invalid-"
+"utf8`,\n"
+"    `invalid-iri`, `non-ascending-keys`, `non-ascending-selectivity-terms`,\n"
+"    `duplicate-stratum-depth`, `duplicate-stratum-derivation`,\n"
+"    `duplicate-statistics-subject`, `duplicate-selectivity-term`. "
+"Certificate\n"
+"    side: `depth-not-derivable`, `depth-without-derivation`,\n"
+"    `derivation-without-depth`, `derivation-without-statistics-entry`,\n"
+"    `statistics-entry-contradicts-derivation`, `selectivity-term-out-of-"
+"range`,\n"
+"    `unconsulted-statistics-subject`. Branch on it, never on `str(exc)`.\n"
+"    \"\"\""
+msgstr ""
+"\"\"\"A refusal from the plan-document boundary: `certify_plan`, "
+"`explain_depth`.\n"
+"\n"
+"    `refusal` is one of the engine's pinned kebab-case names. Decode side:\n"
+"    `version`, `truncated`, `trailing-bytes`, `invalid-tag`, `invalid-"
+"utf8`,\n"
+"    `invalid-iri`, `non-ascending-keys`, `non-ascending-selectivity-terms`,\n"
+"    `duplicate-stratum-depth`, `duplicate-stratum-derivation`,\n"
+"    `duplicate-statistics-subject`, `duplicate-selectivity-term`. "
+"Certificate\n"
+"    side: `depth-not-derivable`, `depth-without-derivation`,\n"
+"    `derivation-without-depth`, `derivation-without-statistics-entry`,\n"
+"    `statistics-entry-contradicts-derivation`, `selectivity-term-out-of-"
+"range`,\n"
+"    `unconsulted-statistics-subject`. Branch on it, never on `str(exc)`.\n"
+"    \"\"\""
+
+#: src/reference/python-api-signatures.md:1605
+#: src/reference/python-api-signatures.md:1617
+#: src/reference/python-api-signatures.md:1621
+msgid "'turtle'"
+msgstr "'turtle'"
+
+#: src/reference/python-api-signatures.md:1641
+msgid "`geo.pyi`"
+msgstr "`geo.pyi`"
+
+#: src/reference/python-api-signatures.md:1648
+msgid ""
+"\"\"\"Immutable strict native profile; omitted input selects standard "
+"CRS84.\"\"\""
+msgstr ""
+"\"\"\"Immutable strict native profile; omitted input selects standard "
+"CRS84.\"\"\""
+
+#: src/reference/python-api-signatures.md:1657
+msgid ""
+"\"\"\"One Rust session over the strict version-one geographic records.\"\"\""
+msgstr ""
+"\"\"\"One Rust session over the strict version-one geographic records.\"\"\""
+
+#: src/reference/python-api-signatures.md:1663
+msgid ""
+"\"\"\"Return canonical semantic outcomes; raise ValueError on operational "
+"refusal.\"\"\""
+msgstr ""
+"\"\"\"Return canonical semantic outcomes; raise ValueError on operational "
+"refusal.\"\"\""
+
+#: src/reference/python-api-signatures.md:1673
+msgid ""
+"\"\"\"Immutable ordered point buckets, constructed by GeoSession.point_index."
+"\"\"\""
+msgstr ""
+"\"\"\"Immutable ordered point buckets, constructed by GeoSession.point_index."
+"\"\"\""
+
+#: src/reference/python-api-signatures.md:1676
+msgid ""
+"\"\"\"Search through the same native comparison law and refusal channel."
+"\"\"\""
+msgstr ""
+"\"\"\"Search through the same native comparison law and refusal channel."
+"\"\"\""
 
 #: src/getting-started/javascript.md:6
 msgid "Getting Started: JavaScript / WebAssembly"

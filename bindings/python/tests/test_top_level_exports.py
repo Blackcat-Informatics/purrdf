@@ -111,41 +111,35 @@ def test_no_purrdf_native_leak_in_public_code() -> None:
 
 
 def test_stub_signatures_match_the_built_bindings() -> None:
-    """The shipped `.pyi` must declare the arity the extension actually accepts.
+    """Check the complete book inventory against installed canonical stubs.
 
-    A PEP 561 package ships its stub as a CONTRACT: mypy checks caller code against
-    the declaration, never against the compiled module. So a stub that declares
-    fewer parameters than the binding takes is worse than an unstubbed package —
-    the type checker approves a call that raises `TypeError` and rejects the call
-    that works. `entail.materialize` and `entail.materialize_nt` drifted exactly
-    that way when `program` became a required argument.
-
-    Names alone are not enough (`check-doc-claims.py` already reads those), so this
-    compares PARAMETER LISTS: PyO3 publishes the real signature on
-    `__text_signature__`, and the stub's is parsed out of the declaration. What is
-    compared is the ordered parameter names plus whether each HAS a default — not
-    the default's value, because a stub idiomatically writes `= ...` where the
-    binding writes the concrete `=0`, and demanding those match would flag correct
-    stubs. The `*` keyword-only marker is dropped: a stub may legitimately be
-    stricter than the runtime, since that can only reject a working call, never
-    approve a failing one.
-
-    The sweep is over each engine's whole surface rather than a hand-listed pair,
-    so a future entry point is covered without anyone remembering to add it. The
-    engines themselves ARE hand-listed, which is the one thing here nobody is
-    spared remembering: an engine missing from that tuple ships its stub with
-    nothing holding it to the binding, and the sweep would report a clean run over
-    the engines it did visit. So the vacuity guard is per engine as well as
-    overall — every name in the tuple must contribute at least one comparison —
-    which turns a stub block that stopped parsing, or an engine whose surface
-    emptied, into a failure rather than a silently smaller sweep.
+    Python's AST retains classes, properties, overloads, aliases, annotations and
+    parameter kinds/defaults without a second custom signature parser. Discovery
+    covers every installed stub; duplicate or missing document blocks fail.
+    The existing native comparison below additionally checks the four engines'
+    PyO3 parameter names/default presence, with its original vacuity guards.
     """
+    import ast
     import re
 
     import purrdf
 
     stub = Path(purrdf.__file__).with_name("__init__.pyi")
     text = stub.read_text(encoding="utf-8")
+
+    reference = Path(__file__).resolve().parents[3] / "docs/book/src/reference/python-api-signatures.md"
+    blocks = re.findall(
+        r"<!-- python-api-stub: ([^\s]+) -->\n```pyi\n(.*?)\n```",
+        reference.read_text(encoding="utf-8"), re.DOTALL,
+    )
+    package = stub.parent
+    canonical = {path.relative_to(package).as_posix(): path for path in package.rglob("*.pyi")}
+    assert canonical and len(blocks) == len(dict(blocks)), "empty stub discovery or duplicate inventory"
+    assert set(dict(blocks)) == set(canonical), "the book must cover every installed stub"
+    for name, declaration in blocks:
+        documented = ast.dump(ast.parse(declaration))
+        installed = ast.dump(ast.parse(canonical[name].read_text(encoding="utf-8")))
+        assert documented == installed, f"complete book signature inventory drifted from {name}"
 
     def shape(params: str) -> list[str]:
         """Ordered `name` / `name=` tokens, annotations and default VALUES removed."""

@@ -746,7 +746,8 @@ class _QuadStore:
     # `away-from-zero`, `floor`, `ceiling`, `half-even`,
     # `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`). Unset is
     # `"exact-or-18:half-even"`. Under `"exact"` a quotient with no finite decimal expansion
-    # raises the query's `ValueError`, naming `err:FOAR0002`. An unreadable policy
+    # is an expression error (`err:FOAR0002`), leaving a projected cell unbound or
+    # available to COALESCE. Governed evidence counts that absorbed error. An unreadable policy
     # raises `ValueError` before anything is evaluated. Every query, UPDATE, governed,
     # entailment and prepared entry point takes it.
     def query(
