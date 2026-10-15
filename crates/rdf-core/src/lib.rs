@@ -306,7 +306,8 @@ pub use sssom::{
     SssomMeta, SssomSetComment,
 };
 pub use statistics::{
-    PredicateStatistics, SnapshotStatistics, StatisticCount, StatisticsAccuracy, StatisticsStream,
+    PredicateStatistics, SnapshotStatistics, StatisticCount, StatisticsAccuracy,
+    StatisticsPosition, StatisticsStream,
 };
 pub use store::RdfStoreCapabilities;
 pub use term_writer::{write_term_value, write_term_value_with_memory};

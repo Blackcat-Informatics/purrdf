@@ -1780,6 +1780,10 @@ impl DatasetView for RdfDataset {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        Some(self.predicate_statistics())
+    }
+
     frozen_term_nesting_bound_method! {
         /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
         /// which refuses a triple term nested past 16.

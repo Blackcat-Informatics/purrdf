@@ -39,6 +39,15 @@ pub enum StatisticsStream {
     Annotations,
 }
 
+/// The distinct identity domain requested from immutable statistics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatisticsPosition {
+    /// Subject identities.
+    Subject,
+    /// Object identities.
+    Object,
+}
+
 /// The domain of rows under one predicate and graph restriction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PredicateStatistics {
@@ -64,6 +73,24 @@ pub trait SnapshotStatistics<I: ViewTermId>: Sync {
     /// Deterministic revision discriminator for these immutable statistics.
     /// A host must change it whenever any returned count or exactness changes.
     fn fingerprint(&self) -> u64;
+
+    /// Visit sorted, unique IDs in the provider's dictionary generation. This
+    /// permits exact domain union across segments without adding distinct counts.
+    /// Returns false when the domain is unknown. A visitor may stop early.
+    ///
+    /// # Errors
+    /// Returns an integrity error for a malformed sealed domain. Storage faults
+    /// remain latched on the owning view, as on its other metadata paths.
+    fn visit_distinct(
+        &self,
+        _predicate: I,
+        _graph: GraphMatch<I>,
+        _stream: StatisticsStream,
+        _position: StatisticsPosition,
+        _visit: &mut dyn FnMut(I) -> std::ops::ControlFlow<()>,
+    ) -> Result<bool, crate::ir::pack::bits::PackBitsError> {
+        Ok(false)
+    }
 
     /// Count a predicate-bound pattern across all three streams. This default
     /// requires every contributing count, and leaves subject restrictions to a

@@ -1380,7 +1380,7 @@ fn visit_access_costs<D: DatasetView>(
         let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
         let cost = dataset.cost(probe, &plan);
         if cost.cardinality_fallback().is_some()
-            && let Some(count) = dataset.statistics().and_then(|stats| stats.pattern(probe))
+            && let Some(count) = provider_cardinality(dataset, pattern, probe)
         {
             visit(
                 probe,
@@ -1483,7 +1483,7 @@ fn base_cardinality<D: DatasetView>(
     let o = constant_of(&cp.o);
     let cardinality = |g| {
         let probe = purrdf_core::ProbePattern { s, p, o, g };
-        if let Some(count) = dataset.statistics().and_then(|stats| stats.pattern(probe)) {
+        if let Some(count) = provider_cardinality(dataset, cp, probe) {
             return count.value;
         }
         dataset.cardinality_estimate(s, p, o, g).saturating_add(
@@ -1499,6 +1499,23 @@ fn base_cardinality<D: DatasetView>(
             .map(|&g| cardinality(GraphMatch::Named(g)))
             .fold(0, u64::saturating_add),
     }
+}
+
+/// Marginal predicate statistics cannot erase an existing structural component
+/// restriction. That probe retains its component-range estimate until the
+/// provider has the corresponding joint statistic.
+fn provider_cardinality<D: DatasetView>(
+    dataset: &D,
+    pattern: &CompiledPattern<D::Id>,
+    probe: purrdf_core::ProbePattern<D::Id>,
+) -> Option<purrdf_core::StatisticCount> {
+    if components_of(&pattern.o, constant_of)
+        .iter()
+        .any(Option::is_some)
+    {
+        return None;
+    }
+    dataset.statistics()?.pattern(probe)
 }
 
 /// The ground id of a position, or `None` for a slot or (conservatively) a nested
@@ -4763,7 +4780,7 @@ mod tests {
     }
 
     impl purrdf_core::SnapshotStatistics<TermId> for HostCost<'_> {
-        fn source(&self) -> &str {
+        fn source(&self) -> &'static str {
             "fixture-exact"
         }
 
