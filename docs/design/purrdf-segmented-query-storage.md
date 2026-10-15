@@ -30,6 +30,29 @@ annotation probes use the existing subject-sorted stream. The statement-layer
 consumer can stop the traversal before another row is translated, so an
 ordinary positive LIMIT need not intern every reifier in the image.
 
+## Statistical metadata
+
+Data profile 2 stores four authenticated statistical sections: predicate/scope
+records, compressed distinct-ID domains, selected object frequencies and
+object-category/datatype counts. Predicate records carry row and distinct counts
+and ranges into the other sections. Fixed record widths permit selective binary
+searches for predicate, class and category counts without reading distinct-ID
+payloads, RDF rows or dictionary values. An explicit domain visit streams its
+requested range through the existing delta codec and read admission owner.
+
+Full certification reconstructs the RDF dataset and checks each statistical
+section against its derived metadata, including exact block packing. A matching
+hash tree alone cannot authorize false counts or domains. The data profile and
+sections participate in representation identity. Earlier data-profile images
+require regeneration from their RDF input; this reader refuses unsupported
+profiles. The certification receipt's encoding and hash laws remain distinct
+from the data profile.
+
+The reader exposes these counts through the common snapshot statistics seam.
+Residual bounds retain the tighter existing subject-range estimate where it is
+available. Operational metadata failures latch the original read cause and make
+guarded query completion fail, even if no RDF row has been emitted.
+
 The shared block cache indexes the complete `(snapshot, slot)` key through the
 workspace's fixed-key hash home. Recency links name those same keys, so table
 growth cannot invalidate them. Hits update a bounded number of links without

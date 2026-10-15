@@ -135,6 +135,8 @@ impl SegmentedHandle {
 pub enum SegmentedError {
     /// Original logical capacity or physical storage refusal during construction.
     Storage(purrdf_lex::allocation::StorageError),
+    /// Original malformed statistical-record or domain-codec failure.
+    Statistics(super::pack::bits::PackBitsError),
     /// The host could not complete a requested read.
     Provider {
         /// Fixed host operation label; retaining an error never allocates text.
@@ -190,6 +192,7 @@ impl std::fmt::Display for SegmentedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Storage(error) => error.fmt(f),
+            Self::Statistics(error) => write!(f, "invalid segmented statistics: {error}"),
             Self::Provider {
                 operation,
                 host_code,
@@ -224,10 +227,11 @@ impl std::fmt::Display for SegmentedError {
 }
 purrdf_lex::error_source!(SegmentedError {
     Storage,
+    Statistics,
     SharedOwnership
 });
 
-purrdf_lex::variant_from!(SegmentedError { Storage(purrdf_lex::allocation::StorageError) });
+purrdf_lex::variant_from!(SegmentedError { Storage(purrdf_lex::allocation::StorageError), Statistics(super::pack::bits::PackBitsError) });
 
 /// A streamed RDF line export distinguishes source completeness from sink failure.
 #[derive(Debug)]

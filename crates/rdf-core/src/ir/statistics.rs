@@ -15,6 +15,9 @@ use crate::{
     GraphMatch, PredicateStatistics, RdfTermKind, StatisticCount, StatisticsAccuracy, ViewTermId,
 };
 
+mod codec;
+pub(super) use codec::{PredicateRecord, StatisticsSection, decode_frequency, decode_kind};
+
 // Keep complete frequencies for low-cardinality objects and every rdf:type
 // class. Higher-cardinality predicates retain exact domains and kind counts;
 // a missing selected frequency remains unknown, never a fabricated zero.
@@ -158,14 +161,14 @@ impl std::fmt::Display for StatisticsMergeError {
     }
 }
 
-fn exact(value: u64) -> StatisticCount {
+pub(super) fn exact(value: u64) -> StatisticCount {
     StatisticCount {
         value,
         accuracy: StatisticsAccuracy::Exact,
     }
 }
 
-fn kind_key(kind: RdfTermKind) -> u8 {
+pub(super) fn kind_key(kind: RdfTermKind) -> u8 {
     match kind {
         RdfTermKind::Iri => 0,
         RdfTermKind::BlankNode => 1,
@@ -620,52 +623,24 @@ impl<I: StatisticsId> LocalStatistics<I> {
     /// Canonical words for the enclosing summary's existing digest. Pointer
     /// width, native struct padding and the table hasher never enter this stream.
     pub(super) fn visit_words(&self, mut emit: impl FnMut(u64)) {
-        emit(self.predicates.len() as u64);
-        for entry in &self.predicates {
-            emit(entry.key.0 as u64);
-            match entry.key.1 {
-                Scope::Any => emit(0),
-                Scope::Graph(None) => emit(1),
-                Scope::Graph(Some(graph)) => {
-                    emit(2);
-                    emit(graph.statistics_index());
+        for section in StatisticsSection::ALL {
+            emit(self.section_rows(section) as u64);
+            if section == StatisticsSection::Domains {
+                for chunk in self.domains.chunks(8) {
+                    let mut bytes = [0; 8];
+                    bytes[..chunk.len()].copy_from_slice(chunk);
+                    emit(u64::from_le_bytes(bytes));
+                }
+            } else {
+                for index in 0..self.section_rows(section) {
+                    let words = self
+                        .record_words(section, index)
+                        .expect("a frozen statistics section owns every enumerated record");
+                    for &word in words.values() {
+                        emit(word);
+                    }
                 }
             }
-            emit(entry.key.2.statistics_index());
-            emit(entry.rows);
-            for domain in [entry.subjects, entry.objects] {
-                emit(domain.offset as u64);
-                emit(domain.bytes as u64);
-                emit(domain.count as u64);
-            }
-            emit(u64::from(entry.frequencies.is_some()));
-            emit(u64::from(entry.unbounded_frequencies));
-            if let Some((offset, count)) = entry.frequencies {
-                emit(offset as u64);
-                emit(count as u64);
-            }
-            emit(entry.kinds.0 as u64);
-            emit(entry.kinds.1 as u64);
-        }
-        emit(self.domains.len() as u64);
-        for chunk in self.domains.chunks(8) {
-            let mut word = [0; 8];
-            word[..chunk.len()].copy_from_slice(chunk);
-            emit(u64::from_le_bytes(word));
-        }
-        emit(self.frequencies.len() as u64);
-        for value in &self.frequencies {
-            emit(value.object.statistics_index());
-            emit(value.rows);
-        }
-        emit(self.kinds.len() as u64);
-        for value in &self.kinds {
-            emit(u64::from(value.kind));
-            emit(u64::from(value.datatype.is_some()));
-            if let Some(datatype) = value.datatype {
-                emit(datatype.statistics_index());
-            }
-            emit(value.rows);
         }
     }
 
@@ -675,11 +650,7 @@ impl<I: StatisticsId> LocalStatistics<I> {
         predicate: I,
         graph: GraphMatch<I>,
     ) -> Option<&Predicate<I>> {
-        let scope = match graph {
-            GraphMatch::Any => Scope::Any,
-            GraphMatch::Default => Scope::Graph(None),
-            GraphMatch::Named(graph) => Scope::Graph(Some(graph)),
-        };
+        let scope = codec::scope_of(graph);
         self.predicates
             .binary_search_by_key(&(relation, scope, predicate), |entry| entry.key)
             .ok()
@@ -775,7 +746,7 @@ impl<I: StatisticsId> LocalStatistics<I> {
     }
 }
 
-fn relation(stream: crate::StatisticsStream) -> Relation {
+pub(super) fn relation(stream: crate::StatisticsStream) -> Relation {
     match stream {
         crate::StatisticsStream::Asserted => Relation::Asserted,
         crate::StatisticsStream::Reifiers => Relation::Reifiers,
@@ -797,11 +768,7 @@ impl<I: StatisticsId> crate::SnapshotStatistics<I> for LocalStatistics<I> {
         graph: GraphMatch<I>,
         stream: crate::StatisticsStream,
     ) -> Option<StatisticCount> {
-        let scope = match graph {
-            GraphMatch::Any => Scope::Any,
-            GraphMatch::Default => Scope::Graph(None),
-            GraphMatch::Named(graph) => Scope::Graph(Some(graph)),
-        };
+        let scope = codec::scope_of(graph);
         self.predicates
             .iter()
             .filter(|entry| entry.key.0 == relation(stream) && entry.key.1 == scope)
@@ -1145,6 +1112,44 @@ mod tests {
     }
 
     #[test]
+    fn segmented_metadata_matches_native_graph_streams_and_sorted_domains() {
+        use crate::{SegmentedBuildLimits, SegmentedImage, SegmentedReadLimits};
+        let (native, predicates, scopes) = fixture_partition(true, 0, 101);
+        let limits = SegmentedBuildLimits::new(4096, 1_000_000, 4096, 512, 4)
+            .unwrap()
+            .with_first_term_index((1_u64 << 40) + 17)
+            .unwrap();
+        let image = SegmentedImage::from_native_fixture(&native, limits).unwrap();
+        let source = image
+            .open_session(SegmentedReadLimits::new(
+                8_000_000,
+                2,
+                100_000,
+                100_000_000,
+                8,
+            ))
+            .unwrap();
+        let global = |id| {
+            source
+                .term_id_by_value(&native.as_ref().term_value(id))
+                .unwrap()
+                .unwrap()
+        };
+        let predicates: Vec<_> = predicates.into_iter().map(global).collect();
+        let scopes: Vec<_> = scopes
+            .into_iter()
+            .map(|scope| match scope {
+                GraphMatch::Any => GraphMatch::Any,
+                GraphMatch::Default => GraphMatch::Default,
+                GraphMatch::Named(id) => GraphMatch::Named(global(id)),
+            })
+            .collect();
+        assert_rows(&source, &predicates, &scopes);
+        assert!(source.read_error().is_none());
+        assert!(predicates.iter().all(|id| id.index() > u64::from(u32::MAX)));
+    }
+
+    #[test]
     fn translated_domains_keep_full_width_ids_and_sort_after_translation() {
         use crate::{GlobalTermId, SnapshotStatistics};
         let (native, predicates, _) = fixture(false);
@@ -1197,6 +1202,118 @@ mod tests {
 
     use purrdf_testkit::prop::prelude::*;
 
+    fn assert_persisted_partition_merge(
+        left: &RdfDataset,
+        right: &RdfDataset,
+        combined: &RdfDataset,
+        predicates: &[TermId],
+        scopes: &[GraphMatch],
+    ) {
+        use crate::{SegmentedBuildLimits, SegmentedImage, SegmentedReadLimits};
+        let images: Vec<_> = [left, right, combined]
+            .into_iter()
+            .enumerate()
+            .map(|(index, dataset)| {
+                let first = (1_u64 << (40 + index)) + 17;
+                let limits = SegmentedBuildLimits::new(4096, 1_000_000, 4096, 512, 4)
+                    .unwrap()
+                    .with_first_term_index(first)
+                    .unwrap();
+                SegmentedImage::from_native_fixture(dataset, limits).unwrap()
+            })
+            .collect();
+        let sources: Vec<_> = images
+            .iter()
+            .map(|image| {
+                image
+                    .open_session(SegmentedReadLimits::new(
+                        8_000_000,
+                        2,
+                        100_000,
+                        100_000_000,
+                        8,
+                    ))
+                    .unwrap()
+            })
+            .collect();
+        for &predicate in predicates {
+            let value = left.term_value(predicate);
+            let ids: Vec<_> = sources
+                .iter()
+                .map(|source| source.term_id_by_value(&value).unwrap().unwrap())
+                .collect();
+            for &scope in scopes {
+                let graphs: Vec<_> = sources
+                    .iter()
+                    .map(|source| match scope {
+                        GraphMatch::Any => GraphMatch::Any,
+                        GraphMatch::Default => GraphMatch::Default,
+                        GraphMatch::Named(id) => GraphMatch::Named(
+                            source
+                                .term_id_by_value(&left.term_value(id))
+                                .unwrap()
+                                .unwrap(),
+                        ),
+                    })
+                    .collect();
+                for stream in [
+                    StatisticsStream::Asserted,
+                    StatisticsStream::Reifiers,
+                    StatisticsStream::Annotations,
+                ] {
+                    let counts: Vec<_> = sources
+                        .iter()
+                        .enumerate()
+                        .map(|(index, source)| {
+                            source
+                                .statistics()
+                                .unwrap()
+                                .predicate(ids[index], graphs[index], stream)
+                                .unwrap()
+                        })
+                        .collect();
+                    assert_eq!(
+                        counts[0].rows.value + counts[1].rows.value,
+                        counts[2].rows.value
+                    );
+                    for position in [StatisticsPosition::Subject, StatisticsPosition::Object] {
+                        let mut values = [BTreeSet::new(), BTreeSet::new(), BTreeSet::new()];
+                        for (index, source) in sources.iter().enumerate() {
+                            let mut previous = None;
+                            assert!(
+                                source
+                                    .statistics()
+                                    .unwrap()
+                                    .visit_distinct(
+                                        ids[index],
+                                        graphs[index],
+                                        stream,
+                                        position,
+                                        &mut |id| {
+                                            assert!(previous.is_none_or(|previous| previous < id));
+                                            previous = Some(id);
+                                            values[index].insert(source.term_value(id).unwrap());
+                                            ControlFlow::Continue(())
+                                        }
+                                    )
+                                    .unwrap()
+                            );
+                        }
+                        let [mut union, right, expected] = values;
+                        union.extend(right);
+                        assert_eq!(union, expected);
+                        let count = match position {
+                            StatisticsPosition::Subject => counts[2].subjects,
+                            StatisticsPosition::Object => counts[2].objects,
+                        };
+                        assert_eq!(union.len() as u64, count.unwrap().value);
+                    }
+                }
+            }
+        }
+        assert!(sources.iter().all(|source| source.read_error().is_none()));
+    }
+
     prop_test! {
         #[test]
         fn property_translated_two_page_summaries_match_one_combined_snapshot(
@@ -1210,7 +1327,7 @@ mod tests {
             builder.push_dataset(&right).unwrap();
             let combined = builder.freeze().unwrap();
             let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(
-                vec![left.clone(), right],
+                vec![left.clone(), right.clone()],
             ))).unwrap();
             let native_ids: Vec<_> = predicates.iter().map(|&id|
                 combined.as_ref().term_id_by_value(&left.as_ref().term_value(id)).unwrap()).collect();
@@ -1218,7 +1335,7 @@ mod tests {
                 paged.term_id_by_value(&left.as_ref().term_value(id)).unwrap().unwrap()).collect();
             let mut native_scopes = Vec::new();
             let mut global_scopes = Vec::new();
-            for scope in scopes {
+            for &scope in &scopes {
                 match scope {
                     GraphMatch::Any => { native_scopes.push(GraphMatch::Any); global_scopes.push(GraphMatch::Any); }
                     GraphMatch::Default => { native_scopes.push(GraphMatch::Default); global_scopes.push(GraphMatch::Default); }
@@ -1231,6 +1348,7 @@ mod tests {
             }
             assert_rows(&*combined, &native_ids, &native_scopes);
             assert_rows(&paged, &global_ids, &global_scopes);
+            assert_persisted_partition_merge(&left, &right, &combined, &predicates, &scopes);
             for (&native_id, &global_id) in native_ids.iter().zip(&global_ids) {
                 for (&native_scope, &global_scope) in native_scopes.iter().zip(&global_scopes) {
                     prop_assert_eq!(
