@@ -1738,6 +1738,10 @@ impl RdfDataset {
     /// probes locate the target run in `O(log n)` and visit only matching rows.
     /// Graph-distinct bindings retain their multiplicity and reifier/graph order.
     pub fn reifiers_of(&self, triple: TermId) -> impl Iterator<Item = TermId> + '_ {
+        self.reifier_rows_for_target(triple).map(|(r, _, _)| r)
+    }
+
+    fn reifier_rows_for_target(&self, triple: TermId) -> impl Iterator<Item = ReifierRow> + '_ {
         let order = self
             .try_reifier_targets()
             .expect("host cannot allocate a resident reifier index");
@@ -1745,7 +1749,7 @@ impl RdfDataset {
         let end = order.partition_point(|&index| self.reifiers[index as usize].1 <= triple);
         order[start..end]
             .iter()
-            .map(|&index| self.reifiers[index as usize].0)
+            .map(|&index| self.reifiers[index as usize])
     }
 
     fn try_reifier_targets(&self) -> Result<&[u32], purrdf_lex::allocation::StorageError> {
@@ -1856,9 +1860,8 @@ impl RdfDataset {
     /// `O(log n)` to locate the run: reifier rows are frozen sorted by
     /// `(reifier, triple, graph)`, so `reifier` is the PRIMARY key and every row for
     /// one reifier is contiguous — `partition_point` finds the start, then a
-    /// `take_while` walks the run. (Contrast [`reifiers_of`](Self::reifiers_of), which
-    /// keys on the SECONDARY `triple` column, whose rows are NOT contiguous and for
-    /// which binary search therefore does not apply.)
+    /// `take_while` walks the run. Target-keyed [`reifiers_of`](Self::reifiers_of)
+    /// instead locates its run in the separate target ordinal order.
     ///
     /// Yields exactly the rows of `reifier_quads().filter(|q| q.s == reifier)`, in the
     /// same order (contiguity makes the two streams identical, not merely equal as
@@ -1884,6 +1887,28 @@ impl RdfDataset {
                     g,
                 })
         })
+    }
+
+    /// Reifier declarations for an exact triple term and graph scope, using the
+    /// target ordinal range. Graph-distinct rows retain their declaration order.
+    pub fn reifier_quads_for_target(
+        &self,
+        target: TermId,
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        self.assert_reifier_table_invariant();
+        self.rdf_reifies_id()
+            .into_iter()
+            .flat_map(move |predicate| {
+                self.reifier_rows_for_target(target)
+                    .filter(move |row| graph.matches(row.2))
+                    .map(move |(reifier, triple, g)| QuadIds {
+                        s: reifier,
+                        p: predicate,
+                        o: triple,
+                        g,
+                    })
+            })
     }
 
     /// Iterate the annotation side-table AS resolved virtual quads: each
@@ -2550,6 +2575,20 @@ mod tests {
                     .map(|row| row.0)
                     .collect();
                 assert_eq!(dataset.reifiers_of(wanted).collect::<Vec<_>>(), expected);
+                for scope in [
+                    GraphMatch::Any,
+                    GraphMatch::Default,
+                    GraphMatch::Named(graph),
+                ] {
+                    let expected: Vec<_> = dataset
+                        .reifier_quads()
+                        .filter(|quad| quad.o == wanted && scope.matches(quad.g))
+                        .collect();
+                    let actual: Vec<_> =
+                        crate::DatasetView::reifier_quads_for_target(&dataset, wanted, scope)
+                            .collect();
+                    assert_eq!(actual, expected);
+                }
             }
             assert_eq!(
                 dataset.reifier_targets.get().unwrap().len(),

@@ -1120,6 +1120,19 @@ pub trait DatasetView {
         self.reifier_quads().filter(move |q| q.s == reifier)
     }
 
+    /// Reifier declarations of an exact triple term within `graph`. The default
+    /// preserves graph pruning and filters its stream; an indexed backend can
+    /// narrow the target before admitting or visiting unrelated rows.
+    /// The result has the same order and multiplicity as that filtered stream.
+    fn reifier_quads_for_target(
+        &self,
+        target: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.reifier_quads_in_graph(graph)
+            .filter(move |quad| quad.o == target)
+    }
+
     /// The RDF 1.2 annotation side-table AS resolved virtual triples: each
     /// `(reifier, predicate, object)` annotation becomes a quad carrying its own graph
     /// slot. Capability-gated: a backend with no annotation layer yields nothing.
@@ -1829,6 +1842,14 @@ impl DatasetView for RdfDataset {
         Self::annotation_quads(self)
     }
 
+    fn reifier_quads_for_target(
+        &self,
+        target: TermId,
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        Self::reifier_quads_for_target(self, target, graph)
+    }
+
     #[inline]
     fn annotations_of_with_graph(
         &self,
@@ -2045,6 +2066,14 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     #[inline]
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         (**self).annotation_quads()
+    }
+
+    fn reifier_quads_for_target(
+        &self,
+        target: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads_for_target(target, graph)
     }
 
     #[inline]

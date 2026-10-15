@@ -40,7 +40,8 @@
 //! * BOTH side-tables index straight to a bound subject's run, because the subject IS the
 //!   reifier key and hence each table's primary sort key
 //!   ([`DatasetView::reifier_quads_of`] / [`DatasetView::annotations_of_with_graph`]).
-//! * An UNBOUND subject instead narrows by the known GRAPH scope up front
+//! * An UNBOUND subject with an exact triple object uses
+//!   [`DatasetView::reifier_quads_for_target`]. Other unbound probes narrow by GRAPH
 //!   ([`DatasetView::reifier_quads_in_graph`] / [`DatasetView::annotation_quads_in_graph`])
 //!   rather than scanning the whole table and filtering the graph out afterwards. A
 //!   backend that can name, without materializing anything, which of its own storage
@@ -126,15 +127,25 @@ pub(crate) fn visit_quads<D: DatasetView>(
 
     // ── reifier rows: (reifier, rdf:reifies, <<triple>>) ────────────────────
     if scan_reifier_rows {
-        match s {
-            Some(reifier) => {
+        match (s, o) {
+            (Some(reifier), _) => {
                 for quad in dataset.reifier_quads_of(reifier).filter(keyed_residual) {
                     if emit(quad).is_break() {
                         return;
                     }
                 }
             }
-            None => {
+            (None, Some(target)) => {
+                for quad in dataset
+                    .reifier_quads_for_target(target, graph)
+                    .filter(unkeyed_residual)
+                {
+                    if emit(quad).is_break() {
+                        return;
+                    }
+                }
+            }
+            (None, None) => {
                 for quad in dataset
                     .reifier_quads_in_graph(graph)
                     .filter(unkeyed_residual)
@@ -174,6 +185,77 @@ pub(crate) fn visit_quads<D: DatasetView>(
                     return;
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_core::RdfDatasetBuilder;
+
+    #[test]
+    fn exact_target_walk_materializes_the_target_order_then_reuses_it() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let graph = builder.intern_iri("http://example.org/g").unwrap();
+        let target = builder.intern_triple(subject, predicate, subject).unwrap();
+        let other = builder.intern_triple(graph, predicate, subject).unwrap();
+        for index in 0..257 {
+            let reifier = builder
+                .intern_iri(&format!("http://example.org/r{index}"))
+                .unwrap();
+            builder
+                .push_reifier_in_graph(
+                    reifier,
+                    if index % 17 == 0 { target } else { other },
+                    (index % 2 == 0).then_some(graph),
+                )
+                .unwrap();
+        }
+        let dataset = builder.freeze().unwrap();
+        // The actual shared traversal must reach the target index through Arc's
+        // DatasetView forwarding. Merely filtering a whole-table walk allocates
+        // no index and therefore cannot satisfy this physical-path assertion.
+        for (iteration, scope) in [
+            GraphMatch::Named(graph),
+            GraphMatch::Default,
+            GraphMatch::Any,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let expected = dataset
+                .reifier_quads()
+                .filter(|quad| quad.o == target && scope.matches(quad.g))
+                .count();
+            let mut count = 0;
+            let window = CurrentThreadWindow::open();
+            visit_quads(
+                &dataset,
+                StatementProbe {
+                    s: None,
+                    p: None,
+                    o: Some(target),
+                    graph: scope,
+                    scan_reifier_rows: true,
+                },
+                |quad| {
+                    assert_eq!(quad.o, target);
+                    assert!(scope.matches(quad.g));
+                    count += 1;
+                    ControlFlow::Continue(())
+                },
+            );
+            let measured = window.close();
+            assert_eq!(count, expected);
+            assert_eq!(
+                measured.retained_bytes,
+                if iteration == 0 { 257 * 4 } else { 0 }
+            );
+            assert_eq!(measured.allocations, u64::from(iteration == 0));
         }
     }
 }

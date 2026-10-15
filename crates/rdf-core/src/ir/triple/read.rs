@@ -159,14 +159,18 @@ impl TripleRead<'_> {
             .map(Self::project)
     }
 
-    fn binding_rows(&self, reifier: Option<TermId>) -> impl Iterator<Item = QuadIds> + '_ {
+    fn binding_rows(
+        &self,
+        reifier: Option<TermId>,
+        target: Option<TermId>,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
         let predicate = self
             .dataset
             .dictionary
             .term_id_by_iri(purrdf_iri::vocab::rdf::REIFIES);
         let rows = self.ready().and_then(|()| {
             self.dataset
-                .reifiers_for_pattern(reifier, None)
+                .reifiers_for_pattern(reifier, target)
                 .map_err(|error| self.latch(error.into()))
         });
         rows.ok()
@@ -291,7 +295,7 @@ impl DatasetView for TripleRead<'_> {
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.binding_rows(None)
+        self.binding_rows(None, None)
     }
 
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -302,7 +306,16 @@ impl DatasetView for TripleRead<'_> {
     }
 
     fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
-        self.binding_rows(Some(reifier))
+        self.binding_rows(Some(reifier), None)
+    }
+
+    fn reifier_quads_for_target(
+        &self,
+        target: TermId,
+        graph: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        let _ = self.graph(graph);
+        self.binding_rows(None, Some(target))
     }
 
     fn annotations_of_with_graph(

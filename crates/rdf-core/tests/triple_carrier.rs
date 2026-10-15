@@ -148,6 +148,20 @@ fn compact_statement_probes_populate_only_the_requested_ordinal_arrays() {
         }
     }
     assert_eq!(dataset.storage_layout().reifier_targets, 4 * 8);
+    let read = Arc::new(dataset.read().unwrap());
+    for &target in targets.iter().chain(ids.iter()) {
+        let expected: Vec<_> = read
+            .reifier_quads()
+            .filter(|quad| quad.o == target)
+            .collect();
+        for graph in [GraphMatch::Any, GraphMatch::Default] {
+            assert_eq!(
+                read.reifier_quads_for_target(target, graph)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
     assert_eq!(dataset.storage_layout().annotation_orders, [0, 0]);
     for mask in 0..8 {
         for row in dataset.annotations() {
@@ -340,6 +354,25 @@ fn refused_child_stops_existing_streams_and_fresh_session_is_healthy() {
         }
     ));
     let healthy = compact.read().unwrap();
+    // A new indexed seam obeys the same graph-free refusal and sticky cause,
+    // even when its target is absent. A fresh read remains independent.
+    let refused_target = compact.read().unwrap();
+    assert_eq!(
+        refused_target
+            .reifier_quads_for_target(s, GraphMatch::Named(s))
+            .count(),
+        0
+    );
+    assert_eq!(
+        refused_target.read_error(),
+        Some(TripleReadError::NamedGraphsUnsupported)
+    );
+    assert_eq!(
+        refused_target
+            .reifier_quads_for_target(s, GraphMatch::Default)
+            .count(),
+        0
+    );
     assert_eq!(
         healthy
             .quads_for_pattern(Some(s), Some(p), Some(o), GraphMatch::Default)
