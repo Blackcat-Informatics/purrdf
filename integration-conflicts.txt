@@ -1,0 +1,7 @@
+4bc0fac92d9941261b7e9e68d99defaf03702bf9
+helpers-ledger.toml
+
+Auto-merging docs/design/purrdf-simd.md
+Auto-merging helpers-ledger.toml
+CONFLICT (content): Merge conflict in helpers-ledger.toml
+Auto-merging scripts/simd-asm-manifest.toml

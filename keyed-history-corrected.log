@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 59s
+     Running tests/segmented_stack.rs (/opt/.cargo/a6/4ff8652dfb692b/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 1 test
+test generated_chronological_publications_match_eager_typed_seals ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.35s
+

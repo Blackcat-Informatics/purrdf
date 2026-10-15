@@ -1,0 +1,69 @@
+{
+  "issue": 553,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Segmented stack view: bound-reifier patterns drop annotations and scan the reifier table; block cache lookup is linear",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 494,
+      "title": "Evaluate at caller-supplied coordinates: host-supplied NOW(), as-of snapshots of a PagedStack, and range scans on annotation values",
+      "state": "OPEN"
+    },
+    {
+      "number": 496,
+      "title": "Benchmarks: measured evidence at 10^8-10^9 triples, including a reifier-heavy RDF 1.2 claims workload",
+      "state": "OPEN"
+    },
+    {
+      "number": 495,
+      "title": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment",
+      "state": "CLOSED"
+    },
+    {
+      "number": 492,
+      "title": "Triple-only carrier for RDF 1.2 consumers that use no named graphs (rows, permutations, Datalog atoms, identities)",
+      "state": "OPEN"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "CLOSED"
+    },
+    {
+      "number": 375,
+      "title": "Prep v3.0 release",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "bug": 2,
+    "none": 22,
+    "performance": 3,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/553-segmented-stack-view-bound-reifier"
+  },
+  "coverage": [
+    "issue #553 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Segmented', 'stack', 'view:']: 7 other item(s)",
+    "GhpRsq-Defect-Class trailers: 4 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #553 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #553: 0",
+    "requirement candidates: 0 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 5 path(s) (5 on disk), 10 identifier(s), 0 workspace package(s), 0 URL(s)"
+  ]
+}

@@ -1,0 +1,48 @@
+diff --git crates/sparql-eval/tests/segmented_query.rs crates/sparql-eval/tests/segmented_query.rs
+index 3ca6f55a2..3b4da8932 100644
+--- crates/sparql-eval/tests/segmented_query.rs
++++ crates/sparql-eval/tests/segmented_query.rs
+@@ -1318,9 +1318,9 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+     for claims in [2000, 200_000] {
+         let mut builder = RdfDatasetBuilder::new();
+         let predicate = TermValue::iri("https://example.org/claim-predicate");
+-        let annotation = builder
+-            .intern_value(&TermValue::iri("https://example.org/annotation"))
+-            .unwrap();
++        let annotations: Vec<_> = (0..4)
++            .map(|index| builder.intern_value(&TermValue::iri(format!("https://example.org/annotation/{index}"))).unwrap())
++            .collect();
+         for index in 0..claims {
+             let reifier = builder
+                 .intern_value(&TermValue::iri(format!(
+@@ -1341,9 +1341,9 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+             builder
+                 .push_reifier_in_graph(reifier, triple, None)
+                 .unwrap();
+-            builder
+-                .push_annotation_in_graph(reifier, annotation, object, None)
+-                .unwrap();
++            for annotation in &annotations {
++                builder.push_annotation_in_graph(reifier, *annotation, object, None).unwrap();
++            }
+         }
+         let resident = builder.freeze().unwrap();
+         let packed = PackBuilder::build_view_bytes(resident.as_ref()).unwrap();
+@@ -1447,7 +1447,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+             // Both side tables must use the subject-keyed logical path. Check
+             // existing and absent keys against independent counts and the
+             // resident evaluator, including the final claim in the full image.
+-            for (claim, rows) in [(claims / 2, 2), (claims - 1, 2), (claims, 0)] {
++            for (claim, rows) in [(claims / 2, 5), (claims - 1, 5), (claims, 0)] {
+                 let text = format!(
+                     "SELECT (COUNT(*) AS ?n) WHERE {{ <https://example.org/claim/{claim}> ?p ?o }}"
+                 );
+@@ -1503,7 +1503,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+             assert_eq!(
+                 expected.1,
+                 vec![vec![Some(TermValue::typed_literal(
+-                    (2 * claims).to_string(),
++                    (5 * claims).to_string(),
+                     purrdf_xsd::XsdDatatype::Integer.iri()
+                 ))]]
+             );

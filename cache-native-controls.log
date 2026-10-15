@@ -1,0 +1,25 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/rdf-core)
+error[E0599]: no method named `read_error` found for struct `session::SegmentedSession` in the current scope
+   --> crates/rdf-core/src/ir/segmented/session/cache_control.rs:55:28
+    |
+ 55 |         assert_eq!(session.read_error(), None);
+    |                            ^^^^^^^^^^ method not found in `session::SegmentedSession`
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:546:8
+    |
+546 |     fn read_error(&self) -> Option<Self::ReadError> {
+    |        ---------- the method is available for `session::SegmentedSession` here
+    |
+   ::: crates/rdf-core/src/ir/segmented/session.rs:785:1
+    |
+785 | pub struct SegmentedSession {
+    | --------------------------- method `read_error` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `read_error` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use crate::dataset_view::DatasetView;
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (lib test) due to 1 previous error

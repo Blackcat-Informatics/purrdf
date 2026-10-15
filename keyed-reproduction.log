@@ -1,0 +1,59 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/rdf-events)
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/lex)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling regex-automata v0.4.14
+   Compiling digest v0.11.3
+   Compiling libc v0.2.186
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/rdf-core)
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/deflate)
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/xsd)
+   Compiling hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/testkit)
+   Compiling rayon v1.12.0
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/cdt)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/stack)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/sparql-algebra)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/alloc-probe)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4m 16s
+     Running tests/segmented_query.rs (/opt/.cargo/a6/4ff8652dfb692b/debug/build/purrdf-sparql-eval/75e071c550c35b0c/out/segmented_query-75e071c550c35b0c)
+
+running 1 test
+claims=2000 block_bytes=4096 records_per_block=32 terms=6260 pack_bytes=80373 image_bytes=1777664
+claims=2000 block_bytes=4096 records_per_block=32 block_kind_bytes=[0, 802816, 802816, 131072, 0, 4096] authentication_bytes=32768
+claims=2000 limit_touched=21 requests=120 io_bytes=52608 peak_bytes=233937
+
+thread 'persisted_reifier_limit_bounds_touched_terms_and_full_count_matches' (421110) panicked at crates/sparql-eval/tests/segmented_query.rs:1479:17:
+assertion `left == right` failed
+  left: (["n"], [[Some(Literal { lexical_form: "1", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })]])
+ right: (["n"], [[Some(Literal { lexical_form: "2", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })]])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test persisted_reifier_limit_bounds_touched_terms_and_full_count_matches ... FAILED
+
+failures:
+
+failures:
+    persisted_reifier_limit_bounds_touched_terms_and_full_count_matches
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test segmented_query`

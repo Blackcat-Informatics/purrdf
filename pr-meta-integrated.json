@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "881bc8a29aa79afec356f73ab7c607bc9784c3f9",
+  "headRefName": "paudley/553-segmented-stack-view-bound-reifier",
+  "headRefOid": "1f80189d96f1e430ff3bb2d019f0f39a5857a45e",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 554,
+  "state": "OPEN",
+  "title": "Restore keyed segmented statements and index block caching",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/554"
+}

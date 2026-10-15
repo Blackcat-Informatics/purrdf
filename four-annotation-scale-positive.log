@@ -1,0 +1,53 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 32.50s
+     Running tests/segmented_query.rs (/opt/.cargo/a6/4ff8652dfb692b/debug/build/purrdf-sparql-eval/75e071c550c35b0c/out/segmented_query-75e071c550c35b0c)
+
+running 1 test
+claims=2000 block_bytes=4096 records_per_block=32 terms=6263 pack_bytes=93613 image_bytes=1974272
+claims=2000 block_bytes=4096 records_per_block=32 block_kind_bytes=[0, 802816, 802816, 323584, 0, 8192] authentication_bytes=32768
+claims=2000 limit_touched=21 requests=130 io_bytes=56992 peak_bytes=246067
+claims=2000 block_bytes=4096 records_per_block=32 key=1000 expected_rows=5 touched=8 io_bytes=92064
+claims=2000 block_bytes=4096 records_per_block=32 key=1999 expected_rows=5 touched=8 io_bytes=105216
+claims=2000 block_bytes=4096 records_per_block=32 key=2000 expected_rows=0 touched=0 io_bytes=65760
+claims=2000 count_touched=4261 requests=8650 io_bytes=3792160 peak_bytes=4486060
+claims=2000 block_bytes=4096 records_per_block=64 terms=6263 pack_bytes=93613 image_bytes=1171456
+claims=2000 block_bytes=4096 records_per_block=64 block_kind_bytes=[0, 401408, 401408, 323584, 0, 8192] authentication_bytes=32768
+claims=2000 limit_touched=21 requests=120 io_bytes=52608 peak_bytes=357990
+claims=2000 block_bytes=4096 records_per_block=64 key=1000 expected_rows=5 touched=8 io_bytes=87680
+claims=2000 block_bytes=4096 records_per_block=64 key=1999 expected_rows=5 touched=8 io_bytes=100832
+claims=2000 block_bytes=4096 records_per_block=64 key=2000 expected_rows=0 touched=0 io_bytes=61376
+claims=2000 count_touched=4261 requests=5000 io_bytes=2192000 peak_bytes=4289452
+claims=2000 block_bytes=4096 records_per_block=128 refusal=ConstructionLimit
+claims=2000 block_bytes=8192 records_per_block=128 terms=6263 pack_bytes=93613 image_bytes=1163264
+claims=2000 block_bytes=8192 records_per_block=128 block_kind_bytes=[0, 401408, 401408, 327680, 0, 8192] authentication_bytes=16384
+claims=2000 limit_touched=21 requests=90 io_bytes=84480 peak_bytes=1192399
+claims=2000 block_bytes=8192 records_per_block=128 key=1000 expected_rows=5 touched=8 io_bytes=143616
+claims=2000 block_bytes=8192 records_per_block=128 key=1999 expected_rows=5 touched=8 io_bytes=160512
+claims=2000 block_bytes=8192 records_per_block=128 key=2000 expected_rows=0 touched=0 io_bytes=101376
+claims=2000 count_touched=4261 requests=1701 io_bytes=1596672 peak_bytes=4797827
+claims=200000 block_bytes=4096 records_per_block=32 terms=600263 pack_bytes=11066989 image_bytes=190832640
+claims=200000 block_bytes=4096 records_per_block=32 block_kind_bytes=[0, 76836864, 76836864, 32256000, 0, 704512] authentication_bytes=4194304
+claims=200000 limit_touched=21 requests=2686 io_bytes=728064 peak_bytes=411590
+claims=200000 block_bytes=4096 records_per_block=32 key=100000 expected_rows=5 touched=8 io_bytes=216576
+claims=200000 block_bytes=4096 records_per_block=32 key=199999 expected_rows=5 touched=8 io_bytes=211968
+claims=200000 block_bytes=4096 records_per_block=32 key=200000 expected_rows=0 touched=0 io_bytes=129024
+claims=200000 count_touched=400261 requests=1992026 io_bytes=539956224 peak_bytes=343405212
+claims=200000 block_bytes=4096 records_per_block=64 terms=600263 pack_bytes=11066989 image_bytes=111902720
+claims=200000 block_bytes=4096 records_per_block=64 block_kind_bytes=[0, 38420480, 38420480, 32256000, 0, 704512] authentication_bytes=2097152
+claims=200000 limit_touched=21 requests=2512 io_bytes=718432 peak_bytes=538057
+claims=200000 block_bytes=4096 records_per_block=64 key=100000 expected_rows=5 touched=8 io_bytes=210496
+claims=200000 block_bytes=4096 records_per_block=64 key=199999 expected_rows=5 touched=8 io_bytes=205920
+claims=200000 block_bytes=4096 records_per_block=64 key=200000 expected_rows=0 touched=0 io_bytes=123552
+claims=200000 count_touched=400261 requests=1354544 io_bytes=387399584 peak_bytes=343405212
+claims=200000 block_bytes=4096 records_per_block=128 refusal=ConstructionLimit
+claims=200000 block_bytes=8192 records_per_block=128 terms=600263 pack_bytes=11066989 image_bytes=110387200
+claims=200000 block_bytes=8192 records_per_block=128 block_kind_bytes=[0, 38420480, 38420480, 32137216, 0, 352256] authentication_bytes=1048576
+claims=200000 limit_touched=21 requests=795 io_bytes=457920 peak_bytes=1383369
+claims=200000 block_bytes=8192 records_per_block=128 key=100000 expected_rows=5 touched=8 io_bytes=345600
+claims=200000 block_bytes=8192 records_per_block=128 key=199999 expected_rows=5 touched=8 io_bytes=336960
+claims=200000 block_bytes=8192 records_per_block=128 key=200000 expected_rows=0 touched=0 io_bytes=216000
+claims=200000 count_touched=400261 requests=833700 io_bytes=480211200 peak_bytes=318370460
+test persisted_reifier_limit_bounds_touched_terms_and_full_count_matches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 32.54s
+

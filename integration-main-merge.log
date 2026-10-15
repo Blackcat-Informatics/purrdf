@@ -1,0 +1,6 @@
+Auto-merging docs/design/purrdf-simd.md
+Auto-merging helpers-ledger.toml
+CONFLICT (content): Merge conflict in helpers-ledger.toml
+Auto-merging scripts/simd-asm-manifest.toml
+Recorded preimage for 'helpers-ledger.toml'
+Automatic merge failed; fix conflicts and then commit the result.

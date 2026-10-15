@@ -1,0 +1,113 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/crates/rdf-core)
+error[E0599]: no method named `term_id_by_value` found for struct `SegmentedStackQuery<'a>` in the current scope
+   --> crates/rdf-core/tests/segmented_stack.rs:267:42
+    |
+267 |             if let Some(reifier) = query.term_id_by_value(&TermValue::iri("urn:r")).unwrap() {
+    |                                          ^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:850:8
+    |
+850 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+    |        ---------------- the method is available for `SegmentedStackQuery<'_>` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `term_id_by_value` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use purrdf_core::DatasetView;
+    |
+help: there is a method `term_value` with a similar name
+    |
+267 -             if let Some(reifier) = query.term_id_by_value(&TermValue::iri("urn:r")).unwrap() {
+267 +             if let Some(reifier) = query.term_value(&TermValue::iri("urn:r")).unwrap() {
+    |
+
+error[E0599]: no method named `reifier_quads_of` found for struct `SegmentedStackQuery<'a>` in the current scope
+    --> crates/rdf-core/tests/segmented_stack.rs:269:27
+     |
+ 269 |                     query.reifier_quads_of(reifier).collect::<Vec<_>>(),
+     |                           ^^^^^^^^^^^^^^^^
+     |
+    ::: crates/rdf-core/src/dataset_view.rs:1082:8
+     |
+1082 |     fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+     |        ---------------- the method is available for `SegmentedStackQuery<'_>` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: there is a method `reifier_quads` with a similar name, but with different arguments
+    --> crates/rdf-core/src/dataset_view.rs:1068:5
+     |
+1068 |     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: trait `DatasetView` which provides `reifier_quads_of` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use purrdf_core::DatasetView;
+     |
+
+error[E0599]: no method named `reifier_quads` found for struct `SegmentedStackQuery<'a>` in the current scope
+    --> crates/rdf-core/tests/segmented_stack.rs:271:26
+     |
+ 270 |                     query
+ 271 |                         .reifier_quads()
+     |                          ^^^^^^^^^^^^^
+     |
+    ::: crates/rdf-core/src/dataset_view.rs:1068:8
+     |
+1068 |     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+     |        ------------- the method is available for `SegmentedStackQuery<'_>` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: there is a method `reifier_quads_of` with a similar name, but with different arguments
+    --> crates/rdf-core/src/dataset_view.rs:1082:5
+     |
+1082 |     fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: trait `DatasetView` which provides `reifier_quads` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use purrdf_core::DatasetView;
+     |
+
+error[E0599]: no method named `annotations_of_with_graph` found for struct `SegmentedStackQuery<'a>` in the current scope
+    --> crates/rdf-core/tests/segmented_stack.rs:276:27
+     |
+ 276 |                     query.annotations_of_with_graph(reifier).collect::<Vec<_>>(),
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `SegmentedStackQuery<'_>`
+     |
+    ::: crates/rdf-core/src/dataset_view.rs:1096:8
+     |
+1096 |     fn annotations_of_with_graph(
+     |        ------------------------- the method is available for `SegmentedStackQuery<'_>` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `annotations_of_with_graph` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use purrdf_core::DatasetView;
+     |
+
+error[E0599]: no method named `annotation_quads` found for struct `SegmentedStackQuery<'a>` in the current scope
+    --> crates/rdf-core/tests/segmented_stack.rs:278:26
+     |
+ 277 |                     query
+ 278 |                         .annotation_quads()
+     |                          ^^^^^^^^^^^^^^^^
+     |
+    ::: crates/rdf-core/src/dataset_view.rs:1089:8
+     |
+1089 |     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+     |        ---------------- the method is available for `SegmentedStackQuery<'_>` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: there is a method `annotation_quads_in_graph` with a similar name, but with different arguments
+    --> crates/rdf-core/src/dataset_view.rs:1131:5
+     |
+1131 | /     fn annotation_quads_in_graph(
+1132 | |         &self,
+1133 | |         g: GraphMatch<Self::Id>,
+1134 | |     ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+     | |_____________________________________________________^
+help: trait `DatasetView` which provides `annotation_quads` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use purrdf_core::DatasetView;
+     |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (test "segmented_stack") due to 5 previous errors

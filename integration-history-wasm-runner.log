@@ -1,0 +1,9 @@
+    Finished `test` profile [optimized] target(s) in 0.50s
+     Running tests/segmented_stack.rs (/opt/.cargo/30/337b5e985294b2/wasm32-unknown-unknown/debug/build/purrdf-core/88eff25baed8444c/out/segmented_stack-88eff25baed8444c.wasm)
+
+running 2 tests
+test generated_chronological_publications_match_eager_typed_seals ... ok
+test effective_annotation_classification_uses_original_chronology_and_first_occurrence ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.31s
+

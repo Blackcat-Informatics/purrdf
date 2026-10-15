@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 553,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier",
+  "branch": "paudley/553-segmented-stack-view-bound-reifier",
+  "slug": "segmented-stack-view-bound-reifier",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/.stage/segmented-stack-view-bound-reifier",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "c2c1c8c78d32d013c7ecfa56d135cbc72c38f7f6",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier",
+    "branch:paudley/553-segmented-stack-view-bound-reifier",
+    "stage:/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/.stage/segmented-stack-view-bound-reifier",
+    "issue:/home/paudley/Active/purrdf/.worktrees/553-segmented-stack-view-bound-reifier/.stage/segmented-stack-view-bound-reifier/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-15T01:51:42-0600"
+}

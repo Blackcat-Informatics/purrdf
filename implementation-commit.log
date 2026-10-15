@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against c2c1c8c78d32 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/553-segmented-stack-view-bound-reifier f8cbba207] Restore keyed segmented statements and index block cache
+ 7 files changed, 362 insertions(+), 63 deletions(-)
+ create mode 100644 crates/rdf-core/src/ir/segmented/session/cache.rs
+ create mode 100644 crates/rdf-core/src/ir/segmented/session/cache_control.rs

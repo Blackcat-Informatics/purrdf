@@ -1,0 +1,6 @@
+
+String dump of section '.comment':
+  [     1]  rustc version 1.101.0-nightly (21b707e3f 2026-09-30)
+  [    36]  GCC: (GNU) 16.2.1 20260810
+  [    51]  Linker: LLD 23.1.1 (/checkout/src/llvm-project/llvm 1b9c0d5ff9bbe7634aead059efe6b11a7eeba145)
+
