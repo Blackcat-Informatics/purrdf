@@ -268,7 +268,7 @@ fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes()
         let (explanation, evidence) = engine
             .explain_query_with_options_fallible_view(&ordinary, &query, None, options)
             .expect("operational EXPLAIN forwards the same request source");
-        assert_eq!(explanation.render(), expected.render());
+        support::assert_scan_explanation_matches_resident(&explanation, &expected.render());
         assert_eq!(evidence.consumed_pages, 1);
         assert_eq!(spy.posts(), before + 2 * per_run);
 
@@ -282,7 +282,7 @@ fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes()
                 Arc::new(CancellationFlag::new()),
             )
             .expect("a quiet stop still measures the configured source");
-        assert_eq!(signalled.render(), expected.render());
+        support::assert_scan_explanation_matches_resident(&signalled, &expected.render());
         assert_eq!(quiet_evidence, evidence);
         assert_eq!(spy.posts(), before + 3 * per_run);
 
@@ -295,7 +295,7 @@ fn fallible_explain_measures_its_request_source_and_preserves_service_outcomes()
         let (stopped, _) = engine
             .explain_query_with_stop_signal_fallible_view(&cancelled, &query, None, options, stop)
             .expect("operational cancellation reports the same measuring receipt");
-        assert_eq!(stopped.render(), stopped_resident.render());
+        support::assert_scan_explanation_matches_resident(&stopped, &stopped_resident.render());
         assert_eq!(
             stopped.evidence().tripped,
             Some(TrippedGovernor::Stopped {

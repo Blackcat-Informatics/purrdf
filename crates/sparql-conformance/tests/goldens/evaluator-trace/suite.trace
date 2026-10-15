@@ -28964,13 +28964,13 @@ solutions vars=["o", "g", "q", "z"] rows=2 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:o> <http://example/o1> .
 | _:c14n1 <urn:purrdf:conformance:var:q> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
 | _:c14n1 <urn:purrdf:conformance:var:z> <<( <http://example/s> <http://example/p> <http://example/o1> )>> .
-metered complete fuel=28 answer-rows=2 intermediate-cells=16
-explain fuel=28 answer-rows=2 intermediate-cells=16
+metered complete fuel=27 answer-rows=2 intermediate-cells=16
+explain fuel=27 answer-rows=2 intermediate-cells=16
 node 0 depth=0 Project rows=2 cells=8 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Join rows=2 cells=8 algebra-node-entry=1 committed-output-row=2
 node 2 depth=2 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 node 3 depth=2 Graph rows=4 cells=16 algebra-node-entry=1 committed-output-row=4
-node 4 depth=3 Bgp rows=4 cells=12 algebra-node-entry=3 committed-output-row=4 bgp-candidate-quad=7
+node 4 depth=3 Bgp rows=4 cells=12 algebra-node-entry=3 committed-output-row=4 bgp-candidate-quad=6
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=11e43147156aec68 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=11e43147156aec68 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=11e43147156aec68 | fuel=3
@@ -28991,12 +28991,11 @@ fuel 19 tripped fuel-exhausted consumed=20 certain prefix=false rows=2 digest=60
 fuel 20 tripped fuel-exhausted consumed=21 certain prefix=false rows=2 digest=60e44e08fe23746d | fuel=21
 fuel 21 tripped fuel-exhausted consumed=22 certain prefix=false rows=2 digest=60e44e08fe23746d | fuel=22
 fuel 22 tripped fuel-exhausted consumed=23 certain prefix=false rows=2 digest=60e44e08fe23746d | fuel=23
-fuel 23 tripped fuel-exhausted consumed=24 certain prefix=false rows=2 digest=60e44e08fe23746d | fuel=24
+fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=2 digest=60e44e08fe23746d | fuel=24
 fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=2 digest=60e44e08fe23746d | fuel=25
 fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=2 digest=60e44e08fe23746d | fuel=26
 fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=2 digest=60e44e08fe23746d | fuel=27
-fuel 27 tripped fuel-exhausted consumed=28 certain prefix=true rows=2 digest=60e44e08fe23746d | fuel=28
-fuel 28..=64 x37 complete rows=2 digest=60e44e08fe23746d | fuel=28
+fuel 27..=64 x38 complete rows=2 digest=60e44e08fe23746d | fuel=27
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#graphs-2> Reified triples - GRAPHs with blank node
 solutions vars=["g1", "s", "p", "o", "g2", "q", "z"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:g1> <http://example/g1> .
@@ -30557,36 +30556,33 @@ solutions vars=["o", "q", "z"] rows=7 ordered=false
 | _:c14n6 <urn:purrdf:conformance:var:o> <http://example/o> .
 | _:c14n6 <urn:purrdf:conformance:var:q> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
 | _:c14n6 <urn:purrdf:conformance:var:z> <<( <http://example/s> <http://example/p1> <http://example/o> )>> .
-metered complete fuel=38 answer-rows=7 intermediate-cells=21
-explain fuel=38 answer-rows=7 intermediate-cells=21
+metered complete fuel=28 answer-rows=7 intermediate-cells=21
+explain fuel=28 answer-rows=7 intermediate-cells=21
 node 0 depth=0 Project rows=7 cells=21 algebra-node-entry=1 committed-output-row=7
-node 1 depth=1 Bgp rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=22
+node 1 depth=1 Bgp rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=12
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=2
-fuel 2..=12 x11 tripped fuel-exhausted consumed=13 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=13
-fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=14
-fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=16
-fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=17
-fuel 17..=18 x2 tripped fuel-exhausted consumed=19 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=19
-fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=2 digest=34b474bf75b182f5 | fuel=20
-fuel 20..=21 x2 tripped fuel-exhausted consumed=22 certain prefix=true rows=3 digest=79d418a8d46db9db | fuel=22
-fuel 22..=23 x2 tripped fuel-exhausted consumed=24 certain prefix=true rows=5 digest=9ae6ae73dd07dec9 | fuel=24
+fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=3
+fuel 3..=6 x4 tripped fuel-exhausted consumed=7 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=7
+fuel 7..=8 x2 tripped fuel-exhausted consumed=9 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=9
+fuel 9 tripped fuel-exhausted consumed=10 certain prefix=true rows=2 digest=34b474bf75b182f5 | fuel=10
+fuel 10..=11 x2 tripped fuel-exhausted consumed=12 certain prefix=true rows=3 digest=79d418a8d46db9db | fuel=12
+fuel 12..=13 x2 tripped fuel-exhausted consumed=14 certain prefix=true rows=5 digest=9ae6ae73dd07dec9 | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=24
 fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=25
 fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=26
 fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=27
 fuel 27 tripped fuel-exhausted consumed=28 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=28
-fuel 28 tripped fuel-exhausted consumed=29 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=29
-fuel 29 tripped fuel-exhausted consumed=30 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=30
-fuel 30 tripped fuel-exhausted consumed=31 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=31
-fuel 31 tripped fuel-exhausted consumed=32 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=32
-fuel 32 tripped fuel-exhausted consumed=33 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=33
-fuel 33 tripped fuel-exhausted consumed=34 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=34
-fuel 34 tripped fuel-exhausted consumed=35 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=35
-fuel 35 tripped fuel-exhausted consumed=36 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=36
-fuel 36 tripped fuel-exhausted consumed=37 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=37
-fuel 37 tripped fuel-exhausted consumed=38 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=38
-fuel 38..=64 x27 complete rows=7 digest=6e2d7fcbcfbb1955 | fuel=38
+fuel 28..=64 x37 complete rows=7 digest=6e2d7fcbcfbb1955 | fuel=28
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-10> Reified triples - Pattern - literals or triple terms
 solutions vars=["s"] rows=5 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example/s4> .
@@ -30594,77 +30590,71 @@ solutions vars=["s"] rows=5 ordered=false
 | _:c14n2 <urn:purrdf:conformance:var:s> <http://example/s5> .
 | _:c14n3 <urn:purrdf:conformance:var:s> <http://example/s3> .
 | _:c14n4 <urn:purrdf:conformance:var:s> <http://example/s2> .
-metered complete fuel=137 answer-rows=5 intermediate-cells=70
-explain fuel=137 answer-rows=5 intermediate-cells=70
+metered complete fuel=71 answer-rows=5 intermediate-cells=70
+explain fuel=71 answer-rows=5 intermediate-cells=70
 node 0 depth=0 Distinct rows=5 cells=5 algebra-node-entry=1 committed-output-row=5
 node 1 depth=1 Project rows=10 cells=10 algebra-node-entry=1 committed-output-row=10
 node 2 depth=2 Union rows=10 cells=70 algebra-node-entry=1 committed-output-row=10
-node 3 depth=3 Bgp rows=2 cells=8 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=9
-node 4 depth=3 Bgp rows=2 cells=8 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=9
-node 5 depth=3 Bgp rows=2 cells=8 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=9
-node 6 depth=3 Bgp rows=2 cells=14 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=58
+node 3 depth=3 Bgp rows=2 cells=8 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=3
+node 4 depth=3 Bgp rows=2 cells=8 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=3
+node 5 depth=3 Bgp rows=2 cells=8 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=3
+node 6 depth=3 Bgp rows=2 cells=14 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=10
 node 7 depth=3 Bgp rows=2 cells=14 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=9
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=3
 fuel 3 tripped fuel-exhausted consumed=4 certain prefix=false rows=0 digest=4e09856ef332be22 | fuel=4
-fuel 4..=10 x7 tripped fuel-exhausted consumed=11 certain prefix=false rows=0 digest=4e09856ef332be22 | fuel=11
-fuel 11..=12 x2 tripped fuel-exhausted consumed=13 certain prefix=false rows=0 digest=4e09856ef332be22 | fuel=13
-fuel 13 tripped fuel-exhausted consumed=14 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=14
-fuel 14 tripped fuel-exhausted consumed=15 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=16
-fuel 16..=22 x7 tripped fuel-exhausted consumed=23 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=23
-fuel 23..=24 x2 tripped fuel-exhausted consumed=25 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=25
-fuel 25 tripped fuel-exhausted consumed=26 certain prefix=false rows=2 digest=8045181395102c04 | fuel=26
-fuel 26 tripped fuel-exhausted consumed=27 certain prefix=false rows=2 digest=8045181395102c04 | fuel=27
-fuel 27 tripped fuel-exhausted consumed=28 certain prefix=false rows=2 digest=8045181395102c04 | fuel=28
-fuel 28..=34 x7 tripped fuel-exhausted consumed=35 certain prefix=false rows=2 digest=8045181395102c04 | fuel=35
-fuel 35..=36 x2 tripped fuel-exhausted consumed=37 certain prefix=false rows=2 digest=8045181395102c04 | fuel=37
-fuel 37 tripped fuel-exhausted consumed=38 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=38
-fuel 38 tripped fuel-exhausted consumed=39 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=39
-fuel 39 tripped fuel-exhausted consumed=40 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=40
-fuel 40..=46 x7 tripped fuel-exhausted consumed=47 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=47
-fuel 47..=53 x7 tripped fuel-exhausted consumed=54 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=54
-fuel 54..=60 x7 tripped fuel-exhausted consumed=61 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=61
-fuel 61..=67 x7 tripped fuel-exhausted consumed=68 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=68
-fuel 68..=74 x7 tripped fuel-exhausted consumed=75 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=75
-fuel 75..=81 x7 tripped fuel-exhausted consumed=82 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=82
-fuel 82..=88 x7 tripped fuel-exhausted consumed=89 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=89
-fuel 89..=95 x7 tripped fuel-exhausted consumed=96 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=96
-fuel 96..=97 x2 tripped fuel-exhausted consumed=98 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=98
-fuel 98 tripped fuel-exhausted consumed=99 certain prefix=false rows=4 digest=671dda9d837de759 | fuel=99
-fuel 99 tripped fuel-exhausted consumed=100 certain prefix=false rows=4 digest=671dda9d837de759 | fuel=100
-fuel 100 tripped fuel-exhausted consumed=101 certain prefix=true rows=4 digest=671dda9d837de759 | fuel=101
-fuel 101..=107 x7 tripped fuel-exhausted consumed=108 certain prefix=true rows=4 digest=671dda9d837de759 | fuel=108
-fuel 108..=109 x2 tripped fuel-exhausted consumed=110 certain prefix=true rows=4 digest=671dda9d837de759 | fuel=110
-fuel 110 tripped fuel-exhausted consumed=111 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=111
-fuel 111 tripped fuel-exhausted consumed=112 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=112
-fuel 112 tripped fuel-exhausted consumed=113 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=113
-fuel 113 tripped fuel-exhausted consumed=114 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=114
-fuel 114 tripped fuel-exhausted consumed=115 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=115
-fuel 115 tripped fuel-exhausted consumed=116 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=116
-fuel 116 tripped fuel-exhausted consumed=117 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=117
-fuel 117 tripped fuel-exhausted consumed=118 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=118
-fuel 118 tripped fuel-exhausted consumed=119 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=119
-fuel 119 tripped fuel-exhausted consumed=120 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=120
-fuel 120 tripped fuel-exhausted consumed=121 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=121
-fuel 121 tripped fuel-exhausted consumed=122 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=122
-fuel 122 tripped fuel-exhausted consumed=123 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=123
-fuel 123 tripped fuel-exhausted consumed=124 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=124
-fuel 124 tripped fuel-exhausted consumed=125 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=125
-fuel 125 tripped fuel-exhausted consumed=126 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=126
-fuel 126 tripped fuel-exhausted consumed=127 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=127
-fuel 127 tripped fuel-exhausted consumed=128 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=128
-fuel 128 tripped fuel-exhausted consumed=129 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=129
-fuel 129 tripped fuel-exhausted consumed=130 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=130
-fuel 130 tripped fuel-exhausted consumed=131 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=131
-fuel 131 tripped fuel-exhausted consumed=132 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=132
-fuel 132 tripped fuel-exhausted consumed=133 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=133
-fuel 133 tripped fuel-exhausted consumed=134 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=134
-fuel 134 tripped fuel-exhausted consumed=135 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=135
-fuel 135 tripped fuel-exhausted consumed=136 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=136
-fuel 136 tripped fuel-exhausted consumed=137 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=137
-fuel 137 complete rows=5 digest=939ad9905a97bf6a | fuel=137
+fuel 4 tripped fuel-exhausted consumed=5 certain prefix=false rows=0 digest=4e09856ef332be22 | fuel=5
+fuel 5..=6 x2 tripped fuel-exhausted consumed=7 certain prefix=false rows=0 digest=4e09856ef332be22 | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=9
+fuel 9 tripped fuel-exhausted consumed=10 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=10
+fuel 10 tripped fuel-exhausted consumed=11 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=11
+fuel 11..=12 x2 tripped fuel-exhausted consumed=13 certain prefix=false rows=1 digest=ecad05666178c0ce | fuel=13
+fuel 13 tripped fuel-exhausted consumed=14 certain prefix=false rows=2 digest=8045181395102c04 | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 certain prefix=false rows=2 digest=8045181395102c04 | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 certain prefix=false rows=2 digest=8045181395102c04 | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 certain prefix=false rows=2 digest=8045181395102c04 | fuel=17
+fuel 17..=18 x2 tripped fuel-exhausted consumed=19 certain prefix=false rows=2 digest=8045181395102c04 | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=22
+fuel 22..=28 x7 tripped fuel-exhausted consumed=29 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=29
+fuel 29 tripped fuel-exhausted consumed=30 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=30
+fuel 30..=31 x2 tripped fuel-exhausted consumed=32 certain prefix=false rows=3 digest=20f5ada8b786b326 | fuel=32
+fuel 32 tripped fuel-exhausted consumed=33 certain prefix=false rows=4 digest=671dda9d837de759 | fuel=33
+fuel 33 tripped fuel-exhausted consumed=34 certain prefix=false rows=4 digest=671dda9d837de759 | fuel=34
+fuel 34 tripped fuel-exhausted consumed=35 certain prefix=true rows=4 digest=671dda9d837de759 | fuel=35
+fuel 35..=41 x7 tripped fuel-exhausted consumed=42 certain prefix=true rows=4 digest=671dda9d837de759 | fuel=42
+fuel 42..=43 x2 tripped fuel-exhausted consumed=44 certain prefix=true rows=4 digest=671dda9d837de759 | fuel=44
+fuel 44 tripped fuel-exhausted consumed=45 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=45
+fuel 45 tripped fuel-exhausted consumed=46 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=46
+fuel 46 tripped fuel-exhausted consumed=47 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=47
+fuel 47 tripped fuel-exhausted consumed=48 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=48
+fuel 48 tripped fuel-exhausted consumed=49 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=49
+fuel 49 tripped fuel-exhausted consumed=50 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=50
+fuel 50 tripped fuel-exhausted consumed=51 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=51
+fuel 51 tripped fuel-exhausted consumed=52 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=52
+fuel 52 tripped fuel-exhausted consumed=53 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=53
+fuel 53 tripped fuel-exhausted consumed=54 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=54
+fuel 54 tripped fuel-exhausted consumed=55 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=55
+fuel 55 tripped fuel-exhausted consumed=56 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=56
+fuel 56 tripped fuel-exhausted consumed=57 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=57
+fuel 57 tripped fuel-exhausted consumed=58 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=58
+fuel 58 tripped fuel-exhausted consumed=59 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=59
+fuel 59 tripped fuel-exhausted consumed=60 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=60
+fuel 60 tripped fuel-exhausted consumed=61 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=61
+fuel 61 tripped fuel-exhausted consumed=62 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=62
+fuel 62 tripped fuel-exhausted consumed=63 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=63
+fuel 63 tripped fuel-exhausted consumed=64 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=64
+fuel 64 tripped fuel-exhausted consumed=65 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=65
+fuel 65 tripped fuel-exhausted consumed=66 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=66
+fuel 66 tripped fuel-exhausted consumed=67 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=67
+fuel 67 tripped fuel-exhausted consumed=68 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=68
+fuel 68 tripped fuel-exhausted consumed=69 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=69
+fuel 69 tripped fuel-exhausted consumed=70 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=70
+fuel 70 tripped fuel-exhausted consumed=71 certain prefix=true rows=5 digest=939ad9905a97bf6a | fuel=71
+fuel 71 complete rows=5 digest=939ad9905a97bf6a | fuel=71
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-11> Triple terms - Pattern - literals or triple terms
 solutions vars=["s"] rows=4 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example/s4> .
@@ -30725,39 +30715,33 @@ solutions vars=["o", "q", "z"] rows=7 ordered=false
 | _:c14n6 <urn:purrdf:conformance:var:o> <http://example/o> .
 | _:c14n6 <urn:purrdf:conformance:var:q> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> .
 | _:c14n6 <urn:purrdf:conformance:var:z> <<( <http://example/s> <http://example/p1> <http://example/o> )>> .
-metered complete fuel=41 answer-rows=7 intermediate-cells=21
-explain fuel=41 answer-rows=7 intermediate-cells=21
+metered complete fuel=28 answer-rows=7 intermediate-cells=21
+explain fuel=28 answer-rows=7 intermediate-cells=21
 node 0 depth=0 Project rows=7 cells=21 algebra-node-entry=1 committed-output-row=7
-node 1 depth=1 Bgp rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=25
+node 1 depth=1 Bgp rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=12
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=2
-fuel 2..=12 x11 tripped fuel-exhausted consumed=13 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=13
-fuel 13..=14 x2 tripped fuel-exhausted consumed=15 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=16
-fuel 16..=17 x2 tripped fuel-exhausted consumed=18 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=18
-fuel 18..=19 x2 tripped fuel-exhausted consumed=20 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=20
-fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=21
-fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=1 digest=d02507994b911e6f | fuel=22
-fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=2 digest=34b474bf75b182f5 | fuel=23
-fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=3 digest=79d418a8d46db9db | fuel=24
-fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=4 digest=4683567770500688 | fuel=25
-fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=5 digest=9ae6ae73dd07dec9 | fuel=26
-fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=6 digest=9c1f01b959c002e6 | fuel=27
+fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=3
+fuel 3..=6 x4 tripped fuel-exhausted consumed=7 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=7
+fuel 7..=8 x2 tripped fuel-exhausted consumed=9 certain prefix=true rows=0 digest=fdbd98730629aed5 | fuel=9
+fuel 9 tripped fuel-exhausted consumed=10 certain prefix=true rows=2 digest=34b474bf75b182f5 | fuel=10
+fuel 10..=11 x2 tripped fuel-exhausted consumed=12 certain prefix=true rows=3 digest=79d418a8d46db9db | fuel=12
+fuel 12..=13 x2 tripped fuel-exhausted consumed=14 certain prefix=true rows=5 digest=9ae6ae73dd07dec9 | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=25
+fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=26
+fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=27
 fuel 27 tripped fuel-exhausted consumed=28 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=28
-fuel 28 tripped fuel-exhausted consumed=29 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=29
-fuel 29 tripped fuel-exhausted consumed=30 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=30
-fuel 30 tripped fuel-exhausted consumed=31 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=31
-fuel 31 tripped fuel-exhausted consumed=32 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=32
-fuel 32 tripped fuel-exhausted consumed=33 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=33
-fuel 33 tripped fuel-exhausted consumed=34 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=34
-fuel 34 tripped fuel-exhausted consumed=35 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=35
-fuel 35 tripped fuel-exhausted consumed=36 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=36
-fuel 36 tripped fuel-exhausted consumed=37 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=37
-fuel 37 tripped fuel-exhausted consumed=38 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=38
-fuel 38 tripped fuel-exhausted consumed=39 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=39
-fuel 39 tripped fuel-exhausted consumed=40 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=40
-fuel 40 tripped fuel-exhausted consumed=41 certain prefix=true rows=7 digest=6e2d7fcbcfbb1955 | fuel=41
-fuel 41..=64 x24 complete rows=7 digest=6e2d7fcbcfbb1955 | fuel=41
+fuel 28..=64 x37 complete rows=7 digest=6e2d7fcbcfbb1955 | fuel=28
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-3> Reified triples - Pattern - Variable for reified triple reifier
 solutions vars=["s", "o", "z"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:o> <http://example/reifier> .
@@ -30799,98 +30783,89 @@ solutions vars=["s", "p", "o", "Q"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:o> <http://example/o> .
 | _:c14n0 <urn:purrdf:conformance:var:p> <http://example/p2> .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example/s> .
-metered complete fuel=137 answer-rows=1 intermediate-cells=4
-explain fuel=137 answer-rows=1 intermediate-cells=4
+metered complete fuel=59 answer-rows=1 intermediate-cells=4
+explain fuel=59 answer-rows=1 intermediate-cells=4
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
-node 1 depth=1 Bgp rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=133
+node 1 depth=1 Bgp rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=55
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=2
 fuel 2..=12 x11 tripped fuel-exhausted consumed=13 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=13
-fuel 13..=23 x11 tripped fuel-exhausted consumed=24 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=24
-fuel 24..=34 x11 tripped fuel-exhausted consumed=35 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=35
-fuel 35..=45 x11 tripped fuel-exhausted consumed=46 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=46
-fuel 46..=56 x11 tripped fuel-exhausted consumed=57 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=57
-fuel 57..=67 x11 tripped fuel-exhausted consumed=68 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=68
-fuel 68..=78 x11 tripped fuel-exhausted consumed=79 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=79
-fuel 79..=89 x11 tripped fuel-exhausted consumed=90 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=90
-fuel 90..=100 x11 tripped fuel-exhausted consumed=101 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=101
-fuel 101..=111 x11 tripped fuel-exhausted consumed=112 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=112
-fuel 112..=122 x11 tripped fuel-exhausted consumed=123 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=123
-fuel 123..=133 x11 tripped fuel-exhausted consumed=134 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=134
-fuel 134 tripped fuel-exhausted consumed=135 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=135
-fuel 135 tripped fuel-exhausted consumed=136 certain prefix=true rows=1 digest=8d1559ee05461151 | fuel=136
-fuel 136 tripped fuel-exhausted consumed=137 certain prefix=true rows=1 digest=8d1559ee05461151 | fuel=137
-fuel 137 complete rows=1 digest=8d1559ee05461151 | fuel=137
+fuel 13..=16 x4 tripped fuel-exhausted consumed=17 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=17
+fuel 17..=20 x4 tripped fuel-exhausted consumed=21 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=21
+fuel 21..=24 x4 tripped fuel-exhausted consumed=25 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=25
+fuel 25..=28 x4 tripped fuel-exhausted consumed=29 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=29
+fuel 29..=33 x5 tripped fuel-exhausted consumed=34 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=34
+fuel 34..=38 x5 tripped fuel-exhausted consumed=39 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=39
+fuel 39..=43 x5 tripped fuel-exhausted consumed=44 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=44
+fuel 44..=48 x5 tripped fuel-exhausted consumed=49 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=49
+fuel 49 tripped fuel-exhausted consumed=50 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=50
+fuel 50..=54 x5 tripped fuel-exhausted consumed=55 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=55
+fuel 55 tripped fuel-exhausted consumed=56 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=56
+fuel 56 tripped fuel-exhausted consumed=57 certain prefix=true rows=0 digest=824725e73c9870ca | fuel=57
+fuel 57 tripped fuel-exhausted consumed=58 certain prefix=true rows=1 digest=8d1559ee05461151 | fuel=58
+fuel 58 tripped fuel-exhausted consumed=59 certain prefix=true rows=1 digest=8d1559ee05461151 | fuel=59
+fuel 59..=64 x6 complete rows=1 digest=8d1559ee05461151 | fuel=59
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-6> Reified triples - Pattern - Nesting 1
 solutions vars=["q"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:q> <http://example/o> .
-metered complete fuel=65 answer-rows=1 intermediate-cells=1
-explain fuel=65 answer-rows=1 intermediate-cells=1
+metered complete fuel=7 answer-rows=1 intermediate-cells=1
+explain fuel=7 answer-rows=1 intermediate-cells=1
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
-node 1 depth=1 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=61
+node 1 depth=1 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=3
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=2
-fuel 2..=6 x5 tripped fuel-exhausted consumed=7 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=7
-fuel 7..=17 x11 tripped fuel-exhausted consumed=18 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=18
-fuel 18..=28 x11 tripped fuel-exhausted consumed=29 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=29
-fuel 29..=39 x11 tripped fuel-exhausted consumed=40 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=40
-fuel 40..=50 x11 tripped fuel-exhausted consumed=51 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=51
-fuel 51..=61 x11 tripped fuel-exhausted consumed=62 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=62
-fuel 62 tripped fuel-exhausted consumed=63 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=63
-fuel 63 tripped fuel-exhausted consumed=64 certain prefix=true rows=1 digest=2679dd786931a1b3 | fuel=64
-fuel 64 tripped fuel-exhausted consumed=65 certain prefix=true rows=1 digest=2679dd786931a1b3 | fuel=65
-fuel 65 complete rows=1 digest=2679dd786931a1b3 | fuel=65
+fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=0 digest=2d49262983be06e4 | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=1 digest=2679dd786931a1b3 | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=1 digest=2679dd786931a1b3 | fuel=7
+fuel 7..=64 x58 complete rows=1 digest=2679dd786931a1b3 | fuel=7
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-7> Reified triples - Pattern - Nesting 2
 solutions vars=["s", "x", "q"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:q> <http://example/o> .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example/s> .
 | _:c14n0 <urn:purrdf:conformance:var:x> <http://example/z> .
-metered complete fuel=71 answer-rows=1 intermediate-cells=3
-explain fuel=71 answer-rows=1 intermediate-cells=3
+metered complete fuel=7 answer-rows=1 intermediate-cells=3
+explain fuel=7 answer-rows=1 intermediate-cells=3
 node 0 depth=0 Project rows=1 cells=3 algebra-node-entry=1 committed-output-row=1
-node 1 depth=1 Bgp rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=67
+node 1 depth=1 Bgp rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=3
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=2
-fuel 2..=12 x11 tripped fuel-exhausted consumed=13 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=13
-fuel 13..=23 x11 tripped fuel-exhausted consumed=24 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=24
-fuel 24..=34 x11 tripped fuel-exhausted consumed=35 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=35
-fuel 35..=45 x11 tripped fuel-exhausted consumed=46 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=46
-fuel 46..=56 x11 tripped fuel-exhausted consumed=57 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=57
-fuel 57..=67 x11 tripped fuel-exhausted consumed=68 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=68
-fuel 68 tripped fuel-exhausted consumed=69 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=69
-fuel 69 tripped fuel-exhausted consumed=70 certain prefix=true rows=1 digest=394fc98cec5c0afe | fuel=70
-fuel 70 tripped fuel-exhausted consumed=71 certain prefix=true rows=1 digest=394fc98cec5c0afe | fuel=71
-fuel 71 complete rows=1 digest=394fc98cec5c0afe | fuel=71
+fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=3
+fuel 3 tripped fuel-exhausted consumed=4 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=0 digest=153a1203f15849ed | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=1 digest=394fc98cec5c0afe | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=1 digest=394fc98cec5c0afe | fuel=7
+fuel 7..=64 x58 complete rows=1 digest=394fc98cec5c0afe | fuel=7
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-8> Reified triples - Pattern - Match and nesting
 solutions vars=["t", "s", "p", "o"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:o> <http://example/o> .
 | _:c14n0 <urn:purrdf:conformance:var:p> <http://example/p2> .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example/s> .
 | _:c14n0 <urn:purrdf:conformance:var:t> <http://example/reifier2> .
-metered complete fuel=18 answer-rows=1 intermediate-cells=4
-explain fuel=18 answer-rows=1 intermediate-cells=4
+metered complete fuel=8 answer-rows=1 intermediate-cells=4
+explain fuel=8 answer-rows=1 intermediate-cells=4
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
-node 1 depth=1 Bgp rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=14
+node 1 depth=1 Bgp rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=4
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=3
-fuel 3..=13 x11 tripped fuel-exhausted consumed=14 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=14
-fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=16
-fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=1 digest=c7e090d8d78d9bd2 | fuel=17
-fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=1 digest=c7e090d8d78d9bd2 | fuel=18
-fuel 18..=64 x47 complete rows=1 digest=c7e090d8d78d9bd2 | fuel=18
+fuel 3 tripped fuel-exhausted consumed=4 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=4
+fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=0 digest=1184cacf6a4fb4f1 | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=1 digest=c7e090d8d78d9bd2 | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=1 digest=c7e090d8d78d9bd2 | fuel=8
+fuel 8..=64 x57 complete rows=1 digest=c7e090d8d78d9bd2 | fuel=8
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-8-nomatch> Reified triples - Pattern - Match for non-equal reifier and nesting
 solutions vars=["t"] rows=0 ordered=false
-metered complete fuel=14
-explain fuel=14
+metered complete fuel=3
+explain fuel=3
 node 0 depth=0 Project rows=0 cells=0 algebra-node-entry=1
-node 1 depth=1 Bgp rows=0 cells=0 algebra-node-entry=1 bgp-candidate-quad=12
+node 1 depth=1 Bgp rows=0 cells=0 algebra-node-entry=1 bgp-candidate-quad=1
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=0e23d6acbeb8935b | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=0e23d6acbeb8935b | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=true rows=0 digest=0e23d6acbeb8935b | fuel=3
-fuel 3..=13 x11 tripped fuel-exhausted consumed=14 certain prefix=true rows=0 digest=0e23d6acbeb8935b | fuel=14
-fuel 14..=64 x51 complete rows=0 digest=0e23d6acbeb8935b | fuel=14
+fuel 3..=64 x62 complete rows=0 digest=0e23d6acbeb8935b | fuel=3
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-9> Reified triples - Pattern - Same variable
 solutions vars=["s", "p", "z"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:p> <http://example/p> .
