@@ -3,6 +3,9 @@
 
 //! Real header-read and allocation controls for shallow segmented publications.
 
+#[path = "support/statistics.rs"]
+mod statistics;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -558,6 +561,7 @@ fn effective_annotation_classification_uses_original_chronology_and_first_occurr
     let orphan = statement_layer([&[], &[], &annotations], SegmentedLayerMetadata::default());
     let ordinary = statement_layer([&annotations, &[], &[]], SegmentedLayerMetadata::default());
     let mut stack = SegmentedStack::default();
+    let mut revisions = purrdf_core::FastSet::default();
     for (layers, expected) in [
         (vec![Arc::clone(&initial)], (0, 1, 4)),
         (vec![Arc::clone(&initial), Arc::clone(&removal)], (4, 0, 0)),
@@ -567,9 +571,36 @@ fn effective_annotation_classification_uses_original_chronology_and_first_occurr
         ),
         (vec![Arc::clone(&initial), ordinary], (0, 1, 4)),
     ] {
+        let layered = layers.len() > 1;
         stack.publish(layers, limits()).unwrap();
         let snapshot = stack.snapshot().unwrap();
         let query = snapshot.query(limits()).unwrap();
+        let untouched = query.touched_terms();
+        let before = query.statistics().unwrap().fingerprint();
+        query
+            .statistics()
+            .unwrap()
+            .stream_rows(
+                purrdf_core::GraphMatch::Any,
+                purrdf_core::StatisticsStream::Asserted,
+            )
+            .unwrap();
+        assert_eq!(
+            query.touched_terms(),
+            untouched,
+            "unbound statistics do not mint dictionary values"
+        );
+        let predicate = query
+            .term_id_by_value(&TermValue::iri("urn:p"))
+            .unwrap()
+            .unwrap();
+        let revision =
+            statistics::assert_chronological_counts(&query, predicate, expected.into(), layered);
+        assert_eq!(revision, before);
+        assert!(
+            revisions.insert(revision),
+            "different publication prefixes have different revisions"
+        );
         assert_eq!(
             (
                 query.quads().count(),
@@ -1076,6 +1107,7 @@ fn final_query_readiness_checks_untouched_evicted_descriptors() {
         .intern_source_term(SegmentedStackSource::Layer(1), ids[0])
         .unwrap();
     drift.store(true, Ordering::Relaxed);
+    assert!(query.statistics().is_none());
     assert_eq!(query.check_ready(), Err(SegmentedError::SnapshotMismatch));
     drift.store(false, Ordering::Relaxed);
     assert_eq!(

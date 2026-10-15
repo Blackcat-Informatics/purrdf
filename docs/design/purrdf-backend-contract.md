@@ -180,6 +180,24 @@ target-predicate counts, including ordinary and annotation rows; tighter native
 component ranges can lower the estimate. An unavailable statistic stays unknown.
 These estimates do not authorize output allocation or certify an output bound.
 
+Chronological paged and segmented views expose their physical-source evidence
+through one shared combiner. A single uncut source retains its exact rows and
+positional domain sizes. Across sources or removals, the physical population
+bounds the effective set; duplicate suppression and tombstones are not guessed
+away by subtraction. Ordinary and annotation populations are combined before
+bounding either stream, since reifier changes can reclassify rows. A removal-only
+head still invalidates exactness even when it has no physical page. Complete
+pattern counts combine each physical stream once. Distinct domains in unrelated
+source dictionaries remain unknown until a common-identity union is available;
+their sizes are never added or presented as exact.
+
+Segmented planning translates only bound probe values through its existing lazy
+identity owner. Unbound stream counts read headers without minting terms. Native
+head/removal revisions are frozen at publication; query opening and historical
+snapshot copies do not traverse their dictionaries. Revisions include the pinned
+source order and immutable metadata and do not change as the read cache warms.
+Metadata point reads retain the source's original descriptor and failure checks.
+
 Native rule planning consumes the same provider through
 `purrdf_datalog::plan::Stratified::plan_with_statistics`. Its caller resolves
 authored atoms into probes in the provider's identity space. Statistical counts

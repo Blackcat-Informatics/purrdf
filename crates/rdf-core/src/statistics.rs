@@ -9,6 +9,8 @@
 
 use crate::{GraphMatch, ProbePattern, RdfTermKind, ViewTermId};
 
+pub(crate) mod layered;
+
 /// The evidence behind one statistical count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StatisticsAccuracy {
