@@ -62,7 +62,7 @@ use std::fmt;
 
 use crate::clause::ClauseAtom;
 use crate::dictionary::TermDictionary;
-use crate::store::{RelationStore, TermInterner};
+use crate::store::{Arity, RelationStore, StoreShape, TermInterner};
 
 /// What a [`Guard`] reads besides its declared inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -171,14 +171,14 @@ impl Guard {
 /// — a guard may read a variable an atom of the group binds, and may bind variables a
 /// later guard reads. Every atom here is positive: the group is negated as a whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Negation {
+pub struct Negation<const N: usize = 4> {
     /// The group's atoms, in authored order; never negated.
-    atoms: Vec<ClauseAtom>,
+    atoms: Vec<ClauseAtom<N>>,
     /// The group's guards, in authored order.
     guards: Vec<Guard>,
 }
 
-impl Negation {
+impl<const N: usize> Negation<N> {
     /// A negated conjunction of `atoms` and `guards`.
     ///
     /// # Panics
@@ -187,7 +187,7 @@ impl Negation {
     /// would block every solution), if an atom is itself negated, or if a guard reads
     /// the evaluation model — the group's truth must be a function of the facts it
     /// matches, or the negation would be decided by code no stratification can see.
-    pub fn new(atoms: Vec<ClauseAtom>, guards: Vec<Guard>) -> Self {
+    pub fn new(atoms: Vec<ClauseAtom<N>>, guards: Vec<Guard>) -> Self {
         assert!(
             !atoms.is_empty() || !guards.is_empty(),
             "a negated conjunction may not be empty"
@@ -204,7 +204,7 @@ impl Negation {
     }
 
     /// The group's atoms, in authored order.
-    pub fn atoms(&self) -> &[ClauseAtom] {
+    pub fn atoms(&self) -> &[ClauseAtom<N>] {
         &self.atoms
     }
 
@@ -230,7 +230,10 @@ pub enum GuardSite {
 
 /// One guard evaluation request.
 #[derive(Debug)]
-pub struct GuardCall<'a, D: TermDictionary = TermInterner> {
+pub struct GuardCall<'a, D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The rule's index in authored program order.
     pub rule: usize,
     /// Which of the rule's guards this is.
@@ -240,12 +243,15 @@ pub struct GuardCall<'a, D: TermDictionary = TermInterner> {
     /// The lexical surfaces bound to [`Guard::inputs`], in the same order.
     pub inputs: &'a [&'a str],
     /// The evaluation model at the point the rule runs.
-    pub model: &'a RelationStore<D>,
+    pub model: &'a RelationStore<D, N>,
 }
 
-impl<D: TermDictionary> Copy for GuardCall<'_, D> {}
+impl<D: TermDictionary, const N: usize> Copy for GuardCall<'_, D, N> where Arity<N>: StoreShape<N> {}
 
-impl<D: TermDictionary> Clone for GuardCall<'_, D> {
+impl<D: TermDictionary, const N: usize> Clone for GuardCall<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     fn clone(&self) -> Self {
         *self
     }
@@ -257,7 +263,10 @@ impl<D: TermDictionary> Clone for GuardCall<'_, D> {
 /// what an empty answer, an empty row and several rows mean — or `Err` with a message,
 /// which aborts the evaluation as [`EvalError::Guard`](crate::seminaive::EvalError::Guard):
 /// a guard that could not decide is never read as a guard that said no.
-pub trait GuardEvaluator<D: TermDictionary = TermInterner> {
+pub trait GuardEvaluator<D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Evaluate one guard call.
     ///
     /// # Errors
@@ -265,7 +274,7 @@ pub trait GuardEvaluator<D: TermDictionary = TermInterner> {
     /// A typed source or storage refusal, or a message naming why evaluation failed.
     fn evaluate(
         &self,
-        call: &GuardCall<'_, D>,
+        call: &GuardCall<'_, D, N>,
     ) -> Result<Vec<Vec<String>>, CallbackError<D::Error>>;
 }
 
@@ -325,10 +334,13 @@ purrdf_lex::variant_from!(impl<E> CallbackError<E> { Evaluation(&str) as ToStrin
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoGuards;
 
-impl<D: TermDictionary> GuardEvaluator<D> for NoGuards {
+impl<D: TermDictionary, const N: usize> GuardEvaluator<D, N> for NoGuards
+where
+    Arity<N>: StoreShape<N>,
+{
     fn evaluate(
         &self,
-        call: &GuardCall<'_, D>,
+        call: &GuardCall<'_, D, N>,
     ) -> Result<Vec<Vec<String>>, CallbackError<D::Error>> {
         Err(format!(
             "rule {} carries guard {:?}, but the evaluation was given no guard evaluator",
@@ -387,7 +399,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "may not be empty")]
     fn an_empty_negated_conjunction_is_refused() {
-        let _ = Negation::new(Vec::new(), Vec::new());
+        let _: Negation = Negation::new(Vec::new(), Vec::new());
     }
 
     #[test]

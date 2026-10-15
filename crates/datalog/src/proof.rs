@@ -77,11 +77,9 @@ use hashbrown::HashTable;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::id::ProofId;
-use crate::plan::{
-    ATOM_ARITY, POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT,
-};
+use crate::plan::{POSITION_OBJECT, POSITION_SUBJECT};
 use crate::seminaive::Evaluation;
-use crate::store::{Bound, Fact, RelationStore};
+use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInterner};
 
 // ── The wire format's fixed vocabulary ──────────────────────────────────────────
 
@@ -90,6 +88,7 @@ use crate::store::{Bound, Fact, RelationStore};
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
 const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-proof-v1");
+const TRIPLE_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-triple-proof-v1");
 
 /// Wire kind byte: an axiom (assertion) leaf.
 const KIND_AXIOM: u8 = 0;
@@ -104,12 +103,15 @@ const KIND_BY_RULE: u8 = 1;
 /// Every variant is a NORMAL rejection of an invalid proof, never an engine fault: a checker
 /// that could not tell a bad proof from a good one would defeat the point of having one.
 ///
-/// Every [`Fact`] payload is boxed. A rejection travels through a `Result` whose success arm
+/// Every [`ShapeFact`] payload is boxed. A rejection travels through a `Result` whose success arm
 /// is one fact, and four owned surfaces per inlined fact would make the error arm several
 /// times wider than the answer it displaces on every call, including the calls that succeed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum ProofError {
+pub enum ProofError<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Native capacity or allocation refused; this is not an invalid-proof verdict.
     Storage(StorageError),
     /// The proof is not a well-formed term: a reference outside the arena, a premise that
@@ -125,7 +127,7 @@ pub enum ProofError {
     /// reported here, because the EDB is the only extension an axiom may appeal to.
     NotAsserted {
         /// The fact that was claimed as given but is not seeded.
-        goal: Box<Fact>,
+        goal: Box<ShapeFact<N>>,
     },
     /// A rule application names a clause index the program does not have.
     UnknownRule {
@@ -159,7 +161,7 @@ pub enum ProofError {
         /// The unmatched atom's index in the clause's AUTHORED body.
         body_position: usize,
         /// The fact the premise actually proved.
-        proven: Box<Fact>,
+        proven: Box<ShapeFact<N>>,
     },
     /// A negated body atom IS satisfied in the model, so the step it guards does not hold.
     NegatedPremiseSatisfied {
@@ -192,21 +194,24 @@ pub enum ProofError {
         /// The cited clause index.
         rule: usize,
         /// The conclusion re-derived by the checker.
-        derived: Box<Fact>,
+        derived: Box<ShapeFact<N>>,
         /// The conclusion the proof claimed.
-        stated: Box<Fact>,
+        stated: Box<ShapeFact<N>>,
     },
 }
 
 /// Render a fact as `subject predicate object graph`, for a diagnostic.
-fn render(fact: &Fact) -> String {
-    format!(
-        "{} {} {} {}",
-        fact.subject, fact.predicate, fact.object, fact.graph
-    )
+fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+where
+    Arity<N>: StoreShape<N>,
+{
+    Arity::<N>::fact_terms(fact).join(" ")
 }
 
-impl fmt::Display for ProofError {
+impl<const N: usize> fmt::Display for ProofError<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => error.fmt(f),
@@ -214,7 +219,7 @@ impl fmt::Display for ProofError {
             Self::NotAsserted { goal } => write!(
                 f,
                 "the axiom {} is not in the seeded EDB, so it was not given",
-                render(goal)
+                render::<N>(goal)
             ),
             Self::UnknownRule { rule } => {
                 write!(
@@ -243,7 +248,7 @@ impl fmt::Display for ProofError {
             } => write!(
                 f,
                 "clause {rule} body atom {body_position} does not match the premise fact {}",
-                render(proven)
+                render::<N>(proven)
             ),
             Self::NegatedPremiseSatisfied {
                 rule,
@@ -268,16 +273,16 @@ impl fmt::Display for ProofError {
             } => write!(
                 f,
                 "clause {rule} derives {} from the checked premises, not the stated {}",
-                render(derived),
-                render(stated)
+                render::<N>(derived),
+                render::<N>(stated)
             ),
         }
     }
 }
 
-impl std::error::Error for ProofError {}
+impl<const N: usize> std::error::Error for ProofError<N> where Arity<N>: StoreShape<N> {}
 
-purrdf_lex::variant_from!(ProofError { Storage(StorageError) });
+purrdf_lex::variant_from!(impl [const N: usize] ProofError<N> where [Arity<N>: StoreShape<N>] { Storage(StorageError) });
 
 // ── The term ────────────────────────────────────────────────────────────────────
 
@@ -287,17 +292,20 @@ purrdf_lex::variant_from!(ProofError { Storage(StorageError) });
 /// by a named clause. `premises` hold [`ProofId`]s of nodes interned EARLIER, so the term
 /// set is acyclic by construction and a checker can process it in ascending id order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ProofTerm {
+enum ProofTerm<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// A fact was given: it must be a member of the seeded EDB.
     Axiom {
         /// The asserted fact.
-        goal: Fact,
+        goal: ShapeFact<N>,
     },
     /// A conclusion follows from premises by the clause at this authored index.
     ByRule {
         /// The STATED conclusion. The checker never reads it as an input to re-derivation;
         /// it only compares its own result against it.
-        goal: Fact,
+        goal: ShapeFact<N>,
         /// The producing clause's index in authored program order.
         rule: usize,
         /// One premise per POSITIVE body atom, in authored body order.
@@ -305,9 +313,12 @@ enum ProofTerm {
     },
 }
 
-impl ProofTerm {
+impl<const N: usize> ProofTerm<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Borrow the complete identity before any derived-premise allocation.
-    fn identity(&self) -> ProofIdentity<'_> {
+    fn identity(&self) -> ProofIdentity<'_, N> {
         match self {
             Self::Axiom { goal } => (goal, None),
             Self::ByRule {
@@ -319,7 +330,7 @@ impl ProofTerm {
     }
 
     /// The conclusion this node states.
-    fn goal(&self) -> &Fact {
+    fn goal(&self) -> &ShapeFact<N> {
         match self {
             Self::Axiom { goal } | Self::ByRule { goal, .. } => goal,
         }
@@ -327,11 +338,14 @@ impl ProofTerm {
 }
 
 /// An axiom or rule application, borrowing all lexical and premise payloads.
-type ProofIdentity<'a> = (&'a Fact, Option<(usize, &'a [ProofId])>);
+type ProofIdentity<'a, const N: usize> = (&'a ShapeFact<N>, Option<(usize, &'a [ProofId])>);
 
 /// Fold `fact`'s four length-prefixed surfaces into `hasher`.
-fn hash_fact(hasher: &mut impl Hasher, fact: &Fact) {
-    for surface in [&fact.subject, &fact.predicate, &fact.object, &fact.graph] {
+fn hash_fact<const N: usize>(hasher: &mut impl Hasher, fact: &ShapeFact<N>)
+where
+    Arity<N>: StoreShape<N>,
+{
+    for surface in Arity::<N>::fact_terms(fact) {
         hasher.write_u64(surface.len() as u64);
         hasher.write(surface.as_bytes());
     }
@@ -344,16 +358,19 @@ fn hash_fact(hasher: &mut impl Hasher, fact: &Fact) {
 /// table this feeds is NEVER iterated and the hash is NEVER persisted — a proof's stable
 /// identity is [`ProofArena::digest`], a BLAKE3 digest over the canonical encoding — so the
 /// hasher's lack of version stability cannot reach an output.
-fn term_hash((goal, derivation): ProofIdentity<'_>) -> u64 {
+fn term_hash<const N: usize>((goal, derivation): ProofIdentity<'_, N>) -> u64
+where
+    Arity<N>: StoreShape<N>,
+{
     let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     match derivation {
         None => {
             hasher.write_u8(KIND_AXIOM);
-            hash_fact(&mut hasher, goal);
+            hash_fact::<N>(&mut hasher, goal);
         }
         Some((rule, premises)) => {
             hasher.write_u8(KIND_BY_RULE);
-            hash_fact(&mut hasher, goal);
+            hash_fact::<N>(&mut hasher, goal);
             hasher.write_u64(rule as u64);
             hasher.write_u64(premises.len() as u64);
             for premise in premises {
@@ -379,33 +396,43 @@ fn term_hash((goal, derivation): ProofIdentity<'_>) -> u64 {
 /// * `model` decides negation-as-failure, and nothing else. See the [module docs](self) for
 ///   why a finite proof cannot carry that obligation itself.
 #[derive(Debug, Clone, Copy)]
-pub struct ProofContext<'a> {
+pub struct ProofContext<'a, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The clause program, in authored order.
-    rules: &'a [DlClause],
+    rules: &'a [DlClause<N>],
     /// The seeded EDB — the axioms.
-    edb: &'a RelationStore,
+    edb: &'a RelationStore<TermInterner, N>,
     /// The saturated model — where negation-as-failure is decided.
-    model: &'a RelationStore,
+    model: &'a RelationStore<TermInterner, N>,
 }
 
-impl<'a> ProofContext<'a> {
+impl<'a, const N: usize> ProofContext<'a, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// A context over a program, its seeded EDB and the model the evaluation produced.
-    pub fn new(rules: &'a [DlClause], edb: &'a RelationStore, model: &'a RelationStore) -> Self {
+    pub fn new(
+        rules: &'a [DlClause<N>],
+        edb: &'a RelationStore<TermInterner, N>,
+        model: &'a RelationStore<TermInterner, N>,
+    ) -> Self {
         Self { rules, edb, model }
     }
 
     /// The clause program, in authored order.
-    pub fn rules(&self) -> &'a [DlClause] {
+    pub fn rules(&self) -> &'a [DlClause<N>] {
         self.rules
     }
 
     /// The seeded EDB — the only extension an axiom may appeal to.
-    pub fn edb(&self) -> &'a RelationStore {
+    pub fn edb(&self) -> &'a RelationStore<TermInterner, N> {
         self.edb
     }
 
     /// The saturated model — where negation-as-failure is decided.
-    pub fn model(&self) -> &'a RelationStore {
+    pub fn model(&self) -> &'a RelationStore<TermInterner, N> {
         self.model
     }
 }
@@ -424,9 +451,12 @@ impl<'a> ProofContext<'a> {
 /// two arenas, and [`digest`](Self::digest) — not an arena-local id — is what says they are
 /// the same proof.
 #[derive(Debug, Clone, Default)]
-pub struct ProofArena {
+pub struct ProofArena<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The interned terms, indexed by [`ProofId`] slot.
-    terms: Vec<ProofTerm>,
+    terms: Vec<ProofTerm<N>>,
     /// Content hash → id, for O(1) interning. Probed, NEVER iterated: its order is a hash
     /// order and would be an illegal emission source.
     by_content: HashTable<ProofId>,
@@ -435,7 +465,17 @@ pub struct ProofArena {
     proof_limit: Option<u64>,
 }
 
-impl ProofArena {
+impl<const N: usize> ProofArena<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    const fn encoding_tag() -> Domain {
+        if N == 3 {
+            TRIPLE_PROOF_ENCODING_TAG
+        } else {
+            PROOF_ENCODING_TAG
+        }
+    }
     /// The number of interned terms.
     pub fn len(&self) -> usize {
         self.terms.len()
@@ -450,7 +490,7 @@ impl ProofArena {
     ///
     /// Constructing one asserts nothing — [`check`](Self::check) is what tests the claim,
     /// against the seeded EDB.
-    pub fn axiom(&mut self, goal: Fact) -> Result<ProofId, StorageError> {
+    pub fn axiom(&mut self, goal: ShapeFact<N>) -> Result<ProofId, StorageError> {
         self.intern(ProofTerm::Axiom { goal })
     }
 
@@ -469,7 +509,7 @@ impl ProofArena {
     /// [`ProofError::Malformed`] rejection instead.
     pub fn by_rule(
         &mut self,
-        goal: Fact,
+        goal: ShapeFact<N>,
         rule: usize,
         premises: &[ProofId],
     ) -> Result<ProofId, StorageError> {
@@ -480,7 +520,7 @@ impl ProofArena {
             );
         }
         let identity = (&goal, Some((rule, premises)));
-        let hash = term_hash(identity);
+        let hash = term_hash::<N>(identity);
         if let Some(id) = self.find(identity, hash) {
             return Ok(id);
         }
@@ -501,8 +541,8 @@ impl ProofArena {
     }
 
     /// Intern `term`, returning the existing id if an identical term is already held.
-    fn intern(&mut self, term: ProofTerm) -> Result<ProofId, StorageError> {
-        let hash = term_hash(term.identity());
+    fn intern(&mut self, term: ProofTerm<N>) -> Result<ProofId, StorageError> {
+        let hash = term_hash::<N>(term.identity());
         if let Some(id) = self.find(term.identity(), hash) {
             return Ok(id);
         }
@@ -512,7 +552,7 @@ impl ProofArena {
     }
 
     /// Probe the borrowed identity before any capacity or physical admission.
-    fn find(&self, identity: ProofIdentity<'_>, hash: u64) -> Option<ProofId> {
+    fn find(&self, identity: ProofIdentity<'_, N>, hash: u64) -> Option<ProofId> {
         let terms = &self.terms;
         self.by_content
             .find(hash, |&id| {
@@ -532,18 +572,18 @@ impl ProofArena {
             .map_err(|_| StorageError::AllocationFailed)?;
         self.by_content
             .try_reserve(1, |&id| {
-                term_hash(self.terms[id.resident_index()].identity())
+                term_hash::<N>(self.terms[id.resident_index()].identity())
             })
             .map_err(|_| StorageError::AllocationFailed)?;
         Ok(id)
     }
 
     /// Publish an already-admitted absent node under its original identity.
-    fn insert_missing(&mut self, term: ProofTerm, hash: u64, id: ProofId) {
+    fn insert_missing(&mut self, term: ProofTerm<N>, hash: u64, id: ProofId) {
         self.terms.push(term);
         let terms = &self.terms;
         self.by_content.insert_unique(hash, id, |&id| {
-            term_hash(terms[id.resident_index()].identity())
+            term_hash::<N>(terms[id.resident_index()].identity())
         });
     }
 
@@ -552,7 +592,7 @@ impl ProofArena {
     /// # Panics
     ///
     /// Panics if `id` was not minted by this arena.
-    pub fn goal(&self, id: ProofId) -> &Fact {
+    pub fn goal(&self, id: ProofId) -> &ShapeFact<N> {
         self.term(id).goal()
     }
 
@@ -596,7 +636,7 @@ impl ProofArena {
     /// Panics if `id` was not minted by this arena. Ids are per-arena handles, exactly as
     /// [`crate::store::TermInterner`]'s are, so a foreign id is a programming error rather
     /// than a data state.
-    fn term(&self, id: ProofId) -> &ProofTerm {
+    fn term(&self, id: ProofId) -> &ProofTerm<N> {
         id.slot_in(&self.terms, "ProofId", "proof")
     }
 
@@ -604,7 +644,7 @@ impl ProofArena {
 
     /// RE-DERIVE `root` against `ctx`, returning the conclusion the CHECKER computed.
     ///
-    /// This is the whole point of the module. The returned [`Fact`] is not read out of the
+    /// This is the whole point of the module. The returned [`ShapeFact`] is not read out of the
     /// proof — it is instantiated from the named clause's head under the substitution the
     /// checked premises forced. The proof's stated conclusion participates in exactly one
     /// way: as the value the derived conclusion is compared against, so a mismatch is a
@@ -618,9 +658,13 @@ impl ProofArena {
     /// Only the sub-DAG reachable from `root` is checked: an arena holding several proofs
     /// answers for the one it was asked about, and an unrelated defective term elsewhere in
     /// the arena neither excuses nor condemns it.
-    pub fn check(&self, root: ProofId, ctx: &ProofContext<'_>) -> Result<Fact, ProofError> {
+    pub fn check(
+        &self,
+        root: ProofId,
+        ctx: &ProofContext<'_, N>,
+    ) -> Result<ShapeFact<N>, ProofError<N>> {
         let reachable = self.reachable_from(root)?;
-        let mut proven: BTreeMap<usize, Fact> = BTreeMap::new();
+        let mut proven: BTreeMap<usize, ShapeFact<N>> = BTreeMap::new();
         for &index in &reachable {
             let fact = self.check_step(index, &proven, ctx)?;
             proven.insert(index, fact);
@@ -631,7 +675,7 @@ impl ProofArena {
     }
 
     /// A [`ProofError::Malformed`] carrying `detail`.
-    fn malformed(detail: &str) -> ProofError {
+    fn malformed(detail: &str) -> ProofError<N> {
         ProofError::Malformed {
             detail: detail.to_owned(),
         }
@@ -643,7 +687,7 @@ impl ProofArena {
     /// [`by_rule`](Self::by_rule) and [`decode`](Self::decode) both refuse a premise that
     /// does not already exist. The walk re-checks that invariant rather than assuming it, so
     /// a term set that somehow violated it is rejected instead of silently mis-checked.
-    fn reachable_from(&self, root: ProofId) -> Result<BTreeSet<usize>, ProofError> {
+    fn reachable_from(&self, root: ProofId) -> Result<BTreeSet<usize>, ProofError<N>> {
         if root.address()? >= self.terms.len() {
             return Err(Self::malformed("the root is outside this arena"));
         }
@@ -671,16 +715,13 @@ impl ProofArena {
     fn check_step(
         &self,
         index: usize,
-        proven: &BTreeMap<usize, Fact>,
-        ctx: &ProofContext<'_>,
-    ) -> Result<Fact, ProofError> {
+        proven: &BTreeMap<usize, ShapeFact<N>>,
+        ctx: &ProofContext<'_, N>,
+    ) -> Result<ShapeFact<N>, ProofError<N>> {
         match &self.terms[index] {
             ProofTerm::Axiom { goal } => {
                 // The seeded EDB, never the saturated model: see [`ProofContext`].
-                if ctx
-                    .edb
-                    .contains(&goal.subject, &goal.predicate, &goal.object, &goal.graph)
-                {
+                if ctx.edb.contains_row(Arity::<N>::fact_terms(goal)) {
                     Ok(goal.clone())
                 } else {
                     Err(ProofError::NotAsserted {
@@ -701,10 +742,10 @@ impl ProofArena {
         &self,
         rule: usize,
         premises: &[ProofId],
-        stated: &Fact,
-        proven: &BTreeMap<usize, Fact>,
-        ctx: &ProofContext<'_>,
-    ) -> Result<Fact, ProofError> {
+        stated: &ShapeFact<N>,
+        proven: &BTreeMap<usize, ShapeFact<N>>,
+        ctx: &ProofContext<'_, N>,
+    ) -> Result<ShapeFact<N>, ProofError<N>> {
         let clause = ctx
             .rules
             .get(rule)
@@ -724,7 +765,7 @@ impl ProofArena {
         // A negated body atom is a refutation obligation, not a premise, so the premises
         // pair with the POSITIVE atoms alone — in authored body order, which is the order
         // a `Derivation` reports its sources in.
-        let positive: Vec<(usize, &ClauseAtom)> = clause
+        let positive: Vec<(usize, &ClauseAtom<N>)> = clause
             .body()
             .iter()
             .enumerate()
@@ -745,7 +786,14 @@ impl ProofArena {
             let fact = proven.get(&premise.address()?).ok_or_else(|| {
                 Self::malformed("a premise was not established before the step that uses it")
             })?;
-            if !match_atom(atom, fact, &mut subst) {
+            if !match_atom(atom, fact, &mut subst)
+                || (atom.read_source() == crate::clause::ReadSource::Base
+                    && (!ctx.edb.has_base()
+                        || !ctx
+                            .edb
+                            .read_source(crate::clause::ReadSource::Base)
+                            .contains_row(Arity::<N>::fact_terms(fact))))
+            {
                 return Err(ProofError::PremiseMismatch {
                     rule,
                     body_position,
@@ -761,7 +809,18 @@ impl ProofArena {
             .enumerate()
             .filter(|(_, atom)| atom.is_negated())
         {
-            if negated_atom_is_satisfied(atom, &subst, ctx.model) {
+            let model = match atom.read_source() {
+                crate::clause::ReadSource::Evaluation => ctx.model,
+                crate::clause::ReadSource::Base if ctx.edb.has_base() => {
+                    ctx.edb.read_source(crate::clause::ReadSource::Base)
+                }
+                crate::clause::ReadSource::Base => {
+                    return Err(Self::malformed(
+                        "a base premise requires an explicit immutable base context",
+                    ));
+                }
+            };
+            if negated_atom_is_satisfied(atom, &subst, model) {
                 return Err(ProofError::NegatedPremiseSatisfied {
                     rule,
                     body_position,
@@ -822,13 +881,13 @@ impl ProofArena {
             .collect();
 
         let mut out = Vec::new();
-        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, Self::encoding_tag().as_bytes());
         out.extend_from_slice(&(order.len() as u64).to_le_bytes());
         for &index in &order {
             match &self.terms[index] {
                 ProofTerm::Axiom { goal } => {
                     out.push(KIND_AXIOM);
-                    frame_fact(&mut out, goal);
+                    frame_fact::<N>(&mut out, goal);
                 }
                 ProofTerm::ByRule {
                     goal,
@@ -836,7 +895,7 @@ impl ProofArena {
                     premises,
                 } => {
                     out.push(KIND_BY_RULE);
-                    frame_fact(&mut out, goal);
+                    frame_fact::<N>(&mut out, goal);
                     out.extend_from_slice(&(*rule as u64).to_le_bytes());
                     out.extend_from_slice(&(premises.len() as u64).to_le_bytes());
                     for premise in premises {
@@ -918,9 +977,9 @@ impl ProofArena {
     /// that is nonetheless structurally legal — a premise pointing at the WRONG earlier node
     /// — decodes cleanly and is caught where it should be: by
     /// [`check`](Self::check)'s re-derivation.
-    pub fn decode(bytes: &[u8]) -> Result<(Self, ProofId), ProofError> {
+    pub fn decode(bytes: &[u8]) -> Result<(Self, ProofId), ProofError<N>> {
         let mut reader = Reader::new(bytes);
-        if reader.frame()? != PROOF_ENCODING_TAG.as_bytes() {
+        if reader.frame()? != Self::encoding_tag().as_bytes() {
             return Err(Self::malformed(
                 "the proof encoding tag is absent or from another layout",
             ));
@@ -985,14 +1044,20 @@ impl ProofArena {
 /// height, invented a source, or derived a fact circularly produces proofs that FAIL to
 /// check rather than proofs that quietly agree with it.
 #[derive(Debug, Clone)]
-pub struct EvaluationProofs {
+pub struct EvaluationProofs<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The hash-consed terms; a subproof shared by two derivations is stored once.
-    arena: ProofArena,
+    arena: ProofArena<N>,
     /// One root per derived fact, in lexical fact order.
-    roots: Vec<(Fact, ProofId)>,
+    roots: Vec<(ShapeFact<N>, ProofId)>,
 }
 
-impl EvaluationProofs {
+impl<const N: usize> EvaluationProofs<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Build a proof term for every derivation `evaluation` recorded.
     ///
     /// Derivations are processed in `(proof height, fact)` order, so every DERIVED source of
@@ -1000,7 +1065,7 @@ impl EvaluationProofs {
     /// height is strictly below its consumer's, by the definition of proof height. Both
     /// components are content-derived, so the interning sequence, and hence every arena id,
     /// is a pure function of the evaluation.
-    pub fn of(evaluation: &Evaluation) -> Result<Self, StorageError> {
+    pub fn of(evaluation: &Evaluation<TermInterner, N>) -> Result<Self, StorageError> {
         let derivations = evaluation.derivations();
         let mut order: Vec<usize> = (0..derivations.len()).collect();
         order.sort_by(|&left, &right| {
@@ -1009,7 +1074,7 @@ impl EvaluationProofs {
         });
 
         let mut arena = ProofArena::default();
-        let mut built: BTreeMap<&Fact, ProofId> = BTreeMap::new();
+        let mut built: BTreeMap<&ShapeFact<N>, ProofId> = BTreeMap::new();
         for &index in &order {
             let derivation = &derivations[index];
             let mut premises = Vec::with_capacity(derivation.sources().len());
@@ -1032,17 +1097,17 @@ impl EvaluationProofs {
     }
 
     /// The arena the roots address.
-    pub fn arena(&self) -> &ProofArena {
+    pub fn arena(&self) -> &ProofArena<N> {
         &self.arena
     }
 
     /// One `(derived fact, proof)` pair per derivation, in LEXICAL fact order.
-    pub fn roots(&self) -> &[(Fact, ProofId)] {
+    pub fn roots(&self) -> &[(ShapeFact<N>, ProofId)] {
         &self.roots
     }
 
     /// The proof of `fact`, if the evaluation derived it.
-    pub fn root_for(&self, fact: &Fact) -> Option<ProofId> {
+    pub fn root_for(&self, fact: &ShapeFact<N>) -> Option<ProofId> {
         self.roots
             .binary_search_by(|(candidate, _)| candidate.cmp(fact))
             .ok()
@@ -1060,17 +1125,15 @@ impl EvaluationProofs {
 /// every other occurrence of the same variable, anywhere in the body, which is how the
 /// generalized diagonal (a variable repeated inside one atom) and the join (a variable shared
 /// across atoms) are BOTH re-checked by one rule.
-fn match_atom<'r, 'f>(
-    atom: &'r ClauseAtom,
-    fact: &'f Fact,
+fn match_atom<'r, 'f, const N: usize>(
+    atom: &'r ClauseAtom<N>,
+    fact: &'f ShapeFact<N>,
     subst: &mut BTreeMap<&'r str, &'f str>,
-) -> bool {
-    let surfaces = [
-        fact.subject.as_str(),
-        fact.predicate.as_str(),
-        fact.object.as_str(),
-        fact.graph.as_str(),
-    ];
+) -> bool
+where
+    Arity<N>: StoreShape<N>,
+{
+    let surfaces = Arity::<N>::fact_terms(fact);
     for (term, surface) in atom.terms().into_iter().zip(surfaces) {
         match term {
             ClauseTerm::Var(name) => match subst.entry(name.as_str()) {
@@ -1109,12 +1172,15 @@ fn resolved_surface(term: &ClauseTerm, subst: &BTreeMap<&str, &str>) -> Option<S
 }
 
 /// Instantiate a rule head under `subst` — the checker's OWN conclusion.
-fn ground_atom(
-    head: &ClauseAtom,
+fn ground_atom<const N: usize>(
+    head: &ClauseAtom<N>,
     rule: usize,
     subst: &BTreeMap<&str, &str>,
-) -> Result<Fact, ProofError> {
-    let mut surfaces: [String; ATOM_ARITY] = std::array::from_fn(|_| String::new());
+) -> Result<ShapeFact<N>, ProofError<N>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut surfaces: [String; N] = std::array::from_fn(|_| String::new());
     for (position, term) in head.terms().into_iter().enumerate() {
         surfaces[position] = match resolved_surface(term, subst) {
             Some(surface) => surface,
@@ -1127,13 +1193,7 @@ fn ground_atom(
             }
         };
     }
-    let [subject, predicate, object, graph] = surfaces;
-    Ok(Fact {
-        subject,
-        predicate,
-        object,
-        graph,
-    })
+    Ok(Arity::<N>::fact(surfaces))
 }
 
 /// Whether a NEGATED body atom is satisfied in `model` under `subst` — i.e. some matching
@@ -1149,12 +1209,15 @@ fn ground_atom(
 ///
 /// A ground position whose surface the model never interned constrains to zero rows, so the
 /// atom is not satisfied.
-fn negated_atom_is_satisfied(
-    atom: &ClauseAtom,
+fn negated_atom_is_satisfied<const N: usize>(
+    atom: &ClauseAtom<N>,
     subst: &BTreeMap<&str, &str>,
-    model: &RelationStore,
-) -> bool {
-    let mut values = [None; ATOM_ARITY];
+    model: &RelationStore<TermInterner, N>,
+) -> bool
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut values = [None; N];
     for (position, term) in atom.terms().into_iter().enumerate() {
         let Some(surface) = resolved_surface(term, subst) else {
             continue; // free: unconstrained
@@ -1171,15 +1234,18 @@ fn negated_atom_is_satisfied(
         (None, None) => Bound::Any,
     };
     model
-        .partitions(values[POSITION_PREDICATE], values[POSITION_GRAPH])
+        .partitions_for(values)
         .any(|partition| partition.select(bound).any_remaining())
 }
 
 // ── Wire primitives ─────────────────────────────────────────────────────────────
 
 /// Length-prefix a fact's four surfaces into `out`, in `(s, p, o, g)` order.
-fn frame_fact(out: &mut Vec<u8>, fact: &Fact) {
-    for surface in [&fact.subject, &fact.predicate, &fact.object, &fact.graph] {
+fn frame_fact<const N: usize>(out: &mut Vec<u8>, fact: &ShapeFact<N>)
+where
+    Arity<N>: StoreShape<N>,
+{
+    for surface in Arity::<N>::fact_terms(fact) {
         frame_le(out, surface.as_bytes());
     }
 }
@@ -1190,15 +1256,25 @@ fn frame_fact(out: &mut Vec<u8>, fact: &Fact) {
 /// remain, so a truncated or hostile stream is a [`ProofError::Malformed`] rejection and
 /// never a panic or an over-large allocation.
 #[derive(Debug)]
-struct Reader<'a> {
+struct Reader<'a, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    shape: core::marker::PhantomData<Arity<N>>,
     /// The bytes still unread.
     rest: &'a [u8],
 }
 
-impl<'a> Reader<'a> {
+impl<'a, const N: usize> Reader<'a, N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// A reader over `bytes`.
     fn new(bytes: &'a [u8]) -> Self {
-        Self { rest: bytes }
+        Self {
+            rest: bytes,
+            shape: core::marker::PhantomData,
+        }
     }
 
     /// Whether every byte has been consumed.
@@ -1207,9 +1283,9 @@ impl<'a> Reader<'a> {
     }
 
     /// Take `n` bytes, or report truncation.
-    fn take(&mut self, n: usize) -> Result<&'a [u8], ProofError> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], ProofError<N>> {
         if self.rest.len() < n {
-            return Err(ProofArena::malformed(
+            return Err(ProofArena::<N>::malformed(
                 "the proof encoding ends inside a field",
             ));
         }
@@ -1219,16 +1295,16 @@ impl<'a> Reader<'a> {
     }
 
     /// Read one kind byte.
-    fn byte(&mut self) -> Result<u8, ProofError> {
+    fn byte(&mut self) -> Result<u8, ProofError<N>> {
         Ok(self.take(1)?[0])
     }
 
     /// Read one little-endian `u64`.
-    fn u64(&mut self) -> Result<u64, ProofError> {
+    fn u64(&mut self) -> Result<u64, ProofError<N>> {
         let (bytes, rest) = self
             .rest
             .split_first_chunk()
-            .ok_or_else(|| ProofArena::malformed("the proof encoding ends inside a field"))?;
+            .ok_or_else(|| ProofArena::<N>::malformed("the proof encoding ends inside a field"))?;
         self.rest = rest;
         Ok(u64::from_le_bytes(*bytes))
     }
@@ -1238,33 +1314,32 @@ impl<'a> Reader<'a> {
     /// A value too large for the target's `usize` is a rejection rather than a wrap: a proof
     /// written on a 64-bit host and read on `wasm32` must fail loudly instead of decoding to
     /// a different proof.
-    fn length(&mut self) -> Result<usize, ProofError> {
+    fn length(&mut self) -> Result<usize, ProofError<N>> {
         usize::try_from(self.u64()?).map_err(|_| {
-            ProofArena::malformed("a length in the proof encoding exceeds this target's usize")
+            ProofArena::<N>::malformed("a length in the proof encoding exceeds this target's usize")
         })
     }
 
     /// Read one length-prefixed field.
-    fn frame(&mut self) -> Result<&'a [u8], ProofError> {
+    fn frame(&mut self) -> Result<&'a [u8], ProofError<N>> {
         let len = self.length()?;
         self.take(len)
     }
 
     /// Read one length-prefixed UTF-8 surface.
-    fn surface(&mut self) -> Result<String, ProofError> {
+    fn surface(&mut self) -> Result<String, ProofError<N>> {
         let bytes = self.frame()?;
-        String::from_utf8(bytes.to_vec())
-            .map_err(|_| ProofArena::malformed("a term surface in the proof encoding is not UTF-8"))
+        String::from_utf8(bytes.to_vec()).map_err(|_| {
+            ProofArena::<N>::malformed("a term surface in the proof encoding is not UTF-8")
+        })
     }
 
     /// Read one fact's four surfaces, in `(s, p, o, g)` order.
-    fn fact(&mut self) -> Result<Fact, ProofError> {
-        Ok(Fact {
-            subject: self.surface()?,
-            predicate: self.surface()?,
-            object: self.surface()?,
-            graph: self.surface()?,
-        })
+    fn fact(&mut self) -> Result<ShapeFact<N>, ProofError<N>> {
+        Ok(Arity::<N>::fact(crate::dictionary::try_map_row(
+            [(); N],
+            |()| self.surface(),
+        )?))
     }
 }
 
@@ -1273,7 +1348,7 @@ mod tests {
     #[test]
     fn proof_capacity_preserves_axiom_and_rule_hits_before_admission() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace};
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let given = fact("a", P, "b");
         let derived = fact("a", T, "b");
         let axiom = arena.axiom(given.clone()).unwrap();
@@ -1297,6 +1372,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::store::Fact;
 
     use crate::clause::HeadDisjunct;
     use crate::seminaive::{compile, evaluate};
@@ -1360,7 +1436,7 @@ mod tests {
 
     /// A hand-built, VALID proof of `t(a, c)` over [`chain_rules`], plus its arena.
     fn chain_proof() -> (ProofArena, ProofId) {
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let first = arena.axiom(fact("a", P, "b")).unwrap();
         let second = arena.axiom(fact("b", P, "c")).unwrap();
         let root = arena
@@ -1495,7 +1571,7 @@ mod tests {
             DlClause::datalog(atom("?s", T, "?o"), vec![atom("?s", Q, "?o")]),
         ];
 
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let first = arena.axiom(fact("a", P, "b")).unwrap();
         let second = arena.axiom(fact("b", P, "c")).unwrap();
 
@@ -1554,7 +1630,7 @@ mod tests {
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let first = arena.axiom(fact("a", P, "b")).unwrap();
 
         // The second body atom has no premise at all.
@@ -1616,7 +1692,7 @@ mod tests {
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let first = arena.axiom(fact("a", P, "b")).unwrap();
         let second = arena.axiom(fact("b", P, "c")).unwrap();
         let tampered = arena
@@ -1674,7 +1750,8 @@ mod tests {
         // demands a premise whose subject is `c`, which `p(b, c)` is not.
         let mut shared = bytes.clone();
         shared[premise_0..premise_1].copy_from_slice(&1u64.to_le_bytes());
-        let (forged, forged_root) = ProofArena::decode(&shared).expect("a legal shape decodes");
+        let (forged, forged_root) =
+            ProofArena::<4>::decode(&shared).expect("a legal shape decodes");
         assert_eq!(
             forged.premises(forged_root)[0],
             forged.premises(forged_root)[1],
@@ -1695,7 +1772,7 @@ mod tests {
         out_of_range[premise_1..].copy_from_slice(&9u64.to_le_bytes());
         assert!(
             matches!(
-                ProofArena::decode(&out_of_range),
+                ProofArena::<4>::decode(&out_of_range),
                 Err(ProofError::Malformed { .. })
             ),
             "a premise reference outside the proof is refused at decode"
@@ -1706,14 +1783,15 @@ mod tests {
         forward[premise_1..].copy_from_slice(&2u64.to_le_bytes());
         assert!(
             matches!(
-                ProofArena::decode(&forward),
+                ProofArena::<4>::decode(&forward),
                 Err(ProofError::Malformed { .. })
             ),
             "a premise that does not precede its step is refused at decode"
         );
 
         // The unpatched bytes still check, so the three rejections are about the patches.
-        let (honest, honest_root) = ProofArena::decode(&bytes).expect("the honest proof decodes");
+        let (honest, honest_root) =
+            ProofArena::<4>::decode(&bytes).expect("the honest proof decodes");
         assert_eq!(honest.check(honest_root, &ctx), Ok(fact("a", T, "c")));
     }
 
@@ -1775,7 +1853,7 @@ mod tests {
         let rules = chain_rules();
         let edb = chain_edb();
         let ctx = ProofContext::new(&rules, &edb, &edb);
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let first = arena.axiom(fact("a", P, "b")).unwrap();
         let second = arena.axiom(fact("b", P, "c")).unwrap();
         // `t(a, a)` is not in the least model; no permutation of the real premises yields it.
@@ -1814,7 +1892,7 @@ mod tests {
         let edb = store_of(&[("a", base, "b"), ("c", base, "d"), ("a", Q, "b")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         // `c base d` has no `q`, so the step holds.
         let allowed_premise = arena.axiom(fact("c", base, "d")).unwrap();
         let allowed = arena
@@ -1852,7 +1930,7 @@ mod tests {
         let edb = store_of(&[("a", base, "b"), ("c", base, "d"), ("a", Q, "zzz")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let allowed_premise = arena.axiom(fact("c", base, "d")).unwrap();
         let allowed = arena
             .by_rule(fact("c", R, "d"), 0, &[allowed_premise])
@@ -1904,7 +1982,7 @@ mod tests {
     /// Structurally identical proofs intern to ONE id, so a shared subproof is stored once.
     #[test]
     fn structurally_identical_proofs_share_one_node() {
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let left = arena.axiom(fact("a", P, "b")).unwrap();
         let right = arena.axiom(fact("a", P, "b")).unwrap();
         assert_eq!(left, right, "identical axioms intern once");
@@ -1966,7 +2044,7 @@ mod tests {
 
         // The SAME proof built through a different interning sequence — an unrelated term
         // interned first, so every arena id moves — encodes to the same bytes.
-        let mut shifted = ProofArena::default();
+        let mut shifted = ProofArena::<4>::default();
         let _unrelated = shifted.axiom(fact("z", P, "z")).unwrap();
         let second = shifted.axiom(fact("b", P, "c")).unwrap();
         let first = shifted.axiom(fact("a", P, "b")).unwrap();
@@ -1984,7 +2062,8 @@ mod tests {
         );
 
         // Round trip, and a fixed point under re-encoding.
-        let (decoded, decoded_root) = ProofArena::decode(&bytes).expect("the encoding decodes");
+        let (decoded, decoded_root) =
+            ProofArena::<4>::decode(&bytes).expect("the encoding decodes");
         assert_eq!(decoded.encode(decoded_root), bytes);
         assert_eq!(decoded.digest(decoded_root), arena.digest(root));
         assert_eq!(decoded.goal(decoded_root), &fact("a", T, "c"));
@@ -2004,13 +2083,13 @@ mod tests {
     /// the DAG rather than in its paths.
     #[test]
     fn a_shared_subproof_is_emitted_once() {
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let shared = arena.axiom(fact("a", P, "a")).unwrap();
         let root = arena
             .by_rule(fact("a", T, "a"), 0, &[shared, shared])
             .unwrap();
         let (decoded, decoded_root) =
-            ProofArena::decode(&arena.encode(root)).expect("the encoding decodes");
+            ProofArena::<4>::decode(&arena.encode(root)).expect("the encoding decodes");
         assert_eq!(decoded.len(), 2, "one axiom and one step, not three nodes");
         assert_eq!(
             decoded.premises(decoded_root)[0],
@@ -2029,7 +2108,7 @@ mod tests {
         for cut in 0..bytes.len() {
             assert!(
                 matches!(
-                    ProofArena::decode(&bytes[..cut]),
+                    ProofArena::<4>::decode(&bytes[..cut]),
                     Err(ProofError::Malformed { .. })
                 ),
                 "a stream truncated at {cut} must be refused"
@@ -2040,7 +2119,7 @@ mod tests {
         let mut extra = bytes.clone();
         extra.push(0);
         assert!(matches!(
-            ProofArena::decode(&extra),
+            ProofArena::<4>::decode(&extra),
             Err(ProofError::Malformed { .. })
         ));
 
@@ -2048,7 +2127,7 @@ mod tests {
         let mut wrong_tag = bytes.clone();
         wrong_tag[8] ^= 0xff;
         assert!(matches!(
-            ProofArena::decode(&wrong_tag),
+            ProofArena::<4>::decode(&wrong_tag),
             Err(ProofError::Malformed { .. })
         ));
 
@@ -2058,7 +2137,7 @@ mod tests {
         let mut wrong_kind = bytes;
         wrong_kind[kind_offset] = 9;
         assert!(matches!(
-            ProofArena::decode(&wrong_kind),
+            ProofArena::<4>::decode(&wrong_kind),
             Err(ProofError::Malformed { .. })
         ));
 
@@ -2067,7 +2146,7 @@ mod tests {
         frame_le(&mut empty, PROOF_ENCODING_TAG.as_bytes());
         empty.extend_from_slice(&0u64.to_le_bytes());
         assert!(matches!(
-            ProofArena::decode(&empty),
+            ProofArena::<4>::decode(&empty),
             Err(ProofError::Malformed { .. })
         ));
 
@@ -2081,7 +2160,7 @@ mod tests {
             frame_le(&mut bad_utf8, b"");
         }
         assert!(matches!(
-            ProofArena::decode(&bad_utf8),
+            ProofArena::<4>::decode(&bad_utf8),
             Err(ProofError::Malformed { .. })
         ));
     }
@@ -2143,7 +2222,7 @@ mod tests {
         let edb = store_of(&[("a", P, "a"), ("a", P, "b")]);
         let ctx = ProofContext::new(&rules, &edb, &edb);
 
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let diagonal = arena.axiom(fact("a", P, "a")).unwrap();
         let ok = arena.by_rule(fact("a", T, "a"), 0, &[diagonal]).unwrap();
         assert_eq!(arena.check(ok, &ctx), Ok(fact("a", T, "a")));
@@ -2265,7 +2344,7 @@ mod tests {
         )];
         let edb = RelationStore::new();
         let ctx = ProofContext::new(&rules, &edb, &edb);
-        let mut arena = ProofArena::default();
+        let mut arena = ProofArena::<4>::default();
         let expected = fact("https://example.org/a", T, "https://example.org/b");
         let root = arena.by_rule(expected.clone(), 0, &[]).unwrap();
         assert_eq!(arena.check(root, &ctx), Ok(expected));
@@ -2339,7 +2418,7 @@ mod tests {
     /// `std::error::Error`.
     #[test]
     fn rejections_render() {
-        let errors = [
+        let errors: [ProofError; 9] = [
             ProofError::Malformed {
                 detail: "truncated".to_owned(),
             },

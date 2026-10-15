@@ -3542,7 +3542,10 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     if matches!(
         pattern,
-        GraphPattern::Filter { .. } | GraphPattern::Slice { .. } | GraphPattern::Lateral { .. }
+        GraphPattern::Filter { .. }
+            | GraphPattern::Slice { .. }
+            | GraphPattern::Lateral { .. }
+            | GraphPattern::LeftJoin { .. }
     ) {
         return eval_ordinary_chain(pattern, ctx);
     }
@@ -3573,9 +3576,10 @@ fn eval_numbered_node<D: DatasetView + Sync>(
 }
 
 /// The ordinary graph-child route keeps each entered node's cursor, search
-/// frame and local cap in one admitted worklist while FILTER and Slice descend.
+/// frame and local cap in one admitted worklist while graph children descend.
 /// Expression rows and copied EXISTS children use their own suspended states.
 enum OrdinaryAfter<'a, I: ViewTermId> {
+    OptionalLeft,
     Filter {
         lift: crate::governor::lift::DetachedLift,
     },
@@ -3932,7 +3936,7 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    // A single ordinary FILTER, Slice or LATERAL keeps its parent inline.
+    // A single ordinary graph-child suspension keeps its parent inline.
     // Only an actual nested suspension needs the admitted spill buffer.
     let mut runner = OrdinaryRunner {
         pending: crate::AdmittedVec::new(&ctx.growth),
@@ -4003,6 +4007,7 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                 Ok(None) => {}
             }
             let after = match current_pattern {
+                GraphPattern::LeftJoin { .. } => Ok(Some(OrdinaryAfter::OptionalLeft)),
                 GraphPattern::Filter { .. } => {
                     crate::governor::lift::Lift::at_admitted(current_pattern, &runner.ctx.growth)
                         .map(|lift| {
@@ -4045,18 +4050,19 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
             if let Some(after) = after {
                 let next = match current_pattern {
                     GraphPattern::Filter { inner, .. } | GraphPattern::Slice { inner, .. } => inner,
-                    GraphPattern::Lateral { left, .. } => left,
-                    _ => unreachable!("only FILTER, Slice and LATERAL suspend a graph child here"),
+                    GraphPattern::Lateral { left, .. } | GraphPattern::LeftJoin { left, .. } => {
+                        left
+                    }
+                    _ => unreachable!("only admitted graph-child frames suspend here"),
                 };
                 let next = match &current {
                     OrdinaryPosition::Borrowed(parent) => match parent {
                         GraphPattern::Filter { inner, .. } | GraphPattern::Slice { inner, .. } => {
                             OrdinaryPosition::Borrowed(inner)
                         }
-                        GraphPattern::Lateral { left, .. } => OrdinaryPosition::Borrowed(left),
-                        _ => unreachable!(
-                            "only FILTER, Slice and LATERAL suspend a graph child here"
-                        ),
+                        GraphPattern::Lateral { left, .. }
+                        | GraphPattern::LeftJoin { left, .. } => OrdinaryPosition::Borrowed(left),
+                        _ => unreachable!("only admitted graph-child frames suspend here"),
                     },
                     OrdinaryPosition::Copied(_) => match current.copied_child(next) {
                         Ok(next) => next,
@@ -4204,6 +4210,22 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
             runner.active = Some(boundary);
             let pattern = position.pattern();
             let result = match (after, completed) {
+                (OrdinaryAfter::OptionalLeft, Ok(child)) => (|| {
+                    let GraphPattern::LeftJoin {
+                        right, expression, ..
+                    } = pattern
+                    else {
+                        return Err(EvalError::internal("OPTIONAL frame lost its pattern"));
+                    };
+                    crate::binop::finish_left_join(
+                        pattern,
+                        child,
+                        right,
+                        expression.as_ref(),
+                        runner.ctx,
+                    )
+                    .map(Some)
+                })(),
                 (OrdinaryAfter::Filter { lift }, Ok(child)) => (|| {
                     let GraphPattern::Filter {
                         expr: expression, ..
@@ -5549,6 +5571,12 @@ pub fn eval<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
+    crate::dataset_spec::require_pattern_graph_support(
+        pattern,
+        ctx.dataset,
+        &ctx.growth,
+        |error| ctx.workspace.source_error(error),
+    )?;
     pattern.validate_hidden_variables()?;
     if ctx.dataset.storage_live_budget().is_some()
         && ctx.bounded_workspace == WorkspaceAdmission::Unpriced
@@ -5824,6 +5852,9 @@ pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
     kept: Option<&crate::plan::PlanCache>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
+    crate::dataset_spec::require_query_graph_support(query, ctx.dataset, &ctx.growth, |error| {
+        ctx.workspace.source_error(error)
+    })?;
     admit_version(AdmittedRequest::Query(query))?;
     ctx.user_functions
         .declarations()
@@ -6405,19 +6436,23 @@ mod tests {
         let _definition = crate::expr::force_exists_strategy_for_test(
             crate::expr::ForcedExistsStrategy::Definition,
         );
-        for lateral in [false, true] {
+        for kind in 0..3 {
             let mut pattern = GraphPattern::empty_bgp();
             for _ in 0..3 {
-                pattern = if lateral {
-                    GraphPattern::Lateral {
+                pattern = match kind {
+                    0 => GraphPattern::Lateral {
                         left: Child::new(GraphPattern::empty_bgp()),
                         right: Child::new(pattern),
-                    }
-                } else {
-                    GraphPattern::Filter {
+                    },
+                    1 => GraphPattern::Filter {
                         inner: Child::new(GraphPattern::empty_bgp()),
                         expr: purrdf_sparql_algebra::Expression::Exists(Child::new(pattern)),
-                    }
+                    },
+                    _ => GraphPattern::LeftJoin {
+                        left: Child::new(pattern),
+                        right: Child::new(GraphPattern::empty_bgp()),
+                        expression: None,
+                    },
                 };
             }
             let (workspace, ledger, base) = account(1_000_000);

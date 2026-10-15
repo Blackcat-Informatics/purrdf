@@ -194,12 +194,13 @@ fn cache_eviction_preserves_exact_non_cache_owner_conservation() {
     );
     let read = session(&image, 2);
     let opening = read.evidence();
-    let owners = opening.live_bytes() - opening.unpinned_cache_bytes();
+    let owners =
+        opening.live_bytes() - opening.unpinned_cache_bytes() - opening.bookkeeping_bytes();
     assert!(opening.unpinned_cache_bytes() > 0);
     let mut reservation = read.reserve_workspace(3000).unwrap();
     let held = read.evidence();
     assert_eq!(
-        held.live_bytes() - held.unpinned_cache_bytes(),
+        held.live_bytes() - held.unpinned_cache_bytes() - held.bookkeeping_bytes(),
         owners + 3000
     );
     reservation.resize(4000).unwrap();
@@ -209,23 +210,25 @@ fn cache_eviction_preserves_exact_non_cache_owner_conservation() {
     ));
     let refused = read.evidence();
     assert_eq!(
-        refused.live_bytes() - refused.unpinned_cache_bytes(),
+        refused.live_bytes() - refused.unpinned_cache_bytes() - refused.bookkeeping_bytes(),
         owners + 4000
     );
     drop(reservation);
     let released = read.evidence();
     assert!(released.evictions() > opening.evictions());
     assert_eq!(
-        released.live_bytes() - released.unpinned_cache_bytes(),
+        released.live_bytes() - released.unpinned_cache_bytes() - released.bookkeeping_bytes(),
         owners
     );
     let pin = read.resolve(ids[0]).unwrap();
     let pinned = read.evidence();
-    assert!(pinned.live_bytes() - pinned.unpinned_cache_bytes() > owners);
+    assert!(
+        pinned.live_bytes() - pinned.unpinned_cache_bytes() - pinned.bookkeeping_bytes() > owners
+    );
     drop(pin);
     let unpinned = read.evidence();
     assert_eq!(
-        unpinned.live_bytes() - unpinned.unpinned_cache_bytes(),
+        unpinned.live_bytes() - unpinned.unpinned_cache_bytes() - unpinned.bookkeeping_bytes(),
         owners
     );
     assert!(read.read_error().is_none());

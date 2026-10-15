@@ -9,6 +9,7 @@ use shape_cases::{
     cache_refusal_keeps_previous_owner, dictionary_analyzer_identity, dictionary_cache_and_size,
     dictionary_long_phrase_and_determinism, dictionary_projection_and_aliases, dictionary_property,
     expanded_dictionary_and_union, false_expression_gaps_keep_original_traversal,
+    graph_free_corpus_keys_ranking_and_query, graph_free_rdf12_partitions_and_named_refusal,
     host_refusal_and_governor_boundary, longest_first_reference,
     original_evidence_and_empty_barriers, prepared_and_query_forms, registered_host_and_decline,
     scoped_streams_and_update_where, typed_series_property, window_barrier_property,
@@ -38,4 +39,6 @@ purrdf_testkit::harness_main!(
     scoped_streams_and_update_where,
     cache_refusal_keeps_previous_owner,
     false_expression_gaps_keep_original_traversal,
+    graph_free_corpus_keys_ranking_and_query,
+    graph_free_rdf12_partitions_and_named_refusal,
 );

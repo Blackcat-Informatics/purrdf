@@ -33,6 +33,24 @@ pub fn lock_read_state<T>(state: &std::sync::Mutex<T>) -> std::sync::MutexGuard<
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The certificate exposed only by carriers frozen through the native validator.
+#[inline]
+pub(crate) const fn frozen_term_nesting_bound() -> Option<usize> {
+    Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
+}
+
+/// Declare a validated carrier's getter through the one certificate home.
+macro_rules! frozen_term_nesting_bound_method {
+    ($(#[$meta:meta])*) => {
+        $(#[$meta])*
+        #[inline]
+        fn triple_term_nesting_bound(&self) -> Option<usize> {
+            $crate::dataset_view::frozen_term_nesting_bound()
+        }
+    };
+}
+pub(crate) use frozen_term_nesting_bound_method;
+
 /// The sole typed leaf-conversion body. The storage factory determines physical
 /// ownership; view resolution and lexical/type semantics remain shared.
 fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
@@ -446,7 +464,8 @@ impl GraphSelector {
     /// read failure, which is returned through the view's typed error.
     ///
     /// # Errors
-    /// Returns a typed reverse-lookup failure from the backing read session.
+    /// Returns unsupported named-graph or reverse-lookup failure from the
+    /// backing read session. Support is checked before an absent IRI shortcut.
     pub fn resolve<D: DatasetView + ?Sized>(
         &self,
         dataset: &D,
@@ -455,6 +474,7 @@ impl GraphSelector {
             Self::Any => GraphMatch::Any,
             Self::Default => GraphMatch::Default,
             Self::Named(name) => {
+                dataset.require_named_graphs()?;
                 let Some(id) = dataset.term_id_by_value(name)? else {
                     return Ok(None);
                 };
@@ -545,6 +565,23 @@ pub trait DatasetView {
     /// Resident implementations return `None` with an uninhabited error type.
     fn read_error(&self) -> Option<Self::ReadError> {
         None
+    }
+
+    /// Whether this carrier can represent named graphs, including empty ones.
+    /// Unlike `capabilities().named_graphs`, this does not describe observed data.
+    fn supports_named_graphs(&self) -> bool {
+        true
+    }
+
+    /// Admit a request that names or enumerates named graphs, before looking up
+    /// a graph term or testing for empty input. This is support, distinct from
+    /// `capabilities().named_graphs`, which only describes observed data.
+    ///
+    /// # Errors
+    /// A graph-free session latches its typed unsupported-operation cause. Quad
+    /// carriers retain their usual support and operational first-error check.
+    fn require_named_graphs(&self) -> Result<(), Self::ReadError> {
+        self.checked_read(|_| ())
     }
 
     /// Reserve operator scratch, owned results or output staging before allocation.
@@ -1653,11 +1690,9 @@ impl DatasetView for RdfDataset {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
-    /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
-    /// which refuses a triple term nested past 16.
-    #[inline]
-    fn triple_term_nesting_bound(&self) -> Option<usize> {
-        Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
+    frozen_term_nesting_bound_method! {
+        /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
+        /// which refuses a triple term nested past 16.
     }
 
     #[inline]
@@ -1851,6 +1886,14 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
     fn read_error(&self) -> Option<Self::ReadError> {
         (**self).read_error()
+    }
+
+    fn require_named_graphs(&self) -> Result<(), Self::ReadError> {
+        (**self).require_named_graphs()
+    }
+
+    fn supports_named_graphs(&self) -> bool {
+        (**self).supports_named_graphs()
     }
 
     #[inline]

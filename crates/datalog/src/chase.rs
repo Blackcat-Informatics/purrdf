@@ -70,11 +70,12 @@
 //! every constant-predicate refinement of the same slot, because at run time it can consume
 //! and produce any of them.
 //!
-//! # Every atom is an arity-4 quad, and the predicate is data
+//! # Static triple or quad atoms, with the predicate as data
 //!
-//! A [`ClauseAtom`] is `triple(?s, ?p, ?o, ?g)` and all four positions may be variables, so
-//! a position node is keyed by all four slots rather than by a relation symbol: `slot` says
-//! which of the four the variable occupies, and the other three carry the refinement. That
+//! A [`ClauseAtom`] stores three triple positions or four quad positions. Every stored
+//! position may be a variable, so a position node is keyed by those slots rather than by
+//! a relation symbol: `slot` identifies the variable's position and the other stored
+//! positions carry the refinement. That
 //! makes the predicate position an ordinary analysed slot instead of a special case, which
 //! is what an OWL 2 RL meta-rule needs.
 //!
@@ -109,7 +110,7 @@
 //! # Determinism
 //!
 //! Every map and set that reaches an output is a `BTreeMap`/`BTreeSet`. A round's pending
-//! facts are accumulated in a `BTreeMap<Fact, clause index>`, so they are committed in total
+//! facts are accumulated in a `BTreeMap<ShapeFact<N>, clause index>`, so they are committed in total
 //! lexical `(subject, predicate, object, graph)` order regardless of which clause produced
 //! them or in which order the join enumerated rows, and a fact several clauses derive is
 //! credited to the lowest authored index rather than to whichever ran first. A witness
@@ -132,7 +133,7 @@ use crate::seminaive::{
     BudgetReport, BudgetResource, EvalOptions, MAX_TERM_ARENA_BYTES, render_capacity_refusal,
 };
 use crate::stop::{StopSignal, is_stopped};
-use crate::store::{Bound, Fact, RelationStore};
+use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInterner};
 
 // ── The position dependency graph ───────────────────────────────────────────────
 
@@ -224,16 +225,16 @@ impl Slot {
 /// The refinement at the node's own slot is unused (it is the position being described), so
 /// it is held as [`ClassKey::Wildcard`] and rendered as `?`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Position {
+struct Position<const N: usize> {
     /// Which slot the variable occupies.
     slot: Slot,
     /// The refinement contributed by each slot; the entry at `slot` is unused.
-    keys: [ClassKey; ATOM_ARITY],
+    keys: [ClassKey; N],
 }
 
-impl Position {
+impl<const N: usize> Position<N> {
     /// The position of `atom`'s `slot`, refined by the atom's other three slots.
-    fn of(atom: &ClauseAtom, slot: Slot) -> Self {
+    fn of(atom: &ClauseAtom<N>, slot: Slot) -> Self {
         let terms = atom.terms();
         let keys = std::array::from_fn(|index| {
             if index == slot.index() {
@@ -262,7 +263,7 @@ impl Position {
     /// This position, rendered for a diagnostic — for example
     /// `[s=?, p=<https://example.org/type>, o=<https://example.org/C>, g=(default graph)]`.
     fn render(&self) -> String {
-        let rendered: Vec<String> = Slot::ALL
+        let rendered: Vec<String> = Slot::ALL[..N]
             .iter()
             .enumerate()
             .map(|(index, slot)| {
@@ -282,14 +283,14 @@ impl Position {
 ///
 /// A variable occurring twice in one atom yields two positions, and a variable occurring in
 /// two atoms yields one per atom — the analysis is about slots, not occurrences of a name.
-fn refined_positions<'a>(
-    atoms: impl IntoIterator<Item = &'a ClauseAtom>,
+fn refined_positions<'a, const N: usize>(
+    atoms: impl IntoIterator<Item = &'a ClauseAtom<N>>,
     variable: &str,
-) -> Vec<Position> {
+) -> Vec<Position<N>> {
     let mut out = Vec::new();
     for atom in atoms {
         let terms = atom.terms();
-        for slot in Slot::ALL {
+        for slot in Slot::ALL.into_iter().take(N) {
             if terms[slot.index()].variable() == Some(variable) {
                 out.push(Position::of(atom, slot));
             }
@@ -310,7 +311,10 @@ fn refined_positions<'a>(
 /// Distinct compatible positions always differ at some slot where one side is a wildcard —
 /// two positions whose refinements are all byte-equal constants ARE the same node — so this
 /// never adds a self-edge that the program did not already have.
-fn add_subsumption(adjacency: &mut BTreeMap<Position, BTreeSet<Position>>, nodes: &[Position]) {
+fn add_subsumption<const N: usize>(
+    adjacency: &mut BTreeMap<Position<N>, BTreeSet<Position<N>>>,
+    nodes: &[Position<N>],
+) {
     for (index, left) in nodes.iter().enumerate() {
         for right in &nodes[index + 1..] {
             if left.compatible(right) {
@@ -333,13 +337,13 @@ fn add_subsumption(adjacency: &mut BTreeMap<Position, BTreeSet<Position>>, nodes
 /// reaches `u`, and for a self-loop `u == v` that means the edge `u → u` itself must count.
 /// A depth-first walk over `BTreeSet` adjacency, so the answer is a pure function of the
 /// graph.
-fn reaches(
-    adjacency: &BTreeMap<Position, BTreeSet<Position>>,
-    from: &Position,
-    to: &Position,
+fn reaches<const N: usize>(
+    adjacency: &BTreeMap<Position<N>, BTreeSet<Position<N>>>,
+    from: &Position<N>,
+    to: &Position<N>,
 ) -> bool {
-    let mut stack: Vec<&Position> = adjacency.get(from).into_iter().flatten().collect();
-    let mut seen: BTreeSet<&Position> = BTreeSet::new();
+    let mut stack: Vec<&Position<N>> = adjacency.get(from).into_iter().flatten().collect();
+    let mut seen: BTreeSet<&Position<N>> = BTreeSet::new();
     while let Some(node) = stack.pop() {
         if node == to {
             return true;
@@ -415,7 +419,7 @@ impl fmt::Display for ChaseTermination {
 /// tunable. Two callers holding the same program always get the same certificate, and a
 /// caller cannot assert termination it has not proved.
 ///
-/// The analysis is constant-refined weak acyclicity over the arity-4 position dependency
+/// The analysis is constant-refined weak acyclicity over the carrier's position dependency
 /// graph — see the [module docs](self) for the node shape, the worked example that motivates
 /// the refinement, and the soundness argument for it. Reachability is over-approximated
 /// (compatible refinements of one slot are connected in both directions), so a program that
@@ -425,10 +429,10 @@ impl fmt::Display for ChaseTermination {
 /// A program with no existential head has no special edges at all and is therefore
 /// trivially weakly acyclic, however cyclic its Datalog recursion is — transitive closure
 /// invents nothing.
-pub fn certify(program: &[DlClause]) -> ChaseTermination {
-    let mut adjacency: BTreeMap<Position, BTreeSet<Position>> = BTreeMap::new();
-    let mut special: BTreeSet<(Position, Position)> = BTreeSet::new();
-    let mut nodes: BTreeSet<Position> = BTreeSet::new();
+pub fn certify<const N: usize>(program: &[DlClause<N>]) -> ChaseTermination {
+    let mut adjacency: BTreeMap<Position<N>, BTreeSet<Position<N>>> = BTreeMap::new();
+    let mut special: BTreeSet<(Position<N>, Position<N>)> = BTreeSet::new();
+    let mut nodes: BTreeSet<Position<N>> = BTreeSet::new();
 
     for clause in program {
         let frontier = clause.frontier_variables();
@@ -456,7 +460,7 @@ pub fn certify(program: &[DlClause]) -> ChaseTermination {
         if clause.existentials().is_empty() {
             continue;
         }
-        let mut frontier_positions: Vec<Position> = Vec::new();
+        let mut frontier_positions: Vec<Position<N>> = Vec::new();
         for variable in &frontier {
             frontier_positions.extend(refined_positions(clause.body(), variable));
         }
@@ -475,7 +479,7 @@ pub fn certify(program: &[DlClause]) -> ChaseTermination {
         }
     }
 
-    let ordered: Vec<Position> = nodes.iter().cloned().collect();
+    let ordered: Vec<Position<N>> = nodes.iter().cloned().collect();
     add_subsumption(&mut adjacency, &ordered);
 
     // A special edge `(u, v)` violates weak acyclicity exactly when `v` reaches `u`: the
@@ -654,6 +658,16 @@ impl SkolemRegistry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ChaseError {
+    /// Immutable-base body reads require the ordered scheduler.
+    BaseReadClause {
+        /// The clause requiring ordered immutable-base semantics.
+        clause: usize,
+    },
+    /// Operational no-output heads belong to the ordered executor.
+    NoOutputClause {
+        /// The clause's index in authored program order.
+        clause: usize,
+    },
     /// The original logical capacity or physical storage refusal.
     Storage(purrdf_lex::allocation::StorageError),
     /// The complete existential rule bundle violates a declaration.
@@ -758,6 +772,14 @@ pub enum ChaseError {
 impl fmt::Display for ChaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::BaseReadClause { clause } => write!(
+                f,
+                "clause {clause} reads immutable base facts and requires ordered evaluation"
+            ),
+            Self::NoOutputClause { clause } => write!(
+                f,
+                "clause {clause} has an operational no-output head: use the ordered scheduler"
+            ),
             Self::Storage(error) => error.fmt(f),
             Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
             Self::NonTerminating { violations } => {
@@ -874,8 +896,8 @@ impl StepMeter {
 /// Extend `solution` by every row of the store that `atom` matches, appending each
 /// extension to `out`.
 ///
-/// The four positions are resolved once: a constant renders to its lexical surface, a bound
-/// variable reads its binding, an unbound variable is free. The predicate and graph
+/// The stored positions are resolved once: a constant renders to its lexical surface, a bound
+/// variable reads its binding, an unbound variable is free. The predicate and optional graph
 /// positions select the partitions, the subject and object positions drive the partition's
 /// `(subject, object)` index, and the two are independent — exactly the access path
 /// [`crate::seminaive`] uses, so an atom that names its predicate costs one ordered-map
@@ -883,21 +905,23 @@ impl StepMeter {
 ///
 /// A repeated variable — within the atom or shared with `solution` — is enforced per row
 /// rather than through the index, so `p(?x, ?p, ?x, ?g)` behaves as the diagonal it is.
-fn extend_solution(
-    atom: &ClauseAtom,
-    store: &RelationStore,
+fn extend_solution<const N: usize>(
+    atom: &ClauseAtom<N>,
+    store: &RelationStore<TermInterner, N>,
     solution: &Binding,
     out: &mut Vec<Binding>,
     meter: &mut StepMeter,
-) {
+) where
+    Arity<N>: StoreShape<N>,
+{
     let terms = atom.terms();
     // The already-known surface of each position, or `None` when the scan binds it.
-    let known: [Option<String>; ATOM_ARITY] = std::array::from_fn(|index| match terms[index] {
+    let known: [Option<String>; N] = std::array::from_fn(|index| match terms[index] {
         ClauseTerm::Var(name) => solution.get(name).cloned(),
         constant => constant.surface(),
     });
 
-    let mut ids: [Option<TermId>; ATOM_ARITY] = [None; ATOM_ARITY];
+    let mut ids: [Option<TermId>; N] = [None; N];
     for (index, surface) in known.iter().enumerate() {
         if let Some(surface) = surface {
             // A pinned term the store has never interned matches nothing at all.
@@ -916,21 +940,18 @@ fn extend_solution(
     };
 
     let interner = store.interner();
-    for partition in store.partitions(ids[POSITION_PREDICATE], ids[POSITION_GRAPH]) {
+    for partition in store.partitions_for(ids) {
         let mut cursor = partition.select(bound);
         while let Some((subject, object, _row)) = LendingIterator::next(&mut cursor) {
             if meter.spent() {
                 return;
             }
-            let matched = [
-                interner.resolve(subject),
-                interner.resolve(partition.predicate()),
-                interner.resolve(object),
-                interner.resolve(partition.graph()),
-            ];
+            let matched = partition
+                .row(subject, object)
+                .map(|id| interner.resolve(id));
             // Agreement first, allocation second: a row that fails the diagonal never
             // clones the binding.
-            let mut fresh: [Option<(&str, &str)>; ATOM_ARITY] = [None; ATOM_ARITY];
+            let mut fresh: [Option<(&str, &str)>; N] = [None; N];
             let mut agrees = true;
             for (index, term) in terms.iter().enumerate() {
                 let Some(name) = term.variable() else {
@@ -973,12 +994,15 @@ fn extend_solution(
 /// the frontier binding and the existentials left FREE. The blocking condition is literally
 /// "does this conjunctive query have a solution", so writing it as a second, subtly
 /// different traversal would be an opportunity for the two to disagree.
-fn join_atoms<'a>(
-    atoms: impl IntoIterator<Item = &'a ClauseAtom>,
-    store: &RelationStore,
+fn join_atoms<'a, const N: usize>(
+    atoms: impl IntoIterator<Item = &'a ClauseAtom<N>>,
+    store: &RelationStore<TermInterner, N>,
     seed: &Binding,
     meter: &mut StepMeter,
-) -> Vec<Binding> {
+) -> Vec<Binding>
+where
+    Arity<N>: StoreShape<N>,
+{
     let mut solutions = vec![seed.clone()];
     for atom in atoms {
         let mut next = Vec::new();
@@ -1017,9 +1041,12 @@ fn restrict(solution: &Binding, variables: &[String]) -> Binding {
 /// frontier is bound by the body join, and every existential is bound to a freshly minted
 /// witness before this is reached, so an uncovered variable here is a contradiction in that
 /// check rather than a data state.
-fn ground(atom: &ClauseAtom, binding: &Binding) -> Fact {
+fn ground<const N: usize>(atom: &ClauseAtom<N>, binding: &Binding) -> ShapeFact<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     let terms = atom.terms();
-    let surfaces: [String; ATOM_ARITY] = std::array::from_fn(|index| match terms[index] {
+    let surfaces: [String; N] = std::array::from_fn(|index| match terms[index] {
         ClauseTerm::Var(name) => binding
             .get(name)
             .cloned()
@@ -1028,13 +1055,7 @@ fn ground(atom: &ClauseAtom, binding: &Binding) -> Fact {
             .surface()
             .expect("a non-variable term always has a lexical surface"),
     });
-    let [subject, predicate, object, graph] = surfaces;
-    Fact {
-        subject,
-        predicate,
-        object,
-        graph,
-    }
+    Arity::<N>::fact(surfaces)
 }
 
 /// One clause the chase will actually fire, with its loop-invariant shapes hoisted out of
@@ -1054,7 +1075,7 @@ impl Firing {
     /// Every fireable head form has exactly one disjunct: the atomic and conjunctive forms
     /// by definition, and the existential form because [`plan_firings`] refuses a
     /// multi-disjunct existential head.
-    fn disjunct<'a>(&self, clause: &'a DlClause) -> &'a HeadDisjunct {
+    fn disjunct<'a, const N: usize>(&self, clause: &'a DlClause<N>) -> &'a HeadDisjunct<N> {
         clause
             .head_disjuncts()
             .first()
@@ -1067,11 +1088,21 @@ impl Firing {
 /// The head form is decided FIRST, because the later checks are defined in terms of a head
 /// the clause may not have: naming an unbound head variable in a clause whose real defect is
 /// that its head is `false` would report a consequence rather than the cause.
-fn plan_firings(program: &[DlClause]) -> Result<Vec<Firing>, ChaseError> {
+fn plan_firings<const N: usize>(program: &[DlClause<N>]) -> Result<Vec<Firing>, ChaseError> {
     let mut firings = Vec::with_capacity(program.len());
     for (clause_index, clause) in program.iter().enumerate() {
+        if clause.reads_base() {
+            return Err(ChaseError::BaseReadClause {
+                clause: clause_index,
+            });
+        }
         let disjuncts = clause.head_disjuncts().len();
         match clause.head_form() {
+            HeadForm::NoOutput => {
+                return Err(ChaseError::NoOutputClause {
+                    clause: clause_index,
+                });
+            }
             HeadForm::Inconsistency => {
                 return Err(ChaseError::InconsistencyClause {
                     clause: clause_index,
@@ -1136,11 +1167,14 @@ fn plan_firings(program: &[DlClause]) -> Result<Vec<Firing>, ChaseError> {
 
 /// The mutable working set carried across the chase's rounds.
 #[derive(Debug)]
-struct ChaseState {
+struct ChaseState<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The accumulated store: the seeded EDB plus everything derived so far.
-    store: RelationStore,
+    store: RelationStore<TermInterner, N>,
     /// Every derived fact with its producing clause, in commit order.
-    derivations: Vec<ChaseDerivation>,
+    derivations: Vec<ChaseDerivation<N>>,
     /// The witnesses invented so far.
     witnesses: SkolemRegistry,
     /// The candidate-solution meter.
@@ -1149,7 +1183,10 @@ struct ChaseState {
     options: EvalOptions,
 }
 
-impl ChaseState {
+impl<const N: usize> ChaseState<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The budget consumption observed so far.
     fn report(&self) -> BudgetReport {
         BudgetReport::new(
@@ -1199,16 +1236,22 @@ impl ChaseState {
 /// does — needs exactly the authored clause index, and mapping that index back to a rule is
 /// the consumer's own table, because one rule may author several clauses.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChaseDerivation {
+pub struct ChaseDerivation<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The derived fact.
-    fact: Fact,
+    fact: ShapeFact<N>,
     /// The producing clause's index in authored program order.
     clause: usize,
 }
 
-impl ChaseDerivation {
+impl<const N: usize> ChaseDerivation<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The derived fact.
-    pub fn fact(&self) -> &Fact {
+    pub fn fact(&self) -> &ShapeFact<N> {
         &self.fact
     }
 
@@ -1226,13 +1269,16 @@ impl ChaseDerivation {
 /// A completed chase: the closed store, the facts it derived, the witnesses it invented,
 /// what it consumed, and the certificate that justified running it at all.
 #[derive(Debug, Clone)]
-pub struct ChaseOutcome {
+pub struct ChaseOutcome<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The universal model: the seeded EDB plus every derived fact.
-    facts: RelationStore,
+    facts: RelationStore<TermInterner, N>,
     /// Every derived fact, in commit order — round by round, and lexically within a round.
-    derived: Vec<Fact>,
+    derived: Vec<ShapeFact<N>>,
     /// The same facts with their producing clause, in the same order as `derived`.
-    derivations: Vec<ChaseDerivation>,
+    derivations: Vec<ChaseDerivation<N>>,
     /// The witnesses the chase invented.
     witnesses: SkolemRegistry,
     /// What the run consumed, against the limits it ran under.
@@ -1241,41 +1287,44 @@ pub struct ChaseOutcome {
     termination: ChaseTermination,
 }
 
-impl ChaseOutcome {
+impl<const N: usize> ChaseOutcome<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The universal model: the seeded EDB plus every derived fact.
-    pub fn facts(&self) -> &RelationStore {
+    pub fn facts(&self) -> &RelationStore<TermInterner, N> {
         &self.facts
     }
 
     /// Take ownership of the universal model.
-    pub fn into_facts(self) -> RelationStore {
+    pub fn into_facts(self) -> RelationStore<TermInterner, N> {
         self.facts
     }
 
     /// Every derived fact, in commit order.
     ///
-    /// The order is round by round and, within a round, total lexical
-    /// `(subject, predicate, object, graph)` order — so it is byte-deterministic while still
+    /// The order is round by round and, within a round, total lexical order
+    /// of each fact's terms — so it is byte-deterministic while still
     /// showing which layer of the fixpoint produced each fact. It is NOT globally sorted,
     /// because flattening the layers would discard that.
-    pub fn derived(&self) -> &[Fact] {
+    pub fn derived(&self) -> &[ShapeFact<N>] {
         &self.derived
     }
 
     /// Every derived fact with the clause that concluded it, in commit order.
     ///
-    /// Position `i` here is position `i` of [`Self::derived`] — the same facts, in the same
+    /// Entry `i` here is entry `i` of [`Self::derived`] — the same facts, in the same
     /// order, with the attribution attached.
     ///
     /// **Which clause gets the credit.** Exactly one derivation per COMMITTED fact, and the
     /// credit goes to the FIRST commit: a fact a later round re-derives is already in the
     /// store and never enters the vector again, so it keeps the attribution it entered the
     /// closure with. Within a single round the round's candidates are accumulated in a
-    /// `BTreeMap` keyed by the fact's four lexical surfaces and attributed by the LOWEST
+    /// `BTreeMap` keyed by the fact's lexical surfaces and attributed by the LOWEST
     /// authored clause index that produced them, so "first" is decided by the program and
     /// the data — never by which clause the loop happened to reach first, and never by the
     /// order the join enumerated rows in.
-    pub fn derivations(&self) -> &[ChaseDerivation] {
+    pub fn derivations(&self) -> &[ChaseDerivation<N>] {
         &self.derivations
     }
 
@@ -1332,7 +1381,13 @@ impl ChaseOutcome {
 /// # Errors
 ///
 /// Any [`ChaseError`].
-pub fn chase(program: &[DlClause], edb: RelationStore) -> Result<ChaseOutcome, ChaseError> {
+pub fn chase<const N: usize>(
+    program: &[DlClause<N>],
+    edb: RelationStore<TermInterner, N>,
+) -> Result<ChaseOutcome<N>, ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
     chase_until(program, edb, None)
 }
 
@@ -1346,11 +1401,14 @@ pub fn chase(program: &[DlClause], edb: RelationStore) -> Result<ChaseOutcome, C
 /// # Errors
 ///
 /// [`ChaseError::Stopped`] if `stop` fired, and every error [`chase`] returns.
-pub fn chase_until(
-    program: &[DlClause],
-    edb: RelationStore,
+pub fn chase_until<const N: usize>(
+    program: &[DlClause<N>],
+    edb: RelationStore<TermInterner, N>,
     stop: Option<&dyn StopSignal>,
-) -> Result<ChaseOutcome, ChaseError> {
+) -> Result<ChaseOutcome<N>, ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
     chase_with(program, edb, &EvalOptions::default(), stop)
 }
 
@@ -1358,13 +1416,16 @@ pub fn chase_until(
 /// # Errors
 /// Returns exact protected/undecidable head refusal before the ordinary
 /// executor's fragment checks, then the same errors as [`chase_with`].
-pub fn chase_with_declarations(
-    program: &[DlClause],
-    edb: RelationStore,
+pub fn chase_with_declarations<const N: usize>(
+    program: &[DlClause<N>],
+    edb: RelationStore<TermInterner, N>,
     options: &EvalOptions,
     stop: Option<&dyn StopSignal>,
     declarations: &crate::admission::NeverDeriveDeclarations,
-) -> Result<ChaseOutcome, ChaseError> {
+) -> Result<ChaseOutcome<N>, ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
     declarations
         .admit(program)
         .map_err(ChaseError::NeverDerive)?;
@@ -1382,12 +1443,15 @@ pub fn chase_with_declarations(
 /// # Errors
 ///
 /// Every error [`chase_until`] returns.
-pub fn chase_with(
-    program: &[DlClause],
-    edb: RelationStore,
+pub fn chase_with<const N: usize>(
+    program: &[DlClause<N>],
+    edb: RelationStore<TermInterner, N>,
     options: &EvalOptions,
     stop: Option<&dyn StopSignal>,
-) -> Result<ChaseOutcome, ChaseError> {
+) -> Result<ChaseOutcome<N>, ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
     let termination = certify(program);
     if let ChaseTermination::Unbounded { violations } = termination {
         return Err(ChaseError::NonTerminating { violations });
@@ -1417,7 +1481,7 @@ pub fn chase_with(
         // The credit goes to the LOWEST authored clause index that produced the fact
         // (`or_insert` over clauses visited in program order), so attribution is a function
         // of the program and the data rather than of the traversal.
-        let mut pending: BTreeMap<Fact, usize> = BTreeMap::new();
+        let mut pending: BTreeMap<ShapeFact<N>, usize> = BTreeMap::new();
         let seed = Binding::new();
 
         for firing in &firings {
@@ -1480,13 +1544,9 @@ pub fn chase_with(
 
         // A fact an earlier round already committed keeps the attribution it entered the
         // closure with: it is in the store, so it is filtered out here and never re-credited.
-        let fresh: Vec<ChaseDerivation> = pending
+        let fresh: Vec<ChaseDerivation<N>> = pending
             .into_iter()
-            .filter(|(fact, _)| {
-                !state
-                    .store
-                    .contains(&fact.subject, &fact.predicate, &fact.object, &fact.graph)
-            })
+            .filter(|(fact, _)| !state.store.contains_row(Arity::<N>::fact_terms(fact)))
             .map(|(fact, clause)| ChaseDerivation { fact, clause })
             .collect();
         if fresh.is_empty() {
@@ -1509,9 +1569,7 @@ pub fn chase_with(
         }
         for derivation in fresh {
             let fact = &derivation.fact;
-            state
-                .store
-                .insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph)?;
+            state.store.insert_row(Arity::<N>::fact_terms(fact))?;
             state.derivations.push(derivation);
         }
         state.check_budget()?;
@@ -2395,7 +2453,7 @@ mod tests {
         assert!(outcome.witnesses().is_empty());
         assert_eq!(outcome.facts().row_count(), 1);
         assert_eq!(
-            certify(&[]),
+            certify::<4>(&[]),
             ChaseTermination::WeaklyAcyclic {
                 positions: 0,
                 existential_edges: 0

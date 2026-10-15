@@ -9,12 +9,16 @@
 //! snapshot keep no whole-dictionary, block-directory or translation array.
 
 mod build;
+#[cfg(not(target_arch = "wasm32"))]
+mod file;
 mod format;
 mod query;
 mod session;
 mod stack;
 
 pub use build::{SegmentedBuildLimits, SegmentedBuilder, SegmentedImage};
+#[cfg(not(target_arch = "wasm32"))]
+pub use file::SegmentedFileProvider;
 pub use query::{
     SegmentedStackQuery, SegmentedStackSource, SegmentedStackTerm, SegmentedStackTermGuard,
 };
@@ -386,11 +390,12 @@ impl SegmentedReceipt {
 /// A bounded resident byte provider, useful for fixtures and browser-owned bytes.
 /// The source bytes are outside a reader's residency budget; the reader's copies,
 /// pins, metadata, scratch and exact evidence are inside it.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SegmentedBytes {
     bytes: Arc<[u8]>,
     snapshot: SegmentedSnapshot,
 }
+purrdf_hash::debug_non_exhaustive!(SegmentedBytes { snapshot });
 
 impl SegmentedBytes {
     /// Attach bytes to their representation identity. Attachment is checked against

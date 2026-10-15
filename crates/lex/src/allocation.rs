@@ -180,10 +180,12 @@ pub enum CapacitySpace {
     DatalogMetas,
     /// Datalog atomic symbols.
     DatalogSymbols,
+    /// Resident graph-free asserted triples.
+    Triples,
 }
 
 impl CapacitySpace {
-    const NAMES: [(Self, &'static str); 22] = [
+    const NAMES: [(Self, &'static str); 23] = [
         (Self::LocalTerms, "rdf-local-terms"),
         (Self::LocalTermBytes, "rdf-local-text"),
         (Self::GlobalTerms, "rdf-global-terms"),
@@ -206,6 +208,7 @@ impl CapacitySpace {
         (Self::DatalogNodes, "datalog-nodes"),
         (Self::DatalogMetas, "datalog-metavariables"),
         (Self::DatalogSymbols, "datalog-symbols"),
+        (Self::Triples, "rdf-triples"),
     ];
 
     /// Stable allocation-free identity for error publication.
@@ -512,12 +515,17 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
             .size();
         self.add(next)?;
         let mut replacement = Vec::new();
-        replacement
-            .try_reserve_exact(required)
-            .map_err(|_| StorageError::AllocationFailed)?;
+        if replacement.try_reserve_exact(required).is_err() {
+            drop(replacement);
+            // Keep the allocator's original failure if a caller refuses refund.
+            let _ = self.release_bytes(next);
+            return Err(StorageError::AllocationFailed);
+        }
         // Global Vec's exact reservation requests precisely the certified Layout.
         // Refuse a violated allocator/collection certificate before using it.
         if size_of::<T>() != 0 && replacement.capacity() != required {
+            drop(replacement);
+            let _ = self.release_bytes(next);
             return Err(StorageError::SizeOverflow);
         }
         replacement.append(values);
@@ -985,6 +993,35 @@ mod resumed_memory_regressions {
             self.live = live;
             Ok(())
         }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn failed_array_allocation_refunds_only_the_replacement_layout() {
+        let mut grant = OriginalGrant {
+            limit: usize::MAX,
+            ..OriginalGrant::default()
+        };
+        let mut original = Vec::<u8>::new();
+        let mut memory = Memory::new(&mut grant);
+        memory.reserve(&mut original, 13).unwrap();
+        original.extend_from_slice(b"original");
+        // A valid Layout whose native allocation cannot fit the address space.
+        // Vec reports allocator refusal without an infallible allocation or OOM.
+        let impossible = usize::try_from(isize::MAX).unwrap();
+        assert_eq!(
+            memory.reserve(&mut original, impossible),
+            Err(StorageError::AllocationFailed)
+        );
+        assert_eq!(original, b"original");
+        assert_eq!(original.capacity(), 13);
+        assert_eq!(memory.admitted_bytes(), 13);
+        assert_eq!(memory.admission_mut().live, 13);
+        memory.reserve(&mut original, 32).unwrap();
+        assert_eq!(original, b"original");
+        assert_eq!(memory.admitted_bytes(), 32);
+        memory.release_vec(original).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]

@@ -485,7 +485,9 @@ mod bounded_native_workspace {
             .unwrap();
         let opening_evidence = source.evidence();
         let opening_live = opening_evidence.live_bytes();
-        let opening_owners = opening_live - opening_evidence.unpinned_cache_bytes();
+        let opening_owners = opening_live
+            - opening_evidence.unpinned_cache_bytes()
+            - opening_evidence.bookkeeping_bytes();
         let before_searches = observations.searches();
         let before_candidates = observations.graph_candidates();
         let error = engine
@@ -517,7 +519,7 @@ mod bounded_native_workspace {
         drop(error);
         let released = source.evidence();
         assert_eq!(
-            released.live_bytes() - released.unpinned_cache_bytes(),
+            released.live_bytes() - released.unpinned_cache_bytes() - released.bookkeeping_bytes(),
             opening_owners,
             "a failed native beam must release every query-owned grant"
         );

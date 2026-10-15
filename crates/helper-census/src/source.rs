@@ -212,7 +212,7 @@ pub(crate) struct Workspace {
     pub(crate) rule_hits: Vec<crate::rules::RuleHit>,
     /// Literal-preserving identities of shipping source for capacity proofs.
     pub(crate) capacity_sources: BTreeMap<String, String>,
-    /// Complete shipping source-reference closure of the crate-private constructor.
+    /// Shipping constructor references and the frozen lexical owner's visibility domain.
     pub(crate) capacity_constructors: BTreeSet<String>,
     pending: Vec<Pending>,
     /// Shipping files already examined for logical capacity panics.
@@ -335,6 +335,11 @@ impl Workspace {
             is_outside_or_generated(context.package_dir, file)
         };
         if excluded {
+            if context.shipping && crate::capacity::frozen_owner_domain(context.package, module) {
+                self.errors.push(format!(
+                    "{file}: shipping frozen-owner module {module} is outside the audited source domain"
+                ));
+            }
             return;
         }
         let read;
@@ -387,6 +392,12 @@ impl Workspace {
     }
 
     fn walk_items(&mut self, context: &Context<'_>, place: &Place<'_>, items: &[syn::Item]) {
+        // FrozenTerms' fields are visible to ir and its descendants. Pin that
+        // entire shipping owner domain, including inline and #[path] modules,
+        // so a new sibling writer cannot bypass the constructor-token closure.
+        if context.shipping && crate::capacity::frozen_owner_domain(context.package, place.module) {
+            self.capacity_constructors.insert(place.file.to_owned());
+        }
         for item in items {
             if is_test_only(item_attrs(item)) {
                 continue;

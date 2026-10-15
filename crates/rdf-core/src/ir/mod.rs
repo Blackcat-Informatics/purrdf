@@ -30,6 +30,7 @@ mod cursor;
 pub mod dataset;
 /// Deterministic, mmap-native embedding companions bound to exact pack bytes.
 pub mod embedding;
+mod frozen_terms;
 // The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl.
 pub mod mutable;
 pub mod view_accounting;
@@ -60,9 +61,12 @@ pub mod pack;
 pub mod skolem;
 pub mod term;
 mod term_walk;
+pub mod triple;
 pub mod validate;
 
-pub use builder::{NativeBuildError, RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
+pub use builder::{
+    NativeBuildError, RdfDatasetBuilder, TripleDatasetBuilder, ValidatedRdfDatasetBuilder,
+};
 pub use bundle::{GtsBundle, RdfEnvelope};
 pub use canon::{
     BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
@@ -106,6 +110,8 @@ pub use pipeline_bundle::{
     BundleDigestWork, CanonScopeName, GraphLayer, HandleEntry, HandleKey, PIPELINE_ROOT_DOMAIN,
     PipelineBundle, PipelineBundleError, PipelineViewBundle,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use segmented::SegmentedFileProvider;
 pub use segmented::{
     SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError, SegmentedEvidence,
     SegmentedExportError, SegmentedHandle, SegmentedImage, SegmentedLayer, SegmentedLayerMetadata,
@@ -121,6 +127,10 @@ pub use term_walk::{
     Nested, OwnedTermFoldError, TermBox, TermVisit, fold_term, fold_workspace_bound,
     try_fold_nested, try_fold_nested_with_memory, try_fold_term, try_fold_term_with_memory,
     try_fold_term_with_storage, visit_nested,
+};
+pub use triple::{
+    TripleDataset, TripleIds, TripleOrder, TripleRead, TripleReadError, TripleReifierRow,
+    TripleReservation, TripleRows, TripleStorageLayout,
 };
 
 pub use composite::{

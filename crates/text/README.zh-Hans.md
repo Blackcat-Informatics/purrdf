@@ -18,7 +18,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
-`purrdf-text` 是 PurRDF 工具包的内存全文索引。它从冻结数据集中读取 RDF 1.2 字面量，按明确解析的 Unicode／词典配置分析文本，并以精确 BM25F 分数回答排序查询。[分析与辅助检索](../../docs/design/text-analysis.md)说明限定作用域的变音符号、英语词干提取、五套完整的基线词典、emoji、HTML 字符引用、来源证据、位置子串以及独立的汉字检索检索结果生成器。
+`purrdf-text` 是 PurRDF 工具包的内存全文索引。它从冻结数据集中读取 RDF 1.2 字面量，按明确解析的 Unicode／词典配置分析文本，并以精确 BM25F 分数回答排序查询。[分析与辅助检索](../../docs/design/text-analysis.md)说明限定作用域的变音符号、英语词干提取、五套完整的基线词典、emoji、HTML 字符引用、来源证据、位置子串以及独立的汉字检索结果生成器。
 
 ## 由调用方提供的 IRI
 
@@ -41,7 +41,11 @@ PurRDF 不生成词汇表。此 crate 通过求值器的属性函数扩展接口
 其中的 surface-presence 字节区分被省略的索引和空索引。两种模式的索引指纹都会
 有意改变；来源指纹和序列化排序结果仍保留原有编码。
 
-排序统一使用含字段的 BM25F 路径，单字段情况也一样。不可变的 `RankingProfile` 将调用方指定的命名字段、每个字段的权重与长度归一化、完整的谓词路由、精确运算、查询聚合与字段总体统计方式绑定到同一指纹。`k1 = 1.2` 固定不变。`RankingProfile::single_field()` 显式把每个选定谓词路由到同一字段，权重为一，`b = 0.75`。
+`TextIndexConfig::<GraphFree>::for_triples` 选择按主体和语言组织的文档，以及仅按语言划分的分区。
+其 `purrdf-text/triples/index/v1` 身份包含相同的 surface-presence 字段，并省略所有图坐标和选择器。
+独立的 `purrdf-text/triples/source/v1` 身份覆盖来源三元组，不因省略 surface index 而改变。
+
+排序统一使用含字段的 BM25F 路径，单字段情况也一样。不可变的 `RankingProfile` 将调用方指定的命名字段、每个字段的权重与长度归一化、完整的谓词路由、精确运算、查询聚合与字段总体统计方式绑定到同一指纹。`PreparedQuery` 则根据语料统计单独携带该查询的认证分数上界。`k1 = 1.2` 固定不变。`RankingProfile::single_field()` 显式把每个选定谓词路由到同一字段，权重为一，`b = 0.75`。
 
 `TextIndex::from_dataset_with_ranking` 按显式配置建立索引；`with_ranking_profile` 利用保留的谓词级词元事实对现有索引重新加权或重映射，无须再次切词。分析器身份与排序身份分开。纯函数式 `PreparedCorpus` 和 `PreparedQuery` API 将同一评分实现提供给其他存储，并将缓存的 IDF 绑定到经验证的语料统计与不可变配置。
 

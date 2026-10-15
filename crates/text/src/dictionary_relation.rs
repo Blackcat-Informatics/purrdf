@@ -3,10 +3,10 @@
 
 //! Positional phrase rows through the ordinary property-function ingress.
 
-use crate::TextIndex;
 use crate::dictionary::{
     Dictionary, DictionaryCache, DictionaryEntry, DictionaryMatch, DictionaryMatches, Occurrence,
 };
+use crate::{CorpusProfile, GraphLanguage, TextIndex};
 use purrdf_core::datatype::{XSD_INTEGER, XSD_STRING};
 use purrdf_core::{TermValue, binding_pattern::BindingPattern, small::Shared};
 use purrdf_sparql_eval::property_fn::{
@@ -22,17 +22,17 @@ use std::sync::Arc;
 /// `?doc caller:phrase(?phrase ?language ?start ?end)`, with half-open positions.
 /// The IRI is supplied by the caller. The existing single-token relation is unchanged.
 #[derive(Debug)]
-pub struct PhraseOccurrenceRelation {
-    index: Arc<TextIndex>,
+pub struct PhraseOccurrenceRelation<P: CorpusProfile = GraphLanguage> {
+    index: Arc<TextIndex<P>>,
     cache: DictionaryCache,
     generation: Arc<str>,
     modes: [BindingPattern; 1],
     predicate: Option<u32>,
     rows: u64,
 }
-impl PhraseOccurrenceRelation {
+impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
     /// Match phrases over all configured indexed predicates, preserving original positions.
-    pub fn new(index: Arc<TextIndex>) -> Self {
+    pub fn new(index: Arc<TextIndex<P>>) -> Self {
         let generation = crate::relation::index_generation(&index);
         let rows = index.phrase_row_bound();
         Self {
@@ -95,7 +95,7 @@ impl PhraseOccurrenceRelation {
         )
     }
 }
-impl PropertyFunction for PhraseOccurrenceRelation {
+impl<P: CorpusProfile> PropertyFunction for PhraseOccurrenceRelation<P> {
     fn volatility(&self) -> Volatility {
         Volatility::Stable
     }
@@ -168,7 +168,7 @@ impl PropertyFunction for PhraseOccurrenceRelation {
             workspace,
         )?;
         let control = workspace.charge(
-            u64::try_from(size_of::<PhraseBatch>())
+            u64::try_from(size_of::<PhraseBatch<P>>())
                 .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
         )?;
         let batch = purrdf_core::small::try_boxed(PhraseBatch {
@@ -210,16 +210,16 @@ fn phrase<'a>(args: &PfArgs<'a>, workspace: &WorkspaceCapability) -> Result<&'a 
     })
 }
 #[derive(Debug)]
-struct Results {
-    matches: DictionaryMatches,
+struct Results<P: CorpusProfile> {
+    matches: DictionaryMatches<P>,
     _allocation: WorkspaceAllocation,
 }
-fn share(
-    matches: DictionaryMatches,
+fn share<P: CorpusProfile>(
+    matches: DictionaryMatches<P>,
     workspace: &WorkspaceCapability,
-) -> Result<Shared<Results>, EvalError> {
+) -> Result<Shared<Results<P>>, EvalError> {
     let allocation = workspace.charge(
-        u64::try_from(Shared::<Results>::allocation_layout().size())
+        u64::try_from(Shared::<Results<P>>::allocation_layout().size())
             .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
     )?;
     Shared::try_new(Results {
@@ -230,12 +230,12 @@ fn share(
         construct: "dictionary matches owner",
     })
 }
-struct PhraseBatch {
-    results: Shared<Results>,
+struct PhraseBatch<P: CorpusProfile> {
+    results: Shared<Results<P>>,
     generation: Arc<str>,
     _allocation: WorkspaceAllocation,
 }
-impl DictionaryBatch for PhraseBatch {
+impl<P: CorpusProfile> DictionaryBatch for PhraseBatch<P> {
     fn work(&self) -> purrdf_sparql_eval::shapes::ShapeWork {
         let work = self.results.matches.work();
         purrdf_sparql_eval::shapes::ShapeWork {
@@ -262,8 +262,8 @@ impl DictionaryBatch for PhraseBatch {
         )
     }
 }
-struct PhraseCursor {
-    results: Shared<Results>,
+struct PhraseCursor<P: CorpusProfile> {
+    results: Shared<Results<P>>,
     at: usize,
     end: usize,
     bound: AdmittedVec<Option<WorkspaceTerm>>,
@@ -272,8 +272,8 @@ struct PhraseCursor {
     work: u64,
     workspace: WorkspaceCapability,
 }
-fn cursor(
-    results: Shared<Results>,
+fn cursor<P: CorpusProfile>(
+    results: Shared<Results<P>>,
     ordinal: usize,
     args: &PfArgs<'_>,
     ceiling: Option<u64>,
@@ -314,7 +314,7 @@ fn cursor(
         "phrase occurrence cursor",
     )
 }
-impl PhraseCursor {
+impl<P: CorpusProfile> PhraseCursor<P> {
     fn next_owned(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
         while self.at < self.end && self.remaining != Some(0) {
             let matched = &self.results.matches.rows()[self.at];
@@ -354,7 +354,7 @@ impl PhraseCursor {
         Ok(None)
     }
 }
-impl PfCursor for PhraseCursor {
+impl<P: CorpusProfile> PfCursor for PhraseCursor<P> {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         self.next_owned()?
             .map(|row| {
@@ -379,13 +379,13 @@ impl PfCursor for PhraseCursor {
 
 // The literal path is the original positional-call join, not the automaton.
 // Terms are visited in phrase order and occurrences in cursor traversal order.
-fn literal_matches(
-    index: Arc<TextIndex>,
+fn literal_matches<P: CorpusProfile>(
+    index: Arc<TextIndex<P>>,
     dictionary: Dictionary,
     phrase: &str,
     predicate: Option<u32>,
     workspace: &WorkspaceCapability,
-) -> Result<DictionaryMatches, EvalError> {
+) -> Result<DictionaryMatches<P>, EvalError> {
     let terms = index
         .query_terms_owned(phrase, workspace)
         .map_err(EvalError::from)?;

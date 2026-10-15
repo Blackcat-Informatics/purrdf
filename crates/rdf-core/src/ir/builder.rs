@@ -43,6 +43,9 @@ use crate::RdfLocation;
 // hot interning path.
 use crate::hash::hash_of;
 
+mod triple;
+pub use triple::TripleDatasetBuilder;
+
 fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
     match lookup {
         TermLookup::Iri(iri) => crate::hash::hash_iri_for_interner(iri),
@@ -110,6 +113,7 @@ impl LocalCapacity {
                 CapacitySpace::LocalTerms | CapacitySpace::DeltaTerms => terms,
                 CapacitySpace::LocalTermBytes => text,
                 CapacitySpace::Quads
+                | CapacitySpace::Triples
                 | CapacitySpace::Reifiers
                 | CapacitySpace::Annotations
                 | CapacitySpace::Permutation => rows,
@@ -351,6 +355,47 @@ struct Interner {
 }
 
 impl Interner {
+    fn ensure_reifies<S: Admission + ?Sized>(
+        &mut self,
+        predicate: &mut Option<TermId>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        if predicate.is_none() {
+            *predicate = Some(
+                self.intern_with_memory(TermLookup::Iri(purrdf_iri::vocab::rdf::REIFIES), memory)?,
+            );
+        }
+        Ok(())
+    }
+
+    /// Transfer the original lexical allocations and reverse index unchanged.
+    fn freeze_with_memory<S: Admission + ?Sized>(
+        self,
+        derivation_predicate: Option<String>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<super::frozen_terms::FrozenTerms, StorageError> {
+        // Configuration does not intern a missing predicate at freeze.
+        let derivation_predicate_iri = derivation_predicate
+            .map(|text| -> Result<Box<str>, StorageError> {
+                let exact = memory.string(&text)?;
+                memory.release_string(text)?;
+                Ok(exact.into_boxed_str())
+            })
+            .transpose()?;
+        let derivation_predicate = derivation_predicate_iri
+            .as_deref()
+            .and_then(|iri| self.lookup_iri(iri));
+        Ok(super::frozen_terms::FrozenTerms {
+            arena: memory.boxed_slice(self.arena)?,
+            terms: memory.boxed_slice(self.terms)?,
+            term_index: self.index,
+            content_ids: self.content_ids,
+            content_scheme: self.content_scheme,
+            derivation_predicate,
+            derivation_predicate_iri,
+        })
+    }
+
     fn new() -> Self {
         Self {
             capacity: LocalCapacity::Native,
@@ -990,15 +1035,7 @@ impl RdfDatasetBuilder {
             interner.capacity,
             CapacitySpace::Reifiers,
             memory,
-            |memory| {
-                if predicate.is_none() {
-                    *predicate = Some(interner.intern_with_memory(
-                        TermLookup::Iri(purrdf_iri::vocab::rdf::REIFIES),
-                        memory,
-                    )?);
-                }
-                Ok(())
-            },
+            |memory| interner.ensure_reifies(predicate, memory),
         )?;
         Ok(())
     }
@@ -2925,21 +2962,6 @@ impl RdfDatasetBuilder {
         memory.release_bytes(discarded_indexes)?;
         memory.release_bytes(scope_bytes)?;
 
-        // Resolve the configured derivation-predicate IRI to its frozen `TermId`
-        // via a lookup-only probe (never interns): terms are frozen from this
-        // point on, so an IRI that was configured but never actually interned
-        // resolves to `None` — "no derivations present", not an error.
-        let derivation_predicate_iri = derivation_predicate
-            .map(|text| -> Result<Box<str>, StorageError> {
-                let exact = memory.string(&text)?;
-                memory.release_string(text)?;
-                Ok(exact.into_boxed_str())
-            })
-            .transpose()?;
-        let derivation_predicate = derivation_predicate_iri
-            .as_deref()
-            .and_then(|iri| interner.lookup_iri(iri));
-
         // Deterministic, reproducible frozen order: sort by id tuples. Terms keep
         // their interning (allocation) order, which is itself deterministic for a
         // fixed push sequence.
@@ -3047,23 +3069,17 @@ impl RdfDatasetBuilder {
             !named_graphs.is_empty(),
             &reifiers,
             &annotations,
-            &locations,
+            !locations.is_empty(),
         );
 
         Ok(RdfDataset::from_parts(
-            memory.boxed_slice(interner.arena)?,
-            memory.boxed_slice(interner.terms)?,
+            interner.freeze_with_memory(derivation_predicate, memory)?,
             memory.boxed_slice(quads)?,
             memory.boxed_slice(reifiers)?,
             memory.boxed_slice(annotations)?,
             memory.boxed_slice(locations)?,
             caps,
             memory.boxed_slice(named_graphs)?,
-            interner.index,
-            interner.content_ids,
-            interner.content_scheme,
-            derivation_predicate,
-            derivation_predicate_iri,
         ))
     }
 }
@@ -3087,12 +3103,12 @@ fn owned_binding(scope: BlankScope) -> crate::cdt_blank::BlankBinding {
 }
 
 /// Compute the dataset's capability flags ONCE at freeze, from the frozen tables.
-fn compute_capabilities(
+fn compute_capabilities<R, A>(
     terms: &[InternedTerm],
     named_graphs: bool,
-    reifiers: &[(TermId, TermId, Option<TermId>)],
-    annotations: &[(TermId, TermId, TermId, Option<TermId>)],
-    locations: &[(QuadHandle, RdfLocation)],
+    reifiers: &[R],
+    annotations: &[A],
+    source_locations: bool,
 ) -> RdfStoreCapabilities {
     RdfStoreCapabilities {
         named_graphs,
@@ -3101,7 +3117,7 @@ fn compute_capabilities(
             .any(|t| matches!(t, InternedTerm::Triple { .. })),
         reifiers: !reifiers.is_empty(),
         annotations: !annotations.is_empty(),
-        source_locations: !locations.is_empty(),
+        source_locations,
         // The frozen dataset is the hot graph only; envelope concerns (loss
         // records, lookaside) live elsewhere (C0.6).
         loss_records: false,

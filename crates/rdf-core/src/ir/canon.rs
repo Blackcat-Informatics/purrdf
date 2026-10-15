@@ -829,6 +829,7 @@ pub fn try_flat_digest_view<D: FallibleDatasetView>(
 /// The [`CanonScope`] naming `graph` in `view`, or `None` when `view` interns no such
 /// IRI (so no quad or statement row can carry it as a graph name).
 fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id>> {
+    view.require_named_graphs().ok()?;
     view.term_id_if_ready(&TermValue::iri(graph))
         .map(CanonScope::Graph)
 }

@@ -111,6 +111,7 @@ use crate::error::TextError;
 use crate::fixed::{Fixed, SCALE_DIGITS};
 use crate::index::{PartitionKey, TextIndex};
 use crate::ranking::{BoundedScore, PreparedCorpus, PreparedQuery, ScoreBound};
+use crate::{CorpusProfile, GraphLanguage};
 
 /// The raw constants below are written at [`SCALE_DIGITS`] fractional digits, so
 /// the scale and the literals cannot drift apart unnoticed.
@@ -219,7 +220,7 @@ impl<T> Default for Constraint<T> {
 /// dropping whole partitions cannot change a surviving row's rank, since no
 /// surviving row was ever compared against a dropped one.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct PartitionFilter {
+pub struct PartitionFilter<P: CorpusProfile = GraphLanguage> {
     /// The graph dimension.
     graph: Constraint<TermValue>,
     /// The language dimension.
@@ -234,12 +235,21 @@ pub struct PartitionFilter {
     /// pair can express without also admitting a partition the subject is
     /// absent from. Ranking that extra partition would be work whose every row
     /// is then discarded.
-    keys: Option<Vec<PartitionKey>>,
+    keys: Option<Vec<PartitionKey<P>>>,
 }
 
-purrdf_hash::default_from_new!(PartitionFilter => unconstrained);
+purrdf_hash::default_from_new!([P: CorpusProfile] PartitionFilter<P> => unconstrained);
 
-impl PartitionFilter {
+impl PartitionFilter<GraphLanguage> {
+    /// This filter with its graph dimension replaced.
+    #[must_use]
+    pub fn with_graph(mut self, graph: Constraint<TermValue>) -> Self {
+        self.graph = graph;
+        self
+    }
+}
+
+impl<P: CorpusProfile> PartitionFilter<P> {
     /// A filter that admits every partition; [`Default`] delegates here.
     #[must_use]
     pub const fn unconstrained() -> Self {
@@ -248,13 +258,6 @@ impl PartitionFilter {
             language: Constraint::Any,
             keys: None,
         }
-    }
-
-    /// This filter with its graph dimension replaced.
-    #[must_use]
-    pub fn with_graph(mut self, graph: Constraint<TermValue>) -> Self {
-        self.graph = graph;
-        self
     }
 
     /// This filter with its language dimension replaced.
@@ -286,7 +289,7 @@ impl PartitionFilter {
     /// subject the index holds no text for, is genuinely empty, and the honest
     /// answer is to rank nothing rather than to rank everything and discard it.
     #[must_use]
-    pub fn restricted_to(mut self, keys: Vec<PartitionKey>) -> Self {
+    pub fn restricted_to(mut self, keys: Vec<PartitionKey<P>>) -> Self {
         let mut keys = keys;
         keys.sort();
         keys.dedup();
@@ -295,16 +298,16 @@ impl PartitionFilter {
     }
 
     /// The explicit allow-list, or `None` when the filter carries none.
-    pub fn keys(&self) -> Option<&[PartitionKey]> {
+    pub fn keys(&self) -> Option<&[PartitionKey<P>]> {
         self.keys.as_deref()
     }
 
     /// Whether `key` names a partition this filter admits.
-    pub fn matches(&self, key: &PartitionKey) -> bool {
+    pub fn matches(&self, key: &PartitionKey<P>) -> bool {
         let graph = match &self.graph {
             Constraint::Any => true,
-            Constraint::Absent => key.graph().is_none(),
-            Constraint::Exactly(name) => key.graph() == Some(name),
+            Constraint::Absent => key.graph_coordinate().is_none(),
+            Constraint::Exactly(name) => key.graph_coordinate() == Some(name),
         };
         let language = match &self.language {
             Constraint::Any => true,
@@ -338,9 +341,9 @@ impl PartitionFilter {
 /// and `1` here means first *in this partition*, not first in the index.
 ///
 /// [`Analyzer`]: crate::Analyzer
-pub fn rank_partition(
-    index: &TextIndex,
-    partition: &PartitionKey,
+pub fn rank_partition<P: CorpusProfile>(
+    index: &TextIndex<P>,
+    partition: &PartitionKey<P>,
     needle: &[String],
     limit: Option<u64>,
 ) -> Result<Vec<Scored>, TextError> {
@@ -367,10 +370,10 @@ pub fn rank_partition(
 ///   every partition, yields nothing: ranks are 1-based, so `0` names no row, and
 ///   asking for a row a partition does not have is a question with an honest empty
 ///   answer rather than an error.
-pub fn select(
-    index: &TextIndex,
+pub fn select<P: CorpusProfile>(
+    index: &TextIndex<P>,
     needle: &[String],
-    filter: &PartitionFilter,
+    filter: &PartitionFilter<P>,
     ceiling: Option<u64>,
     partition_rank: Option<u32>,
 ) -> Result<Vec<Scored>, TextError> {
@@ -407,10 +410,10 @@ pub struct ScopedTerm<'a> {
 /// # Errors
 /// Refuses undeclared field predicates, scopes outside the analyzed needle,
 /// or the original scorer's typed numeric/data failure.
-pub fn select_scoped(
-    index: &TextIndex,
+pub fn select_scoped<P: CorpusProfile>(
+    index: &TextIndex<P>,
     needle: &[String],
-    filter: &PartitionFilter,
+    filter: &PartitionFilter<P>,
     scopes: &[ScopedTerm<'_>],
     ceiling: Option<u64>,
     partition_rank: Option<u32>,
@@ -426,10 +429,10 @@ pub fn select_scoped(
     )
 }
 
-pub(crate) fn select_scoped_counted(
-    index: &TextIndex,
+pub(crate) fn select_scoped_counted<P: CorpusProfile>(
+    index: &TextIndex<P>,
     needle: &[String],
-    filter: &PartitionFilter,
+    filter: &PartitionFilter<P>,
     scopes: &[ScopedTerm<'_>],
     ceiling: Option<u64>,
     partition_rank: Option<u32>,
@@ -464,8 +467,8 @@ pub(crate) fn select_scoped_counted(
     )
 }
 
-pub(crate) fn matches_scopes(
-    index: &TextIndex,
+pub(crate) fn matches_scopes<P: CorpusProfile>(
+    index: &TextIndex<P>,
     document: u32,
     scopes: &[ScopedTerm<'_>],
 ) -> Result<bool, TextError> {
@@ -481,8 +484,8 @@ pub(crate) fn matches_scopes(
 /// Field scope changes which postings establish membership, not conjunction of
 /// the tokens or any scoring weight. Explicit `ScopedTerm` requirements above
 /// instead denote separately required token/field constraints.
-pub(crate) fn matches_predicate<'a>(
-    index: &TextIndex,
+pub(crate) fn matches_predicate<'a, P: CorpusProfile>(
+    index: &TextIndex<P>,
     document: u32,
     terms: impl IntoIterator<Item = &'a str>,
     predicate: Option<&TermValue>,
@@ -498,10 +501,10 @@ pub(crate) fn matches_predicate<'a>(
     Ok(false)
 }
 
-fn select_counted_with_membership(
-    index: &TextIndex,
+fn select_counted_with_membership<P: CorpusProfile>(
+    index: &TextIndex<P>,
     needle: &[String],
-    filter: &PartitionFilter,
+    filter: &PartitionFilter<P>,
     ceiling: Option<u64>,
     partition_rank: Option<u32>,
     work: &mut ScoringWork,
@@ -511,7 +514,7 @@ fn select_counted_with_membership(
         index,
         needle.iter().map(String::as_str),
         CandidateSelection {
-            partitions: |key: &PartitionKey| filter.matches(key),
+            partitions: |key: &PartitionKey<P>| filter.matches(key),
             candidates: membership,
         },
         ceiling,
@@ -523,10 +526,10 @@ fn select_counted_with_membership(
 }
 
 /// [`select`], adding the work it did to `work`.
-pub(crate) fn select_counted(
-    index: &TextIndex,
+pub(crate) fn select_counted<P: CorpusProfile>(
+    index: &TextIndex<P>,
     needle: &[String],
-    filter: &PartitionFilter,
+    filter: &PartitionFilter<P>,
     ceiling: Option<u64>,
     partition_rank: Option<u32>,
     work: &mut ScoringWork,
@@ -545,10 +548,10 @@ pub(crate) fn select_counted(
     Ok(rows.into_iter().collect())
 }
 
-pub(crate) fn select_counted_owned<'a>(
-    index: &TextIndex,
+pub(crate) fn select_counted_owned<'a, P: CorpusProfile>(
+    index: &TextIndex<P>,
     needle: impl ExactSizeIterator<Item = &'a str>,
-    matches: impl Fn(&PartitionKey) -> bool,
+    matches: impl Fn(&PartitionKey<P>) -> bool,
     ceiling: Option<u64>,
     partition_rank: Option<u32>,
     work: &mut ScoringWork,
@@ -574,11 +577,11 @@ pub(crate) struct CandidateSelection<P, M> {
     pub candidates: M,
 }
 
-pub(crate) fn select_counted_membership_owned<'a, E: From<TextError>>(
-    index: &TextIndex,
+pub(crate) fn select_counted_membership_owned<'a, E: From<TextError>, P: CorpusProfile>(
+    index: &TextIndex<P>,
     needle: impl ExactSizeIterator<Item = &'a str>,
     mut selection: CandidateSelection<
-        impl Fn(&PartitionKey) -> bool,
+        impl Fn(&PartitionKey<P>) -> bool,
         impl FnMut(u32) -> Result<bool, E>,
     >,
     ceiling: Option<u64>,
@@ -634,8 +637,8 @@ pub(crate) fn select_counted_membership_owned<'a, E: From<TextError>>(
 /// A `document` the index does not hold is a [`TextError::Data`] — the caller
 /// asked about something that is not there, which is a different thing from a
 /// document that scored nothing.
-pub fn explain(
-    index: &TextIndex,
+pub fn explain<P: CorpusProfile>(
+    index: &TextIndex<P>,
     document: u32,
     needle: &[String],
 ) -> Result<Vec<TermContribution>, TextError> {
@@ -750,9 +753,9 @@ pub(crate) fn distinct_terms_owned<'a>(
 }
 
 /// Rank one partition against already-distinct, already-sorted `terms`.
-fn rank_terms(
-    index: &TextIndex,
-    partition: &PartitionKey,
+fn rank_terms<P: CorpusProfile>(
+    index: &TextIndex<P>,
+    partition: &PartitionKey<P>,
     terms: &[&str],
     limit: Option<u64>,
     work: &mut ScoringWork,
@@ -770,9 +773,9 @@ fn rank_terms(
     .collect())
 }
 
-fn rank_terms_owned<E: From<TextError>>(
-    index: &TextIndex,
-    partition: &PartitionKey,
+fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
+    index: &TextIndex<P>,
+    partition: &PartitionKey<P>,
     terms: &[&str],
     limit: Option<u64>,
     work: &mut ScoringWork,
@@ -825,9 +828,9 @@ struct CandidateOccurrence<'a> {
 /// A document holding none of them is not a candidate. Candidate membership is
 /// independent of field weights: a matching document can legitimately score
 /// zero, and still participates in the canonical tie order.
-fn candidates_owned<E: From<TextError>>(
-    index: &TextIndex,
-    partition: &PartitionKey,
+fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
+    index: &TextIndex<P>,
+    partition: &PartitionKey<P>,
     terms: &[&str],
     work: &mut ScoringWork,
     workspace: &WorkspaceCapability,
@@ -898,9 +901,9 @@ fn candidates_owned<E: From<TextError>>(
 /// A document frequency is the length of the term's posting run within the
 /// partition, which [`TextIndex::document_frequency`] reads off the dictionary
 /// in two binary searches without visiting a single posting.
-fn prepare_terms<'c, 'p>(
-    index: &TextIndex,
-    partition: &PartitionKey,
+fn prepare_terms<'c, 'p, P: CorpusProfile>(
+    index: &TextIndex<P>,
+    partition: &PartitionKey<P>,
     corpus: &'c PreparedCorpus<'p>,
     terms: &[&str],
 ) -> Result<PreparedQuery<'c, 'p>, TextError> {
@@ -913,9 +916,9 @@ fn prepare_terms<'c, 'p>(
     )
 }
 
-fn prepare_terms_owned<'c, 'p>(
-    index: &TextIndex,
-    partition: &PartitionKey,
+fn prepare_terms_owned<'c, 'p, P: CorpusProfile>(
+    index: &TextIndex<P>,
+    partition: &PartitionKey<P>,
     corpus: &'c PreparedCorpus<'p>,
     terms: &[&str],
     workspace: &WorkspaceCapability,
@@ -936,8 +939,8 @@ fn prepare_terms_owned<'c, 'p>(
 /// occurrences; the point scorer hands it the postings its lookups located. Both
 /// reach the same additions in the same order, so the two scores are one number
 /// rather than two numbers that agree.
-fn score_document<'a>(
-    index: &TextIndex,
+fn score_document<'a, P: CorpusProfile>(
+    index: &TextIndex<P>,
     query: &PreparedQuery<'_, '_>,
     document: u32,
     held: impl Iterator<Item = (usize, &'a [(u32, u64)])>,
@@ -1001,8 +1004,8 @@ pub(crate) struct ScoringWork {
 ///
 /// Work is independent of the corpus: one binary search per needle term for its
 /// document frequency, and one field-input assembly per held term.
-pub(crate) fn score_located_owned(
-    index: &TextIndex,
+pub(crate) fn score_located_owned<P: CorpusProfile>(
+    index: &TextIndex<P>,
     document: u32,
     terms: &[&str],
     located: &[(usize, &[(u32, u64)])],

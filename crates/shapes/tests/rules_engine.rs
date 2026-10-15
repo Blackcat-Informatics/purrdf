@@ -202,6 +202,28 @@ fn global_rules_run_without_a_focus_node() {
     );
 }
 
+/// A legal empty CONSTRUCT produces no facts while its neighbour still executes.
+#[test]
+fn empty_construct_preserves_the_neighbouring_rule() {
+    let empty = r#"ex:empty a sh:SPARQLRule ;
+        sh:construct "CONSTRUCT {} WHERE { ?s ?p ?o }" ."#;
+    let neighbour = r#"ex:reverse a sh:SPARQLRule ;
+        sh:construct "CONSTRUCT { ?o ?p ?s } WHERE { ?s ?p ?o }" ."#;
+    let options = RuleOptions::default();
+    assert_eq!(run("ex:a ex:knows ex:b .", empty, &options).unwrap(), []);
+    let expected = run("ex:a ex:knows ex:b .", neighbour, &options).unwrap();
+    assert_eq!(expected.len(), 1);
+    assert_eq!(
+        run(
+            "ex:a ex:knows ex:b .",
+            &format!("{empty} {neighbour}"),
+            &options
+        )
+        .unwrap(),
+        expected,
+    );
+}
+
 /// A rule set selects its members and its included sets' members; the default rule
 /// set is every rule; an undeclared rule set is refused.
 #[test]
@@ -968,7 +990,18 @@ fn an_ill_formed_element_rule_is_refused() {
         vec![pattern(var("x"), "p", var("nowhere"))],
         vec![Element::Pattern(pattern(var("x"), "q", var("y")))],
     );
-    let err = evaluate(vec![unbound_head], "ex:a ex:q ex:b .").expect_err("ill formed");
+    let source = parse_turtle_to_dataset(&format!("{PREFIXES} ex:a ex:q ex:b ."), None).unwrap();
+    let view = Arc::new(purrdf_shapes::data_view::ShaclDatasetView::project(source));
+    let data = ShaclData::from_views(Arc::clone(&view), view, None);
+    let mut set = RuleSet {
+        rules: vec![unbound_head],
+        data: Vec::new(),
+        scheduling: Scheduling::Stratified,
+    };
+    let err = srl::evaluate(&set, &data, &Shapes::default(), &RuleOptions::default())
+        .expect_err("ill formed")
+        .to_string();
+    assert_eq!(data.view_stats()[0].materializations, 0);
     assert!(
         err.contains(&format!("<{EX}bad>")) && err.contains("not well formed"),
         "{err}"
@@ -978,12 +1011,11 @@ fn an_ill_formed_element_rule_is_refused() {
         vec![pattern(var("x"), "p", var("y"))],
         vec![Element::Pattern(pattern(var("x"), "q", var("y")))],
     );
-    assert_eq!(
-        evaluate(vec![fine], "ex:a ex:q ex:b .")
-            .expect("evaluates")
-            .len(),
-        1
-    );
+    set.rules = vec![fine];
+    let inferred =
+        srl::evaluate(&set, &data, &Shapes::default(), &RuleOptions::default()).expect("evaluates");
+    assert_eq!(inferred.inferred().len(), 1);
+    assert_eq!(data.view_stats()[0].materializations, 1);
 }
 
 /// The shape of the transitive-closure bench, pinned for correctness: a chain of `n`
