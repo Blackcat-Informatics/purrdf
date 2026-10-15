@@ -11,6 +11,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 - [Rust](getting-started/rust.md)
 - [Python](getting-started/python.md)
+  - [Python API guide](reference/python-api.md)
   - [Python API signatures](reference/python-api-signatures.md)
 - [JavaScript / WebAssembly](getting-started/javascript.md)
 - [C](getting-started/c.md)
