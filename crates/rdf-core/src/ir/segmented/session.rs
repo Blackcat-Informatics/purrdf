@@ -271,6 +271,11 @@ struct CacheEntry {
     slot: u64,
     block: Arc<CachedBlock>,
 }
+#[derive(Clone, Copy)]
+enum ReaderBuffer {
+    Cache,
+    Requests,
+}
 struct State {
     cache: Vec<CacheEntry>,
     requests: Vec<SegmentedRequest>,
@@ -282,6 +287,43 @@ struct State {
     // reservation has no cache backlink: resizing while holding State must not
     // lock State again.
     storage: super::query::QueryStorage,
+}
+
+impl State {
+    fn evict_one(&mut self) -> Result<bool, SegmentedError> {
+        let Some(index) = self
+            .cache
+            .iter()
+            .position(|entry| Arc::strong_count(&entry.block) == 1)
+        else {
+            return Ok(false);
+        };
+        self.cache.remove(index);
+        self.evictions = self
+            .evictions
+            .checked_add(1)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        Ok(true)
+    }
+
+    fn reserve_buffer(&mut self, buffer: ReaderBuffer) -> Result<(), SegmentedError> {
+        loop {
+            let result = match buffer {
+                ReaderBuffer::Cache => self
+                    .storage
+                    .run(|memory| memory.reserve_for_push(&mut self.cache)),
+                ReaderBuffer::Requests => self
+                    .storage
+                    .run(|memory| memory.reserve_for_push(&mut self.requests)),
+            };
+            // State is already locked. Evict here rather than installing a
+            // reservation backlink that would recursively acquire that lock.
+            if matches!(&result, Err(SegmentedError::Residency { .. })) && self.evict_one()? {
+                continue;
+            }
+            return result;
+        }
+    }
 }
 
 // Workspace growth and block loading evict through the same account. A pinned
@@ -307,17 +349,7 @@ fn make_room(
         if requested <= budget.limit && slots_available {
             return Ok(());
         }
-        if let Some(index) = state
-            .cache
-            .iter()
-            .position(|entry| Arc::strong_count(&entry.block) == 1)
-        {
-            state.cache.remove(index);
-            state.evictions = state
-                .evictions
-                .checked_add(1)
-                .ok_or(SegmentedError::AddressExhausted)?;
-        } else {
+        if !state.evict_one()? {
             let error = if state.cache.is_empty() {
                 SegmentedError::Residency {
                     requested,
@@ -857,9 +889,7 @@ impl SegmentedSession {
         {
             return Err(SegmentedError::Corrupt("range escapes certified provider"));
         }
-        state
-            .storage
-            .run(|memory| memory.reserve_for_push(&mut state.requests))?;
+        state.reserve_buffer(ReaderBuffer::Requests)?;
         state.requests.push(SegmentedRequest {
             snapshot: self
                 .identity
@@ -963,11 +993,13 @@ impl SegmentedSession {
             .and_then(|v| v.checked_add(overhead))
             .ok_or(SegmentedError::AddressExhausted)?;
         self.make_room(&mut state, charge, true)?;
-        let State { cache, storage, .. } = &mut *state;
-        if let Err(error) = storage.run(|memory| memory.reserve_for_push(cache)) {
+        if let Err(error) = state.reserve_buffer(ReaderBuffer::Cache) {
             state.error.get_or_insert_with(|| error.clone());
             return Err(error);
         }
+        // Admitted cache capacity can consume the room previously left for
+        // this block. Reclaim against the actual combined live layouts.
+        self.make_room(&mut state, charge, true)?;
         let mut reservation = self.budget.reserve(charge)?;
         let mut bytes = vec![
             0_u8;
@@ -1868,6 +1900,57 @@ mod operation_tests {
             assert!(matches!(session.block(slot), Err(error) if error == FIRST));
             assert_eq!(session.read_error(), Some(FIRST));
             assert_eq!(session.evidence().request_count(), before.request_count());
+        }
+    }
+
+    #[test]
+    fn reader_buffer_growth_reclaims_unpinned_blocks_before_refusal() {
+        const CEILING: u64 = 2_000_000;
+        let (image, _) = image("urn:reader-buffer-eviction");
+        for grow_cache in [false, true] {
+            let session = SegmentedSession::open(
+                Arc::new(image.provider()),
+                image.receipt(),
+                SegmentedReadLimits::new(CEILING, 8, 2000, 10_000_000, 4),
+            )
+            .unwrap();
+            let mut preload = vec![session.header.summaries.first];
+            if grow_cache {
+                preload.extend([
+                    session.header.dictionary.first,
+                    session.header.reverse.first,
+                ]);
+            }
+            for slot in preload {
+                drop(session.block(slot).unwrap());
+            }
+            {
+                let state = lock_read_state(&session.state);
+                let requests_full = state.requests.len() == state.requests.capacity();
+                let cache_full = state.cache.len() == state.cache.capacity();
+                drop(state);
+                assert!(requests_full);
+                assert_eq!(cache_full, grow_cache);
+            }
+            let before = session.evidence();
+            // The ordinary row block fits exactly. A growing reader buffer also
+            // needs room, and the original unpinned header can provide it.
+            let charge = u64::from(session.receipt.block_bytes)
+                + u64::try_from(size_of::<CachedBlock>() + 64).unwrap();
+            let held = session
+                .reserve_workspace(CEILING - before.live_bytes() - charge)
+                .unwrap();
+            let target = session.header.streams[0].first;
+            drop(session.block(target).unwrap());
+            let after = session.evidence();
+            assert!(after.evictions() > before.evictions());
+            assert_eq!(
+                after.request_count() - before.request_count(),
+                usize::try_from(session.receipt.leaf_count.trailing_zeros()).unwrap() + 1
+            );
+            assert!(after.peak_bytes() <= CEILING);
+            assert_eq!(session.read_error(), None);
+            drop(held);
         }
     }
 
