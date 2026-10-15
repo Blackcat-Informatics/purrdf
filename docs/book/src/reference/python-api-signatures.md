@@ -821,6 +821,8 @@ _FoldReifierRow = tuple[int, tuple[int, int, int], int | None]
 _BlobExportRow = tuple[str, bytes]
 _InputTermRow = tuple[int, str | None, int | None, str | None, str | None, int | None, tuple[int, int, int] | None]
 
+GTS_ALL_SCOPE: str
+
 class GtsRelationalRows(TypedDict):
     terms: list[_TermRow]
     directions: list[str | None]

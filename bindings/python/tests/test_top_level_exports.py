@@ -126,6 +126,11 @@ def test_stub_signatures_match_the_built_bindings() -> None:
 
     stub = Path(purrdf.__file__).with_name("__init__.pyi")
     text = stub.read_text(encoding="utf-8")
+    surface = ast.parse(text).body
+    declared_names = {node.name for node in surface if isinstance(node, (ast.ClassDef, ast.FunctionDef))}
+    declared_names.update(node.target.id for node in surface if isinstance(node, ast.AnnAssign))
+    declared_names.update(name.id for node in surface if isinstance(node, ast.Assign) for name in node.targets if isinstance(name, ast.Name))
+    assert set(purrdf.__all__) <= declared_names, "every public root export needs a canonical declaration"
 
     reference = Path(__file__).resolve().parents[3] / "docs/book/src/reference/python-api-signatures.md"
     blocks = re.findall(

@@ -1398,6 +1398,9 @@ _InputTermRow = tuple[
     tuple[int, int, int] | None,
 ]
 
+# The existing native sentinel selecting every graph; None selects the default graph.
+GTS_ALL_SCOPE: str
+
 class GtsRelationalRows(TypedDict):
     terms: list[_TermRow]
     # RDF 1.2 base direction ("ltr"/"rtl"), positionally parallel to `terms`.
