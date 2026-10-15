@@ -11,7 +11,9 @@ use super::dataset::{QuadIds, ReifierRow, TermRef};
 use super::frozen_terms::FrozenTerms;
 use super::pack::bits::{DeltaListRef, write_varint};
 use super::term::TermId;
-use crate::{GraphMatch, PredicateStatistics, RdfTermKind, StatisticCount, StatisticsAccuracy};
+use crate::{
+    GraphMatch, PredicateStatistics, RdfTermKind, StatisticCount, StatisticsAccuracy, ViewTermId,
+};
 
 // Keep complete frequencies for low-cardinality objects and every rdf:type
 // class. Higher-cardinality predicates retain exact domains and kind counts;
@@ -27,58 +29,133 @@ pub(super) enum Relation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum Scope {
+enum Scope<I = TermId> {
     Any,
-    Graph(Option<TermId>),
+    Graph(Option<I>),
 }
 
-#[derive(Clone, Copy, Debug, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct Domain {
     offset: usize,
     bytes: usize,
     count: usize,
 }
 
-#[derive(Clone, Copy, Debug, Hash)]
-struct Predicate {
-    key: (Relation, Scope, TermId),
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct Predicate<I = TermId> {
+    key: (Relation, Scope<I>, I),
     rows: u64,
     subjects: Domain,
     objects: Domain,
     frequencies: Option<(usize, usize)>,
+    /// Class frequencies remain complete beyond the ordinary selection cap.
+    unbounded_frequencies: bool,
     kinds: (usize, usize),
 }
 
-#[derive(Clone, Copy, Debug, Hash)]
-struct Frequency {
-    object: TermId,
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct Frequency<I = TermId> {
+    object: I,
     rows: u64,
 }
 
-#[derive(Clone, Copy, Debug, Hash)]
-struct KindCount {
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct KindCount<I = TermId> {
     kind: u8,
-    datatype: Option<TermId>,
+    datatype: Option<I>,
     rows: u64,
 }
 
 /// No query-time growth: every slice is frozen through the original admission.
-#[derive(Clone)]
-pub(super) struct LocalStatistics {
-    predicates: Box<[Predicate]>,
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct LocalStatistics<I = TermId> {
+    predicates: Box<[Predicate<I>]>,
     domains: Box<[u8]>,
-    frequencies: Box<[Frequency]>,
-    kinds: Box<[KindCount]>,
+    frequencies: Box<[Frequency<I>]>,
+    kinds: Box<[KindCount<I>]>,
     fingerprint: u64,
 }
-purrdf_hash::debug_non_exhaustive!(LocalStatistics { fingerprint });
+purrdf_hash::debug_non_exhaustive!([I] LocalStatistics<I> { fingerprint });
 
-#[derive(Default)]
-pub(super) struct StatisticsBuilder {
-    predicates: Vec<Predicate>,
+pub(super) struct StatisticsBuilder<I = TermId> {
+    predicates: Vec<Predicate<I>>,
     domains: Vec<u8>,
-    frequencies: Vec<Frequency>,
-    kinds: Vec<KindCount>,
+    frequencies: Vec<Frequency<I>>,
+    kinds: Vec<KindCount<I>>,
+}
+
+// Deriving Default would unnecessarily require an empty identity value.
+impl<I> Default for StatisticsBuilder<I> {
+    fn default() -> Self {
+        Self {
+            predicates: Vec::new(),
+            domains: Vec::new(),
+            frequencies: Vec::new(),
+            kinds: Vec::new(),
+        }
+    }
+}
+
+/// The two native sealed dictionary widths. This is not the caller's identity
+/// interface: external providers continue to implement SnapshotStatistics.
+pub(crate) trait StatisticsId: ViewTermId {
+    const VARINT_BYTES: usize;
+    const SOURCE: &'static str;
+    fn statistics_index(self) -> u64;
+    fn statistics_id(index: u64) -> Result<Self, super::pack::bits::PackBitsError>;
+}
+
+impl StatisticsId for TermId {
+    const VARINT_BYTES: usize = 5;
+    const SOURCE: &'static str = "native-frozen-predicate-domains-v1";
+
+    fn statistics_index(self) -> u64 {
+        self.index() as u64
+    }
+
+    fn statistics_id(index: u64) -> Result<Self, super::pack::bits::PackBitsError> {
+        use super::pack::bits::PackBitsError;
+        let index = u32::try_from(index)
+            .map_err(|_| PackBitsError::Malformed("statistics identity exceeds local width"))?;
+        Self::from_index(index)
+            .map_err(|_| PackBitsError::Malformed("statistics identity is not representable"))
+    }
+}
+
+impl StatisticsId for super::GlobalTermId {
+    const VARINT_BYTES: usize = 10;
+    const SOURCE: &'static str = "merged-dictionary-predicate-domains-v1";
+
+    fn statistics_index(self) -> u64 {
+        self.index()
+    }
+
+    fn statistics_id(index: u64) -> Result<Self, super::pack::bits::PackBitsError> {
+        Self::from_index(index).map_err(|_| {
+            super::pack::bits::PackBitsError::Malformed(
+                "statistics global identity is not representable",
+            )
+        })
+    }
+}
+
+/// Admission failure and malformed encoded metadata remain distinct.
+#[derive(Debug)]
+pub(super) enum StatisticsMergeError {
+    Storage(StorageError),
+    Encoding(super::pack::bits::PackBitsError),
+}
+purrdf_lex::variant_from!(StatisticsMergeError {
+    Storage(StorageError), Encoding(super::pack::bits::PackBitsError)
+});
+
+impl std::fmt::Display for StatisticsMergeError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Storage(error) => error.fmt(output),
+            Self::Encoding(error) => error.fmt(output),
+        }
+    }
 }
 
 fn exact(value: u64) -> StatisticCount {
@@ -146,8 +223,10 @@ impl StatisticsBuilder {
             while begin < count {
                 let group = key(ordinals[begin]);
                 let end = begin + ordinals[begin..].partition_point(|&index| key(index) == group);
-                let subjects =
-                    self.encode_domain(&ordinals[begin..end], |index| row(index).s, memory)?;
+                let subjects = self.encode_domain(
+                    ordinals[begin..end].iter().map(|&index| row(index).s),
+                    memory,
+                )?;
                 memory.push(
                     &mut self.predicates,
                     Predicate {
@@ -160,6 +239,7 @@ impl StatisticsBuilder {
                             count: 0,
                         },
                         frequencies: None,
+                        unbounded_frequencies: Some(group.2) == class_predicate,
                         kinds: (0, 0),
                     },
                 )?;
@@ -171,8 +251,10 @@ impl StatisticsBuilder {
             while begin < count {
                 let group = key(ordinals[begin]);
                 let end = begin + ordinals[begin..].partition_point(|&index| key(index) == group);
-                let objects =
-                    self.encode_domain(&ordinals[begin..end], |index| row(index).o, memory)?;
+                let objects = self.encode_domain(
+                    ordinals[begin..end].iter().map(|&index| row(index).o),
+                    memory,
+                )?;
                 self.predicates[entry].objects = objects;
                 let frequencies = self.frequencies.len();
                 let kinds = self.kinds.len();
@@ -229,25 +311,26 @@ impl StatisticsBuilder {
         }
         memory.release_vec(ordinals)
     }
+}
 
+impl<I: StatisticsId> StatisticsBuilder<I> {
     fn encode_domain<S: Admission + ?Sized>(
         &mut self,
-        ordinals: &[usize],
-        id: impl Fn(usize) -> TermId,
+        ids: impl IntoIterator<Item = I>,
         memory: &mut Memory<'_, S>,
     ) -> Result<Domain, StorageError> {
         let offset = self.domains.len();
         let mut previous = None;
         let mut count = 0;
-        for &ordinal in ordinals {
-            let value = id(ordinal).index() as u64;
+        for id in ids {
+            let value = id.statistics_index();
             if previous == Some(value) {
                 continue;
             }
             let required = self
                 .domains
                 .len()
-                .checked_add(5)
+                .checked_add(I::VARINT_BYTES)
                 .ok_or(StorageError::SizeOverflow)?;
             let capacity = growth_capacity::<u8>(self.domains.capacity(), required)?;
             memory.reserve(&mut self.domains, capacity)?;
@@ -265,7 +348,7 @@ impl StatisticsBuilder {
     pub(super) fn freeze<S: Admission + ?Sized>(
         mut self,
         memory: &mut Memory<'_, S>,
-    ) -> Result<LocalStatistics, StorageError> {
+    ) -> Result<LocalStatistics<I>, StorageError> {
         self.predicates.sort_unstable_by_key(|entry| entry.key);
         let fingerprint = purrdf_hash::fixed::hash_one(&(
             &self.predicates,
@@ -336,13 +419,262 @@ impl LocalStatistics {
             builder.freeze(memory)
         })
     }
+}
+
+impl<I: StatisticsId> LocalStatistics<I> {
+    /// Merge disjoint effective row partitions into the destination dictionary.
+    /// Translation precedes sorting and union: source-local numeric order never
+    /// substitutes for destination identity. A missing selected frequency stays
+    /// unknown, while domains and category counts remain complete and exact.
+    pub(super) fn merge_translated<'a, J: StatisticsId, T: Copy, S: Admission + ?Sized>(
+        sources: impl IntoIterator<Item = T>,
+        summary: impl Fn(T) -> &'a LocalStatistics<J>,
+        translate: impl Fn(T, J) -> I,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StatisticsMergeError> {
+        memory.try_scope(|memory| {
+            let mut keys = Vec::new();
+            for source in sources {
+                for (index, entry) in summary(source).predicates.iter().enumerate() {
+                    let scope = match entry.key.1 {
+                        Scope::Any => Scope::Any,
+                        Scope::Graph(graph) => Scope::Graph(graph.map(|id| translate(source, id))),
+                    };
+                    memory.push(
+                        &mut keys,
+                        (
+                            (entry.key.0, scope, translate(source, entry.key.2)),
+                            source,
+                            index,
+                        ),
+                    )?;
+                }
+            }
+            keys.sort_unstable_by_key(|entry| entry.0);
+            let mut builder = StatisticsBuilder::default();
+            let mut ids = Vec::new();
+            let mut frequencies: Vec<Frequency<I>> = Vec::new();
+            let mut kinds: Vec<KindCount<I>> = Vec::new();
+            let mut begin = 0;
+            while begin < keys.len() {
+                let key = keys[begin].0;
+                let end = begin + keys[begin..].partition_point(|entry| entry.0 == key);
+                let mut rows = 0_u64;
+                let mut complete_frequencies = true;
+                let mut unbounded_frequencies = false;
+                for &(_, source, index) in &keys[begin..end] {
+                    let entry = &summary(source).predicates[index];
+                    rows = rows
+                        .checked_add(entry.rows)
+                        .ok_or(StorageError::SizeOverflow)?;
+                    complete_frequencies &= entry.frequencies.is_some();
+                    unbounded_frequencies |= entry.unbounded_frequencies;
+                }
+                // A graph subset with every row is identical to the any-graph
+                // relation. Share all sealed ranges rather than doubling them.
+                if matches!(key.1, Scope::Graph(_))
+                    && let Ok(index) = builder.predicates.binary_search_by_key(
+                        &(key.0, Scope::Any, key.2),
+                        |entry: &Predicate<I>| entry.key,
+                    )
+                    && builder.predicates[index].rows == rows
+                {
+                    let alias = Predicate {
+                        key,
+                        ..builder.predicates[index]
+                    };
+                    memory.push(&mut builder.predicates, alias)?;
+                    begin = end;
+                    continue;
+                }
+                let mut domains = [Domain {
+                    offset: 0,
+                    bytes: 0,
+                    count: 0,
+                }; 2];
+                for (position, domain) in domains.iter_mut().enumerate() {
+                    ids.clear();
+                    for &(_, source, index) in &keys[begin..end] {
+                        let statistics = summary(source);
+                        let entry = &statistics.predicates[index];
+                        let local_domain = if position == 0 {
+                            entry.subjects
+                        } else {
+                            entry.objects
+                        };
+                        for value in statistics.read_domain(local_domain) {
+                            let id = J::statistics_id(value?)?;
+                            memory.push(&mut ids, translate(source, id))?;
+                        }
+                    }
+                    ids.sort_unstable();
+                    ids.dedup();
+                    *domain = builder.encode_domain(ids.iter().copied(), memory)?;
+                }
+                frequencies.clear();
+                kinds.clear();
+                complete_frequencies &=
+                    domains[1].count <= SELECTED_OBJECT_FREQUENCIES || unbounded_frequencies;
+                for &(_, source, index) in &keys[begin..end] {
+                    let statistics = summary(source);
+                    let entry = &statistics.predicates[index];
+                    if complete_frequencies {
+                        let (offset, count) = entry.frequencies.expect("complete frequencies");
+                        for value in &statistics.frequencies[offset..offset + count] {
+                            memory.push(
+                                &mut frequencies,
+                                Frequency {
+                                    object: translate(source, value.object),
+                                    rows: value.rows,
+                                },
+                            )?;
+                        }
+                    }
+                    let (offset, count) = entry.kinds;
+                    for value in &statistics.kinds[offset..offset + count] {
+                        memory.push(
+                            &mut kinds,
+                            KindCount {
+                                kind: value.kind,
+                                datatype: value.datatype.map(|id| translate(source, id)),
+                                rows: value.rows,
+                            },
+                        )?;
+                    }
+                }
+                frequencies.sort_unstable_by_key(|value| value.object);
+                kinds.sort_unstable_by_key(|value| (value.kind, value.datatype));
+                let frequency_begin = builder.frequencies.len();
+                for &value in &frequencies {
+                    if let Some(previous) = builder.frequencies[frequency_begin..].last_mut()
+                        && previous.object == value.object
+                    {
+                        previous.rows = previous
+                            .rows
+                            .checked_add(value.rows)
+                            .ok_or(StorageError::SizeOverflow)?;
+                    } else {
+                        memory.push(&mut builder.frequencies, value)?;
+                    }
+                }
+                let kind_begin = builder.kinds.len();
+                for &value in &kinds {
+                    if let Some(previous) = builder.kinds[kind_begin..].last_mut()
+                        && (previous.kind, previous.datatype) == (value.kind, value.datatype)
+                    {
+                        previous.rows = previous
+                            .rows
+                            .checked_add(value.rows)
+                            .ok_or(StorageError::SizeOverflow)?;
+                    } else {
+                        memory.push(&mut builder.kinds, value)?;
+                    }
+                }
+                memory.push(
+                    &mut builder.predicates,
+                    Predicate {
+                        key,
+                        rows,
+                        subjects: domains[0],
+                        objects: domains[1],
+                        frequencies: complete_frequencies.then_some((
+                            frequency_begin,
+                            builder.frequencies.len() - frequency_begin,
+                        )),
+                        kinds: (kind_begin, builder.kinds.len() - kind_begin),
+                        unbounded_frequencies,
+                    },
+                )?;
+                begin = end;
+            }
+            memory.release_vec(keys)?;
+            memory.release_vec(ids)?;
+            memory.release_vec(frequencies)?;
+            memory.release_vec(kinds)?;
+            Ok(builder.freeze(memory)?)
+        })
+    }
+
+    pub(super) fn clone_admitted<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        memory.try_scope(|memory| {
+            let predicates = memory.collect(self.predicates.iter().copied())?;
+            let predicates = memory.boxed_slice(predicates)?;
+            let domains = memory.collect(self.domains.iter().copied())?;
+            let domains = memory.boxed_slice(domains)?;
+            let frequencies = memory.collect(self.frequencies.iter().copied())?;
+            let frequencies = memory.boxed_slice(frequencies)?;
+            let kinds = memory.collect(self.kinds.iter().copied())?;
+            Ok(Self {
+                predicates,
+                domains,
+                frequencies,
+                kinds: memory.boxed_slice(kinds)?,
+                fingerprint: self.fingerprint,
+            })
+        })
+    }
+
+    /// Canonical words for the enclosing summary's existing digest. Pointer
+    /// width, native struct padding and the table hasher never enter this stream.
+    pub(super) fn visit_words(&self, mut emit: impl FnMut(u64)) {
+        emit(self.predicates.len() as u64);
+        for entry in &self.predicates {
+            emit(entry.key.0 as u64);
+            match entry.key.1 {
+                Scope::Any => emit(0),
+                Scope::Graph(None) => emit(1),
+                Scope::Graph(Some(graph)) => {
+                    emit(2);
+                    emit(graph.statistics_index());
+                }
+            }
+            emit(entry.key.2.statistics_index());
+            emit(entry.rows);
+            for domain in [entry.subjects, entry.objects] {
+                emit(domain.offset as u64);
+                emit(domain.bytes as u64);
+                emit(domain.count as u64);
+            }
+            emit(u64::from(entry.frequencies.is_some()));
+            emit(u64::from(entry.unbounded_frequencies));
+            if let Some((offset, count)) = entry.frequencies {
+                emit(offset as u64);
+                emit(count as u64);
+            }
+            emit(entry.kinds.0 as u64);
+            emit(entry.kinds.1 as u64);
+        }
+        emit(self.domains.len() as u64);
+        for chunk in self.domains.chunks(8) {
+            let mut word = [0; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            emit(u64::from_le_bytes(word));
+        }
+        emit(self.frequencies.len() as u64);
+        for value in &self.frequencies {
+            emit(value.object.statistics_index());
+            emit(value.rows);
+        }
+        emit(self.kinds.len() as u64);
+        for value in &self.kinds {
+            emit(u64::from(value.kind));
+            emit(u64::from(value.datatype.is_some()));
+            if let Some(datatype) = value.datatype {
+                emit(datatype.statistics_index());
+            }
+            emit(value.rows);
+        }
+    }
 
     fn entry(
         &self,
         relation: Relation,
-        predicate: TermId,
-        graph: GraphMatch,
-    ) -> Option<&Predicate> {
+        predicate: I,
+        graph: GraphMatch<I>,
+    ) -> Option<&Predicate<I>> {
         let scope = match graph {
             GraphMatch::Any => Scope::Any,
             GraphMatch::Default => Scope::Graph(None),
@@ -357,8 +689,8 @@ impl LocalStatistics {
     pub(super) fn predicate(
         &self,
         relation: Relation,
-        predicate: TermId,
-        graph: GraphMatch,
+        predicate: I,
+        graph: GraphMatch<I>,
     ) -> PredicateStatistics {
         let entry = self.entry(relation, predicate, graph);
         PredicateStatistics {
@@ -371,9 +703,9 @@ impl LocalStatistics {
     pub(super) fn frequency(
         &self,
         relation: Relation,
-        predicate: TermId,
-        object: TermId,
-        graph: GraphMatch,
+        predicate: I,
+        object: I,
+        graph: GraphMatch<I>,
     ) -> Option<StatisticCount> {
         let Some(entry) = self.entry(relation, predicate, graph) else {
             return Some(exact(0));
@@ -391,10 +723,10 @@ impl LocalStatistics {
     pub(super) fn kind(
         &self,
         relation: Relation,
-        predicate: TermId,
+        predicate: I,
         kind: RdfTermKind,
-        datatype: Option<TermId>,
-        graph: GraphMatch,
+        datatype: Option<I>,
+        graph: GraphMatch<I>,
     ) -> StatisticCount {
         let Some(entry) = self.entry(relation, predicate, graph) else {
             return exact(0);
@@ -411,8 +743,8 @@ impl LocalStatistics {
     pub(super) fn domain(
         &self,
         relation: Relation,
-        predicate: TermId,
-        graph: GraphMatch,
+        predicate: I,
+        graph: GraphMatch<I>,
         subject: bool,
     ) -> DeltaListRef<'_> {
         let domain = self.entry(relation, predicate, graph).map(|entry| {
@@ -423,12 +755,16 @@ impl LocalStatistics {
             }
         });
         match domain {
-            Some(domain) => DeltaListRef::new(
-                &self.domains[domain.offset..domain.offset + domain.bytes],
-                domain.count,
-            ),
+            Some(domain) => self.read_domain(domain),
             None => DeltaListRef::new(&[], 0),
         }
+    }
+
+    fn read_domain(&self, domain: Domain) -> DeltaListRef<'_> {
+        DeltaListRef::new(
+            &self.domains[domain.offset..domain.offset + domain.bytes],
+            domain.count,
+        )
     }
 
     pub(super) fn retained_bytes(&self) -> Option<usize> {
@@ -447,9 +783,9 @@ fn relation(stream: crate::StatisticsStream) -> Relation {
     }
 }
 
-impl crate::SnapshotStatistics<TermId> for LocalStatistics {
+impl<I: StatisticsId> crate::SnapshotStatistics<I> for LocalStatistics<I> {
     fn source(&self) -> &'static str {
-        "native-frozen-predicate-domains-v1"
+        I::SOURCE
     }
 
     fn fingerprint(&self) -> u64 {
@@ -458,8 +794,8 @@ impl crate::SnapshotStatistics<TermId> for LocalStatistics {
 
     fn predicate(
         &self,
-        predicate: TermId,
-        graph: GraphMatch,
+        predicate: I,
+        graph: GraphMatch<I>,
         stream: crate::StatisticsStream,
     ) -> Option<PredicateStatistics> {
         Some(Self::predicate(self, relation(stream), predicate, graph))
@@ -467,9 +803,9 @@ impl crate::SnapshotStatistics<TermId> for LocalStatistics {
 
     fn predicate_object(
         &self,
-        predicate: TermId,
-        object: TermId,
-        graph: GraphMatch,
+        predicate: I,
+        object: I,
+        graph: GraphMatch<I>,
         stream: crate::StatisticsStream,
     ) -> Option<StatisticCount> {
         self.frequency(relation(stream), predicate, object, graph)
@@ -477,10 +813,10 @@ impl crate::SnapshotStatistics<TermId> for LocalStatistics {
 
     fn predicate_object_kind(
         &self,
-        predicate: TermId,
+        predicate: I,
         kind: RdfTermKind,
-        datatype: Option<TermId>,
-        graph: GraphMatch,
+        datatype: Option<I>,
+        graph: GraphMatch<I>,
         stream: crate::StatisticsStream,
     ) -> Option<StatisticCount> {
         Some(self.kind(relation(stream), predicate, kind, datatype, graph))
@@ -488,32 +824,27 @@ impl crate::SnapshotStatistics<TermId> for LocalStatistics {
 
     fn reifier_target_predicate(
         &self,
-        predicate: TermId,
-        graph: GraphMatch,
+        predicate: I,
+        graph: GraphMatch<I>,
     ) -> Option<PredicateStatistics> {
         Some(Self::predicate(self, Relation::Targets, predicate, graph))
     }
 
     fn visit_distinct(
         &self,
-        predicate: TermId,
-        graph: GraphMatch,
+        predicate: I,
+        graph: GraphMatch<I>,
         stream: crate::StatisticsStream,
         position: crate::StatisticsPosition,
-        visit: &mut dyn FnMut(TermId) -> std::ops::ControlFlow<()>,
+        visit: &mut dyn FnMut(I) -> std::ops::ControlFlow<()>,
     ) -> Result<bool, super::pack::bits::PackBitsError> {
-        use super::pack::bits::PackBitsError;
         for value in self.domain(
             relation(stream),
             predicate,
             graph,
             position == crate::StatisticsPosition::Subject,
         ) {
-            let value = u32::try_from(value?)
-                .map_err(|_| PackBitsError::Malformed("statistics identity exceeds local width"))?;
-            let id = TermId::from_index(value).map_err(|_| {
-                PackBitsError::Malformed("statistics identity is not representable")
-            })?;
+            let id = I::statistics_id(value?)?;
             if visit(id).is_break() {
                 break;
             }
@@ -535,8 +866,16 @@ mod tests {
     };
 
     fn fixture(named: bool) -> (Arc<RdfDataset>, Vec<TermId>, Vec<GraphMatch>) {
+        fixture_partition(named, 0, 0)
+    }
+
+    fn fixture_partition(
+        named: bool,
+        partition: u8,
+        extra_objects: u8,
+    ) -> (Arc<RdfDataset>, Vec<TermId>, Vec<GraphMatch>) {
         let mut builder = RdfDatasetBuilder::new();
-        let ids: Vec<_> = [
+        let names = [
             "a",
             "b",
             "p",
@@ -546,14 +885,23 @@ mod tests {
             "g",
             "r",
             "r2",
-        ]
-        .into_iter()
-        .map(|name| {
+        ];
+        let mut intern = |name: &str| {
+            let suffix = if partition != 0 && matches!(name, "a" | "b" | "r" | "r2") {
+                format!("/{partition}")
+            } else {
+                String::new()
+            };
             builder
-                .intern_iri(&format!("http://example.org/{name}"))
+                .intern_iri(&format!("http://example.org/{name}{suffix}"))
                 .unwrap()
-        })
-        .collect();
+        };
+        if !partition.is_multiple_of(2) {
+            for name in names.iter().rev() {
+                intern(name);
+            }
+        }
+        let ids: Vec<_> = names.into_iter().map(intern).collect();
         let [a, b, p, annotation, rare, common, g, r, r2] = ids[..] else {
             unreachable!()
         };
@@ -572,6 +920,13 @@ mod tests {
         ] {
             builder.push_quad(s, predicate, o, graph).unwrap();
         }
+        for index in 0..extra_objects {
+            let object = builder
+                .intern_iri(&format!("http://example.org/extra/{partition}/{index}"))
+                .unwrap();
+            builder.push_quad(a, p, object, None).unwrap();
+            builder.push_quad(a, rdf_type, object, None).unwrap();
+        }
         builder.push_reifier(r, triple).unwrap();
         builder
             .push_reifier_in_graph(r2, triple, named.then_some(g))
@@ -589,12 +944,11 @@ mod tests {
         )
     }
 
-    fn assert_rows<D: DatasetView<Id = TermId>>(
-        view: &D,
-        predicates: &[TermId],
-        scopes: &[GraphMatch],
-    ) {
+    fn assert_rows<D: DatasetView>(view: &D, predicates: &[D::Id], scopes: &[GraphMatch<D::Id>]) {
         let statistics = view.statistics().unwrap();
+        let class = view
+            .term_id_by_value(&crate::TermValue::iri(purrdf_iri::vocab::rdf::TYPE))
+            .unwrap();
         for stream in [
             StatisticsStream::Asserted,
             StatisticsStream::Reifiers,
@@ -642,12 +996,20 @@ mod tests {
                         .map(|row| row.o)
                         .chain(predicates.iter().copied())
                     {
-                        assert_eq!(
-                            statistics.predicate_object(predicate, object, graph, stream),
-                            Some(exact(
-                                selected.iter().filter(|row| row.o == object).count() as u64
-                            ))
-                        );
+                        let actual = statistics.predicate_object(predicate, object, graph, stream);
+                        if actual.is_none() {
+                            assert_ne!(Some(predicate), class, "class counts are never capped");
+                            assert!(
+                                summary.objects.unwrap().value > SELECTED_OBJECT_FREQUENCIES as u64
+                            );
+                        } else {
+                            assert_eq!(
+                                actual,
+                                Some(exact(
+                                    selected.iter().filter(|row| row.o == object).count() as u64
+                                ))
+                            );
+                        }
                     }
                 }
             }
@@ -684,6 +1046,181 @@ mod tests {
                 ),
                 Some(exact(expected))
             );
+        }
+    }
+
+    #[test]
+    fn paged_metadata_is_exact_shared_on_reopen_and_requires_no_query_io() {
+        use crate::{
+            FallibleDatasetView, InMemoryPageProvider, PagedDataset, PagedQueryLimits,
+            ViewOperationStatus,
+        };
+        let (native, predicates, scopes) = fixture(true);
+        let provider = Arc::new(InMemoryPageProvider::new(vec![native.clone()]));
+        let paged = PagedDataset::from_provider(provider.clone()).unwrap();
+        let global = |id| {
+            paged
+                .term_id_by_value(&native.as_ref().term_value(id))
+                .unwrap()
+                .unwrap()
+        };
+        let predicates: Vec<_> = predicates.into_iter().map(global).collect();
+        let scopes: Vec<_> = scopes
+            .into_iter()
+            .map(|scope| match scope {
+                GraphMatch::Any => GraphMatch::Any,
+                GraphMatch::Default => GraphMatch::Default,
+                GraphMatch::Named(id) => GraphMatch::Named(global(id)),
+            })
+            .collect();
+        let (dictionary, generation, parts) = paged.to_parts();
+        let warm = PagedDataset::from_parts(dictionary, provider, generation, parts).unwrap();
+        assert!(std::ptr::addr_eq(
+            paged.statistics().unwrap(),
+            warm.statistics().unwrap()
+        ));
+        let operational = warm.query_view(PagedQueryLimits::new(0, 0));
+        let statistics = operational.statistics().unwrap();
+        for predicate in &predicates {
+            for scope in &scopes {
+                assert_eq!(
+                    statistics.predicate(*predicate, *scope, StatisticsStream::Annotations),
+                    paged.statistics().unwrap().predicate(
+                        *predicate,
+                        *scope,
+                        StatisticsStream::Annotations
+                    ),
+                );
+            }
+        }
+        let ViewOperationStatus::Ready { evidence } = operational.operation_status() else {
+            panic!("metadata requires no page admission");
+        };
+        assert_eq!(evidence.consumed_pages, 0);
+        assert_eq!(evidence.requested_pages, []);
+        assert_rows(&paged, &predicates, &scopes);
+        assert_rows(&warm, &predicates, &scopes);
+    }
+
+    #[test]
+    fn translated_domains_keep_full_width_ids_and_sort_after_translation() {
+        use crate::{GlobalTermId, SnapshotStatistics};
+        let (native, predicates, _) = fixture(false);
+        let base = u64::from(u32::MAX) + 100;
+        let translate = |id: TermId| GlobalTermId::from_index(base - id.index() as u64).unwrap();
+        let mut admission = purrdf_lex::allocation::Resident;
+        let merged = LocalStatistics::<GlobalTermId>::merge_translated(
+            [&native],
+            |source| source.predicate_statistics(),
+            |_, id| translate(id),
+            &mut Memory::new(&mut admission),
+        )
+        .unwrap();
+        for predicate in predicates {
+            for position in [StatisticsPosition::Subject, StatisticsPosition::Object] {
+                let mut expected = Vec::new();
+                native
+                    .statistics()
+                    .unwrap()
+                    .visit_distinct(
+                        predicate,
+                        GraphMatch::Any,
+                        StatisticsStream::Asserted,
+                        position,
+                        &mut |id| {
+                            expected.push(translate(id));
+                            ControlFlow::Continue(())
+                        },
+                    )
+                    .unwrap();
+                expected.sort_unstable();
+                let mut actual = Vec::new();
+                merged
+                    .visit_distinct(
+                        translate(predicate),
+                        GraphMatch::Any,
+                        StatisticsStream::Asserted,
+                        position,
+                        &mut |id| {
+                            actual.push(id);
+                            ControlFlow::Continue(())
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(actual, expected);
+                assert!(actual.iter().all(|id| id.index() > u64::from(u32::MAX)));
+            }
+        }
+    }
+
+    use purrdf_testkit::prop::prelude::*;
+
+    prop_test! {
+        #[test]
+        fn property_translated_two_page_summaries_match_one_combined_snapshot(
+            first in 0_u8..16, delta in 1_u8..16, named in any::<bool>(), extra in 0_u8..70,
+        ) {
+            use crate::{InMemoryPageProvider, PagedDataset};
+            let (left, predicates, scopes) = fixture_partition(named, first, extra);
+            let (right, _, _) = fixture_partition(!named, first + delta, extra);
+            let mut builder = RdfDatasetBuilder::new();
+            builder.push_dataset(&left).unwrap();
+            builder.push_dataset(&right).unwrap();
+            let combined = builder.freeze().unwrap();
+            let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(
+                vec![left.clone(), right],
+            ))).unwrap();
+            let native_ids: Vec<_> = predicates.iter().map(|&id|
+                combined.as_ref().term_id_by_value(&left.as_ref().term_value(id)).unwrap()).collect();
+            let global_ids: Vec<_> = predicates.iter().map(|&id|
+                paged.term_id_by_value(&left.as_ref().term_value(id)).unwrap().unwrap()).collect();
+            let mut native_scopes = Vec::new();
+            let mut global_scopes = Vec::new();
+            for scope in scopes {
+                match scope {
+                    GraphMatch::Any => { native_scopes.push(GraphMatch::Any); global_scopes.push(GraphMatch::Any); }
+                    GraphMatch::Default => { native_scopes.push(GraphMatch::Default); global_scopes.push(GraphMatch::Default); }
+                    GraphMatch::Named(id) => {
+                        let value = left.as_ref().term_value(id);
+                        native_scopes.push(GraphMatch::Named(combined.as_ref().term_id_by_value(&value).unwrap()));
+                        global_scopes.push(GraphMatch::Named(paged.term_id_by_value(&value).unwrap().unwrap()));
+                    }
+                }
+            }
+            assert_rows(&*combined, &native_ids, &native_scopes);
+            assert_rows(&paged, &global_ids, &global_scopes);
+            for (&native_id, &global_id) in native_ids.iter().zip(&global_ids) {
+                for (&native_scope, &global_scope) in native_scopes.iter().zip(&global_scopes) {
+                    prop_assert_eq!(
+                        combined.statistics().unwrap().reifier_target_predicate(native_id, native_scope),
+                        paged.statistics().unwrap().reifier_target_predicate(global_id, global_scope),
+                    );
+                    for stream in [StatisticsStream::Asserted, StatisticsStream::Reifiers, StatisticsStream::Annotations] {
+                        prop_assert_eq!(
+                            combined.statistics().unwrap().predicate(native_id, native_scope, stream),
+                            paged.statistics().unwrap().predicate(global_id, global_scope, stream),
+                        );
+                        for kind in [RdfTermKind::Iri, RdfTermKind::Literal, RdfTermKind::BlankNode, RdfTermKind::Triple] {
+                            prop_assert_eq!(
+                                combined.statistics().unwrap().predicate_object_kind(native_id, kind, None, native_scope, stream),
+                                paged.statistics().unwrap().predicate_object_kind(global_id, kind, None, global_scope, stream),
+                            );
+                        }
+                        let objects: BTreeSet<_> = match stream {
+                            StatisticsStream::Asserted => combined.quads().map(|row| row.o).collect(),
+                            StatisticsStream::Reifiers => combined.reifier_quads().map(|row| row.o).collect(),
+                            StatisticsStream::Annotations => combined.annotation_quads().map(|row| row.o).collect(),
+                        };
+                        for object in objects {
+                            let global_object = paged.term_id_by_value(&combined.as_ref().term_value(object)).unwrap().unwrap();
+                            prop_assert_eq!(
+                                combined.statistics().unwrap().predicate_object(native_id, object, native_scope, stream),
+                                paged.statistics().unwrap().predicate_object(global_id, global_object, global_scope, stream),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -157,6 +157,16 @@ predicate/object, object-category, reifier-target-predicate and distinct-domain
 metadata at freeze. A provider's source and revision participate in retained
 order-cache identity. The planner uses available predicate-specific domains for
 join selectivity and keeps the existing fallback where they are unknown.
+Paged views seal the same metadata into page headers independently of page
+materialization. They translate local identities into the common dictionary
+before sorting and unioning distinct domains; distinct counts are not summed.
+Selected frequencies retain the resident selection policy, including complete
+class frequencies. Queries read the sealed metadata without materializing pages
+or allocating domain unions. Reconstructing an unchanged page set from its parts
+shares the merged metadata; subsets and compaction rebuild it for their actual
+dictionary and page set. Metadata source and revision can therefore differ from
+a resident dataset containing the same statements, while counts and accuracy
+remain comparable.
 EXPLAIN's `statistics` section and `QueryExplanation::statistics()` record the
 provider, revision and statistical inputs for each BGP pattern and graph scope,
 including retained positive plans. Exact input counts do not make the joined

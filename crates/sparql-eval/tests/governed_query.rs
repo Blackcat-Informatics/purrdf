@@ -1466,6 +1466,104 @@ fn statement_statistics_at_one_million_claims() {
     assert_statement_statistics(1_000_000);
 }
 
+/// All terms and asserted rows are fixed; only reifier declarations vary. The
+/// same population also has one rare class instance among ten ordinary rows.
+fn statistics_plan_fixture(reifier_count: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let subjects: Vec<_> = (0..32)
+        .map(|index| {
+            builder
+                .intern_iri(&format!("http://example.org/statistics/r{index}"))
+                .unwrap()
+        })
+        .collect();
+    let predicate = builder
+        .intern_iri("http://example.org/statistics/ordinary")
+        .unwrap();
+    let object = builder
+        .intern_iri("http://example.org/statistics/object")
+        .unwrap();
+    let class = builder
+        .intern_iri("http://example.org/statistics/RareClass")
+        .unwrap();
+    let rdf_type = builder.intern_iri(purrdf_iri::vocab::rdf::TYPE).unwrap();
+    let target = builder
+        .intern_triple(subjects[0], predicate, object)
+        .unwrap();
+    for &subject in subjects.iter().take(reifier_count) {
+        builder.push_reifier(subject, target).unwrap();
+    }
+    for &subject in subjects.iter().take(10) {
+        builder.push_quad(subject, predicate, object, None).unwrap();
+    }
+    builder
+        .push_quad(subjects[0], rdf_type, class, None)
+        .unwrap();
+    builder.freeze().unwrap()
+}
+
+#[test]
+fn paged_reifier_counts_change_the_plan_with_identical_terms_and_assertions() {
+    use purrdf_core::DatasetView;
+    let engine = NativeSparqlEngine::new();
+    let query = "SELECT * WHERE { ?r <http://example.org/statistics/ordinary> ?o . ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?t }";
+    let mut orders = Vec::new();
+    let mut fingerprints = Vec::new();
+    let mut term_count = None;
+    for (reifiers, expected_rows) in [(1, 1), (32, 10)] {
+        let native = statistics_plan_fixture(reifiers);
+        assert_eq!(native.quads().count(), 11);
+        if let Some(count) = term_count {
+            assert_eq!(native.term_count(), count);
+        }
+        term_count = Some(native.term_count());
+        let paged =
+            PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![native]))).unwrap();
+        let explanation = engine.explain_query_view(&paged, query, None).unwrap();
+        assert!(explanation.statistics().iter().all(|record| {
+            record.contains("source=\"merged-dictionary-predicate-domains-v1\"")
+        }));
+        let bgp = explanation
+            .ledger()
+            .iter()
+            .find(|node| node.label == "Bgp")
+            .unwrap();
+        assert_eq!(bgp.rows, expected_rows);
+        assert_eq!(bgp.estimate.as_ref().unwrap().rows, expected_rows);
+        fingerprints.push(paged.statistics().unwrap().fingerprint());
+        orders.push(explanation.join_orders().to_vec());
+    }
+    assert!(orders[0][0].contains("reifies"));
+    assert!(orders[1][0].contains("ordinary"));
+    assert_ne!(fingerprints[0], fingerprints[1]);
+}
+
+#[test]
+fn native_and_paged_statistics_plan_rare_class_before_the_common_predicate() {
+    let native = statistics_plan_fixture(32);
+    let paged =
+        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![native.clone()])))
+            .unwrap();
+    let query = "SELECT * WHERE { ?r <http://example.org/statistics/ordinary> ?o . ?r a <http://example.org/statistics/RareClass> }";
+    let engine = NativeSparqlEngine::new();
+    for explanation in [
+        engine.explain_query(&native, query, None).unwrap(),
+        engine.explain_query_view(&paged, query, None).unwrap(),
+    ] {
+        assert!(explanation.join_orders()[0].contains("RareClass"));
+        let bgp = explanation
+            .ledger()
+            .iter()
+            .find(|node| node.label == "Bgp")
+            .unwrap();
+        assert_eq!(bgp.rows, 1);
+        assert_eq!(bgp.estimate.as_ref().unwrap().rows, 1);
+        assert!(explanation.statistics().iter().any(|input| {
+            input.contains("row-input=Some(StatisticCount { value: 1, accuracy: Exact })")
+        }));
+    }
+}
+
 /// Fixed work for external instruction counting. Both modes build and warm the
 /// identical population; subtract control from query for each population/kind.
 /// There is no timer, adaptive sampling or throughput claim in this probe.

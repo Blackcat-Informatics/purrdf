@@ -968,6 +968,10 @@ impl DatasetView for PagedQueryView<'_> {
         )
     }
 
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<GlobalTermId>> {
+        (!self.failed()).then_some(&self.dataset.statistics.values)
+    }
+
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         self.dataset.pages.iter().flat_map(move |slot| {
             self.page(slot.id).into_iter().flat_map(move |page| {

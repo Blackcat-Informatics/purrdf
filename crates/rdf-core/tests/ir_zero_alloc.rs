@@ -150,56 +150,70 @@ fn fold<H: Hash>(hasher: &mut purrdf_hash::fixed::FixedHasher, value: &H) {
 
 #[test]
 fn sealed_predicate_statistics_and_distinct_domains_allocate_nothing() {
-    use purrdf_core::{DatasetView, GraphMatch, RdfTermKind, StatisticsPosition, StatisticsStream};
+    use purrdf_core::{
+        DatasetView, GraphMatch, InMemoryPageProvider, PagedDataset, RdfTermKind,
+        SnapshotStatistics, StatisticsPosition, StatisticsStream, TermValue, ViewTermId,
+    };
     use std::ops::ControlFlow;
+    use std::sync::Arc;
+    fn assert_reads<I: ViewTermId>(statistics: &dyn SnapshotStatistics<I>, predicate: I) {
+        let window = CurrentThreadWindow::open();
+        for _ in 0..16 {
+            let count = statistics
+                .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
+                .unwrap();
+            assert_eq!(count.rows.value, 256);
+            assert_eq!(count.subjects.unwrap().value, 128);
+            assert_eq!(count.objects.unwrap().value, 256);
+            assert_eq!(
+                statistics
+                    .predicate_object_kind(
+                        predicate,
+                        RdfTermKind::Literal,
+                        None,
+                        GraphMatch::Any,
+                        StatisticsStream::Asserted
+                    )
+                    .unwrap()
+                    .value,
+                128
+            );
+            let mut seen = 0;
+            let mut previous = None;
+            assert!(
+                statistics
+                    .visit_distinct(
+                        predicate,
+                        GraphMatch::Any,
+                        StatisticsStream::Asserted,
+                        StatisticsPosition::Object,
+                        &mut |id| {
+                            assert!(previous.is_none_or(|previous| previous < id));
+                            previous = Some(id);
+                            seen += 1;
+                            ControlFlow::Continue(())
+                        }
+                    )
+                    .unwrap()
+            );
+            assert_eq!(seen, 256);
+        }
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(measured.requested_bytes, 0);
+        assert_eq!(measured.retained_bytes, 0);
+    }
+
     let dataset = build_dataset();
     let predicate = dataset.term_id_by_iri("http://example.org/p").unwrap();
-    let statistics = dataset.statistics().unwrap();
-    let window = CurrentThreadWindow::open();
-    for _ in 0..16 {
-        let count = statistics
-            .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
-            .unwrap();
-        assert_eq!(count.rows.value, 256);
-        assert_eq!(count.subjects.unwrap().value, 128);
-        assert_eq!(count.objects.unwrap().value, 256);
-        assert_eq!(
-            statistics
-                .predicate_object_kind(
-                    predicate,
-                    RdfTermKind::Literal,
-                    None,
-                    GraphMatch::Any,
-                    StatisticsStream::Asserted
-                )
-                .unwrap()
-                .value,
-            128
-        );
-        let mut seen = 0;
-        let mut previous = None;
-        assert!(
-            statistics
-                .visit_distinct(
-                    predicate,
-                    GraphMatch::Any,
-                    StatisticsStream::Asserted,
-                    StatisticsPosition::Object,
-                    &mut |id| {
-                        assert!(previous.is_none_or(|previous| previous < id));
-                        previous = Some(id);
-                        seen += 1;
-                        ControlFlow::Continue(())
-                    }
-                )
-                .unwrap()
-        );
-        assert_eq!(seen, 256);
-    }
-    let measured = window.close();
-    assert_eq!(measured.allocations, 0);
-    assert_eq!(measured.requested_bytes, 0);
-    assert_eq!(measured.retained_bytes, 0);
+    assert_reads(dataset.statistics().unwrap(), predicate);
+    let paged =
+        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![dataset]))).unwrap();
+    let predicate = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/p"))
+        .unwrap()
+        .unwrap();
+    assert_reads(paged.statistics().unwrap(), predicate);
 }
 
 #[test]

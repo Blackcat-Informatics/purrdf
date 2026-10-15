@@ -982,7 +982,7 @@ impl Iterator for QuadPatternCursor {
 impl std::iter::FusedIterator for QuadPatternCursor {}
 
 impl RdfDataset {
-    pub(crate) fn predicate_statistics(&self) -> &dyn crate::SnapshotStatistics<TermId> {
+    pub(crate) fn predicate_statistics(&self) -> &super::statistics::LocalStatistics {
         &self.statistics
     }
 

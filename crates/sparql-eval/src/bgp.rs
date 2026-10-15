@@ -1537,9 +1537,13 @@ fn cost_base<D: DatasetView>(
         let mut cardinality_only = true;
         visit_access_costs(pattern, dataset, scope, &mut |probe, cost| {
             cardinality_only &= cost.cardinality_fallback().is_some();
-            let cardinality = cost
-                .cardinality_fallback()
-                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g));
+            let cardinality = provider_cardinality(dataset, pattern, probe).map_or_else(
+                || {
+                    cost.cardinality_fallback()
+                        .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g))
+                },
+                |count| count.value,
+            );
             // Match the conservative saturation used by base_cardinality over
             // merged graph scopes. Host work is a separate statistic: every
             // physically representable graph slice on 32/64-bit targets has
@@ -5215,6 +5219,33 @@ mod tests {
         assert_eq!(supplied.take_first_probe(), Some(graph.rare));
         assert_eq!(actual, expected);
         assert_eq!(actual.len(), 100);
+
+        // A physical-work declaration must not hide the independent statistical
+        // row counts. The native replay and the host-ranked order share them.
+        let mut measured = HostCost::over(&graph, true);
+        measured.cardinalities = supplied.cardinalities;
+        measured.supplied_statistics = true;
+        let compiled = [
+            cp(Pos::Slot(0), Pos::Bound(graph.hot), Pos::Slot(1)),
+            cp(Pos::Slot(0), Pos::Bound(graph.mid), Pos::Slot(2)),
+            cp(Pos::Slot(0), Pos::Bound(graph.rare), Pos::Slot(3)),
+        ];
+        let inputs = cost_base(
+            &compiled,
+            &measured,
+            &GraphScope::One(GraphMatch::Default),
+            &crate::WorkspaceCapability::resident(),
+        )
+        .unwrap();
+        assert_eq!(
+            inputs.iter().map(|input| input.rows).collect::<Vec<_>>(),
+            [20.0, 5.0, 1.0]
+        );
+        assert_eq!(
+            inputs.iter().map(|input| input.work).collect::<Vec<_>>(),
+            [1.0, 100.0, 1000.0]
+        );
+        assert_eq!(run(&measured, &patterns, &columns), expected);
 
         let engine = crate::NativeSparqlEngine::new();
         let query = "SELECT * WHERE { ?hub <http://ex/hot> ?hot . ?hub <http://ex/mid> ?mid . ?hub <http://ex/rare> ?rare }";
