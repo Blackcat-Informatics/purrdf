@@ -1597,9 +1597,10 @@ ABI, whose egress is the dataset itself, reports the loss as a count instead:
 
 A result carrying only default-graph statements is untouched everywhere: every
 SPARQL 1.1 `CONSTRUCT` and every `DESCRIBE` serializes to Turtle exactly as
-before. A **mixed** result is refused as a whole rather than half-emitted,
-because emitting the default-graph half would report a partial answer as a
-complete one.
+before. CLI, Python and WebAssembly refuse a **mixed** result as a whole when
+explicitly asked for a single-graph syntax, because emitting the default-graph
+half would report a partial answer as a complete one. The C ABI reports the
+discarded row count instead, as described above.
 
 ## The `VERSION` declaration
 
@@ -1710,15 +1711,16 @@ declared state bound) and `AggregateAccumulator` (the per-invocation fold:
 folds in source order, `finish` to the group's answer) — and is registered
 into an `AggregateRegistry` under an IRI of the caller's choosing:
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 use purrdf::sparql::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
     ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
 };
-use purrdf::{SparqlRequest, TermValue};
+use purrdf::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
+use purrdf::xsd::datatype::XSD_INTEGER;
 
-/// A running total over one numeric argument — `example.org`'s own
+/// A checked nonnegative-integer total (at most i64::MAX) — `example.org`'s own
 /// `AGG(<https://example.org/agg#total>, ?x)`.
 struct TotalAccumulator {
     sum: i64,
@@ -1726,11 +1728,19 @@ struct TotalAccumulator {
 
 impl AggregateAccumulator for TotalAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.sum += n;
+        let [TermValue::Literal { lexical_form, datatype, .. }] = args else {
+            return Err(EvalError::function("total requires one xsd:integer"));
+        };
+        if datatype != XSD_INTEGER {
+            return Err(EvalError::function("total requires one xsd:integer"));
         }
+        let n = lexical_form.parse::<i64>()
+            .map_err(|_| EvalError::function("total requires a signed-64-bit integer"))?;
+        if n < 0 {
+            return Err(EvalError::function("total requires a nonnegative integer"));
+        }
+        self.sum = self.sum.checked_add(n)
+            .ok_or_else(|| EvalError::function("total overflow"))?;
         Ok(())
     }
 
@@ -1748,7 +1758,8 @@ impl AggregateAccumulator for TotalAccumulator {
                 "combine received a partial accumulator of a different concrete type",
             )
         })?;
-        self.sum += other.sum;
+        self.sum = self.sum.checked_add(other.sum)
+            .ok_or_else(|| EvalError::function("total overflow"))?;
         Ok(())
     }
 
@@ -1759,7 +1770,7 @@ impl AggregateAccumulator for TotalAccumulator {
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
         Ok(Some(TermValue::typed_literal(
             self.sum.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
+            XSD_INTEGER,
         )))
     }
 }
@@ -1791,18 +1802,23 @@ registry.register(
 );
 // The environment a query text is read in: `AGG(<iri>, …)` is admitted against
 // this registry.
-let env = ExtensionEnv::over_aggregates(registry)?;
+let env = ExtensionEnv::over_aggregates(registry).expect("aggregate environment");
 
+let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
 let engine = NativeSparqlEngine::new();
 let result = engine.query_with_options_view(
     &ds,
     SparqlRequest {
-        query: "SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s <https://example.org/n> ?x }",
+        query: "SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { VALUES ?x { 1 2 3 } }",
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions::new().with_env(&env),
-)?;
+    QueryOptions::EMPTY.with_env(&env),
+).expect("custom total");
+let SparqlResult::Solutions { rows, .. } = result else {
+    panic!("SELECT result");
+};
+assert_eq!(rows, vec![vec![Some(TermValue::typed_literal("6", XSD_INTEGER))]]);
 ```
 
 An `AGG(<iri>, …)` call to an unregistered IRI, with the wrong argument
@@ -1855,9 +1871,12 @@ given group shape spends identical fuel to a built-in one. See
 `agg_fn` seam, closed (no caller extension point) and reached through **one**
 call: `AggregateRegistry::register_statistical_aggregates`:
 
-```rust,ignore
+```rust
+use purrdf::sparql::AggregateRegistry;
+
 let mut registry = AggregateRegistry::default();
 registry.register_statistical_aggregates("https://example.org/agg#");
+assert_eq!(registry.len(), 10);
 // Now reachable: AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …TOPK…
 ```
 

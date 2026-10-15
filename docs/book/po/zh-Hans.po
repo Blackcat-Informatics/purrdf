@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T07:48:11-06:00\n"
+"POT-Creation-Date: 2026-10-15T16:45:01-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -34,7 +34,7 @@ msgid "Getting Started"
 msgstr "入门"
 
 #: src/SUMMARY.md:12 src/concepts/projections.md:449 src/concepts/jsonld.md:36
-#: src/sparql/querying.md:2217 src/validation/shacl.md:302
+#: src/sparql/querying.md:2236 src/validation/shacl.md:302
 #: src/validation/shacl.md:406 src/validation/shacl.md:441
 #: src/validation/shacl.md:1190 src/validation/shacl.md:1464
 #: src/validation/shex.md:74 src/entailment.md:49 src/entailment.md:94
@@ -43,7 +43,7 @@ msgstr "Rust"
 
 #: src/SUMMARY.md:13 src/concepts/projections.md:451
 #: src/concepts/base-iris.md:55 src/concepts/jsonld.md:74
-#: src/sparql/querying.md:2219 src/validation/shacl.md:304
+#: src/sparql/querying.md:2238 src/validation/shacl.md:304
 #: src/validation/shacl.md:403 src/validation/shacl.md:438
 #: src/validation/shacl.md:1360 src/validation/shacl.md:1466
 #: src/validation/shex.md:76 src/entailment.md:51 src/entailment.md:96
@@ -63,7 +63,7 @@ msgid "JavaScript / WebAssembly"
 msgstr "JavaScript / WebAssembly"
 
 #: src/SUMMARY.md:17 src/concepts/projections.md:453 src/concepts/jsonld.md:114
-#: src/sparql/querying.md:2221 src/validation/shacl.md:405
+#: src/sparql/querying.md:2240 src/validation/shacl.md:405
 #: src/validation/shacl.md:440 src/validation/shacl.md:1468
 #: src/entailment.md:53 src/entailment.md:98
 msgid "C"
@@ -6599,7 +6599,7 @@ msgstr "其他生产接口"
 msgid "The surface names follow the same profile/config/archive contract:"
 msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 
-#: src/concepts/projections.md:447 src/sparql/querying.md:2215
+#: src/concepts/projections.md:447 src/sparql/querying.md:2234
 #: src/validation/shacl.md:300 src/validation/shacl.md:400
 #: src/validation/shacl.md:435 src/validation/shacl.md:1357
 #: src/validation/shacl.md:1462 src/validation/shex.md:72 src/entailment.md:47
@@ -6640,7 +6640,7 @@ msgid "`lift_archive`"
 msgstr "`lift_archive`"
 
 #: src/concepts/projections.md:450 src/concepts/jsonld.md:62
-#: src/sparql/querying.md:2218 src/validation/shacl.md:303
+#: src/sparql/querying.md:2237 src/validation/shacl.md:303
 #: src/validation/shacl.md:402 src/validation/shacl.md:437
 #: src/validation/shacl.md:1190 src/validation/shacl.md:1359
 #: src/validation/shacl.md:1465 src/validation/shex.md:75 src/entailment.md:50
@@ -7317,7 +7317,7 @@ msgstr ""
 "blob/main/docs/COLUMNAR.md)。"
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
-#: src/sparql/querying.md:2244 src/validation/shacl.md:1590
+#: src/sparql/querying.md:2263 src/validation/shacl.md:1590
 #: src/validation/shex.md:98 src/entailment.md:365
 msgid "Conformance"
 msgstr "一致性"
@@ -7575,7 +7575,7 @@ msgstr "Rust 字节 API（`parse_dataset`、`purrdf-rdf`、`purrdf-iri`）"
 msgid "pass a base, or the document must carry one"
 msgstr "传入基准，或文档自身必须携带基准"
 
-#: src/concepts/base-iris.md:53 src/sparql/querying.md:2220
+#: src/concepts/base-iris.md:53 src/sparql/querying.md:2239
 #: src/validation/shacl.md:305 src/validation/shacl.md:404
 #: src/validation/shacl.md:439 src/validation/shacl.md:1190
 #: src/validation/shacl.md:1361 src/validation/shacl.md:1467
@@ -10742,10 +10742,11 @@ msgstr "存在范式（Existential Normal Form）"
 #: src/sparql/querying.md:924
 msgid ""
 "Exactly one bit per row is observed under `EXISTS`: whether the inner "
-"pattern's evaluation is empty. The following rewrite laws replace a node with "
-"something provably emptiness-equivalent but cheaper, applied wherever they "
-"appear at the top of the inner (never inside a `Join`/`Filter`/`Extend`/ "
-"`Graph`/`Minus` operand, which read more than emptiness from their child):"
+"pattern's evaluation is empty. The following rewrite laws replace a node "
+"with something provably emptiness-equivalent but cheaper, applied wherever "
+"they appear at the top of the inner (never inside a `Join`/`Filter`/"
+"`Extend`/ `Graph`/`Minus` operand, which read more than emptiness from their "
+"child):"
 msgstr ""
 "在 `EXISTS` 之下，每一行恰好只观察一个比特：内层模式的求值结果是否为空。以下"
 "改写律把一个节点替换为可证明在空性上等价、但代价更低的东西，凡在内层顶部出现"
@@ -12398,19 +12399,21 @@ msgstr ""
 msgid ""
 "A result carrying only default-graph statements is untouched everywhere: "
 "every SPARQL 1.1 `CONSTRUCT` and every `DESCRIBE` serializes to Turtle "
-"exactly as before. A **mixed** result is refused as a whole rather than half-"
-"emitted, because emitting the default-graph half would report a partial "
-"answer as a complete one."
+"exactly as before. CLI, Python and WebAssembly refuse a **mixed** result as "
+"a whole when explicitly asked for a single-graph syntax, because emitting "
+"the default-graph half would report a partial answer as a complete one. The "
+"C ABI reports the discarded row count instead, as described above."
 msgstr ""
 "仅承载默认图语句的结果在任何地方都不受影响：每一个 SPARQL 1.1 `CONSTRUCT` 与"
-"每一个 `DESCRIBE` 都与以往完全一样序列化为 Turtle。**混合**结果会被整体拒绝，"
-"而不会只输出一半，因为输出默认图那一半会把部分答案报告为完整答案。"
+"每一个 `DESCRIBE` 都与以往完全一样序列化为 Turtle。CLI、Python 与 "
+"WebAssembly 在被明确要求使用单图语法时，会整体拒绝**混合**结果，因为输出默认"
+"图那一半会把部分答案报告为完整答案。C ABI 则改为报告丢弃的行数，如上所述。"
 
-#: src/sparql/querying.md:1604
+#: src/sparql/querying.md:1605
 msgid "The `VERSION` declaration"
 msgstr "`VERSION` 声明"
 
-#: src/sparql/querying.md:1606
+#: src/sparql/querying.md:1607
 msgid ""
 "A query or update prologue may declare `VERSION \"<string>\"` (SPARQL 1.2 "
 "Query specification §4.4). Parsing is syntax-only — any string is accepted, "
@@ -12424,7 +12427,7 @@ msgstr ""
 "的值不再被丢弃：`Query::version()` / `Update::version()` 以带类型的 "
 "`SparqlVersion` 公开它，与既有的 `dataset()`/`base_iri()` 访问器并列。"
 
-#: src/sparql/querying.md:1612
+#: src/sparql/querying.md:1613
 msgid ""
 "Evaluation is the admission boundary. `VERSION \"1.2\"` and `VERSION \"1.2-"
 "basic\"` are recognized; any other declared string — `VERSION \"1.1\"`, a "
@@ -12436,7 +12439,7 @@ msgstr ""
 "何声明的字符串——`VERSION \"1.1\"`、拼写错误、本构建之后才出现的未来版本——都会"
 "在求值准入时被拒绝，给出指名所声明字符串的带类型错误，且早于任何工作的开销。"
 
-#: src/sparql/querying.md:1617
+#: src/sparql/querying.md:1618
 msgid ""
 "`VERSION \"1.2\"` evaluates normally on the full engine. `VERSION \"1.2-"
 "basic\"` is enforced as a narrower profile: the SPARQL 1.2 Query "
@@ -12463,11 +12466,11 @@ msgstr ""
 "对于更新，不会施加任何变更。未使用上述任何构造的 `1.2-basic` 请求，其求值与 "
 "`1.2` 请求完全相同。"
 
-#: src/sparql/querying.md:1630
+#: src/sparql/querying.md:1631
 msgid "Aggregate determinism: row order, `DISTINCT`, and `GROUP_CONCAT`"
 msgstr "聚合的确定性：行顺序、`DISTINCT` 与 `GROUP_CONCAT`"
 
-#: src/sparql/querying.md:1632
+#: src/sparql/querying.md:1633
 msgid ""
 "SPARQL 1.1/1.2 leave several corners of `GROUP BY`/aggregate evaluation "
 "intentionally underspecified — a conforming engine may pick any answer "
@@ -12483,7 +12486,7 @@ msgstr ""
 "`purrdf_sparql_eval::modifier` 的 crate 文档中），从而「`GROUP_CONCAT` 返回什"
 "么」具有单一、可测试的含义，而不是「引擎碰巧产生的任何顺序」。"
 
-#: src/sparql/querying.md:1639
+#: src/sparql/querying.md:1640
 msgid ""
 "**Row and group order (§18.6.1 \"Aggregate Algebra\").** `GROUP BY` "
 "partitions the inner solution sequence into groups; this crate keeps groups "
@@ -12501,7 +12504,7 @@ msgstr ""
 "`SAMPLE` 的「第一个值胜出」、自定义聚合的 `OrderDependent` 折叠——都严格按这一"
 "顺序对各行折叠。"
 
-#: src/sparql/querying.md:1648
+#: src/sparql/querying.md:1649
 msgid ""
 "\"Inner-operator order\" is REPRODUCIBLE (the same query against the same "
 "dataset yields the same order every time) but is not, by itself, a "
@@ -12524,7 +12527,7 @@ msgstr ""
 "ORDER BY ?key }`——「内层算子顺序」恰恰就是该 `ORDER BY` 的 SPARQL 全序"
 "（§15.1），而这是规范本身所固定的。"
 
-#: src/sparql/querying.md:1660
+#: src/sparql/querying.md:1661
 msgid ""
 "**`DISTINCT` (inside an aggregate call).** Per §18.6.1's `Aggregation` "
 "definition, `DISTINCT` folds `Dedup(M(Ψ))` rather than `M(Ψ)` — an order-"
@@ -12538,11 +12541,11 @@ msgstr ""
 "其中各元素首次出现的相对顺序得以保持。本 crate 的去重保留按值相等的元组的第一"
 "次（FIRST）出现（按上述行顺序）；之后的每次出现都不会到达折叠的 `step`。"
 
-#: src/sparql/querying.md:1667
+#: src/sparql/querying.md:1668
 msgid "`GROUP_CONCAT` ordering"
 msgstr "`GROUP_CONCAT` 的排序"
 
-#: src/sparql/querying.md:1669
+#: src/sparql/querying.md:1670
 msgid ""
 "§18.6.1.7 defines `GroupConcat` as concatenating the sequence's elements "
 "with `sep` between them, but explicitly leaves the sequence's own order "
@@ -12563,7 +12566,7 @@ msgstr ""
 "有词法形式的项（空节点或三元组项）会把折叠毒化为未绑定，这与 `SUM`/`AVG` 对非"
 "数值累计值的解读相同。"
 
-#: src/sparql/querying.md:1680
+#: src/sparql/querying.md:1681
 msgid ""
 "Because a plain BGP's own scan order is an implementation detail rather than "
 "a documented guarantee (see above), a `GROUP_CONCAT` fixture that wants to "
@@ -12589,11 +12592,11 @@ msgstr ""
 "`DESC` 而不是 `ASC`，这样一个静默忽略子查询 `ORDER BY`（并退回到存储偶然的扫"
 "描顺序）的回归，就会产生一个可以察觉的不同的错误字符串，而不是碰巧通过。"
 
-#: src/sparql/querying.md:1694
+#: src/sparql/querying.md:1695
 msgid "Extending the evaluator: custom aggregates"
 msgstr "扩展求值器：自定义聚合"
 
-#: src/sparql/querying.md:1696
+#: src/sparql/querying.md:1697
 msgid ""
 "Beyond the SPARQL 1.1 built-in aggregates (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`/ "
 "`SAMPLE`/`GROUP_CONCAT`), a Rust host may register additional `GROUP BY` "
@@ -12614,7 +12617,7 @@ msgstr ""
 "是一个**折叠**：分组中的各行经由调用方提供的累加器归约为一个值，与内置聚合的"
 "做法完全相同。"
 
-#: src/sparql/querying.md:1706
+#: src/sparql/querying.md:1707
 msgid ""
 "A registered aggregate implements two traits — `CustomAggregate` (the per-"
 "IRI factory: declared arity, `Volatility`, `AlgebraicClass`, and a declared "
@@ -12629,15 +12632,32 @@ msgstr ""
 "个部分折叠，`finish` 得出分组的答案）——并以调用方选定的 IRI 注册到 "
 "`AggregateRegistry` 中："
 
-#: src/sparql/querying.md:1720
+#: src/sparql/querying.md:1722
 msgid ""
-"/// A running total over one numeric argument — `example.org`'s own\n"
+"/// A checked nonnegative-integer total (at most i64::MAX) — `example.org`'s "
+"own\n"
 "/// `AGG(<https://example.org/agg#total>, ?x)`.\n"
 msgstr ""
-"/// 对单个数值参数的累计求和——`example.org` 自己的\n"
+"/// 经检查的非负整数累计求和（不超过 i64::MAX）——`example.org` 自己的\n"
 "/// `AGG(<https://example.org/agg#total>, ?x)`。\n"
 
+#: src/sparql/querying.md:1732 src/sparql/querying.md:1735
+msgid "\"total requires one xsd:integer\""
+msgstr "\"total requires one xsd:integer\""
+
 #: src/sparql/querying.md:1738
+msgid "\"total requires a signed-64-bit integer\""
+msgstr "\"total requires a signed-64-bit integer\""
+
+#: src/sparql/querying.md:1740
+msgid "\"total requires a nonnegative integer\""
+msgstr "\"total requires a nonnegative integer\""
+
+#: src/sparql/querying.md:1743 src/sparql/querying.md:1762
+msgid "\"total overflow\""
+msgstr "\"total overflow\""
+
+#: src/sparql/querying.md:1748
 msgid ""
 "// Recover `other`'s real state through `into_any` rather than\n"
 "        // re-deriving it from `finish()`'s lexical form: `finish()` is a\n"
@@ -12658,32 +12678,28 @@ msgstr ""
 "        // 才是在折叠的最终答案本身并非（NOT）充分的可合并状态时\n"
 "        // 应当照搬的模式。\n"
 
-#: src/sparql/querying.md:1748
+#: src/sparql/querying.md:1758
 msgid "\"combine received a partial accumulator of a different concrete type\""
 msgstr ""
 "\"combine received a partial accumulator of a different concrete type\""
 
-#: src/sparql/querying.md:1756
+#: src/sparql/querying.md:1767
 msgid "// a running total IS its own sufficient merge state\n"
 msgstr "// 累计求和本身就是（IS）其充分的合并状态\n"
 
-#: src/sparql/querying.md:1762
-msgid "\"http://www.w3.org/2001/XMLSchema#integer\""
-msgstr "\"http://www.w3.org/2001/XMLSchema#integer\""
-
-#: src/sparql/querying.md:1774
+#: src/sparql/querying.md:1785
 msgid "// eligible for the within-group parallel fold\n"
 msgstr "// 可参与分组内的并行折叠\n"
 
-#: src/sparql/querying.md:1780
+#: src/sparql/querying.md:1791
 msgid "// stateless besides the running total\n"
 msgstr "// 除累计求和外无其他状态\n"
 
-#: src/sparql/querying.md:1789
+#: src/sparql/querying.md:1800
 msgid "\"https://example.org/agg#total\""
 msgstr "\"https://example.org/agg#total\""
 
-#: src/sparql/querying.md:1791
+#: src/sparql/querying.md:1802
 msgid ""
 "// The environment a query text is read in: `AGG(<iri>, …)` is admitted "
 "against\n"
@@ -12692,15 +12708,35 @@ msgstr ""
 "// 读取查询文本所处的环境：`AGG(<iri>, …)` 依据这个\n"
 "// 注册表被接纳。\n"
 
-#: src/sparql/querying.md:1800
-msgid ""
-"\"SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s "
-"<https://example.org/n> ?x }\""
-msgstr ""
-"\"SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s "
-"<https://example.org/n> ?x }\""
+#: src/sparql/querying.md:1805
+msgid "\"aggregate environment\""
+msgstr "\"aggregate environment\""
 
-#: src/sparql/querying.md:1808
+#: src/sparql/querying.md:1807
+msgid "\"empty dataset\""
+msgstr "\"empty dataset\""
+
+#: src/sparql/querying.md:1812
+msgid ""
+"\"SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { VALUES ?x "
+"{ 1 2 3 } }\""
+msgstr ""
+"\"SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { VALUES ?x "
+"{ 1 2 3 } }\""
+
+#: src/sparql/querying.md:1817
+msgid "\"custom total\""
+msgstr "\"custom total\""
+
+#: src/sparql/querying.md:1819
+msgid "\"SELECT result\""
+msgstr "\"SELECT result\""
+
+#: src/sparql/querying.md:1821
+msgid "\"6\""
+msgstr "\"6\""
+
+#: src/sparql/querying.md:1824
 msgid ""
 "An `AGG(<iri>, …)` call to an unregistered IRI, with the wrong argument "
 "count, or with an invalid `; NAME=value` scalarval clause (an unrecognized "
@@ -12720,11 +12756,11 @@ msgstr ""
 "叠最终答案本身无法重建的结构化状态时所起的作用，见 `purrdf-sparql-eval` 的 "
 "`agg_fn` 模块文档）。"
 
-#: src/sparql/querying.md:1818
+#: src/sparql/querying.md:1834
 msgid "Named scalar-value parameters"
 msgstr "具名标量值参数"
 
-#: src/sparql/querying.md:1820
+#: src/sparql/querying.md:1836
 msgid ""
 "Beyond its positional `args`, `AGG(<iri>, …)` admits zero or more trailing "
 "`; NAME=value` clauses — a named, per-aggregation scalar parameter, "
@@ -12751,7 +12787,7 @@ msgstr ""
 "义，它们必须是整个分组中一个固定的值，而不是查询作者仅仅打算保持不变的逐行表"
 "达式。"
 
-#: src/sparql/querying.md:1834
+#: src/sparql/querying.md:1850
 msgid ""
 "A registered aggregate declares which names it accepts via "
 "`CustomAggregate::scalarvals`, returning a slice of `ScalarvalSpec { name, "
@@ -12769,7 +12805,7 @@ msgstr ""
 "器可以按名称读回它们（`scalarvals.iter().find(|(k, _)| k == \"P\")`），而无需"
 "重新检查类型或是否存在。"
 
-#: src/sparql/querying.md:1843
+#: src/sparql/querying.md:1859
 msgid ""
 "`AGG(<iri>, …)` execution is governed like any other fold: profile v6 adds "
 "two charge points — `aggregate-invocation` (once per group per aggregate "
@@ -12786,11 +12822,11 @@ msgstr ""
 "GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/"
 "main/docs/SPARQL-GOVERNOR-PROFILE.md)。"
 
-#: src/sparql/querying.md:1850
+#: src/sparql/querying.md:1866
 msgid "The statistical aggregate set"
 msgstr "统计聚合集"
 
-#: src/sparql/querying.md:1852
+#: src/sparql/querying.md:1868
 msgid ""
 "`purrdf-sparql-eval` ships ten exact statistical aggregates — `MEDIAN`, "
 "`PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, "
@@ -12804,18 +12840,18 @@ msgstr ""
 "是封闭的（没有供调用方扩展的扩展点），并通过**一次**调用到达："
 "`AggregateRegistry::register_statistical_aggregates`："
 
-#: src/sparql/querying.md:1860
+#: src/sparql/querying.md:1878
 msgid "\"https://example.org/agg#\""
 msgstr "\"https://example.org/agg#\""
 
-#: src/sparql/querying.md:1860
+#: src/sparql/querying.md:1879
 msgid ""
 "// Now reachable: AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …"
 "TOPK…\n"
 msgstr ""
 "// 现已可到达：AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …TOPK…\n"
 
-#: src/sparql/querying.md:1864
+#: src/sparql/querying.md:1883
 msgid ""
 "As with every vocabulary PurRDF touches, `namespace` is caller-supplied "
 "configuration with no fabricated default — a host that never calls this "
@@ -12828,11 +12864,11 @@ msgstr ""
 "`ParserOptions::extension_fn_namespaces` 的宿主得不到任何内置标量扩展函数完全"
 "一样。"
 
-#: src/sparql/querying.md:1870
+#: src/sparql/querying.md:1889
 msgid "Per-member semantics:"
 msgstr "各成员的语义："
 
-#: src/sparql/querying.md:1872
+#: src/sparql/querying.md:1891
 msgid ""
 "**Numeric members** (`STDDEV*`/`VARIANCE*`, `MEDIAN`, `PERCENTILE`) follow "
 "the same `integer ⊂ decimal ⊂ float ⊂ double` promotion tower the built-in "
@@ -12847,7 +12883,7 @@ msgstr ""
 "一致。只有 `STDDEV`/`STDDEV_POP` 最后的平方根会离开精确的 decimal 体系；"
 "`VARIANCE`/`VAR_POP` 从不离开。"
 
-#: src/sparql/querying.md:1878
+#: src/sparql/querying.md:1897
 msgid ""
 "**`STDDEV`/`VARIANCE`** are the sample statistics (`n - 1` denominator, "
 "unbound under two values); **`STDDEV_POP`/`VAR_POP`** are the population "
@@ -12858,7 +12894,7 @@ msgstr ""
 "定）；**`STDDEV_POP`/`VAR_POP`** 是总体统计量（分母为 `n`，一个值时即有定义）"
 "——这是 SQL 自身的命名约定。"
 
-#: src/sparql/querying.md:1882
+#: src/sparql/querying.md:1901
 msgid ""
 "**`MEDIAN`** is `PERCENTILE` at `p = 0.5` under linear interpolation between "
 "the two closest ranks — for an even-sized group this is exactly the mean of "
@@ -12867,7 +12903,7 @@ msgstr ""
 "**`MEDIAN`** 即 `p = 0.5` 时的 `PERCENTILE`，在两个最接近的秩之间做线性插值——"
 "对于大小为偶数的分组，这恰好是两个中间值的平均值。"
 
-#: src/sparql/querying.md:1885
+#: src/sparql/querying.md:1904
 msgid ""
 "**`PERCENTILE`** takes a named scalarval, `AGG(<{NS}PERCENTILE>, ?x; "
 "P=0.95)`: `P` is resolved once for the whole aggregation (never per row — "
@@ -12880,7 +12916,7 @@ msgstr ""
 "于 `[0, 1]` 之外的 `P` 会毒化为未绑定，这与每个数值型成员所用的「毒化，而非中"
 "止」规则相同。缺失或非数值的 `P` 会在预备时被拒绝。"
 
-#: src/sparql/querying.md:1890
+#: src/sparql/querying.md:1909
 msgid ""
 "**`MODE`** works over any term kind, counted by RDF term identity (not value "
 "equality — `\"5\"^^xsd:integer` and `\"05\"^^xsd:integer` count as two "
@@ -12891,11 +12927,11 @@ msgstr ""
 "`\"5\"^^xsd:integer` 与 `\"05\"^^xsd:integer` 算作两个不同的项）。平局时取 "
 "`MIN`/`ORDER BY` 所用的同一全序下最小的项。"
 
-#: src/sparql/querying.md:1894
+#: src/sparql/querying.md:1913
 msgid "**`FIRST`/`LAST`** work over any term kind, in input row order."
 msgstr "**`FIRST`/`LAST`** 适用于任何项类型，按输入行顺序。"
 
-#: src/sparql/querying.md:1895
+#: src/sparql/querying.md:1914
 msgid ""
 "**`TOPK`** takes a named scalarval, `AGG(<{NS}TOPK>, ?x; K=3)`: `K` must be "
 "a positive `xsd:integer`, resolved once for the whole aggregation (a `K ≤ 0` "
@@ -12911,7 +12947,7 @@ msgstr ""
 "应答方式与 `GROUP_CONCAT` 应答多值问题的方式相同——前 `k` 个值，按降序排列，其"
 "词法形式以单个固定的空格分隔符连接。"
 
-#: src/sparql/querying.md:1903
+#: src/sparql/querying.md:1922
 msgid ""
 "All ten declare `Volatility::Stable` and merge partial folds through real, "
 "type-recovered structural state (`AggregateAccumulator::into_any`) rather "
@@ -12924,11 +12960,11 @@ msgstr ""
 "新推导——因此单个大分组可以分块并行折叠（见 "
 "`crate::modifier::eval_custom_aggregate`），其结果与顺序折叠逐字节相同。"
 
-#: src/sparql/querying.md:1909
+#: src/sparql/querying.md:1928
 msgid "Path witnesses: binding the derivation, not the endpoints"
 msgstr "路径见证：绑定推导过程，而不是端点"
 
-#: src/sparql/querying.md:1911
+#: src/sparql/querying.md:1930
 msgid ""
 "The core grammar's property paths answer a **reachability** question. `?s "
 "ex:p+ ?o` says that some sequence of `ex:p` edges leads from `?s` to `?o`, "
@@ -12940,13 +12976,13 @@ msgstr ""
 "`ex:p` 边构成的序列从 `?s` 通往 `?o`，答案是端点对；_哪些_边则无法表达，因此"
 "需要解释、加权、过滤或重新连接该路线的查询无处可查。"
 
-#: src/sparql/querying.md:1916
+#: src/sparql/querying.md:1935
 msgid ""
 "A **path-witness** property function answers the derivation question "
 "instead. A call reads"
 msgstr "**路径见证**属性函数回答的则是推导问题。调用形式如下"
 
-#: src/sparql/querying.md:1923
+#: src/sparql/querying.md:1942
 msgid ""
 "and emits **one row per hop**. For a walk of `k` hops, row `i` binds `?len = "
 "k`, `?step = i`, `?node` to the node that hop arrived at, and `?edge` to the "
@@ -12962,7 +12998,7 @@ msgstr ""
 "直接连接回数据集。`?step` 与 `?len` 是 `xsd:integer` 字面量，正是为了让 "
 "`ORDER BY ?step` 按数值排序，而不是把 `\"10\"` 排在 `\"2\"` 之前。"
 
-#: src/sparql/querying.md:1930
+#: src/sparql/querying.md:1949
 msgid ""
 "There is no default relation IRI and no default traversal envelope. PurRDF "
 "mints no vocabulary IRIs, so the name a query spells in predicate position "
@@ -12978,7 +13014,7 @@ msgstr ""
 "`u32` 能容纳的任何 `max_hops` 都会被接受：遍历把每一层深度的状态都保存在堆"
 "上，而两个资源守卫限定一次游走所做的工作量。"
 
-#: src/sparql/querying.md:1938
+#: src/sparql/querying.md:1957
 msgid ""
 "Two relation TYPES, not one with a mode switch: `PathWitnessRelation` "
 "enumerates every simple-prefix walk (exponential in the worst case) and "
@@ -12992,15 +13028,15 @@ msgstr ""
 "个可达对产生一个最短见证（多项式级）。规划器从注册信息中读取基数，因此由二者"
 "中的哪一个应答某个 IRI，是注册的属性，而不是规划器无法看到的运行时值的属性。"
 
-#: src/sparql/querying.md:1945
+#: src/sparql/querying.md:1964
 msgid "A worked example"
 msgstr "一个完整示例"
 
-#: src/sparql/querying.md:1947
+#: src/sparql/querying.md:1966
 msgid "Over a three-edge chain `ex:a → ex:b → ex:c → ex:d`:"
 msgstr "在一条三边链 `ex:a → ex:b → ex:c → ex:d` 上："
 
-#: src/sparql/querying.md:1958
+#: src/sparql/querying.md:1977
 msgid ""
 "```text\n"
 "end,len,step,node\n"
@@ -13022,7 +13058,7 @@ msgstr ""
 "http://example.org/d,3,3,http://example.org/d\n"
 "```"
 
-#: src/sparql/querying.md:1968
+#: src/sparql/querying.md:1987
 msgid ""
 "`GROUP BY ?pathId` is how the hop rows become walks again. The identifier is "
 "constant across one walk's rows and distinct between walks, so each group IS "
@@ -13034,7 +13070,7 @@ msgstr ""
 "start`、`?end` 与 `?len` 在分组内保持不变，因此同时按它们分组不需要任何代价，"
 "还能把它们投影出来："
 
-#: src/sparql/querying.md:1982
+#: src/sparql/querying.md:2001
 msgid ""
 "```text\n"
 "end,len,route\n"
@@ -13052,7 +13088,7 @@ msgstr ""
 "example.org/d\n"
 "```"
 
-#: src/sparql/querying.md:1989
+#: src/sparql/querying.md:2008
 msgid ""
 "Swap `?node` for `?edge` and the same grouping reconstructs the STATEMENT "
 "sequence, which is where an aggregate over a walk belongs: a `SUM` of a per-"
@@ -13066,45 +13102,45 @@ msgstr ""
 "求 `MIN`、用 `HAVING` 只保留每一跳都带有注解的路线。这些都无法从一个返回端点"
 "的关系中得到，而且都不需要列表项。"
 
-#: src/sparql/querying.md:1995
+#: src/sparql/querying.md:2014
 msgid "The same registration from Python:"
 msgstr "在 Python 中进行同样的注册："
 
-#: src/sparql/querying.md:1999
+#: src/sparql/querying.md:2018
 msgid "\"SELECT ?end ?len ?step ?node WHERE { <http://example.org/a> \""
 msgstr "\"SELECT ?end ?len ?step ?node WHERE { <http://example.org/a> \""
 
-#: src/sparql/querying.md:2000
+#: src/sparql/querying.md:2019
 msgid ""
 "\"<http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) } \""
 msgstr ""
 "\"<http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) } \""
 
-#: src/sparql/querying.md:2001
+#: src/sparql/querying.md:2020
 msgid "\"ORDER BY ?len ?step\""
 msgstr "\"ORDER BY ?len ?step\""
 
-#: src/sparql/querying.md:2003
+#: src/sparql/querying.md:2022
 msgid "\"http://example.org/pf#walk\""
 msgstr "\"http://example.org/pf#walk\""
 
-#: src/sparql/querying.md:2004
+#: src/sparql/querying.md:2023
 msgid "\"http://example.org/p\""
 msgstr "\"http://example.org/p\""
 
-#: src/sparql/querying.md:2004
+#: src/sparql/querying.md:2023
 msgid "\"forward\""
 msgstr "\"forward\""
 
-#: src/sparql/querying.md:2005
+#: src/sparql/querying.md:2024
 msgid "\"walk\""
 msgstr "\"walk\""
 
-#: src/sparql/querying.md:2011
+#: src/sparql/querying.md:2030
 msgid "Under an entailment regime, the walk reads the closure"
 msgstr "在蕴涵机制（entailment regime）下，游走读取的是推理闭包"
 
-#: src/sparql/querying.md:2013
+#: src/sparql/querying.md:2032
 msgid ""
 "A path relation is a snapshot of the step's edges, and the dataset it must "
 "be snapshotted from is the one the query is _answered over_. Under `--"
@@ -13118,7 +13154,7 @@ msgstr ""
 "下，那就是**推理闭包**，而不是源图——因此，在步骤谓语下推导出四元组的蕴涵机"
 "制，会拓宽游走，与它拓宽写在旁边的 `p+` 完全一样。以如下数据为例："
 
-#: src/sparql/querying.md:2025
+#: src/sparql/querying.md:2044
 msgid ""
 "`SELECT ?end WHERE { ex:a ex:p+ ?end }` under `rdfs` answers `ex:b, ex:c`, "
 "and the registered walk seeded at `ex:a` reaches `ex:c` too. Without the "
@@ -13129,7 +13165,7 @@ msgstr ""
 "而以 `ex:a` 为起点注册的游走同样会到达 `ex:c`。没有该蕴涵机制时，二者都止于 "
 "`ex:b`，因为推导出的 `ex:b ex:p ex:c` 并不存在，无从游走。"
 
-#: src/sparql/querying.md:2029
+#: src/sparql/querying.md:2048
 msgid ""
 "One pairing is refused rather than answered: `--entailment owl-direct` on an "
 "ontology whose restricted chase mints existential witnesses. Those witnesses "
@@ -13148,7 +13184,7 @@ msgstr ""
 "种组合的蕴涵机制。不生成任何见证的 `owl-direct` 运行——TBox 位于组合方法的 "
 "Horn 片段之外，或其 chase 未触发任何存在性规则——不会被拒绝。"
 
-#: src/sparql/querying.md:2038
+#: src/sparql/querying.md:2057
 msgid ""
 "The Rust surface spells the same thing explicitly: `query_with_entailment` "
 "and `query_with_entailment_governed` take a `ClosureRelations` argument, "
@@ -13163,11 +13199,11 @@ msgstr ""
 "样使用），要么是 `ClosureRelations::rebuilt_by(&f)`，其中 `f` 接收物化后的推"
 "理闭包，并返回用于作答的注册表。"
 
-#: src/sparql/querying.md:2044
+#: src/sparql/querying.md:2063
 msgid "Reaching extensions from other hosts"
 msgstr "从其他宿主到达扩展"
 
-#: src/sparql/querying.md:2046
+#: src/sparql/querying.md:2065
 msgid ""
 "The SHACL-AF function registry and the GENERAL custom-aggregate registry are "
 "**Rust-closure seams**: a registered function or aggregate is arbitrary host "
@@ -13183,7 +13219,7 @@ msgstr ""
 "符串或任何其他 FFI 形态的值跨越 Python、WebAssembly 或 C 边界——本项目不愿为此"
 "自创任何回调协议，下述四个宿主接口也都没有公开它。"
 
-#: src/sparql/querying.md:2054
+#: src/sparql/querying.md:2073
 msgid ""
 "The property-function registry is a closure seam in the same sense — a "
 "`PropertyFunction` is an arbitrary host implementation — but its DATA-SHAPED "
@@ -13209,12 +13245,12 @@ msgstr ""
 "期间调用的任何东西都无法重新进入解释器，这正是它们能够跨越边界的原因。"
 "WebAssembly 与 C-ABI 接口完全不公开属性函数注册。"
 
-#: src/sparql/querying.md:2067
+#: src/sparql/querying.md:2086
 msgid ""
 "What a relation attests about itself, and the one lane that can record it"
 msgstr "关系对自身作出的证明，以及唯一能够记录它的通道"
 
-#: src/sparql/querying.md:2069
+#: src/sparql/querying.md:2088
 msgid ""
 "Two facts about an invocation are known to a relation's cursor and to "
 "nothing else: which generation of its index answered, and whether that index "
@@ -13228,7 +13264,7 @@ msgstr ""
 "`(generation, incompleteness)`，二者各为字符串或 `None`，并各自被逐字记录。两"
 "者都不声明是默认情况，意味着该关系什么也没说——这是沉默，而不是声称索引完整。"
 
-#: src/sparql/querying.md:2076
+#: src/sparql/querying.md:2095
 msgid ""
 "A relation that declares itself **incomplete** is refused at any entry point "
 "with nowhere to put that declaration: the ungoverned `query` and every "
@@ -13244,7 +13280,7 @@ msgstr ""
 "无人能读取其回执的不完整（被截短）的答案，恰恰是硬失败原则所禁止的。因此，受"
 "治理通道会作答，其结果携带："
 
-#: src/sparql/querying.md:2084
+#: src/sparql/querying.md:2103
 msgid ""
 "# {relation_iri: {\"invocations\": int,\n"
 "#                 \"generations\": [str | None],\n"
@@ -13254,7 +13290,7 @@ msgstr ""
 "#                 \"generations\": [str | None],\n"
 "#                 \"incompleteness\": [str]}}\n"
 
-#: src/sparql/querying.md:2090
+#: src/sparql/querying.md:2109
 msgid ""
 "The mapping is always present and may be empty — a governed query that "
 "invoked no relation reports `{}`, which is a fact rather than an absence. "
@@ -13273,7 +13309,7 @@ msgstr ""
 "因此在同一快照上两次运行的声明（DECLARATIONS）可以逐字节比较。已触发的 "
 "governor 仍会报告各关系在触发之前所证明的内容。"
 
-#: src/sparql/querying.md:2099
+#: src/sparql/querying.md:2118
 msgid ""
 "`invocations` is the one field that does not: it counts entries into host "
 "code, which is a fact about the schedule rather than about the index. Under "
@@ -13295,7 +13331,7 @@ msgstr ""
 "同，包括在两次仅所给预算不同的运行之间。应把它读作「该关系是否运行过」（`0` "
 "对比非零），或作为日志行中的粗略量级；绝不要在两份回执之间比较它。"
 
-#: src/sparql/querying.md:2110
+#: src/sparql/querying.md:2129
 msgid ""
 "PurRDF's first-party **statistical set** is different, precisely because it "
 "is NOT an arbitrary closure: "
@@ -13318,13 +13354,13 @@ msgstr ""
 "接口传递 `property_fn_namespaces` 或最接近的等价可选字符串配置的方式保持一"
 "致："
 
-#: src/sparql/querying.md:2120
+#: src/sparql/querying.md:2139
 msgid ""
 "**Rust** (embedding the engine directly): `QueryOptions.aggregates`, as "
 "shown throughout this page."
 msgstr "**Rust**（直接嵌入引擎）：`QueryOptions.aggregates`，如本页各处所示。"
 
-#: src/sparql/querying.md:2122
+#: src/sparql/querying.md:2141
 msgid ""
 "**Python** (`purrdf.Store` / `purrdf.MutableDataset`): the "
 "`aggregate_namespace` keyword on `query` / `query_governed` / `update` / "
@@ -13334,24 +13370,24 @@ msgstr ""
 "`query_governed` / `update` / `update_governed` 上的 `aggregate_namespace` 关"
 "键字参数。"
 
-#: src/sparql/querying.md:2128
+#: src/sparql/querying.md:2147
 msgid "\"PREFIX ex: <https://ex.example/> \""
 msgstr "\"PREFIX ex: <https://ex.example/> \""
 
-#: src/sparql/querying.md:2129
+#: src/sparql/querying.md:2148
 msgid "\"SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) \""
 msgstr "\"SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) \""
 
-#: src/sparql/querying.md:2130
+#: src/sparql/querying.md:2149
 msgid "\"WHERE { ?s ex:value ?v }\""
 msgstr "\"WHERE { ?s ex:value ?v }\""
 
-#: src/sparql/querying.md:2131 src/sparql/querying.md:2148
-#: src/sparql/querying.md:2158
+#: src/sparql/querying.md:2150 src/sparql/querying.md:2167
+#: src/sparql/querying.md:2177
 msgid "\"https://ex.example/agg#\""
 msgstr "\"https://ex.example/agg#\""
 
-#: src/sparql/querying.md:2135
+#: src/sparql/querying.md:2154
 msgid ""
 "**CLI** (`purrdf query` / `purrdf update`): the `--aggregate-namespace IRI` "
 "flag."
@@ -13359,17 +13395,17 @@ msgstr ""
 "**CLI**（`purrdf query` / `purrdf update`）：`--aggregate-namespace IRI` 标"
 "志。"
 
-#: src/sparql/querying.md:2139
+#: src/sparql/querying.md:2158
 msgid "'https://ex.example/agg#'"
 msgstr "'https://ex.example/agg#'"
 
-#: src/sparql/querying.md:2140
+#: src/sparql/querying.md:2159
 msgid ""
 "'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) WHERE { ?s ?p ?v }'"
 msgstr ""
 "'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) WHERE { ?s ?p ?v }'"
 
-#: src/sparql/querying.md:2143
+#: src/sparql/querying.md:2162
 msgid ""
 "**WebAssembly** (`QueryEngine.queryGoverned` / `updateGoverned`): the "
 "`aggregateNamespace` option, alongside the other governed-call options."
@@ -13377,7 +13413,7 @@ msgstr ""
 "**WebAssembly**（`QueryEngine.queryGoverned` / `updateGoverned`）："
 "`aggregateNamespace` 选项，与其他受治理调用选项并列。"
 
-#: src/sparql/querying.md:2152
+#: src/sparql/querying.md:2171
 msgid ""
 "**C ABI** (`purrdf_query_governed` / `purrdf_update_governed`): a nullable "
 "`const char *aggregate_namespace` parameter, the same optional-C-string "
@@ -13387,15 +13423,15 @@ msgstr ""
 "的 `const char *aggregate_namespace` 参数，与该 ABI 上其他每个可为空字符串所"
 "用的可选 C 字符串约定相同。"
 
-#: src/sparql/querying.md:2157
+#: src/sparql/querying.md:2176
 msgid "/* base_iri */"
 msgstr "/* base_iri */"
 
-#: src/sparql/querying.md:2158
+#: src/sparql/querying.md:2177
 msgid "/* … */"
 msgstr "/* … */"
 
-#: src/sparql/querying.md:2161
+#: src/sparql/querying.md:2180
 msgid ""
 "`namespace` stays caller-supplied configuration with no fabricated default "
 "on every one of these surfaces: omitting it (`None` / not passing the flag / "
@@ -13407,7 +13443,7 @@ msgstr ""
 "省略它（`None` / 不传该标志 / `undefined` / 空指针）会使十个名称中的每一个都"
 "成为普通的未注册自定义聚合 IRI，与该参数出现之前完全一样被拒绝。"
 
-#: src/sparql/querying.md:2167
+#: src/sparql/querying.md:2186
 msgid ""
 "The **entailment-aware query lane** (`query_with_entailment`/ "
 "`query_with_entailment_governed`, and every Python/CLI/WebAssembly/C wrapper "
@@ -13424,7 +13460,7 @@ msgstr ""
 "此 `AGG(<{NS}MEDIAN>, …)` 在蕴涵得出的推理闭包上的解析方式，与在原始视图上相"
 "同。"
 
-#: src/sparql/querying.md:2181
+#: src/sparql/querying.md:2200
 msgid ""
 "`purrdf.Store.query_entailment_governed(..., aggregate_namespace=NS)` "
 "answers the same query the same way, and the WebAssembly and C-ABI governed "
@@ -13433,7 +13469,7 @@ msgstr ""
 "`purrdf.Store.query_entailment_governed(..., aggregate_namespace=NS)` 以同样"
 "的方式回答同一个查询，WebAssembly 与 C-ABI 的受治理蕴涵入口也接受同一个参数。"
 
-#: src/sparql/querying.md:2185
+#: src/sparql/querying.md:2204
 msgid ""
 "One structural limit applies everywhere the statistical set is reachable: "
 "SPARQL UPDATE's grammar admits an aggregate only inside a nested `SELECT … "
@@ -13446,12 +13482,12 @@ msgstr ""
 "`INSERT WHERE` 基本图模式自身没有 `GROUP BY`）——每个宿主的 `update` 入口都恰"
 "好通过这种嵌套子查询形态到达统计集。"
 
-#: src/sparql/querying.md:2192 src/validation/shacl.md:1446
+#: src/sparql/querying.md:2211 src/validation/shacl.md:1446
 #: src/validation/shex.md:64
 msgid "Dated XPath regex laws"
 msgstr "带日期的 XPath 正则法则"
 
-#: src/sparql/querying.md:2194
+#: src/sparql/querying.md:2213
 msgid ""
 "`REGEX` and `REPLACE` run on the compatibility regular expressions unless "
 "the caller selects a dated native XPath law by its stable name:"
@@ -13459,34 +13495,34 @@ msgstr ""
 "`REGEX` 与 `REPLACE` 运行在兼容正则表达式之上，除非调用方按稳定名称选择一种带"
 "日期的原生 XPath 法则："
 
-#: src/sparql/querying.md:2197
+#: src/sparql/querying.md:2216
 msgid "Name"
 msgstr "名称"
 
-#: src/sparql/querying.md:2197
+#: src/sparql/querying.md:2216
 msgid "Law"
 msgstr "法则"
 
-#: src/sparql/querying.md:2199
+#: src/sparql/querying.md:2218
 msgid "`xpath-2.0-2010-12-14`"
 msgstr "`xpath-2.0-2010-12-14`"
 
-#: src/sparql/querying.md:2199
+#: src/sparql/querying.md:2218
 msgid ""
 "XPath and XQuery Functions and Operators 2.0 (Second Edition), 14 December "
 "2010"
 msgstr ""
 "XPath and XQuery Functions and Operators 2.0（第二版），2010 年 12 月 14 日"
 
-#: src/sparql/querying.md:2200
+#: src/sparql/querying.md:2219
 msgid "`xpath-3.1-2017-03-21`"
 msgstr "`xpath-3.1-2017-03-21`"
 
-#: src/sparql/querying.md:2200
+#: src/sparql/querying.md:2219
 msgid "XPath and XQuery Functions and Operators 3.1, 21 March 2017"
 msgstr "XPath and XQuery Functions and Operators 3.1，2017 年 3 月 21 日"
 
-#: src/sparql/querying.md:2202
+#: src/sparql/querying.md:2221
 msgid ""
 "Both laws admit backreferences, which the compatibility expressions refuse. "
 "Only 3.1 admits non-capturing groups such as `(?:a)` and the `q` flag. Under "
@@ -13497,7 +13533,7 @@ msgstr ""
 "这样的非捕获组和 `q` 标志。在任一法则下，下面的查询保留前两个字符相同的每个 "
 "`?code`："
 
-#: src/sparql/querying.md:2206
+#: src/sparql/querying.md:2225
 msgid ""
 "```sparql\n"
 "SELECT ?code WHERE {\n"
@@ -13513,17 +13549,17 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/querying.md:2213
+#: src/sparql/querying.md:2232
 msgid "Every host selects the law in its own spelling:"
 msgstr "每个宿主都以自己的写法选择法则："
 
-#: src/sparql/querying.md:2215 src/validation/shacl.md:400
+#: src/sparql/querying.md:2234 src/validation/shacl.md:400
 #: src/validation/shacl.md:435 src/validation/shacl.md:1462
 #: src/validation/shex.md:72
 msgid "Spelling"
 msgstr "写法"
 
-#: src/sparql/querying.md:2217
+#: src/sparql/querying.md:2236
 msgid ""
 "`NativeSparqlEngine::with_xpath_regex(profile, limits)` for every request "
 "the engine runs, or `QueryOptions::with_xpath_regex(profile, limits)` for "
@@ -13538,11 +13574,11 @@ msgstr ""
 "`purrdf_validate::xpath_regex::{parse_profile, sparql_engine, query_options}"
 "` 按名称选择，并使用生产限制"
 
-#: src/sparql/querying.md:2218
+#: src/sparql/querying.md:2237
 msgid "`--xpath-regex <NAME>` on `query` and `update`"
 msgstr "`query` 与 `update` 上的 `--xpath-regex <NAME>`"
 
-#: src/sparql/querying.md:2219
+#: src/sparql/querying.md:2238
 msgid ""
 "`xpath_regex=` on `query`, `query_governed`, `query_entailment_governed`, "
 "`update`, `update_governed` and `Store.prepare`, and on the rdflib layer's "
@@ -13554,7 +13590,7 @@ msgstr ""
 "`Graph.update` 上的 `xpath_regex=`；`purrdf.XPATH_REGEX_PROFILES` 列出这些名"
 "称"
 
-#: src/sparql/querying.md:2220
+#: src/sparql/querying.md:2239
 msgid ""
 "an `xpathRegex` option on every evaluating `QueryEngine` method and its "
 "asynchronous twin, and a trailing `xpathRegex` on `Dataset.query`, "
@@ -13564,7 +13600,7 @@ msgstr ""
 "`Dataset.query`、`queryRawConfigured` 与 `queryRawWithContext` 的尾随参数 "
 "`xpathRegex`"
 
-#: src/sparql/querying.md:2221
+#: src/sparql/querying.md:2240
 msgid ""
 "`regex_profile` on `purrdf_query_xpath_regex`, "
 "`purrdf_query_json_xpath_regex`, `purrdf_query_governed_xpath_regex`, "
@@ -13576,7 +13612,7 @@ msgstr ""
 "`purrdf_query_entailment_governed_xpath_regex` 与 "
 "`purrdf_update_governed_xpath_regex` 上的 `regex_profile`"
 
-#: src/sparql/querying.md:2223
+#: src/sparql/querying.md:2242
 msgid ""
 "Names match exactly, with no case folding or undated alias, so a name such "
 "as `xpath-3.1` is refused with a list of the accepted names. With no "
@@ -13589,7 +13625,7 @@ msgstr ""
 "`regex_profile` 为 NULL），兼容正则表达式的行为与以往完全一样。预备好的查询在"
 "每次运行中都保留其法则，而未设置法则的请求继承引擎的选择。"
 
-#: src/sparql/querying.md:2229
+#: src/sparql/querying.md:2248
 msgid ""
 "A pattern or flag the selected law does not define is an ordinary expression "
 "error, so a `FILTER` drops the row and a `BIND` leaves its variable unbound. "
@@ -13607,11 +13643,11 @@ msgstr ""
 "purrdf-core)，该页面列出了触及每个上限的、经过测量的几类工作。它绝不会成为部"
 "分答案或 `false` 的过滤结果，被拒绝的更新也不会改变任何内容。"
 
-#: src/sparql/querying.md:2238
+#: src/sparql/querying.md:2257
 msgid "Entailment regimes"
 msgstr "蕴涵机制"
 
-#: src/sparql/querying.md:2240
+#: src/sparql/querying.md:2259
 msgid ""
 "SPARQL queries can be answered under an entailment regime by materializing "
 "the dataset first with [`purrdf-entail`](../entailment.md) — "
@@ -13622,7 +13658,7 @@ msgstr ""
 "SPARQL 查询——`Regime::from_iri` 把 `sparql:entailmentRegime` IRI 映射到相应的"
 "引擎。"
 
-#: src/sparql/querying.md:2246
+#: src/sparql/querying.md:2265
 msgid ""
 "The full W3C SPARQL 1.1 query + update evaluation suites plus the SPARQL 1.2 "
 "suite are vendored verbatim and run by `purrdf-sparql-conformance`; every "
@@ -27338,6 +27374,9 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid "\"http://www.w3.org/2001/XMLSchema#integer\""
+#~ msgstr "\"http://www.w3.org/2001/XMLSchema#integer\""
 
 #~ msgid ""
 #~ "**What it replaces, and where it stops.** This is the surface that lets "
