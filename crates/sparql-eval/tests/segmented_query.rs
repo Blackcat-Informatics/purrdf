@@ -641,7 +641,7 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
         .expect("the selective persistent join is certified");
     let after = source.evidence();
     let measured = window.close();
-    assert_eq!(explanation.render(), expected);
+    support::assert_scan_explanation_matches_resident(&explanation, &expected);
     assert!(
         evidence.evictions() > 0,
         "the measuring run used the sparse storage cache"
@@ -692,7 +692,7 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
         let live_receipt = source.evidence();
         let live = live_receipt.live_bytes() - live_receipt.bookkeeping_bytes();
         let measured = window.close();
-        assert_eq!(again.render(), expected);
+        support::assert_scan_explanation_matches_resident(&again, &expected);
         assert!(
             live > released,
             "the repeated explanation owns its native buffers"
@@ -1929,7 +1929,7 @@ fn configured_explain_matches_resident_and_retains_last_owner() {
                 }
                 .unwrap();
                 let measured = window.close();
-                assert_eq!(explanation.render(), expected);
+                support::assert_scan_explanation_matches_resident(&explanation, &expected);
                 assert!(
                     u64::try_from(measured.peak_working_bytes).unwrap() <= receipt.peak_bytes()
                 );
@@ -1945,7 +1945,7 @@ fn configured_explain_matches_resident_and_retains_last_owner() {
                     live,
                     "shared explanation owns original buffers"
                 );
-                assert_eq!(shared.render(), expected);
+                support::assert_scan_explanation_matches_resident(&shared, &expected);
                 drop(shared);
                 assert!(
                     source.evidence().live_bytes() < live,

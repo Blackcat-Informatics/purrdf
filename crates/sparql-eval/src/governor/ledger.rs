@@ -708,14 +708,7 @@ impl QueryExplanation {
         for pattern in self.join_orders.iter() {
             let _ = writeln!(out, "  {pattern}");
         }
-        let access = |indexed| if indexed { "range" } else { "scan-default" };
-        let _ = writeln!(
-            out,
-            "statement-indexes reifier-target={} reifier-components={} annotation-values={}",
-            access(self.statement_indexes.reifier_targets),
-            access(self.statement_indexes.reifier_components),
-            access(self.statement_indexes.annotation_values)
-        );
+        let _ = writeln!(out, "statement-indexes {}", self.statement_indexes);
         if !self.shapes.is_empty() {
             let _ = writeln!(out, "physical-shapes");
             for shape in &self.shapes {

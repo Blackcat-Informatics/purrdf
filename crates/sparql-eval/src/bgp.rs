@@ -1340,11 +1340,11 @@ fn cost_base<D: DatasetView>(
             let cardinality = cost
                 .cardinality_fallback()
                 .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g));
-            // Preserve the existing cardinality sum, including its profile's
-            // overflow behavior. Host work is a separate statistic: every
+            // Match the conservative saturation used by base_cardinality over
+            // merged graph scopes. Host work is a separate statistic: every
             // physically representable graph slice on 32/64-bit targets has
             // a sum of u64 work estimates below u128::MAX.
-            rows += cardinality;
+            rows = rows.saturating_add(cardinality);
             work = work
                 .checked_add(u128::from(cost.work()))
                 .expect("physically representable graph work sum fits u128");

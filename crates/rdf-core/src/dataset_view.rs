@@ -248,6 +248,19 @@ impl StatementIndexSupport {
     };
 }
 
+impl std::fmt::Display for StatementIndexSupport {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let access = |indexed| if indexed { "range" } else { "scan-default" };
+        write!(
+            out,
+            "reifier-target={} reifier-components={} annotation-values={}",
+            access(self.reifier_targets),
+            access(self.reifier_components),
+            access(self.annotation_values)
+        )
+    }
+}
+
 /// Measured residency of a selected access path, including multi-tier reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReadResidency {

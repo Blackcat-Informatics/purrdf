@@ -15,6 +15,25 @@ pub mod governor_workloads;
 pub mod segmented;
 pub mod statement_claims;
 
+/// Scan-default adapters preserve every resident receipt byte except the
+/// deliberately different physical-access descriptor. Assert that descriptor
+/// rather than dropping it from the comparison.
+pub fn assert_scan_explanation_matches_resident(
+    actual: &purrdf_sparql_eval::QueryExplanation,
+    resident: &str,
+) {
+    use purrdf_core::StatementIndexSupport;
+    let scanning = StatementIndexSupport::default();
+    assert_eq!(actual.statement_indexes(), scanning);
+    let indexed_line = format!("statement-indexes {}\n", StatementIndexSupport::INDEXED);
+    let scanning_line = format!("statement-indexes {scanning}\n");
+    assert_eq!(resident.matches(&indexed_line).count(), 1);
+    assert_eq!(
+        actual.render(),
+        resident.replacen(&indexed_line, &scanning_line, 1)
+    );
+}
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
