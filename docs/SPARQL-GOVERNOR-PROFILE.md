@@ -3,6 +3,8 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
+English | [简体中文](SPARQL-GOVERNOR-PROFILE.zh-Hans.md)
+
 **Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 18
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
@@ -213,9 +215,11 @@ The two `property-function-*` points are the second half of the same argument fo
 second producer whose bag size an outside party picks. A property-function call invokes
 host code from predicate position and ingests whatever rows that relation chooses to
 emit, so without them a call's whole cost would ride the generic per-node accounting —
-one `algebra-node-entry` in and one `committed-output-row` per committed row out — which
-prices a relation emitting a million rows from one invocation exactly as it prices one
-emitting ten, and prices a thousand invocations that each emit nothing at all.
+one `algebra-node-entry` in and one `committed-output-row` per committed row out.
+Those generic points already count committed rows and entered nodes, but do not
+separately identify relation invocations and accepted source rows. The dedicated
+points make those two events explicit; relation-specific internal work is priced
+separately below.
 
 * `property-function-invocation` is charged **after** the call's admission refusals (an
   arity mismatch, an access pattern no declared mode serves) and immediately before the
@@ -326,9 +330,9 @@ is load-bearing: it prevents a signal that fires inside the final operator from 
 reported as complete merely because no next node exists. The interval is a build
 constant, never a knob — a caller-tunable poll interval would make the exact charge
 point at which an injected deadline is observed part of caller configuration. It is
-prime, is not a power of two and is not a round decimal, so it shares no factor with
-the ceilings callers actually pick and the stop poll never lands on a fuel trip
-systematically. `STOP_POLL_FUEL` is part of the pinned identity (§10) because it
+prime, is not a power of two and is not a round decimal, which reduces alignment
+with common round-number ceilings. It does not guarantee coprimality with every
+caller-selected ceiling. `STOP_POLL_FUEL` is part of the pinned identity (§10) because it
 bounds the charged-work interval between periodic polls.
 
 Reminder, because it is the point of §1: the wall-clock measurement in this section
