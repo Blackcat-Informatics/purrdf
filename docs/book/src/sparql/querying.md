@@ -922,7 +922,7 @@ expression inside it — no special correlation channel is invented for it.
 ### Existential Normal Form
 
 Exactly one bit per row is observed under `EXISTS`: whether the inner
-pattern's evaluation is empty. Four rewrite laws replace a node with
+pattern's evaluation is empty. The following rewrite laws replace a node with
 something provably emptiness-equivalent but cheaper, applied wherever they
 appear at the top of the inner (never inside a `Join`/`Filter`/`Extend`/
 `Graph`/`Minus` operand, which read more than emptiness from their child):
