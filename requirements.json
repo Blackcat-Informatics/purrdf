@@ -1,0 +1,269 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 17,
+      "rules": [
+        "modal"
+      ],
+      "text": "Katamari's data model is one RDF 1.2 graph per vault, by decision: \"No named graph, graph name, quad or dataset-kind shall appear in authority, projection, page layout, index key, export or wire format\" (Katamari ADR-0038 38.1). Claims are reifiers with annotations; standpoint and lifecycle are annotations, not graphs.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 33,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- A triple-only dataset holding N triples uses 12N bytes of row storage (plus permutations), not 16N.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 34,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- SPARQL conformance (the default-graph portion) passes unchanged on the triple-only carrier; `GRAPH ?g { \u2026 }` is refused with a typed diagnostic.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B4",
+      "line": 35,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- SPARQL 1.2 RL rules over a triple-only input produce the same model as over the quad carrier with all-default graphs (test), with arity-3 atoms.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B5",
+      "line": 36,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- RDFC over a triple-only dataset equals the quad form's canonical output for the same triples (or the distinct identity is documented and tested).",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "C1.1",
+      "line": 95,
+      "rules": [
+        "modal"
+      ],
+      "text": "changes integrate; native/host IDs must not be remapped at integer joins.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-10T23:53:57Z"
+    },
+    {
+      "id": "C1.2",
+      "line": 129,
+      "rules": [
+        "modal"
+      ],
+      "text": "| Native/portable/hygiene/docs/landing | Complete affected native and actual WASM executions, original controls/scale bench, strict workspace consumers, generated docs/book, one complete final gate after corrections settle; independent full-contract audit, normal hooks, required hosted checks, ghprsq and owned cleanup | 2,3 |",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-10T23:53:57Z"
+    },
+    {
+      "id": "C1.3",
+      "line": 145,
+      "rules": [
+        "modal"
+      ],
+      "text": "required equivalent for settled source. No baseline whole-workspace discovery.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-10T23:53:57Z"
+    },
+    {
+      "id": "C1.4",
+      "line": 147,
+      "rules": [
+        "modal"
+      ],
+      "text": "qualification. Commit/push the complete issue normally after required review/gates.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-10T23:53:57Z"
+    },
+    {
+      "id": "C1.5",
+      "line": 162,
+      "rules": [
+        "modal"
+      ],
+      "text": "existing published crates/hosts must still build and preserve original behavior,",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-10T23:53:57Z"
+    },
+    {
+      "id": "C1.6",
+      "line": 163,
+      "rules": [
+        "modal"
+      ],
+      "text": "and actual portable execution of the new core/rule/text contract is required.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-10T23:53:57Z"
+    },
+    {
+      "id": "C1.7",
+      "line": 165,
+      "rules": [
+        "modal"
+      ],
+      "text": "is deferred to another issue. Planning recheck must adjudicate the concrete",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-10T23:53:57Z"
+    },
+    {
+      "id": "C2.1",
+      "line": 98,
+      "rules": [
+        "modal"
+      ],
+      "text": "changes integrate; native/host IDs must not be remapped at integer joins.",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.2",
+      "line": 133,
+      "rules": [
+        "modal"
+      ],
+      "text": "| Native/portable/hygiene/docs/landing | Complete affected native and actual WASM executions, original controls/scale bench, strict workspace consumers, generated docs/book, one complete final gate after corrections settle; independent full-contract audit, normal hooks, required hosted checks, ghprsq and owned cleanup | 2,3 |",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.3",
+      "line": 149,
+      "rules": [
+        "modal"
+      ],
+      "text": "required equivalent for settled source. No baseline whole-workspace discovery.",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.4",
+      "line": 151,
+      "rules": [
+        "modal"
+      ],
+      "text": "qualification. Commit/push the complete issue normally after required review/gates.",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.5",
+      "line": 166,
+      "rules": [
+        "modal"
+      ],
+      "text": "existing published crates/hosts must still build and preserve original behavior,",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.6",
+      "line": 167,
+      "rules": [
+        "modal"
+      ],
+      "text": "and actual portable execution of the new core/rule/text contract is required.",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.7",
+      "line": 169,
+      "rules": [
+        "modal"
+      ],
+      "text": "is deferred to another issue. Planning recheck must adjudicate the concrete",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.8",
+      "line": 211,
+      "rules": [
+        "modal"
+      ],
+      "text": "publication; any shared builder control must not retain quad rows or expose a",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.9",
+      "line": 214,
+      "rules": [
+        "modal"
+      ],
+      "text": "an unsupported named graph must not become a successful empty result through",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C2.10",
+      "line": 219,
+      "rules": [
+        "modal"
+      ],
+      "text": "Independent planning recheck must accept the concrete TripleRead and closed",
+      "source": "comment 2",
+      "author": "paudley",
+      "date": "2026-10-13T19:45:59Z"
+    },
+    {
+      "id": "C4.1",
+      "line": 10,
+      "rules": [
+        "modal"
+      ],
+      "text": "parity and final hosted checks/review remain required.",
+      "source": "comment 4",
+      "author": "paudley",
+      "date": "2026-10-14T18:21:53Z"
+    }
+  ],
+  "silent_comments": [
+    {
+      "comment": 3,
+      "author": "paudley",
+      "date": "2026-10-14T14:42:40Z"
+    },
+    {
+      "comment": 5,
+      "author": "paudley",
+      "date": "2026-10-15T03:12:22Z"
+    }
+  ]
+}

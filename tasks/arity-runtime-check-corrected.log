@@ -1,0 +1,206 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0425]: cannot find type `N` in this scope
+   --> crates/datalog/src/seminaive/factors.rs:834:11
+    |
+834 |     Arity<N>: StoreShape<N>,
+    |           ^ not found in this scope
+    |
+note: similarly named type parameter `D` defined here
+   --> crates/datalog/src/seminaive/factors.rs:827:19
+    |
+827 | fn ground_blocked<D: TermDictionary>(
+    |                   ^
+help: a type parameter with a similar name exists
+    |
+834 -     Arity<N>: StoreShape<N>,
+834 +     Arity<D>: StoreShape<N>,
+    |
+help: you might be missing a type parameter
+    |
+827 | fn ground_blocked<D: TermDictionary, N>(
+    |                                    +++
+
+error[E0425]: cannot find type `N` in this scope
+   --> crates/datalog/src/seminaive/factors.rs:834:26
+    |
+834 |     Arity<N>: StoreShape<N>,
+    |                          ^ not found in this scope
+    |
+note: similarly named type parameter `D` defined here
+   --> crates/datalog/src/seminaive/factors.rs:827:19
+    |
+827 | fn ground_blocked<D: TermDictionary>(
+    |                   ^
+help: a type parameter with a similar name exists
+    |
+834 -     Arity<N>: StoreShape<N>,
+834 +     Arity<N>: StoreShape<D>,
+    |
+help: you might be missing a type parameter
+    |
+827 | fn ground_blocked<D: TermDictionary, N>(
+    |                                    +++
+
+error[E0425]: cannot find type `N` in this scope
+   --> crates/datalog/src/seminaive/factors.rs:828:26
+    |
+828 |     entry: RuleEntry<'_, N>,
+    |                          ^ not found in this scope
+    |
+note: similarly named type parameter `D` defined here
+   --> crates/datalog/src/seminaive/factors.rs:827:19
+    |
+827 | fn ground_blocked<D: TermDictionary>(
+    |                   ^
+help: a type parameter with a similar name exists
+    |
+828 -     entry: RuleEntry<'_, N>,
+828 +     entry: RuleEntry<'_, D>,
+    |
+help: you might be missing a type parameter
+    |
+827 | fn ground_blocked<D: TermDictionary, N>(
+    |                                    +++
+
+error[E0425]: cannot find type `N` in this scope
+   --> crates/datalog/src/seminaive/factors.rs:829:36
+    |
+829 |     snapshot: RoundSnapshot<'_, D, N>,
+    |                                    ^ not found in this scope
+    |
+note: similarly named type parameter `D` defined here
+   --> crates/datalog/src/seminaive/factors.rs:827:19
+    |
+827 | fn ground_blocked<D: TermDictionary>(
+    |                   ^
+help: a type parameter with a similar name exists
+    |
+829 -     snapshot: RoundSnapshot<'_, D, N>,
+829 +     snapshot: RoundSnapshot<'_, D, D>,
+    |
+help: you might be missing a type parameter
+    |
+827 | fn ground_blocked<D: TermDictionary, N>(
+    |                                    +++
+
+error[E0425]: cannot find type `N` in this scope
+   --> crates/datalog/src/seminaive/factors.rs:831:69
+    |
+831 |     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+    |                                                                     ^ not found in this scope
+    |
+note: similarly named type parameter `D` defined here
+   --> crates/datalog/src/seminaive/factors.rs:827:19
+    |
+827 | fn ground_blocked<D: TermDictionary>(
+    |                   ^
+help: a type parameter with a similar name exists
+    |
+831 -     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+831 +     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, D>>,
+    |
+help: you might be missing a type parameter
+    |
+827 | fn ground_blocked<D: TermDictionary, N>(
+    |                                    +++
+
+error[E0747]: unresolved item provided when a constant was expected
+   --> crates/datalog/src/seminaive/factors.rs:828:26
+    |
+828 |     entry: RuleEntry<'_, N>,
+    |                          ^
+    |
+help: if this generic argument was intended as a const parameter, surround it with braces
+    |
+828 |     entry: RuleEntry<'_, { N }>,
+    |                          +   +
+
+error[E0747]: unresolved item provided when a constant was expected
+   --> crates/datalog/src/seminaive/factors.rs:829:36
+    |
+829 |     snapshot: RoundSnapshot<'_, D, N>,
+    |                                    ^
+    |
+help: if this generic argument was intended as a const parameter, surround it with braces
+    |
+829 |     snapshot: RoundSnapshot<'_, D, { N }>,
+    |                                    +   +
+
+error[E0747]: unresolved item provided when a constant was expected
+   --> crates/datalog/src/seminaive/factors.rs:831:69
+    |
+831 |     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+    |                                                                     ^
+    |
+help: if this generic argument was intended as a const parameter, surround it with braces
+    |
+831 |     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, { N }>>,
+    |                                                                     +   +
+
+error[E0747]: unresolved item provided when a constant was expected
+   --> crates/datalog/src/seminaive/factors.rs:834:11
+    |
+834 |     Arity<N>: StoreShape<N>,
+    |           ^
+    |
+help: if this generic argument was intended as a const parameter, surround it with braces
+    |
+834 |     Arity<{ N }>: StoreShape<N>,
+    |           +   +
+
+error[E0747]: unresolved item provided when a constant was expected
+   --> crates/datalog/src/seminaive/factors.rs:834:26
+    |
+834 |     Arity<N>: StoreShape<N>,
+    |                          ^
+    |
+help: if this generic argument was intended as a const parameter, surround it with braces
+    |
+834 |     Arity<N>: StoreShape<{ N }>,
+    |                          +   +
+
+error[E0308]: arguments to this function are incorrect
+   --> crates/datalog/src/seminaive/factors.rs:732:42
+    |
+732 |         let (blocked, ground_evidence) = ground_blocked(entry, snapshot, governor, &mut evidence)?;
+    |                                          ^^^^^^^^^^^^^^
+    |
+note: expected `4`, found `N`
+   --> crates/datalog/src/seminaive/factors.rs:732:57
+    |
+732 |         let (blocked, ground_evidence) = ground_blocked(entry, snapshot, governor, &mut evidence)?;
+    |                                                         ^^^^^
+    = note: expected struct `RuleEntry<'_, 4>`
+               found struct `RuleEntry<'r, N>`
+note: expected `4`, found `N`
+   --> crates/datalog/src/seminaive/factors.rs:732:64
+    |
+732 |         let (blocked, ground_evidence) = ground_blocked(entry, snapshot, governor, &mut evidence)?;
+    |                                                                ^^^^^^^^
+    = note: expected struct `RoundSnapshot<'_, _, 4>`
+               found struct `RoundSnapshot<'_, D, N>`
+note: expected `4`, found `N`
+   --> crates/datalog/src/seminaive/factors.rs:732:84
+    |
+732 |         let (blocked, ground_evidence) = ground_blocked(entry, snapshot, governor, &mut evidence)?;
+    |                                                                                    ^^^^^^^^^^^^^
+    = note: expected mutable reference `&mut Option<&mut dyn RuleEvidence<_>>`
+               found mutable reference `&mut Option<&mut dyn RuleEvidence<D, N>>`
+note: function defined here
+   --> crates/datalog/src/seminaive/factors.rs:827:4
+    |
+827 | fn ground_blocked<D: TermDictionary>(
+    |    ^^^^^^^^^^^^^^
+828 |     entry: RuleEntry<'_, N>,
+    |     -----------------------
+829 |     snapshot: RoundSnapshot<'_, D, N>,
+    |     ---------------------------------
+830 |     governor: &mut StepGovernor,
+831 |     evidence: &mut Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+    |     -------------------------------------------------------------------
+
+Some errors have detailed explanations: E0308, E0425, E0747.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-datalog` (lib) due to 11 previous errors
+
+terminal_status=101

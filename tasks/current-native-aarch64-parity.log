@@ -1,0 +1,139 @@
+simd-asm-config (aarch64)	Measure and check this configuration	﻿2026-10-14T19:43:10.6104533Z ##[group]Run # Bound scalar WASM compilation through the existing Cargo job budget.
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6105091Z ^[[36;1m# Bound scalar WASM compilation through the existing Cargo job budget.^[[0m
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6105498Z ^[[36;1m# Other configurations keep their current scheduling.^[[0m
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6105843Z ^[[36;1mif [ "aarch64" = wasm32 ]; then^[[0m
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6106106Z ^[[36;1m  export CARGO_BUILD_JOBS=2^[[0m
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6106360Z ^[[36;1mfi^[[0m
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6106749Z ^[[36;1mmake simd-asm SIMD_ASM_ARGS="--config aarch64 --jobs 1 --report target/asm-reports/aarch64.json"^[[0m
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6152815Z shell: /usr/bin/bash -e {0}
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6153069Z env:
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6153282Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6153486Z   CARGO_INCREMENTAL: 0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6153648Z   CARGO_TERM_COLOR: always
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6153851Z ##[endgroup]
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:10.6938846Z python3 scripts/check-simd-asm.py --doc --config aarch64 --jobs 1 --report target/asm-reports/aarch64.json
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:12.6124812Z == aarch64: 4 Cargo jobs
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:43:12.6127739Z == aarch64 graph 0: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/c3fb7a0da0cf637d95631009c6e0656b68472a41287212c815f72b09cdd66005/cargo.graph-0.stderr.log
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:51:04.8727773Z == aarch64 graph 1: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/c3fb7a0da0cf637d95631009c6e0656b68472a41287212c815f72b09cdd66005/cargo.graph-1.stderr.log
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T19:52:19.0924337Z == aarch64 graph 2: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/c3fb7a0da0cf637d95631009c6e0656b68472a41287212c815f72b09cdd66005/cargo.graph-2.stderr.log
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.2278317Z == aarch64: {"analysis_seconds": 24.391831586999956, "build_seconds": 1216.971011207, "fresh_artifacts": 65, "lock_seconds": 0.00017321699999683915, "parsed_units": 144, "reused_units": 65, "rustc_invocations": 144, "seconds": 1241.615633067}
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3750417Z 
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3753380Z site                            aarch64
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3755092Z lex.find-byte2-sparql-string    neon v29·f0·r0·req✓ / call site (in run) v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3755952Z lex.find-byte2-line-split       neon v29·f0·r0·req✓ / call site (parallel) v0·f0·r0 / call site (lines) v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3757052Z core.xsd-regex-scan             pair neon v170·f0·r0·req✓ / range neon v338·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3757439Z sha2.sha256-compress            portable v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3757789Z blake3.hash-many-dispatch       neon chunks v2002·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3758127Z blake3.single-block             neon v286·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3758515Z sparql.lexer-trivia             scan neon v8·f0·r0·req✓ / call site (in run) v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3758957Z sparql.lexer-iri                scan neon v14·f0·r0·req✓ / call site (in run) v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3759375Z sparql.lexer-cursor             peek v9·f0·r0 / cur (in run) v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3759703Z sparql.scope-admission          v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3765373Z rdf.escape-scan                 iri scan neon v20·f0·r0·req✓ / iri (in iri_escape::escape) v0·f0·r0 / literal scan neon v12·f0·r0·req✓ / literal v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3765926Z rdf.sort-canonical              v10·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3766387Z iri.delimiter-scan              scheme neon v8·f0·r0·req✓ / authority neon v5·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3766773Z lex.scan-trivia                 neon v8·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3767081Z lex.scan-iri-body               neon v14·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3767394Z lex.scan-json-string            neon v6·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3767698Z lex.json-escape-controls        neon v10·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3767998Z lex.json-escape-ascii           neon v8·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3768293Z lex.scan-xml                    neon v10·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3768592Z iri.validate-component          neon v51·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3768887Z lex.terminals-in-ranges         table v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3769565Z xsd.whitespace                  replace neon v12·f0·r0·req✓ / collapse neon v14·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3769925Z xsd.canonical-double            v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3770275Z xsd.exact-arith                 mul_fast v0·f0·r0 / div_rem v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3770691Z json.parser-string              scan neon v6·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3771089Z json.parser-whitespace          occurrences v0·f0·r0 / tree v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3771407Z core.intern                     v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3771977Z hash.hex-decode                 canonical neon v48·f0·r0·req✓ / either-case neon v52·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3772392Z hash.hex-lower                  neon v54·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3772712Z core.pack-select-in-word        broadword v2·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3773036Z core.pack-rank1                 neon cnt v2·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3773337Z core.pack-intvector-get         v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3773691Z core.dataset-scan-filter        neon v58·f0·r0·req✓ / cursor v79·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3774091Z core.pack-triples-intersect     intersect v0·f0·r0 / delta v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3774638Z core.canon-escape               iri scan neon v20·f0·r0·req✓ / iri v0·f0·r0 / literal scan neon v8·f0·r0·req✓ / literal v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3775185Z core.purremb-f32-decode         fold neon v13·f0·r0·req✓ / iterator v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3775522Z core.purremb-norm               v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3775779Z core.paged-map-quad             v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3776111Z core.loss-json-escape           scan neon v6·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3776447Z eval.regex-row-alloc            v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3776829Z eval.solution-compatible        compatible v0·f0·r0 / bind_row v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3777157Z eval.bgp-cost-planner           v17·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3777420Z eval.bgp-join-probe             v21·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3777926Z eval.aggregate-fold             step v0·f0·r0 / combine v0·f0·r0 / numeric_add v0·f0·r0 / add_i128 v0·f0·r0 / add_assign v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3778395Z datalog.relation-contains       neon v45·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3778856Z datalog.gallop-leapfrog         gallop v0·f0·r0 / leapfrog v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3779168Z datalog.chase                   v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3779709Z entail.escape                   iri scan neon v20·f0·r0·req✓ / iri v0·f0·r0 / literal scan neon v8·f0·r0·req✓ / literal (in write_leaf_surface) v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3780258Z entail.classify                 decide v0·f0·r0 / saturate v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3780592Z shapes.frontier-dedup           neon v150·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3780875Z shapes.path-eval                v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3781139Z shapes.finish-report            v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3781426Z shex.char-count                 std count v20·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3781822Z shex.matcher                    v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3782245Z results.xml-escape              scan neon v10·f0·r0·req✓ / push_into v0·f0·r0 / writer v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3782651Z core.csv-field                  scan neon v19·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3783057Z results.json-escape             scan neon v6·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3783480Z markdown.lines                  scan neon v2·f0·r0·req✓ / call site (in analyze) v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3784067Z distance.exact.dot              batch f64×f64 v160·f0·r0·req✓ / indexed f64×f32 v208·f0·r0·req✓ / indexed f32×f32 v256·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3784846Z distance.exact.sqeuclid         bounded f64×f64 v160·f0·r0·req✓ / bounded f32×f32 v192·f0·r0·req✓ / pair f64×f64 v160·f0·r0·req✓ / pair f32×f32 v192·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3785705Z distance.reassociated.dot       neon f64×f64 v12·f33·r0·req✓ / neon f64×f32 v66·f34·r0·req✓ / neon f32×f64 v66·f34·r0·req✓ / neon f32×f32 v107·f34·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3786740Z distance.reassociated.sqeuclid  neon f64×f64 v48·f33·r0·req✓ / neon f64×f32 v107·f34·r0·req✓ / neon f32×f64 v107·f34·r0·req✓ / neon f32×f32 v148·f34·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3787506Z knn.norm                        v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3788074Z hnsw.search-build               search v0·f0·r0 / build v1·f0·r0 / search reassociated v0·f0·r0 / build reassociated v1·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3788545Z hnsw.distance-cache             v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3788810Z text.bm25f                      v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3789053Z retrieval.rrf                   v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3789371Z retrieval.fusion-frontier       take v0·f0·r0 / insert v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3789722Z facade.multimodal-read          text lookup v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3790106Z columnar.plain-codec            encode v0·f0·r0·req✓ / decode v0·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3790437Z columnar.rle                    v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3790754Z xsd.endpoint-products           interval v0·f0·r0 / neon v34·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3791091Z geo.exact-limbs                 gcd v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3791410Z geo.relate                      relate v0·f0·r0 / intersect v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3792200Z geo.json-write-string           scan neon v6·f0·r0·req✓ / call site (values) v0·f0·r0 / call site (names) v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3792672Z gts.cbor-writer                 v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3793022Z gts.mmr-json-escape             scan neon v10·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3793461Z gts.replication-json-string     scan neon v10·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3793809Z wasm.term-marshal               v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3794125Z slice.ownership                 analyze v29·f0·r0 / iri refs v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3794530Z slice.prefix-json-string        scan neon v6·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3794959Z slice.dsl-stats-json-string     scan neon v8·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3795301Z cli.pack-input                  v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3795560Z rdf.viz-layout                  v22·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3795810Z rdf.projections                 v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3796177Z lex.percent-encode              reserved neon v18·f0·r0·req✓ / simple neon v19·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3796647Z rdf.csvw-uri-template           call site v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3796929Z core.sssom-tsv                  v2·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3797191Z shapes.pydantic-emit            v8·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3797445Z shapes.schema-compile           v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3797726Z deflate.match-copy              copy neon v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3798101Z deflate.match-length            compare neon v2·f0·r0·req✓ / steps v0·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3798487Z deflate.hash-windows            hash neon v3·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3798866Z hash.sha1-block                 armv8-sha1 v97·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3799341Z hash.crc32-update               crc scalar v0·f0·r0 / pmull fold v33·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3799866Z hash.hex-encode                 neon (inlined) v7·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3800277Z hash.digest-portable            md5 v0·f0·r0 / sha3 v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3800666Z hash.fixed-compress             portable v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3801064Z hash.fixed-terminal             portable frozen lookup v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3801534Z jsonschema.compile-validate     from_document v0·f0·r0 / is_valid v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3802219Z text.unicode-ascii-lower        aarch64 v24·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3802677Z xsd.rfc3339-lexical             parse v2·f0·r0 / format aarch64 v24·f0·r0·req✓
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3803194Z shapes.instance-projection      graph v4·f0·r0 / subject v0·f0·r0 / list index v50·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3803659Z ed25519.sign                    v4·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3803925Z ed25519.verify                  v22·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3804287Z text.dictionary-storage         build v4·f0·r0 / load v0·f0·r0 / lookup v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3804818Z text.dictionary-lattice         lattice entry v0·f0·r0 / prepare v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3805237Z text.emoji-recognition          recognize v5·f0·r0 / finite lookup v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3805689Z text.phonetic-spelling          canonicalize v0·f0·r0 / encode canonical v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:54.3806228Z text.phonetic-distance          prepare band v0·f0·r0 / band v2·f0·r0 / prepare Myers v10·f0·r0 / Myers v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:57.8474408Z 
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:57.8475489Z FAIL: 2 problem(s):
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:57.8476436Z   - row `eval.bgp-join-probe` `aarch64` reads 'v23·f0·r0', measured 'v21·f0·r0' (run `python3 scripts/check-simd-asm.py --write-doc`)
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:57.8477175Z   - row `hash.fixed-terminal` `aarch64` reads 'portable frozen lookup v3·f0·r0', measured 'portable frozen lookup v0·f0·r0' (run `python3 scripts/check-simd-asm.py --write-doc`)
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:57.8836666Z text.surface-build              assemble v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:57.8837148Z text.surface-substring          retrieve v0·f0·r0
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:57.8983977Z make: *** [Makefile:700: simd-asm] Error 1
+simd-asm-config (aarch64)	Measure and check this configuration	2026-10-14T20:03:57.9009579Z ##[error]Process completed with exit code 2.

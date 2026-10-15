@@ -1,0 +1,29 @@
+ Documenting purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/text)
+error: unresolved link to `TextSearchRelation::SEARCH_DOC`
+   --> crates/text/src/relation.rs:885:31
+    |
+885 |     /// positions come from [`TextSearchRelation::SEARCH_DOC`] and
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the struct `TextSearchRelation` has no field or associated item named `SEARCH_DOC`
+    |
+    = note: `-D rustdoc::broken-intra-doc-links` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(rustdoc::broken_intra_doc_links)]`
+
+error: unresolved link to `TextSearchRelation::SEARCH_NEEDLE`
+   --> crates/text/src/relation.rs:886:11
+    |
+886 |     /// [`TextSearchRelation::SEARCH_NEEDLE`], which are this
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the struct `TextSearchRelation` has no field or associated item named `SEARCH_NEEDLE`
+
+error: unresolved link to `TextSearchRelation::SEARCH_DOC`
+   --> crates/text/src/relation.rs:897:28
+    |
+897 |     /// * **Candidate at [`TextSearchRelation::SEARCH_DOC`]** — the document subject is the term a
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the struct `TextSearchRelation` has no field or associated item named `SEARCH_DOC`
+
+error: unresolved link to `TextSearchRelation::SEARCH_LANG`
+   --> crates/text/src/relation.rs:923:53
+    |
+923 |     ///   [`RequestFacet::Language`] placement at [`TextSearchRelation::SEARCH_LANG`].
+    |                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the struct `TextSearchRelation` has no field or associated item named `SEARCH_LANG`
+
+error: could not document `purrdf-text`

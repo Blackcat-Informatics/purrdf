@@ -1,0 +1,33 @@
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/ed25519)
+   Compiling cipher v0.5.2
+   Compiling ctutils v0.4.2
+   Compiling aes v0.9.3
+   Compiling universal-hash v0.6.1
+   Compiling ctr v0.10.1
+   Compiling polyval v0.7.3
+   Compiling aead v0.6.1
+   Compiling structured-zstd v0.0.49
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/jsonschema)
+   Compiling ghash v0.6.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 2m 51s
+     Running tests/srl_language.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-shapes/34380ea358f26d3c/out/srl_language-34380ea358f26d3c)
+
+running 4 tests
+test triple_rl_keeps_statement_roles_and_scoped_blank_identity ... ok
+test triple_term_dependencies_are_exact ... ok
+test triple_carrier_runs_the_public_rl_program_without_quad_storage ... ok
+test a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 13.35s
+

@@ -1,0 +1,13 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized] target(s) in 10m 27s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-core/a6d3c80532194d33/out/triple_carrier-a6d3c80532194d33.wasm)
+
+running 5 tests
+test compact_statement_probes_populate_only_the_requested_ordinal_arrays ... ok
+test compact_layout_and_all_bound_shapes ... ok
+test owned_transfer_preserves_lexical_owner_and_flat_statement_identity ... ok
+test conversion_refuses_every_named_role_including_empty_declarations ... ok
+test refused_child_stops_existing_streams_and_fresh_session_is_healthy ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

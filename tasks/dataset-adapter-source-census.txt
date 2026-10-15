@@ -1,0 +1,85 @@
+crates/rdf-core/src/term_fixture.rs:294:impl DatasetView for ForeignDatatypeView {
+crates/rdf-core/src/describe.rs:147:impl<'a, D: DatasetView<ReadError = Infallible>> Describer<'a, D> {
+crates/rdf-core/src/describe.rs:158:impl<'a, D: DatasetView> Describer<'a, D> {
+crates/columnar/src/writer.rs:178:impl<'a, D: DatasetView> Resolver<'a, D> {
+crates/rdf-core/src/dataset_view.rs:1491:impl FallibleDatasetView for RdfDataset {
+crates/rdf-core/src/dataset_view.rs:1501:impl<T: FallibleDatasetView> FallibleDatasetView for Arc<T> {
+crates/rdf-core/src/dataset_view.rs:1666:impl DatasetView for RdfDataset {
+crates/rdf-core/src/dataset_view.rs:1843:impl<T: DatasetView> DatasetView for Arc<T> {
+crates/rdf-core/src/dataset_view.rs:1845:    type ReadError = T::ReadError;
+crates/rdf-core/src/dataset_view.rs:2259:    impl DatasetView for ProbeView {
+crates/rdf-core/src/dataset_view.rs:2306:    impl FallibleDatasetView for ProbeView {
+crates/rdf-core/src/evidence/ledger/view.rs:124:impl<'a, S: Admission, L: LedgerSource<'a>> DatasetView for LedgerDataset<'a, S, L> {
+crates/rdf-core/src/evidence/ledger/view.rs:254:impl<'a, S: Admission, L: LedgerSource<'a>> crate::FallibleDatasetView for LedgerDataset<'a, S, L> {
+crates/rdf-core/tests/pack_container.rs:598:impl DatasetView for BudgetedView {
+crates/rdf-core/tests/pack_container.rs:657:impl FallibleDatasetView for BudgetedView {
+crates/rdf-core/tests/dataset_state_digest.rs:564:impl DatasetView for Probe {
+crates/rdf-core/tests/dataset_state_digest.rs:658:impl FallibleDatasetView for Probe {
+crates/text/tests/index.rs:189:impl DatasetView for TripleSubjectView {
+crates/rdf-core/src/ir/triple/read.rs:183:impl DatasetView for TripleRead<'_> {
+crates/rdf-core/src/ir/triple/read.rs:331:impl FallibleDatasetView for TripleRead<'_> {
+crates/rdf-core/src/ir/pipeline_bundle.rs:752:impl<D: DatasetView> ResidueView<'_, D> {
+crates/rdf-core/src/ir/pipeline_bundle.rs:762:impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
+crates/rdf-core/src/ir/pipeline_bundle.rs:764:    type ReadError = D::ReadError;
+crates/rdf-core/src/ir/segmented/session.rs:1457:impl DatasetView for SegmentedSession {
+crates/rdf-core/src/ir/segmented/session.rs:1665:impl FallibleDatasetView for SegmentedSession {
+crates/rdf-core/src/ir/segmented/query/view.rs:397:impl DatasetView for SegmentedStackQuery<'_> {
+crates/rdf-core/src/ir/segmented/query/view.rs:665:impl FallibleDatasetView for SegmentedStackQuery<'_> {
+crates/entail/src/lib.rs:1062:    impl DatasetView for FailingSource {
+crates/rdf-core/src/ir/import.rs:208:impl<D: DatasetView> core::fmt::Debug for DatasetImporter<'_, '_, D> {
+crates/rdf-core/src/ir/import.rs:217:impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
+crates/rdf-core/src/ir/mutable/delta_view.rs:592:impl DatasetView for DeltaDatasetView {
+crates/rdf-core/src/ir/mutable/delta_view.rs:908:impl crate::FallibleDatasetView for DeltaDatasetView {
+crates/rdf-core/src/ir/paged/stack.rs:867:impl DatasetView for PagedStackQueryView<'_> {
+crates/rdf-core/src/ir/paged/stack.rs:991:impl FallibleDatasetView for PagedStackQueryView<'_> {
+crates/rdf-core/src/ir/paged/query.rs:781:impl FallibleDatasetView for PagedQueryView<'_> {
+crates/rdf-core/src/ir/paged/query.rs:810:impl DatasetView for PagedQueryView<'_> {
+crates/rdf-core/src/ir/paged/mod.rs:1179:impl DatasetView for PagedDataset {
+crates/sparql-eval/tests/query_completion.rs:222:impl DatasetView for Source {
+crates/sparql-eval/tests/query_completion.rs:400:impl FallibleDatasetView for Source {
+crates/sparql-eval/tests/query_completion.rs:1666:impl DatasetView for ExplainProjection<'_> {
+crates/rdf-core/src/ir/composite.rs:1798:impl DatasetView for CompositeDatasetView {
+crates/rdf-core/src/ir/composite.rs:1998:impl crate::FallibleDatasetView for CompositeDatasetView {
+crates/rdf-core/src/ir/canon/state.rs:221:impl<'a, D: FallibleDatasetView, R: WorkspaceReservation<Error = D::Error>> Captured<'a, D, R> {
+crates/rdf-core/src/ir/canon.rs:2252:impl<'a, D: DatasetView> CanonState<'a, D> {
+crates/rdf-core/src/ir/canon.rs:5063:    impl DatasetView for FlatProbeView {
+crates/rdf-core/src/ir/canon.rs:5143:    impl FallibleDatasetView for FlatProbeView {
+crates/rdf-core/src/ir/pack/view.rs:6://! [`super::dict::PackTermId`] as a [`ViewTermId`], and `impl DatasetView for
+crates/rdf-core/src/ir/pack/view.rs:148:impl DatasetView for PackView<'_> {
+crates/rdf-core/src/ir/pack/mod.rs:50://! `impl DatasetView for PackView<'_>` answers every read-side query straight off
+crates/sparql-eval/tests/host_identity.rs:163:impl DatasetView for Host {
+crates/sparql-eval/tests/host_identity.rs:324:impl FallibleDatasetView for Host {
+crates/sparql-eval/tests/graph_var_narrowing.rs:405:impl DatasetView for ProbeCountingView {
+crates/sparql-eval/src/workspace.rs:3469:    impl purrdf_core::DatasetView for GroundFaultView<'_> {
+crates/sparql-eval/src/interned.rs:114:impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
+crates/sparql-eval/tests/deep_triple_terms.rs:120:impl DatasetView for CountingView {
+crates/sparql-eval/tests/construct_builder.rs:174:impl DatasetView for FinalFailure {
+crates/sparql-eval/tests/construct_builder.rs:211:impl FallibleDatasetView for FinalFailure {
+crates/sparql-eval/src/bgp.rs:4601:    impl DatasetView for HostCost<'_> {
+crates/sparql-eval/src/bgp.rs:5230:    impl DatasetView for Recording<'_> {
+crates/sparql-eval/src/bgp.rs:5306:    impl DatasetView for Chain {
+crates/sparql-eval/src/shapes/runtime.rs:364:impl<D: DatasetView + Sync> super::ShapeCosts for NativeCosts<'_, '_, D> {
+crates/sparql-eval/src/shapes/runtime.rs:383:impl<D: DatasetView + Sync> NativeRuntime<'_, '_, '_, D> {
+crates/sparql-eval/src/shapes/runtime.rs:461:impl<D: DatasetView + Sync> ShapeRuntime for NativeRuntime<'_, '_, '_, D> {
+crates/sparql-eval/src/eval.rs:949:impl<D: DatasetView + Sync> core::fmt::Debug for EvalCtx<'_, D> {
+crates/sparql-eval/src/eval.rs:1004:impl<'d, D: DatasetView + Sync> core::ops::Deref for EvalScopeGuard<'_, 'd, D> {
+crates/sparql-eval/src/eval.rs:1011:impl<D: DatasetView + Sync> core::ops::DerefMut for EvalScopeGuard<'_, '_, D> {
+crates/sparql-eval/src/eval.rs:1017:impl<D: DatasetView + Sync> Drop for EvalScopeGuard<'_, '_, D> {
+crates/sparql-eval/src/eval.rs:1038:impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+crates/sparql-eval/src/eval.rs:3974:impl<'a, D: DatasetView + Sync> RowConsumer<'a, D> {
+crates/sparql-eval/src/eval.rs:3997:impl<D: DatasetView + Sync> RowDelivery<D> for () {
+crates/sparql-eval/src/eval.rs:4013:impl<'s, D: DatasetView + Sync> RowDelivery<D> for &mut RowConsumer<'s, D> {
+crates/sparql-eval/src/path.rs:806:impl<D: DatasetView + Sync> PathCtx<'_, D> {
+crates/sparql-eval/src/path.rs:874:impl<'a, D: DatasetView + Sync> PathCtx<'a, D> {
+crates/sparql-eval/src/expr.rs:7443:    impl DatasetView for FaultView {
+crates/shapes/src/class_membership.rs:697:impl DatasetView for ClassMembershipView {
+crates/shapes/src/data_view.rs:918:impl DatasetView for ShaclDatasetView {
+crates/retrieval/tests/real_producers.rs:139:impl purrdf_core::DatasetView for UnpricedOriginalView {
+crates/helper-census/src/structure.rs:669:impl DatasetView for S { fn list(&self) { loop { let _ = (RDF_FIRST, RDF_REST); } } }
+crates/retrieval/src/execute.rs:1046:impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> fmt::Debug
+crates/retrieval/src/execute.rs:1059:impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> ExclusionLookup
+crates/retrieval/src/execute.rs:1082:impl<D: DatasetView<ReadError = std::convert::Infallible> + Sync> DatasetExclusion<'_, D> {
+crates/retrieval/src/execute.rs:3241:impl<D: DatasetView + Sync> fmt::Debug for CallRead<'_, D> {
+crates/retrieval/src/execute.rs:3252:impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
+crates/rdf/tests/gts_view_ingestion.rs:886:impl DatasetView for ProbeView {
+crates/rdf/tests/gts_view_ingestion.rs:954:impl FallibleDatasetView for ProbeView {

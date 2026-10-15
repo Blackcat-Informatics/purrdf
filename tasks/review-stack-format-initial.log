@@ -1,0 +1,22 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval/src/eval.rs:4050:
+             if let Some(after) = after {
+                 let next = match current_pattern {
+                     GraphPattern::Filter { inner, .. } | GraphPattern::Slice { inner, .. } => inner,
+-                    GraphPattern::Lateral { left, .. } | GraphPattern::LeftJoin { left, .. } => left,
++                    GraphPattern::Lateral { left, .. } | GraphPattern::LeftJoin { left, .. } => {
++                        left
++                    }
+                     _ => unreachable!("only admitted graph-child frames suspend here"),
+                 };
+                 let next = match &current {
+Diff in /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval/src/eval.rs:4060:
+                         }
+                         GraphPattern::Lateral { left, .. }
+                         | GraphPattern::LeftJoin { left, .. } => OrdinaryPosition::Borrowed(left),
+-                        _ => unreachable!(
+-                            "only admitted graph-child frames suspend here"
+-                        ),
++                        _ => unreachable!("only admitted graph-child frames suspend here"),
+                     },
+                     OrdinaryPosition::Copied(_) => match current.copied_child(next) {
+                         Ok(next) => next,

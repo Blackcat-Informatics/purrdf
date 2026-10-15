@@ -1,0 +1,222 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0284]: type annotations needed for `cache::PlanCache<_>`
+    --> crates/datalog/src/cache.rs:1286:13
+     |
+1286 |         let _ = PlanCache::new(0);
+     |             ^   --------- type must be known at this point
+     |
+note: required by a const generic parameter in `cache::PlanCache`
+    --> crates/datalog/src/cache.rs:641:22
+     |
+ 641 | pub struct PlanCache<const N: usize = 4> {
+     |                      ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `PlanCache`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+     |
+1286 |         let _: cache::PlanCache<N> = PlanCache::new(0);
+     |              +++++++++++++++++++++
+
+error[E0284]: type annotations needed for `cache::PlanCache<_>`
+    --> crates/datalog/src/cache.rs:1286:13
+     |
+1286 |         let _ = PlanCache::new(0);
+     |             ^   ----------------- type must be known at this point
+     |
+note: required by a const generic parameter in `cache::PlanCache::<N>::new`
+    --> crates/datalog/src/cache.rs:651:6
+     |
+ 651 | impl<const N: usize> PlanCache<N> {
+     |      ^^^^^^^^^^^^^^ required by this const generic parameter in `PlanCache::<N>::new`
+...
+ 658 |     pub fn new(capacity: usize) -> Self {
+     |            --- required by a bound in this associated function
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+     |
+1286 |         let _: cache::PlanCache<N> = PlanCache::new(0);
+     |              +++++++++++++++++++++
+
+error[E0284]: type annotations needed for `clause::HeadDisjunct<_>`
+    --> crates/datalog/src/clause.rs:1340:13
+     |
+1340 |         let _ = HeadDisjunct::new(Vec::new());
+     |             ^   ------------ type must be known at this point
+     |
+note: required by a const generic parameter in `clause::HeadDisjunct`
+    --> crates/datalog/src/clause.rs:440:25
+     |
+ 440 | pub struct HeadDisjunct<const N: usize = 4> {
+     |                         ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `HeadDisjunct`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+     |
+1340 |         let _: clause::HeadDisjunct<N> = HeadDisjunct::new(Vec::new());
+     |              +++++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `clause::HeadDisjunct<_>`
+    --> crates/datalog/src/clause.rs:1340:13
+     |
+1340 |         let _ = HeadDisjunct::new(Vec::new());
+     |             ^   ----------------------------- type must be known at this point
+     |
+note: required by a const generic parameter in `clause::HeadDisjunct::<N>::new`
+    --> crates/datalog/src/clause.rs:445:6
+     |
+ 445 | impl<const N: usize> HeadDisjunct<N> {
+     |      ^^^^^^^^^^^^^^ required by this const generic parameter in `HeadDisjunct::<N>::new`
+...
+ 458 |     pub fn new(atoms: Vec<ClauseAtom<N>>) -> Self {
+     |            --- required by a bound in this associated function
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+     |
+1340 |         let _: clause::HeadDisjunct<N> = HeadDisjunct::new(Vec::new());
+     |              +++++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `clause::HeadDisjunct<_>`
+    --> crates/datalog/src/clause.rs:1340:13
+     |
+1340 |         let _ = HeadDisjunct::new(Vec::new());
+     |             ^                     ---------- type must be known at this point
+     |
+note: required by a const generic parameter in `clause::ClauseAtom`
+    --> crates/datalog/src/clause.rs:265:23
+     |
+ 265 | pub struct ClauseAtom<const N: usize = 4> {
+     |                       ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `ClauseAtom`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+     |
+1340 |         let _: clause::HeadDisjunct<N> = HeadDisjunct::new(Vec::new());
+     |              +++++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `clause::HeadDisjunct<_>`
+    --> crates/datalog/src/clause.rs:1340:13
+     |
+1340 |         let _ = HeadDisjunct::new(Vec::new());
+     |             ^                     --- type must be known at this point
+     |
+note: required by a const generic parameter in `clause::ClauseAtom`
+    --> crates/datalog/src/clause.rs:265:23
+     |
+ 265 | pub struct ClauseAtom<const N: usize = 4> {
+     |                       ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `ClauseAtom`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+     |
+1340 |         let _: clause::HeadDisjunct<N> = HeadDisjunct::new(Vec::new());
+     |              +++++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `clause::HeadDisjunct<_>`
+    --> crates/datalog/src/clause.rs:1340:13
+     |
+1340 |         let _ = HeadDisjunct::new(Vec::new());
+     |             ^                     -------- type must be known at this point
+     |
+note: required by a const generic parameter in `clause::ClauseAtom`
+    --> crates/datalog/src/clause.rs:265:23
+     |
+ 265 | pub struct ClauseAtom<const N: usize = 4> {
+     |                       ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `ClauseAtom`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+     |
+1340 |         let _: clause::HeadDisjunct<N> = HeadDisjunct::new(Vec::new());
+     |              +++++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `guard::Negation<_>`
+   --> crates/datalog/src/guard.rs:390:13
+    |
+390 |         let _ = Negation::new(Vec::new(), Vec::new());
+    |             ^   -------- type must be known at this point
+    |
+note: required by a const generic parameter in `guard::Negation`
+   --> crates/datalog/src/guard.rs:174:21
+    |
+174 | pub struct Negation<const N: usize = 4> {
+    |                     ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `Negation`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+    |
+390 |         let _: guard::Negation<N> = Negation::new(Vec::new(), Vec::new());
+    |              ++++++++++++++++++++
+
+error[E0284]: type annotations needed for `guard::Negation<_>`
+   --> crates/datalog/src/guard.rs:390:13
+    |
+390 |         let _ = Negation::new(Vec::new(), Vec::new());
+    |             ^   ------------------------------------- type must be known at this point
+    |
+note: required by a const generic parameter in `guard::Negation::<N>::new`
+   --> crates/datalog/src/guard.rs:181:6
+    |
+181 | impl<const N: usize> Negation<N> {
+    |      ^^^^^^^^^^^^^^ required by this const generic parameter in `Negation::<N>::new`
+...
+190 |     pub fn new(atoms: Vec<ClauseAtom<N>>, guards: Vec<Guard>) -> Self {
+    |            --- required by a bound in this associated function
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+    |
+390 |         let _: guard::Negation<N> = Negation::new(Vec::new(), Vec::new());
+    |              ++++++++++++++++++++
+
+error[E0284]: type annotations needed for `guard::Negation<_>`
+   --> crates/datalog/src/guard.rs:390:13
+    |
+390 |         let _ = Negation::new(Vec::new(), Vec::new());
+    |             ^                 ---------- type must be known at this point
+    |
+note: required by a const generic parameter in `clause::ClauseAtom`
+   --> crates/datalog/src/clause.rs:265:23
+    |
+265 | pub struct ClauseAtom<const N: usize = 4> {
+    |                       ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `ClauseAtom`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+    |
+390 |         let _: guard::Negation<N> = Negation::new(Vec::new(), Vec::new());
+    |              ++++++++++++++++++++
+
+error[E0284]: type annotations needed for `guard::Negation<_>`
+   --> crates/datalog/src/guard.rs:390:13
+    |
+390 |         let _ = Negation::new(Vec::new(), Vec::new());
+    |             ^                 --- type must be known at this point
+    |
+note: required by a const generic parameter in `clause::ClauseAtom`
+   --> crates/datalog/src/clause.rs:265:23
+    |
+265 | pub struct ClauseAtom<const N: usize = 4> {
+    |                       ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `ClauseAtom`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+    |
+390 |         let _: guard::Negation<N> = Negation::new(Vec::new(), Vec::new());
+    |              ++++++++++++++++++++
+
+error[E0284]: type annotations needed for `guard::Negation<_>`
+   --> crates/datalog/src/guard.rs:390:13
+    |
+390 |         let _ = Negation::new(Vec::new(), Vec::new());
+    |             ^                 -------- type must be known at this point
+    |
+note: required by a const generic parameter in `clause::ClauseAtom`
+   --> crates/datalog/src/clause.rs:265:23
+    |
+265 | pub struct ClauseAtom<const N: usize = 4> {
+    |                       ^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `ClauseAtom`
+help: consider giving this pattern a type, where the value of const parameter `N` is specified
+    |
+390 |         let _: guard::Negation<N> = Negation::new(Vec::new(), Vec::new());
+    |              ++++++++++++++++++++
+
+error[E0284]: type annotations needed
+    --> crates/datalog/src/plan.rs:2264:20
+     |
+2264 |         assert_eq!(stratify(&[]), Some(BTreeMap::new()));
+     |                    ^^^^^^^^ cannot infer the value of the const parameter `N` declared on the function `stratify`
+     |
+note: required by a const generic parameter in `plan::stratify`
+    --> crates/datalog/src/plan.rs:131:17
+     |
+ 131 | pub fn stratify<const N: usize>(rules: &[DlClause<N>]) -> Option<BTreeMap<String, usize>> {
+     |                 ^^^^^^^^^^^^^^ required by this const generic parameter in `stratify`
+help: consider specifying a const for the const parameter `N`
+     |
+2264 |         assert_eq!(stratify::</* CONST */>(&[]), Some(BTreeMap::new()));
+     |                            +++++++++++++++
+
+For more information about this error, try `rustc --explain E0284`.
+error: could not compile `purrdf-datalog` (lib test) due to 13 previous errors
+
+terminal_status=101

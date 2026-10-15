@@ -1,0 +1,42 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+    Checking unicode-ident v1.0.24
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+    Checking syn v2.0.118
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/jsonschema)
+error[E0277]: the trait bound `TripleDataset: TryFrom<&purrdf_rdf::RdfDataset>` is not satisfied
+   --> crates/shapes/tests/srl_language.rs:57:19
+    |
+ 57 |     let compact = TripleDataset::try_from(quad.as_ref().clone()).unwrap();
+    |                   ^^^^^^^^^^^^^ the trait `From<&purrdf_rdf::RdfDataset>` is not implemented for `TripleDataset`
+    |
+help: the trait `TryFrom<&RdfDataset>` is not implemented for `TripleDataset`
+      but trait `TryFrom<RdfDataset>` is implemented for it
+   --> crates/rdf-core/src/ir/dataset.rs:393:1
+    |
+393 | impl TryFrom<RdfDataset> for super::triple::TripleDataset {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `purrdf_rdf::RdfDataset`, found `&purrdf_rdf::RdfDataset`
+    = note: required for `&purrdf_rdf::RdfDataset` to implement `Into<TripleDataset>`
+    = note: required for `TripleDataset` to implement `TryFrom<&purrdf_rdf::RdfDataset>`
+
+error[E0277]: the trait bound `TripleDataset: From<&purrdf_rdf::RdfDataset>` is not satisfied
+   --> crates/shapes/tests/srl_language.rs:57:19
+    |
+ 57 |     let compact = TripleDataset::try_from(quad.as_ref().clone()).unwrap();
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<&purrdf_rdf::RdfDataset>` is not implemented for `TripleDataset`
+    |
+help: the trait `TryFrom<&RdfDataset>` is not implemented for `TripleDataset`
+      but trait `TryFrom<RdfDataset>` is implemented for it
+   --> crates/rdf-core/src/ir/dataset.rs:393:1
+    |
+393 | impl TryFrom<RdfDataset> for super::triple::TripleDataset {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for that trait implementation, expected `purrdf_rdf::RdfDataset`, found `&purrdf_rdf::RdfDataset`
+    = note: required for `&purrdf_rdf::RdfDataset` to implement `Into<TripleDataset>`
+    = note: required for `TripleDataset` to implement `TryFrom<&purrdf_rdf::RdfDataset>`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (test "srl_language") due to 2 previous errors
+
+terminal_status=101

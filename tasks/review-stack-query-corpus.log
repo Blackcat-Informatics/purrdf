@@ -1,0 +1,11 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 26.63s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-conformance/23e78a717d7c506a/out/triple_carrier-23e78a717d7c506a)
+
+running 1 test
+test official_default_graph_queries_use_compact_storage_and_original_grading ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+

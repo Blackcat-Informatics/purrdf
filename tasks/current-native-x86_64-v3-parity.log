@@ -1,0 +1,139 @@
+simd-asm-config (x86_64-v3)	Measure and check this configuration	﻿2026-10-14T19:42:53.4224186Z ##[group]Run # Bound scalar WASM compilation through the existing Cargo job budget.
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4225265Z ^[[36;1m# Bound scalar WASM compilation through the existing Cargo job budget.^[[0m
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4226140Z ^[[36;1m# Other configurations keep their current scheduling.^[[0m
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4227063Z ^[[36;1mif [ "x86_64-v3" = wasm32 ]; then^[[0m
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4227585Z ^[[36;1m  export CARGO_BUILD_JOBS=2^[[0m
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4228048Z ^[[36;1mfi^[[0m
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4228784Z ^[[36;1mmake simd-asm SIMD_ASM_ARGS="--config x86_64-v3 --jobs 1 --report target/asm-reports/x86_64-v3.json"^[[0m
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4317248Z shell: /usr/bin/bash -e {0}
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4317685Z env:
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4318022Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4318493Z   CARGO_INCREMENTAL: 0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4318884Z   CARGO_TERM_COLOR: always
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.4319281Z ##[endgroup]
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:53.5274158Z python3 scripts/check-simd-asm.py --doc --config x86_64-v3 --jobs 1 --report target/asm-reports/x86_64-v3.json
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:56.4343768Z == x86_64-v3: 4 Cargo jobs
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:42:56.4348448Z == x86_64-v3 graph 0: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/4825bc91104934cda7539e6c3d2449965a45e41fe1808b754e3dae5e51905d83/cargo.graph-0.stderr.log
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:52:16.0071405Z == x86_64-v3 graph 1: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/4825bc91104934cda7539e6c3d2449965a45e41fe1808b754e3dae5e51905d83/cargo.graph-1.stderr.log
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T19:53:39.3414541Z == x86_64-v3 graph 2: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/4825bc91104934cda7539e6c3d2449965a45e41fe1808b754e3dae5e51905d83/cargo.graph-2.stderr.log
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.1563396Z == x86_64-v3: {"analysis_seconds": 38.00514313600013, "build_seconds": 1390.97069654, "fresh_artifacts": 65, "lock_seconds": 0.00021626500000593296, "parsed_units": 144, "reused_units": 65, "rustc_invocations": 144, "seconds": 1429.7222729599998}
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7157819Z 
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7161650Z site                            x86_64-v3
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7162946Z lex.find-byte2-sparql-string    avx2 v19·f0·r0·req✓ / call site (in run) v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7164331Z lex.find-byte2-line-split       avx2 v19·f0·r0·req✓ / call site (parallel) v46·f0·r0 / call site (lines) v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7165601Z core.xsd-regex-scan             pair avx2 v120·f0·r0·req✓ / range avx2 v249·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7166141Z sha2.sha256-compress            sha-ni v126·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7167318Z blake3.hash-many-dispatch       avx512 tree v584·f0·r0·req✓ / avx2 tree v2259·f0·r0·req✓ / avx512 chunks v605·f0·r0·req✓ / avx512 narrow chunks v1259·f0·r0·req✓ / avx512 four complete chunks v227·f0·r0·req✓ / avx512vl two parents v226·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7168648Z blake3.single-block             sse2 v309·f0·r0 / ssse3 v309·f0·r0 / avx2 v350·f0·r0 / avx512 v215·f0·r0 / scalar rotation v0·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7169389Z sparql.lexer-trivia             scan avx2 v22·f0·r0·req✓ / call site (in run) v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7169981Z sparql.lexer-iri                scan avx2 v16·f0·r0·req✓ / call site (in run) v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7170510Z sparql.lexer-cursor             peek v6·f0·r0 / cur (in run) v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7170930Z sparql.scope-admission          v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7176446Z rdf.escape-scan                 iri scan avx2 v22·f0·r0·req✓ / iri (in iri_escape::escape) v0·f0·r0 / literal scan avx2 v13·f0·r0·req✓ / literal v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7177184Z rdf.sort-canonical              v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7177688Z iri.delimiter-scan              scheme avx2 v22·f0·r0·req✓ / authority avx2 v19·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7178203Z lex.scan-trivia                 avx2 v22·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7178581Z lex.scan-iri-body               avx2 v16·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7178954Z lex.scan-json-string            avx2 v21·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7179332Z lex.json-escape-controls        avx2 v11·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7180115Z lex.json-escape-ascii           avx2 v24·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7180476Z lex.scan-xml                    avx2 v11·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7180835Z iri.validate-component          avx2 v62·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7181265Z lex.terminals-in-ranges         table v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7181941Z xsd.whitespace                  replace avx2 v30·f0·r0·req✓ / collapse avx2 v22·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7182400Z xsd.canonical-double            v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7182838Z xsd.exact-arith                 mul_fast v0·f0·r0 / div_rem v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7183354Z json.parser-string              scan avx2 v21·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7184134Z json.parser-whitespace          occurrences v0·f0·r0 / tree v2·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7184600Z core.intern                     v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7185095Z hash.hex-decode                 canonical avx2 v65·f0·r0·req✓ / either-case avx2 v69·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7185592Z hash.hex-lower                  avx2 v54·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7186007Z core.pack-select-in-word        broadword v0·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7186414Z core.pack-rank1                 popcnt v0·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7186767Z core.pack-intvector-get         v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7187206Z core.dataset-scan-filter        avx2 v47·f0·r0·req✓ / cursor v65·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7187728Z core.pack-triples-intersect     intersect v0·f0·r0 / delta v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7188467Z core.canon-escape               iri scan avx2 v22·f0·r0·req✓ / iri v0·f0·r0 / literal scan avx2 v23·f0·r0·req✓ / literal v4·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7189172Z core.purremb-f32-decode         fold avx2 v30·f0·r0·req✓ / iterator v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7189616Z core.purremb-norm               v1·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7189933Z core.paged-map-quad             v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7190372Z core.loss-json-escape           scan avx2 v21·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7190794Z eval.regex-row-alloc            v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7191231Z eval.solution-compatible        compatible v0·f0·r0 / bind_row v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7191654Z eval.bgp-cost-planner           v30·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7191982Z eval.bgp-join-probe             v26·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7192608Z eval.aggregate-fold             step v0·f0·r0 / combine v0·f0·r0 / numeric_add v0·f0·r0 / add_i128 v0·f0·r0 / add_assign v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7193210Z datalog.relation-contains       avx2 v41·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7193652Z datalog.gallop-leapfrog         gallop v0·f0·r0 / leapfrog v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7194302Z datalog.chase                   v10·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7195023Z entail.escape                   iri scan avx2 v22·f0·r0·req✓ / iri v0·f0·r0 / literal scan avx2 v23·f0·r0·req✓ / literal (in write_leaf_surface) v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7195746Z entail.classify                 decide v9·f0·r0 / saturate v4·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7196181Z shapes.frontier-dedup           avx2 v173·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7196556Z shapes.path-eval                v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7196876Z shapes.finish-report            v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7197234Z shex.char-count                 std count v24·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7197581Z shex.matcher                    v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7198083Z results.xml-escape              scan avx2 v11·f0·r0·req✓ / push_into v0·f0·r0 / writer v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7198688Z core.csv-field                  scan sse2 (vex) v17·f0·r0·req✓ / scan avx2 v17·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7199237Z results.json-escape             scan avx2 v21·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7199796Z markdown.lines                  scan avx2 v2·f0·r0·req✓ / call site (in analyze) v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7201182Z distance.exact.dot              batch f64×f64 avx512f v133·f0·r0·req✓ / batch f64×f64 v157·f0·r0·req✓ / indexed f64×f32 avx512f v161·f0·r0·req✓ / indexed f64×f32 v197·f0·r0·req✓ / indexed f32×f32 avx512f v189·f0·r0·req✓ / indexed f32×f32 v237·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7203824Z distance.exact.sqeuclid         bounded f64×f64 avx512f v133·f0·r0·req✓ / bounded f64×f64 v157·f0·r0·req✓ / bounded f32×f32 avx512f v89·f0·r0·req✓ / bounded f32×f32 v125·f0·r0·req✓ / pair f64×f64 avx512f v133·f0·r0·req✓ / pair f64×f64 v157·f0·r0·req✓ / pair f32×f32 avx512f v89·f0·r0·req✓ / pair f32×f32 v125·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7207634Z distance.reassociated.dot       avx2+fma f64×f64 v13·f21·r0·req✓ / avx512f f64×f64 v15·f11·r0·req✓ / baseline f64×f64 v13·f21·r0·req✓ / avx2+fma f64×f32 v34·f21·r0·req✓ / avx512f f64×f32 v26·f11·r0·req✓ / baseline f64×f32 v34·f21·r0·req✓ / avx2+fma f32×f64 v34·f21·r0·req✓ / avx512f f32×f64 v26·f11·r0·req✓ / baseline f32×f64 v34·f21·r0·req✓ / avx2+fma f32×f32 v55·f21·r0·req✓ / avx512f f32×f32 v37·f11·r0·req✓ / baseline f32×f32 v55·f21·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7211448Z distance.reassociated.sqeuclid  avx2+fma f64×f64 v34·f21·r0·req✓ / avx512f f64×f64 v26·f11·r0·req✓ / baseline f64×f64 v34·f21·r0·req✓ / avx2+fma f64×f32 v55·f21·r0·req✓ / avx512f f64×f32 v37·f11·r0·req✓ / baseline f64×f32 v55·f21·r0·req✓ / avx2+fma f32×f64 v55·f21·r0·req✓ / avx512f f32×f64 v37·f11·r0·req✓ / baseline f32×f64 v55·f21·r0·req✓ / avx2+fma f32×f32 v76·f21·r0·req✓ / avx512f f32×f32 v48·f11·r0·req✓ / baseline f32×f32 v76·f21·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7213480Z knn.norm                        v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7214430Z hnsw.search-build               search v0·f0·r0 / build v132·f0·r0 / search reassociated v0·f0·r0 / build reassociated v132·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7215071Z hnsw.distance-cache             v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7215388Z text.bm25f                      v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7215695Z retrieval.rrf                   v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7216089Z retrieval.fusion-frontier       take v0·f0·r0 / insert v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7216537Z facade.multimodal-read          text lookup v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7217033Z columnar.plain-codec            encode v0·f0·r0·req✓ / decode v0·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7217490Z columnar.rle                    v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7218028Z xsd.endpoint-products           interval v6·f0·r0 / sse2 v34·f0·r0 / avx2 v17·f0·r0 / avx512 v18·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7218563Z geo.exact-limbs                 gcd v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7218973Z geo.relate                      relate v0·f0·r0 / intersect v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7219668Z geo.json-write-string           scan avx2 v21·f0·r0·req✓ / call site (values) v0·f0·r0 / call site (names) v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7220237Z gts.cbor-writer                 v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7220679Z gts.mmr-json-escape             scan avx2 v11·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7221247Z gts.replication-json-string     scan avx2 v11·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7221681Z wasm.term-marshal               v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7222080Z slice.ownership                 analyze v32·f0·r0 / iri refs v33·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7222613Z slice.prefix-json-string        scan avx2 v21·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7223176Z slice.dsl-stats-json-string     scan avx2 v24·f0·r0·req✓ / call site v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7223617Z cli.pack-input                  v2·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7224180Z rdf.viz-layout                  v37·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7224538Z rdf.projections                 v30·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7225025Z lex.percent-encode              reserved avx2 v21·f0·r0·req✓ / simple avx2 v24·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7225519Z rdf.csvw-uri-template           call site v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7225865Z core.sssom-tsv                  v9·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7226177Z shapes.pydantic-emit            v10·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:46.7226499Z shapes.schema-compile           v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.7990331Z 
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.7990870Z FAIL: 2 problem(s):
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.7992420Z   - row `datalog.chase` `x86_64-v3` reads 'v0·f0·r0', measured 'v10·f0·r0' (run `python3 scripts/check-simd-asm.py --write-doc`)
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.7995077Z   - row `hash.fixed-terminal` `x86_64-v3` reads 'portable frozen lookup v4·f0·r0', measured 'portable frozen lookup v0·f0·r0' (run `python3 scripts/check-simd-asm.py --write-doc`)
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8439463Z deflate.match-copy              copy sse2 v0·f0·r0 / copy avx2 v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8441610Z deflate.match-length            compare sse2 (avx2 build) v2·f0·r0·req✓ / compare avx2 v2·f0·r0·req✓ / steps v4·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8442996Z deflate.hash-windows            hash avx2 v4·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8443803Z hash.sha1-block                 sha-ni v97·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8444993Z hash.crc32-update               vpclmulqdq v41·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8445834Z hash.hex-encode                 ssse3 (inlined, unrolled) v21·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8446588Z hash.digest-portable            md5 v0·f0·r0 / sha3 v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8447239Z hash.fixed-compress             portable v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8447940Z hash.fixed-terminal             portable frozen lookup v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8448773Z jsonschema.compile-validate     from_document v0·f0·r0 / is_valid v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8449560Z text.unicode-ascii-lower        x86_64-v3 v54·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8450349Z xsd.rfc3339-lexical             parse v0·f0·r0 / format x86_64-v3 v12·f0·r0·req✓
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8451301Z shapes.instance-projection      graph v6·f0·r0 / subject v4·f0·r0 / list index v15·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8452064Z ed25519.sign                    v3·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8452568Z ed25519.verify                  v23·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8453276Z text.dictionary-storage         build v4·f0·r0 / load v4·f0·r0 / lookup v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8454311Z text.dictionary-lattice         lattice entry v0·f0·r0 / prepare v4·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8455187Z text.emoji-recognition          recognize v4·f0·r0 / finite lookup v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8456069Z text.phonetic-spelling          canonicalize v0·f0·r0 / encode canonical v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8456993Z text.phonetic-distance          prepare band v0·f0·r0 / band v6·f0·r0 / prepare Myers v4·f0·r0 / Myers v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8457720Z text.surface-build              assemble v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8458220Z text.surface-substring          retrieve v0·f0·r0
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8630872Z make: *** [Makefile:700: simd-asm] Error 1
+simd-asm-config (x86_64-v3)	Measure and check this configuration	2026-10-14T20:06:49.8647743Z ##[error]Process completed with exit code 2.

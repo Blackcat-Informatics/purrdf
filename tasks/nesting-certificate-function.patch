@@ -1,0 +1,69 @@
+--- a/crates/rdf-core/src/dataset_view.rs
++++ b/crates/rdf-core/src/dataset_view.rs
+@@ -33,17 +33,23 @@
+         .unwrap_or_else(std::sync::PoisonError::into_inner)
+ }
+ 
+-/// Declare the certificate only on carriers frozen through the native validator.
+-macro_rules! frozen_term_nesting_bound {
++/// The certificate exposed only by carriers frozen through the native validator.
++#[inline]
++pub(crate) const fn frozen_term_nesting_bound() -> Option<usize> {
++    Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
++}
++
++/// Declare a validated carrier's getter through the one certificate home.
++macro_rules! frozen_term_nesting_bound_method {
+     ($(#[$meta:meta])*) => {
+         $(#[$meta])*
+         #[inline]
+         fn triple_term_nesting_bound(&self) -> Option<usize> {
+-            Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
++            $crate::dataset_view::frozen_term_nesting_bound()
+         }
+     };
+ }
+-pub(crate) use frozen_term_nesting_bound;
++pub(crate) use frozen_term_nesting_bound_method;
+ 
+ /// The sole typed leaf-conversion body. The storage factory determines physical
+ /// ownership; view resolution and lexical/type semantics remain shared.
+@@ -1684,7 +1690,7 @@
+         Self: 'a;
+     type ProbePlan = QuadProbePlan;
+ 
+-    frozen_term_nesting_bound! {
++    frozen_term_nesting_bound_method! {
+         /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
+         /// which refuses a triple term nested past 16.
+     }
+--- a/crates/rdf-core/src/ir/triple/read.rs
++++ b/crates/rdf-core/src/ir/triple/read.rs
+@@ -241,7 +241,7 @@
+     fn len_hint(&self) -> Option<u64> {
+         Some(self.dataset.len() as u64)
+     }
+-    crate::dataset_view::frozen_term_nesting_bound! {
++    crate::dataset_view::frozen_term_nesting_bound_method! {
+         /// Compact publication uses the original native term validator and bound.
+     }
+ 
+--- a/crates/rdf-core/tests/triple_carrier.rs
++++ b/crates/rdf-core/tests/triple_carrier.rs
+@@ -180,6 +180,8 @@
+ 
+ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
+     let (quad, [s, p, o, reifier]) = statement_fixture();
++    let nesting_bound = quad.triple_term_nesting_bound();
++    assert_eq!(nesting_bound, Some(purrdf_events::MAX_TERM_NESTING_DEPTH));
+     let before = try_canonicalize_flat_view(&quad, CanonHash::Sha256).unwrap();
+     let digest = try_flat_digest_view(&quad, CanonHash::Sha256).unwrap();
+     let TermRef::Iri(iri) = quad.resolve(p) else {
+@@ -228,6 +230,7 @@
+         }
+     ));
+     let read = compact.read().unwrap();
++    assert_eq!(read.triple_term_nesting_bound(), nesting_bound);
+     assert_eq!(
+         DatasetView::annotations_of_with_graph(&read, reifier).count(),
+         annotation_count

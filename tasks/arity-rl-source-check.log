@@ -1,0 +1,68 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+error[E0053]: method `retract` has an incompatible type for trait
+    --> crates/shapes/src/srl/eval.rs:1355:20
+     |
+1355 |         withdrawn: &[Fact],
+     |                    ^^^^^^^ expected `()`, found `std::string::String`
+     |
+     = note: expected signature `fn(&mut Hooks<'_, '_, '_>, _, &RelationStore<_, _>, &[Fact<()>]) -> Result<_, _>`
+                found signature `fn(&mut Hooks<'_, '_, '_>, _, &RelationStore<_, _>, &[Fact]) -> Result<_, _>`
+help: change the parameter type to match the trait
+     |
+1355 |         withdrawn: &[Fact<()>],
+     |                          ++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/srl/eval.rs:1363:49
+     |
+1363 |             .map(|fact| self.engine.decode_fact(fact))
+     |                                     ----------- ^^^^ expected `&Fact<()>`, found `&Fact`
+     |                                     |
+     |                                     arguments to this method are incorrect
+     |
+     = note: expected reference `&Fact<()>`
+                found reference `&Fact<std::string::String>`
+note: method defined here
+    --> crates/shapes/src/srl/eval.rs:813:8
+     |
+ 813 |     fn decode_fact(&self, fact: &RuleFact) -> Result<[Term; 3], String> {
+     |        ^^^^^^^^^^^        ---------------
+
+error[E0308]: mismatched types
+   --> crates/shapes/src/srl/lower.rs:417:36
+    |
+417 |                     negations.push(self.negation(index, elements, *data || rule.data, &authored));
+    |                               ---- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `3`, found `4`
+    |                               |
+    |                               arguments to this method are incorrect
+    |
+    = note: expected struct `Negation<3>`
+               found struct `Negation<4>`
+note: method defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/vec/mod.rs:999:12
+    |
+999 |     pub fn push(&mut self, value: T) {
+    |            ^^^^
+
+error[E0308]: mismatched types
+   --> crates/shapes/src/srl/lower.rs:597:23
+    |
+597 |         Negation::new(atoms, guards)
+    |         ------------- ^^^^^ expected `4`, found `3`
+    |         |
+    |         arguments to this function are incorrect
+    |
+    = note: expected struct `Vec<ClauseAtom<4>>`
+               found struct `Vec<ClauseAtom<3>>`
+note: associated function defined here
+   --> crates/datalog/src/guard.rs:190:12
+    |
+190 |     pub fn new(atoms: Vec<ClauseAtom<N>>, guards: Vec<Guard>) -> Self {
+    |            ^^^
+
+Some errors have detailed explanations: E0053, E0308.
+For more information about an error, try `rustc --explain E0053`.
+error: could not compile `purrdf-shapes` (lib) due to 4 previous errors
+
+terminal_status=101

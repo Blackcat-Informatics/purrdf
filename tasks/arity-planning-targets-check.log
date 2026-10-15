@@ -1,0 +1,31 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0308]: arguments to this function are incorrect
+    --> crates/datalog/src/schedule.rs:247:29
+     |
+ 247 |         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+     |                             ^^^^^^^^^^^^^^^^
+     |
+note: expected `4`, found `N`
+    --> crates/datalog/src/schedule.rs:247:46
+     |
+ 247 |         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+     |                                              ^^^^
+     = note: expected reference `&DlClause<4>`
+                found reference `&DlClause<N>`
+note: expected `4`, found `N`
+    --> crates/datalog/src/schedule.rs:247:52
+     |
+ 247 |         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+     |                                                    ^^^^
+     = note: expected reference `&RulePlan<4>`
+                found reference `&RulePlan<N>`
+note: associated function defined here
+    --> crates/datalog/src/seminaive.rs:3202:19
+     |
+3202 |     pub(crate) fn new(rule: &DlClause, plan: &RulePlan) -> Self {
+     |                   ^^^ ---------------  ---------------
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-datalog` (lib) due to 1 previous error
+
+terminal_status=101

@@ -1,0 +1,140 @@
+{
+  "issue": 492,
+  "branch": "paudley/492-triple-only-carrier-for-rdf-1-2",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "364fc3090b55673d3dc853f528490880b1208261",
+      "subject": "Allow complete hosted assembly projection and retain interrupted evidence",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "463d0bf1622bd00a32a4325bba85ce45c5f9e274",
+      "subject": "Measure frozen IRI hashing at its shared lexical owner",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "78b07bb6db05da259337c732b90a2aea6f92faaf",
+      "subject": "Exclude metadata-only dependencies from consumer assembly evidence",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "295ea4a8b9931a94ee4f685c650862c069d1180f",
+      "subject": "Admit scheduled facts before materializing retained-base overflow",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "da57b25004adfddabb31c64f1273348f7ead277f",
+      "subject": "Emit cross-target consumer assembly without linking",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "1885414d87ce8221e460623c8c5d8ca6b1a0af5a",
+      "subject": "Place assembly consumer notes in the correct table columns",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "2425e5b8d4070648590e29560875d38de69fce7b",
+      "subject": "Measure carrier consumers through standard Cargo builds",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "a9e6ae626a1c99828067d11a8962580833848a6a",
+      "subject": "Link ranked retrieval documentation to public argument constants",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "29bba23edfac5253b127b251aa5a0369fb40aac6",
+      "subject": "Clarify graph-free text ranking and identity documentation",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "525b3cf1b5cf49e833fcf7eecc437a4f8aa3b318",
+      "subject": "Add a graph-free RDF carrier and rule execution",
+      "date": "2026-10-14"
+    }
+  ],
+  "files": [
+    ".github/workflows/ci.yaml",
+    "Makefile",
+    "crates/datalog/README.md",
+    "crates/datalog/src/admission.rs",
+    "crates/datalog/src/cache.rs",
+    "crates/datalog/src/chase.rs",
+    "crates/datalog/src/clause.rs",
+    "crates/datalog/src/dictionary.rs",
+    "crates/datalog/src/guard.rs",
+    "crates/datalog/src/plan.rs",
+    "crates/datalog/src/proof.rs",
+    "crates/datalog/src/schedule.rs",
+    "crates/datalog/src/seminaive.rs",
+    "crates/datalog/src/seminaive/evidence.rs",
+    "crates/datalog/src/seminaive/factors.rs",
+    "crates/datalog/src/store.rs",
+    "crates/datalog/src/test_support/host_dictionary.rs",
+    "crates/datalog/tests/rules_runtime.rs",
+    "crates/hash/README.md",
+    "crates/helper-census/src/capacity.rs",
+    "crates/helper-census/src/source.rs",
+    "crates/lex/src/allocation.rs",
+    "crates/lex/src/constructors.rs",
+    "crates/purrdf/tests/base_surface.rs",
+    "crates/rdf-core/Cargo.toml",
+    "crates/rdf-core/benches/ir_layout.rs",
+    "crates/rdf-core/src/dataset_view.rs",
+    "crates/rdf-core/src/ir/builder.rs",
+    "crates/rdf-core/src/ir/builder/triple.rs",
+    "crates/rdf-core/src/ir/canon.rs",
+    "crates/rdf-core/src/ir/dataset.rs",
+    "crates/rdf-core/src/ir/frozen_terms.rs",
+    "crates/rdf-core/src/ir/mod.rs",
+    "crates/rdf-core/src/ir/pipeline_bundle.rs",
+    "crates/rdf-core/src/ir/triple.rs",
+    "crates/rdf-core/src/ir/triple/read.rs",
+    "crates/rdf-core/src/ir/validate.rs",
+    "crates/rdf-core/src/lib.rs",
+    "crates/rdf-core/tests/triple_carrier.rs",
+    "crates/rdf/src/lib.rs",
+    "crates/shapes/Cargo.toml",
+    "crates/shapes/README.md",
+    "crates/shapes/src/rules.rs",
+    "crates/shapes/src/srl/document.rs",
+    "crates/shapes/src/srl/eval.rs",
+    "crates/shapes/src/srl/lower.rs",
+    "crates/shapes/src/srl/mod.rs",
+    "crates/shapes/src/term.rs",
+    "crates/shapes/tests/rules_engine.rs",
+    "crates/shapes/tests/srl_language.rs",
+    "crates/sparql-conformance/src/compare.rs",
+    "crates/sparql-conformance/src/lib.rs",
+    "crates/sparql-conformance/src/run.rs",
+    "crates/sparql-conformance/tests/golden/triple-query-inventory.tsv",
+    "crates/sparql-conformance/tests/triple_carrier.rs",
+    "crates/sparql-eval/src/dataset_spec.rs",
+    "crates/sparql-eval/src/eval.rs",
+    "crates/sparql-eval/tests/host_identity.rs",
+    "crates/text/README.md",
+    "crates/text/src/corpus.rs",
+    "crates/text/src/dictionary.rs",
+    "crates/text/src/dictionary_relation.rs",
+    "crates/text/src/index.rs",
+    "crates/text/src/lib.rs",
+    "crates/text/src/occurrence_dictionary.rs",
+    "crates/text/src/relation.rs",
+    "crates/text/src/score.rs",
+    "crates/text/tests/determinism.rs",
+    "crates/text/tests/physical_shapes.rs",
+    "crates/text/tests/support/shape_cases.rs",
+    "docs/WASM_TESTING.md",
+    "docs/book/po/zh-Hans.po",
+    "docs/book/src/concepts/interned-dataset.md",
+    "docs/design/purrdf-backend-contract.md",
+    "docs/design/purrdf-simd.md",
+    "helpers-ledger.toml",
+    "scripts/check-simd-asm.py",
+    "scripts/simd-asm-manifest.toml",
+    "scripts/simd_asm_runtime.py",
+    "scripts/test_simd_asm_runtime.py"
+  ],
+  "adrs_touched": []
+}

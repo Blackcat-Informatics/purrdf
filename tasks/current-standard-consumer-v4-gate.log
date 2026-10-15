@@ -1,0 +1,122 @@
+== x86_64-v4: 4 Cargo jobs
+== x86_64-v4 graph 0: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/b50b54d13cfacc5269b0621311e64fb2655f7ae614da210731e5d1c22eb2a38e/cargo.graph-0.stderr.log
+== x86_64-v4 graph 1: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/b50b54d13cfacc5269b0621311e64fb2655f7ae614da210731e5d1c22eb2a38e/cargo.graph-1.stderr.log
+== x86_64-v4 graph 2: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/b50b54d13cfacc5269b0621311e64fb2655f7ae614da210731e5d1c22eb2a38e/cargo.graph-2.stderr.log
+== x86_64-v4: {"analysis_seconds": 11.630853998998646, "build_seconds": 0.9545415639295243, "fresh_artifacts": 209, "lock_seconds": 0.00011192698730155826, "parsed_units": 76, "reused_units": 133, "rustc_invocations": 0, "seconds": 12.985524221032392}
+
+site                            x86_64-v4
+lex.find-byte2-sparql-string    avx512 v12·f0·r0·req✓ / call site (in run) v0·f0·r0
+lex.find-byte2-line-split       avx512 v12·f0·r0·req✓ / call site (parallel) v26·f0·r0 / call site (lines) v0·f0·r0
+core.xsd-regex-scan             pair avx512 masks v79·f0·r0·req✓ / range avx512 masks v158·f0·r0·req✓
+sha2.sha256-compress            sha-ni v122·f0·r0·req✓
+blake3.hash-many-dispatch       avx512 tree v584·f0·r0·req✓ / avx512 chunks v605·f0·r0·req✓ / avx512 partial chunks v633·f0·r0·req✓ / avx512 four complete chunks v233·f0·r0·req✓ / avx512vl two parents v229·f0·r0·req✓
+blake3.single-block             sse2 v216·f0·r0 / ssse3 v216·f0·r0 / avx2 v215·f0·r0 / avx512 v215·f0·r0 / scalar rotation v0·f0·r0·req✓
+sparql.lexer-trivia             scan avx512 masks v18·f0·r0·req✓ / call site (in run) v0·f0·r0
+sparql.lexer-iri                scan avx512 masks v8·f0·r0·req✓ / call site (in run) v0·f0·r0
+sparql.lexer-cursor             peek v4·f0·r0 / cur (in run) v0·f0·r0
+sparql.scope-admission          v0·f0·r0
+rdf.escape-scan                 iri scan avx512 masks v10·f0·r0·req✓ / iri (in iri_escape::escape) v0·f0·r0 / literal scan avx512 masks v6·f0·r0·req✓ / literal v0·f0·r0
+rdf.sort-canonical              v0·f0·r0
+iri.delimiter-scan              scheme avx512 v18·f0·r0·req✓ / authority avx512 v17·f0·r0·req✓
+lex.scan-trivia                 avx512 masks v18·f0·r0·req✓
+lex.scan-iri-body               avx512 masks v8·f0·r0·req✓
+lex.scan-json-string            avx512 masks v17·f0·r0·req✓
+lex.json-escape-controls        avx512 masks v5·f0·r0·req✓
+lex.json-escape-ascii           avx512 masks v18·f0·r0·req✓
+lex.scan-xml                    avx512 masks v6·f0·r0·req✓
+iri.validate-component          avx512 masks v20·f0·r0·req✓
+lex.terminals-in-ranges         table v0·f0·r0
+xsd.whitespace                  replace avx512 masks v15·f0·r0·req✓ / collapse avx512 masks v14·f0·r0·req✓
+xsd.canonical-double            v0·f0·r0
+xsd.exact-arith                 mul_fast v0·f0·r0 / div_rem v0·f0·r0
+json.parser-string              scan avx512 masks v17·f0·r0·req✓ / call site v0·f0·r0
+json.parser-whitespace          occurrences v0·f0·r0 / tree v2·f0·r0
+core.intern                     v0·f0·r0
+hash.hex-decode                 canonical avx512 masks v38·f0·r0·req✓ / either-case avx512 masks v42·f0·r0·req✓
+hash.hex-lower                  avx512 v50·f0·r0·req✓
+core.pack-select-in-word        broadword v0·f0·r0·req✓
+core.pack-rank1                 popcnt v0·f0·r0·req✓
+core.pack-intvector-get         v0·f0·r0
+core.dataset-scan-filter        avx512 masks v18·f0·r0·req✓ / cursor v36·f0·r0
+core.pack-triples-intersect     intersect v0·f0·r0 / delta v0·f0·r0
+core.canon-escape               iri scan avx512 masks v10·f0·r0·req✓ / iri v0·f0·r0 / literal scan avx512 masks v18·f0·r0·req✓ / literal v3·f0·r0
+core.purremb-f32-decode         fold avx512 v10·f0·r0·req✓ / iterator v0·f0·r0
+core.purremb-norm               v1·f0·r0
+core.paged-map-quad             v0·f0·r0
+core.loss-json-escape           scan avx512 masks v17·f0·r0·req✓ / call site v0·f0·r0
+eval.regex-row-alloc            v0·f0·r0
+eval.solution-compatible        compatible v0·f0·r0 / bind_row v0·f0·r0
+eval.bgp-cost-planner           v32·f0·r0
+eval.bgp-join-probe             v14·f0·r0
+eval.aggregate-fold             step v0·f0·r0 / combine v0·f0·r0 / numeric_add v0·f0·r0 / add_i128 v0·f0·r0 / add_assign v0·f0·r0
+datalog.relation-contains       avx512 masks v26·f0·r0·req✓
+datalog.gallop-leapfrog         gallop v0·f0·r0 / leapfrog v0·f0·r0
+datalog.chase                   v2·f0·r0
+entail.escape                   iri scan avx512 masks v10·f0·r0·req✓ / iri v0·f0·r0 / literal scan avx512 masks v18·f0·r0·req✓ / literal (in write_leaf_surface) v0·f0·r0
+entail.classify                 decide v0·f0·r0 / saturate v3·f0·r0
+shapes.frontier-dedup           avx512 masks v50·f0·r0·req✓
+shapes.path-eval                v0·f0·r0
+shapes.finish-report            v0·f0·r0
+shex.char-count                 std count v16·f0·r0·req✓
+shex.matcher                    v0·f0·r0
+results.xml-escape              scan avx512 masks v6·f0·r0·req✓ / push_into v0·f0·r0 / writer v0·f0·r0
+core.csv-field                  scan avx512 masks v8·f0·r0·req✓ / scan avx2 masks v8·f0·r0·req✓
+results.json-escape             scan avx512 masks v17·f0·r0·req✓ / call site v0·f0·r0
+markdown.lines                  scan avx512 masks v1·f0·r0·req✓ / call site (in analyze) v0·f0·r0
+distance.exact.dot              batch f64×f64 v133·f0·r0·req✓ / indexed f64×f32 v161·f0·r0·req✓ / indexed f32×f32 v189·f0·r0·req✓
+distance.exact.sqeuclid         bounded f64×f64 v133·f0·r0·req✓ / bounded f32×f32 v89·f0·r0·req✓ / pair f64×f64 v133·f0·r0·req✓ / pair f32×f32 v89·f0·r0·req✓
+distance.reassociated.dot       avx2+fma f64×f64 v13·f21·r0·req✓ / avx512f f64×f64 (v4 tuning) v13·f21·r0·req✓ / baseline f64×f64 v13·f21·r0·req✓ / avx2+fma f64×f32 v34·f21·r0·req✓ / avx512f f64×f32 (v4 tuning) v34·f21·r0·req✓ / baseline f64×f32 v34·f21·r0·req✓ / avx2+fma f32×f64 v34·f21·r0·req✓ / avx512f f32×f64 (v4 tuning) v34·f21·r0·req✓ / baseline f32×f64 v34·f21·r0·req✓ / avx2+fma f32×f32 v55·f21·r0·req✓ / avx512f f32×f32 (v4 tuning) v55·f21·r0·req✓ / baseline f32×f32 v55·f21·r0·req✓
+distance.reassociated.sqeuclid  avx2+fma f64×f64 v34·f21·r0·req✓ / avx512f f64×f64 (v4 tuning) v34·f21·r0·req✓ / baseline f64×f64 v34·f21·r0·req✓ / avx2+fma f64×f32 v55·f21·r0·req✓ / avx512f f64×f32 (v4 tuning) v55·f21·r0·req✓ / baseline f64×f32 v55·f21·r0·req✓ / avx2+fma f32×f64 v55·f21·r0·req✓ / avx512f f32×f64 (v4 tuning) v55·f21·r0·req✓ / baseline f32×f64 v55·f21·r0·req✓ / avx2+fma f32×f32 v76·f21·r0·req✓ / avx512f f32×f32 (v4 tuning) v76·f21·r0·req✓ / baseline f32×f32 v76·f21·r0·req✓
+knn.norm                        v0·f0·r0
+hnsw.search-build               search v0·f0·r0 / build v46·f0·r0 / search reassociated v0·f0·r0 / build reassociated v46·f0·r0
+hnsw.distance-cache             v0·f0·r0
+text.bm25f                      v0·f0·r0
+retrieval.rrf                   v0·f0·r0
+retrieval.fusion-frontier       take v0·f0·r0 / insert v0·f0·r0
+facade.multimodal-read          text lookup v0·f0·r0
+columnar.plain-codec            encode v0·f0·r0·req✓ / decode v0·f0·r0·req✓
+columnar.rle                    v0·f0·r0
+xsd.endpoint-products           interval v6·f0·r0 / sse2 v34·f0·r0 / avx2 v17·f0·r0 / avx512 v17·f0·r0
+geo.exact-limbs                 gcd v0·f0·r0
+geo.relate                      relate v0·f0·r0 / intersect v0·f0·r0
+geo.json-write-string           scan avx512 masks v17·f0·r0·req✓ / call site (values) v0·f0·r0 / call site (names) v0·f0·r0
+gts.cbor-writer                 v0·f0·r0
+gts.mmr-json-escape             scan avx512 masks v5·f0·r0·req✓ / call site v0·f0·r0
+gts.replication-json-string     scan avx512 masks v5·f0·r0·req✓ / call site v0·f0·r0
+wasm.term-marshal               v0·f0·r0
+slice.ownership                 analyze v24·f0·r0 / iri refs v22·f0·r0
+slice.prefix-json-string        scan avx512 masks v17·f0·r0·req✓ / call site v0·f0·r0
+slice.dsl-stats-json-string     scan avx512 masks v18·f0·r0·req✓ / call site v0·f0·r0
+cli.pack-input                  v2·f0·r0
+rdf.viz-layout                  v37·f0·r0
+rdf.projections                 v27·f0·r0
+lex.percent-encode              reserved avx512 masks v9·f0·r0·req✓ / simple avx512 masks v10·f0·r0·req✓
+rdf.csvw-uri-template           call site v0·f0·r0
+core.sssom-tsv                  v8·f0·r0
+shapes.pydantic-emit            v5·f0·r0
+shapes.schema-compile           v0·f0·r0
+deflate.match-copy              copy sse2 v0·f0·r0 / copy avx2 v0·f0·r0
+deflate.match-length            compare sse2 (avx512 build) v1·f0·r0 / compare avx2 (avx512 build) v1·f0·r0 / steps v4·f0·r0·req✓
+deflate.hash-windows            hash avx2 v4·f0·r0·req✓
+hash.sha1-block                 sha-ni v99·f0·r0·req✓
+hash.crc32-update               vpclmulqdq v33·f0·r0·req✓
+hash.hex-encode                 ssse3 (inlined, unrolled) v21·f0·r0·req✓
+hash.digest-portable            md5 v0·f0·r0 / sha3 v0·f0·r0
+hash.fixed-compress             portable v0·f0·r0
+hash.fixed-terminal             portable frozen lookup v0·f0·r0
+jsonschema.compile-validate     from_document v0·f0·r0 / is_valid v0·f0·r0
+text.unicode-ascii-lower        x86_64-v4 v32·f0·r0·req✓
+xsd.rfc3339-lexical             parse v0·f0·r0 / format x86_64-v4 v8·f0·r0·req✓
+shapes.instance-projection      graph v4·f0·r0 / subject v3·f0·r0 / list index v9·f0·r0
+ed25519.sign                    v9·f0·r0
+ed25519.verify                  v35·f0·r0
+text.dictionary-storage         build v4·f0·r0 / load v4·f0·r0 / lookup v0·f0·r0
+text.dictionary-lattice         lattice entry v0·f0·r0 / prepare v2·f0·r0
+text.emoji-recognition          recognize v3·f0·r0 / finite lookup v0·f0·r0
+text.phonetic-spelling          canonicalize v0·f0·r0 / encode canonical v0·f0·r0
+text.phonetic-distance          prepare band v0·f0·r0 / band v6·f0·r0 / prepare Myers v0·f0·r0 / Myers v0·f0·r0
+text.surface-build              assemble v0·f0·r0
+text.surface-substring          retrieve v0·f0·r0
+document parity and coverage: not requested (`--doc`)
+
+OK: 112 site(s) measured on 1 configurations (partial configuration shard)

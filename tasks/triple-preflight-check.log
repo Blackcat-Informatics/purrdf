@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling crossbeam-utils v0.8.21
+   Compiling libc v0.2.186
+    Checking crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+error[E0515]: cannot return value referencing temporary value
+   --> crates/rdf-core/src/ir/triple/read.rs:224:9
+    |
+224 | /         self.quads_for_pattern_with_plan(
+225 | |             &TripleOrder::selected([s.is_some(), p.is_some(), o.is_some()]),
+    | |              -------------------------------------------------------------- temporary value created here
+226 | |             s,
+227 | |             p,
+228 | |             o,
+229 | |             g,
+230 | |         )
+    | |_________^ returns a value referencing data owned by the current function
+
+For more information about this error, try `rustc --explain E0515`.
+error: could not compile `purrdf-core` (lib) due to 1 previous error
+
+terminal_status=101

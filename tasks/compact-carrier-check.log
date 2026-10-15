@@ -1,0 +1,31 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+   --> crates/rdf-core/src/ir/triple.rs:158:1
+    |
+158 | / pub struct TripleRows<'a> {
+159 | |     rows: &'a [TripleIds],
+160 | |     ordinals: Option<&'a [u32]>,
+161 | |     next: usize,
+162 | |     end: usize,
+163 | |     pattern: [Option<TermId>; 3],
+164 | | }
+    | |_^
+    |
+    = note: `-D missing-debug-implementations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_debug_implementations)]`
+
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+   --> crates/rdf-core/src/ir/triple/read.rs:135:1
+    |
+135 | / pub struct TripleReservation<'a> {
+136 | |     read: &'a TripleRead<'a>,
+137 | | }
+    | |_^
+
+error: could not compile `purrdf-core` (lib) due to 2 previous errors
+
+terminal_status=101

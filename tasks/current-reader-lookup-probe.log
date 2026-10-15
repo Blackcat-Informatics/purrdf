@@ -1,0 +1,7 @@
+python3 scripts/check-simd-asm.py --doc --config x86_64 --jobs 1 --crate purrdf_core --probe 'RdfDataset.*term_id_by_iri' --dump
+== x86_64: 4 Cargo jobs
+== x86_64 graph 0: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/b10c6a0aafeb814f5811bb32584eec5d2487ed17088c59438f5edc644e836543/cargo.graph-0.stderr.log
+== x86_64 graph 1: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/b10c6a0aafeb814f5811bb32584eec5d2487ed17088c59438f5edc644e836543/cargo.graph-1.stderr.log
+== x86_64 graph 2: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/b10c6a0aafeb814f5811bb32584eec5d2487ed17088c59438f5edc644e836543/cargo.graph-2.stderr.log
+FAIL: assembly run interrupted
+make: *** [Makefile:700: simd-asm] Error 130

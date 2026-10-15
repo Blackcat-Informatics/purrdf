@@ -1,0 +1,103 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+   Compiling crossbeam-utils v0.8.21
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-events)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+    Checking regex-automata v0.4.14
+    Checking digest v0.11.3
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+   Compiling libc v0.2.186
+    Checking sha2 v0.11.0
+    Checking crossbeam-epoch v0.9.18
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/deflate)
+    Checking hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+error: unnested or-patterns
+   --> crates/rdf-core/src/ir/triple.rs:107:13
+    |
+107 |             (true, false, true) | (false, false, true) => Self::Osp,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnested_or_patterns
+    = note: `-D clippy::unnested-or-patterns` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnested_or_patterns)]`
+help: nest the patterns
+    |
+107 -             (true, false, true) | (false, false, true) => Self::Osp,
+107 +             (true | false, false, true) => Self::Osp,
+    |
+
+error: more than 3 bools in function parameters
+    --> crates/rdf-core/src/ir/builder.rs:3106:1
+     |
+3106 | / fn compute_capabilities(
+3107 | |     terms: &[InternedTerm],
+3108 | |     named_graphs: bool,
+3109 | |     reifiers: bool,
+...    |
+3126 | | }
+     | |_^
+     |
+     = help: consider refactoring bools into two-variant enums
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#fn_params_excessive_bools
+     = note: `-D clippy::fn-params-excessive-bools` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::fn_params_excessive_bools)]`
+
+error: the following explicit lifetimes could be elided: 'a
+  --> crates/rdf-core/src/ir/triple/read.rs:86:6
+   |
+86 | impl<'a> TripleRead<'a> {
+   |      ^^             ^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+   = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+   |
+86 - impl<'a> TripleRead<'a> {
+86 + impl TripleRead<'_> {
+   |
+
+error: redundant closure
+  --> crates/rdf-core/src/ir/triple.rs:69:9
+   |
+69 |         |memory, rows, count| memory.reserve(rows, count),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_lex::allocation::Memory::reserve`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+   = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: redundant closure
+  --> crates/rdf-core/src/ir/triple.rs:70:9
+   |
+70 |         |memory, rows| memory.boxed_slice(rows),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_lex::allocation::Memory::boxed_slice`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: it looks like you're trying to convert an array to a tuple
+   --> crates/rdf-core/src/ir/triple.rs:106:15
+    |
+106 |         match (s, p, o) {
+    |               ^^^^^^^^^
+    |
+    = help: use `.into()` instead, or `<(T0, T1, ..., Tn)>::from` if type annotations are needed
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#tuple_array_conversions
+    = note: `-D clippy::tuple-array-conversions` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::tuple_array_conversions)]`
+
+error: could not compile `purrdf-core` (lib) due to 6 previous errors
+
+terminal_status=101

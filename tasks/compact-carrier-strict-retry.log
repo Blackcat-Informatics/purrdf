@@ -1,0 +1,15 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Checking crossbeam-deque v0.8.6
+    Checking libc v0.2.186
+   Compiling getrandom v0.3.4
+    Checking rayon-core v1.13.0
+    Checking either v1.16.0
+    Checking rayon v1.12.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/stack)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo-kernel)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-algebra)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2m 04s
+
+terminal_status=0

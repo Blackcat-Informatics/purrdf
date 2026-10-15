@@ -1,0 +1,32 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.56s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 9.26s
+     Running benches/ir_layout.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-core/3777c3a1e91f325c/out/ir_layout-3777c3a1e91f325c)
+[ir_layout] build (intern+push+freeze)   allocations=    7263  allocated_bytes=   1236218  peak_live_bytes=    524662
+[ir_layout] dataset: quads=3200 terms=4608
+[ir_layout] iterate AoS quads()          allocations=       0  allocated_bytes=         0  peak_live_bytes=         0
+[ir_layout] resolve quad_refs()/resolve() allocations=       0  allocated_bytes=         0  peak_live_bytes=         0
+[ir_layout] build SoA columns (shim)     allocations=       4  allocated_bytes=     51200  peak_live_bytes=     51200
+[ir_layout] build pred-adjacency (shim)  allocations=      23  allocated_bytes=    122936  peak_live_bytes=     61568
+[ir_layout] NOTE: shipped layout = array-of-structures QuadRow (Box<[QuadRow]>); SoA + predicate-adjacency are bench-local shims measured head-to-head, not wired in. No standalone secondary index exists today (the sparse location table is built at freeze, folded into the build cost above).
+[ir_layout] triple corpus rows=1000 cold=TripleStorageLayout { triples: 12000, reifiers: 8000, annotations: 12000, triple_orders: [0, 0], annotation_orders: [0, 0], reifier_targets: 0 }
+[ir_layout] triple build                 allocations=    1097  allocated_bytes=    456494  peak_live_bytes=    206589
+[ir_layout] triple corpus rows=1000 warm=TripleStorageLayout { triples: 12000, reifiers: 8000, annotations: 12000, triple_orders: [4000, 4000], annotation_orders: [4000, 4000], reifier_targets: 4000 }
+[ir_layout] triple cold indexes          allocations=       5  allocated_bytes=     20000  peak_live_bytes=     20000
+Testing triple_carrier/1000/build
+Success
+Testing triple_carrier/1000/warm_predicate_probe
+Success
+[ir_layout] triple corpus rows=10000 cold=TripleStorageLayout { triples: 120000, reifiers: 80000, annotations: 120000, triple_orders: [0, 0], annotation_orders: [0, 0], reifier_targets: 0 }
+[ir_layout] triple build                 allocations=   10128  allocated_bytes=   5380638  peak_live_bytes=   2510669
+[ir_layout] triple corpus rows=10000 warm=TripleStorageLayout { triples: 120000, reifiers: 80000, annotations: 120000, triple_orders: [40000, 40000], annotation_orders: [40000, 40000], reifier_targets: 40000 }
+[ir_layout] triple cold indexes          allocations=       5  allocated_bytes=    200000  peak_live_bytes=    200000
+Testing triple_carrier/10000/build
+Success
+Testing triple_carrier/10000/warm_predicate_probe
+Success
+
+4 benchmarks tested; 0 failed
+
+terminal_status=0

@@ -1,0 +1,22 @@
+== x86_64-v4: 4 Cargo jobs
+== x86_64-v4 graph 0: /opt/.cargo/slots/d72a38990a2d7c16/0/cargo.graph-0.stderr.log
+== x86_64-v4 graph 1: /opt/.cargo/slots/d72a38990a2d7c16/0/cargo.graph-1.stderr.log
+== x86_64-v4: {"analysis_seconds": 19.60228626197204, "build_seconds": 936.8944806560175, "fresh_artifacts": 65, "lock_seconds": 0.0003144899965263903, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 74, "seconds": 956.662560686993}
+x86_64-v4            purrdf_datalog  purrdf_datalog::chase::chase_with::<4>
+                     v2 f0 r0  [purrdf_entail-d1dd5629ba193142.s]  vpalignr×2, vpxor×1
+x86_64-v4            alloc  <alloc::vec::Vec<purrdf_datalog::store::Fact> as alloc::vec::spec_from_iter::SpecFromIter<purrdf_datalog::store::Fact, core::iter::adapters::map::Map<core::slice::iter::Iter<purrdf_datalog::chase::ChaseDerivation>, purrdf_datalog::chase::chase_with<4>::{closure#3}>>>::from_iter
+                     v0 f0 r0  [purrdf_entail-d1dd5629ba193142.s]  
+x86_64-v4            core  <core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<alloc::collections::btree::map::IntoIter<purrdf_datalog::store::Fact, usize>, purrdf_datalog::chase::chase_with<4>::{closure#1}>, purrdf_datalog::chase::chase_with<4>::{closure#2}> as core::iter::traits::iterator::Iterator>::next
+                     v0 f0 r0  [purrdf_entail-d1dd5629ba193142.s]  
+x86_64-v4            purrdf_datalog  purrdf_datalog::chase::chase_with::<4>
+                     v2 f0 r0  [purrdf_entail-d1dd5629ba193142.s]  vpalignr×2, vpxor×1
+x86_64-v4            alloc  <alloc::vec::Vec<purrdf_datalog::store::Fact> as alloc::vec::spec_from_iter::SpecFromIter<purrdf_datalog::store::Fact, core::iter::adapters::map::Map<core::slice::iter::Iter<purrdf_datalog::chase::ChaseDerivation>, purrdf_datalog::chase::chase_with<4>::{closure#3}>>>::from_iter
+                     v0 f0 r0  [purrdf_entail-d1dd5629ba193142.s]  
+x86_64-v4            core  <core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<alloc::collections::btree::map::IntoIter<purrdf_datalog::store::Fact, usize>, purrdf_datalog::chase::chase_with<4>::{closure#1}>, purrdf_datalog::chase::chase_with<4>::{closure#2}> as core::iter::traits::iterator::Iterator>::next
+                     v0 f0 r0  [purrdf_entail-d1dd5629ba193142.s]  
+x86_64-v4            purrdf_datalog  purrdf_datalog::chase::chase_with::<4>
+                     v2 f0 r0  [purrdf_wasm-16d062153b501760.s]  vpalignr×2, vpxor×1
+x86_64-v4            alloc  <alloc::vec::Vec<purrdf_datalog::store::Fact> as alloc::vec::spec_from_iter::SpecFromIter<purrdf_datalog::store::Fact, core::iter::adapters::map::Map<core::slice::iter::Iter<purrdf_datalog::chase::ChaseDerivation>, purrdf_datalog::chase::chase_with<4>::{closure#3}>>>::from_iter
+                     v0 f0 r0  [purrdf_wasm-16d062153b501760.s]  
+x86_64-v4            core  <core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<alloc::collections::btree::map::IntoIter<purrdf_datalog::store::Fact, usize>, purrdf_datalog::chase::chase_with<4>::{closure#1}>, purrdf_datalog::chase::chase_with<4>::{closure#2}> as core::iter::traits::iterator::Iterator>::next
+                     v0 f0 r0  [purrdf_wasm-16d062153b501760.s]  

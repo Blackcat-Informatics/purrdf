@@ -1,0 +1,99 @@
+Auto-merging crates/datalog/src/store.rs
+CONFLICT (content): Merge conflict in crates/datalog/src/store.rs
+Auto-merging crates/lex/src/allocation.rs
+Auto-merging crates/purrdf/tests/base_surface.rs
+Auto-merging crates/sparql-conformance/src/run.rs
+Auto-merging crates/sparql-eval/src/eval.rs
+Auto-merging crates/text/README.md
+Auto-merging crates/text/src/index.rs
+Auto-merging docs/book/po/zh-Hans.po
+CONFLICT (content): Merge conflict in docs/book/po/zh-Hans.po
+Auto-merging helpers-ledger.toml
+CONFLICT (content): Merge conflict in helpers-ledger.toml
+Recorded preimage for 'crates/datalog/src/store.rs'
+Recorded preimage for 'docs/book/po/zh-Hans.po'
+Recorded preimage for 'helpers-ledger.toml'
+Index was not unstashed.
+On branch paudley/492-triple-only-carrier-for-rdf-1-2
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	modified:   Makefile
+	modified:   crates/datalog/README.md
+	modified:   crates/datalog/src/admission.rs
+	modified:   crates/datalog/src/cache.rs
+	modified:   crates/datalog/src/chase.rs
+	modified:   crates/datalog/src/clause.rs
+	modified:   crates/datalog/src/dictionary.rs
+	modified:   crates/datalog/src/guard.rs
+	modified:   crates/datalog/src/plan.rs
+	modified:   crates/datalog/src/proof.rs
+	modified:   crates/datalog/src/schedule.rs
+	modified:   crates/datalog/src/seminaive.rs
+	modified:   crates/datalog/src/seminaive/evidence.rs
+	modified:   crates/datalog/src/seminaive/factors.rs
+	modified:   crates/datalog/src/test_support/host_dictionary.rs
+	modified:   crates/datalog/tests/rules_runtime.rs
+	modified:   crates/helper-census/src/capacity.rs
+	modified:   crates/helper-census/src/source.rs
+	modified:   crates/lex/src/allocation.rs
+	modified:   crates/lex/src/constructors.rs
+	modified:   crates/purrdf/tests/base_surface.rs
+	modified:   crates/rdf-core/Cargo.toml
+	modified:   crates/rdf-core/benches/ir_layout.rs
+	modified:   crates/rdf-core/src/dataset_view.rs
+	modified:   crates/rdf-core/src/ir/builder.rs
+	modified:   crates/rdf-core/src/ir/canon.rs
+	modified:   crates/rdf-core/src/ir/dataset.rs
+	modified:   crates/rdf-core/src/ir/mod.rs
+	modified:   crates/rdf-core/src/ir/pipeline_bundle.rs
+	modified:   crates/rdf-core/src/ir/validate.rs
+	modified:   crates/rdf-core/src/lib.rs
+	modified:   crates/rdf/src/lib.rs
+	modified:   crates/shapes/Cargo.toml
+	modified:   crates/shapes/README.md
+	modified:   crates/shapes/src/rules.rs
+	modified:   crates/shapes/src/srl/document.rs
+	modified:   crates/shapes/src/srl/eval.rs
+	modified:   crates/shapes/src/srl/lower.rs
+	modified:   crates/shapes/src/srl/mod.rs
+	modified:   crates/shapes/src/term.rs
+	modified:   crates/shapes/tests/rules_engine.rs
+	modified:   crates/shapes/tests/srl_language.rs
+	modified:   crates/sparql-conformance/src/compare.rs
+	modified:   crates/sparql-conformance/src/lib.rs
+	modified:   crates/sparql-conformance/src/run.rs
+	modified:   crates/sparql-eval/src/dataset_spec.rs
+	modified:   crates/sparql-eval/src/eval.rs
+	modified:   crates/sparql-eval/tests/host_identity.rs
+	modified:   crates/text/README.md
+	modified:   crates/text/src/dictionary.rs
+	modified:   crates/text/src/dictionary_relation.rs
+	modified:   crates/text/src/index.rs
+	modified:   crates/text/src/lib.rs
+	modified:   crates/text/src/occurrence_dictionary.rs
+	modified:   crates/text/src/relation.rs
+	modified:   crates/text/src/score.rs
+	modified:   crates/text/tests/physical_shapes.rs
+	modified:   crates/text/tests/support/shape_cases.rs
+	modified:   docs/WASM_TESTING.md
+	modified:   docs/book/src/concepts/interned-dataset.md
+	modified:   docs/design/purrdf-backend-contract.md
+
+Unmerged paths:
+  (use "git restore --staged <file>..." to unstage)
+  (use "git add <file>..." to mark resolution)
+	both modified:   crates/datalog/src/store.rs
+	both modified:   docs/book/po/zh-Hans.po
+	both modified:   helpers-ledger.toml
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	crates/rdf-core/src/ir/builder/
+	crates/rdf-core/src/ir/frozen_terms.rs
+	crates/rdf-core/src/ir/triple.rs
+	crates/rdf-core/src/ir/triple/
+	crates/rdf-core/tests/triple_carrier.rs
+	crates/sparql-conformance/tests/golden/
+	crates/sparql-conformance/tests/triple_carrier.rs
+	crates/text/src/corpus.rs
+

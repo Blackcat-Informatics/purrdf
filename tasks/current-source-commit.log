@@ -1,0 +1,14 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 541427dc22a4 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/datalog/src/store.rs'.
+Recorded resolution for 'docs/book/po/zh-Hans.po'.
+Recorded resolution for 'helpers-ledger.toml'.
+[paudley/492-triple-only-carrier-for-rdf-1-2 525b3cf1b] Add a graph-free RDF carrier and rule execution
+ 74 files changed, 7478 insertions(+), 2348 deletions(-)
+ create mode 100644 crates/rdf-core/src/ir/builder/triple.rs
+ create mode 100644 crates/rdf-core/src/ir/frozen_terms.rs
+ create mode 100644 crates/rdf-core/src/ir/triple.rs
+ create mode 100644 crates/rdf-core/src/ir/triple/read.rs
+ create mode 100644 crates/rdf-core/tests/triple_carrier.rs
+ create mode 100644 crates/sparql-conformance/tests/golden/triple-query-inventory.tsv
+ create mode 100644 crates/sparql-conformance/tests/triple_carrier.rs
+ create mode 100644 crates/text/src/corpus.rs

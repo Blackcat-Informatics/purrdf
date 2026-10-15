@@ -1,0 +1,27 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 18.47s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 2m 27s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-core/b8de4aea1edcda05/out/triple_carrier-b8de4aea1edcda05)
+
+running 1 test
+test owned_transfer_preserves_lexical_owner_and_flat_statement_identity ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 51s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-core/a6d3c80532194d33/out/triple_carrier-a6d3c80532194d33.wasm)
+
+running 1 test
+test owned_transfer_preserves_lexical_owner_and_flat_statement_identity ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.01s
+
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.16s
+     Running `/opt/.cargo/target/492-triple-only-carrier-for-rdf-1-2-0f2597f5/debug/helper-census --index`
+
+terminal_status=0

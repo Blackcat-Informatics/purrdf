@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized] target(s) in 1.72s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-conformance/23e78a717d7c506a/out/triple_carrier-23e78a717d7c506a)
+
+running 1 test
+triple corpus: 635 queries, 45 named-graph refusals; 590 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test official_default_graph_queries_use_compact_storage_and_original_grading ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.47s
+
+
+terminal_status=0

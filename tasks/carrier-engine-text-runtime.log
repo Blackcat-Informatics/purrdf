@@ -1,0 +1,36 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 7.54s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-core/b8de4aea1edcda05/out/triple_carrier-b8de4aea1edcda05)
+
+running 5 tests
+test compact_statement_probes_populate_only_the_requested_ordinal_arrays ... ok
+test conversion_refuses_every_named_role_including_empty_declarations ... ok
+test refused_child_stops_existing_streams_and_fresh_session_is_healthy ... ok
+test owned_transfer_preserves_lexical_owner_and_flat_statement_identity ... ok
+test compact_layout_and_all_bound_shapes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 3m 16s
+     Running tests/host_identity.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-eval/77965b875fd28fec/out/host_identity-77965b875fd28fec)
+
+running 2 tests
+test triple_graph_support_precedes_empty_and_nested_query_shortcuts ... ok
+test triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s
+
+error: unexpected argument '--nocapture' found
+
+  tip: a similar argument exists: '--features'
+  tip: to pass '--nocapture' as a value, use '-- --nocapture'
+
+Usage: cargo test --locked --jobs <N> --package [<SPEC>] --test [<NAME>] --features <FEATURES> <TESTNAME> [-- [ARGS]...]
+
+For more information, try '--help'.
+
+terminal_status=1

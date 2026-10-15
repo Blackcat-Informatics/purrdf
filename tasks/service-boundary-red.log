@@ -1,0 +1,56 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/service_resolver.rs:240:34
+    |
+240 |                 assert_eq!(names(&result), vec![Some("remote-graph".to_owned())]);
+    |                            ----- ^^^^^^^ expected `&SparqlResult`, found `&CompleteSparqlResult<()>`
+    |                            |
+    |                            arguments to this function are incorrect
+    |
+    = note: expected reference `&SparqlResult`
+               found reference `&CompleteSparqlResult<()>`
+note: function defined here
+   --> crates/sparql-eval/tests/service_resolver.rs:159:4
+    |
+159 | fn names(result: &SparqlResult) -> Vec<Option<String>> {
+    |    ^^^^^ ---------------------
+
+error[E0599]: no method named `read_error` found for struct `TripleRead<'a>` in the current scope
+   --> crates/sparql-eval/tests/service_resolver.rs:241:33
+    |
+241 |                 assert_eq!(read.read_error(), None);
+    |                                 ^^^^^^^^^^ method not found in `TripleRead<'_>`
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:566:8
+    |
+566 |     fn read_error(&self) -> Option<Self::ReadError> {
+    |        ---------- the method is available for `TripleRead<'_>` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `read_error` is implemented but not in scope; perhaps you want to import it
+    |
+ 14 + use purrdf_core::DatasetView;
+    |
+
+error[E0599]: no method named `read_error` found for struct `TripleRead<'a>` in the current scope
+   --> crates/sparql-eval/tests/service_resolver.rs:273:26
+    |
+273 |                     read.read_error(),
+    |                          ^^^^^^^^^^ method not found in `TripleRead<'_>`
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:566:8
+    |
+566 |     fn read_error(&self) -> Option<Self::ReadError> {
+    |        ---------- the method is available for `TripleRead<'_>` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `read_error` is implemented but not in scope; perhaps you want to import it
+    |
+ 14 + use purrdf_core::DatasetView;
+    |
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (test "service_resolver") due to 3 previous errors

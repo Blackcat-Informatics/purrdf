@@ -1,0 +1,31 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 13.65s
+     Running tests/rules_runtime.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-datalog/194ed7bfa895a9e6/out/rules_runtime-194ed7bfa895a9e6)
+
+running 10 tests
+test triple_store_has_predicate_only_keys_and_transactional_original_ids ... ok
+test triple_no_output_runs_the_body_without_fabricating_a_fact ... ok
+test triple_base_authority_survives_data_growth_and_layer_retraction ... FAILED
+test public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error ... ok
+test triple_compiler_preserves_static_arity_and_original_admission ... ok
+test connected_rule_restores_all_authored_premises ... ok
+test later_partial_delta_keeps_both_productive_anchors ... ok
+test independent_head_projects_without_cartesian_work ... ok
+test original_guarded_pair_has_exact_connected_work_and_authored_proofs ... ok
+test recursive_factor_preserves_authored_proofs_and_typed_limits ... ok
+
+failures:
+
+---- triple_base_authority_survives_data_growth_and_layer_retraction stdout ----
+thread 'triple_base_authority_survives_data_growth_and_layer_retraction' panicked at crates/datalog/tests/rules_runtime.rs:853:5:
+assertion `left == right` failed
+  left: 8
+ right: 5
+
+
+failures:
+    triple_base_authority_survives_data_growth_and_layer_retraction
+
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-datalog --test rules_runtime`

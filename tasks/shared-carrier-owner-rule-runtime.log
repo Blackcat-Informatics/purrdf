@@ -1,0 +1,62 @@
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/helper-census)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 21.43s
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/helper-census)
+    Finished `test` profile [optimized] target(s) in 1m 23s
+     Running unittests src/main.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/helper-census/2fb2e3fd4c1dbfce/out/helper_census-2fb2e3fd4c1dbfce)
+
+running 1 test
+test capacity::tests::reconstruction_proofs_fail_closed_on_source_and_constructor_changes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.01s
+
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 19.67s
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/slice)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 06s
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/slice)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 23m 48s
+     Running tests/srl_language.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-shapes/34380ea358f26d3c/out/srl_language-34380ea358f26d3c)
+
+running 25 tests
+test multi_character_terminals_must_be_contiguous ... ok
+test a_declaration_inside_a_rule_or_a_bodiless_rule_is_refused ... ok
+test builtins_are_srls_list ... ok
+test paths_expand_and_annotations_need_one_triple ... ok
+test lang_dir_and_version ... ok
+test triple_rl_keeps_statement_roles_and_scoped_blank_identity ... ok
+test declarations_and_rule_blocks_interleave_freely ... ok
+test the_version_announcement_is_made_early ... ok
+test triple_carrier_runs_the_public_rl_program_without_quad_storage ... ok
+test a_negation_sees_only_earlier_variables ... ok
+test an_assigned_variable_joins_a_later_pattern ... ok
+test an_assigned_blank_node_is_fresh_per_solution ... ok
+test data_block_blank_nodes_are_standardized_apart ... ok
+test computed_assignment_values_reach_negative_patterns ... ok
+test independent_guarded_components_preserve_both_blank_mints ... ok
+test stages_are_typed ... ok
+test a_non_rdf_head_instantiation_is_refused ... ok
+test triple_term_dependencies_are_exact ... ok
+test check_answers_each_level_and_refuses_by_stage ... ok
+test an_empty_head_generates_nothing ... ok
+test check_resolves_imports_from_the_table ... ok
+test imports_resolve_through_the_callers_resolver ... ok
+test numeric_and_boolean_terms ... ok
+test a_closure_deeper_than_the_floor_completes ... ok
+test a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.78s
+
+terminal_status=0

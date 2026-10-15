@@ -1,0 +1,31 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 30.23s
+     Running unittests src/lib.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-datalog/9166702f3a632274/out/purrdf_datalog-9166702f3a632274)
+
+running 23 tests
+test clause::tests::a_conjunctive_existential_head_round_trips ... ok
+test clause::tests::a_disjunction_of_conjunctions_round_trips ... ok
+test clause::tests::a_disjunctive_head_round_trips ... ok
+test clause::tests::a_conjunctive_head_classifies_as_conjunctive ... ok
+test clause::tests::a_graphless_atom_is_in_the_default_graph ... ok
+test clause::tests::a_frontier_variable_may_not_be_existential - should panic ... ok
+test clause::tests::a_negated_head_atom_is_not_a_rule - should panic ... ok
+test clause::tests::a_negated_conjunct_is_not_a_rule_either - should panic ... ok
+test clause::tests::a_vacuous_existential_is_refused - should panic ... ok
+test clause::tests::a_repeated_existential_is_refused - should panic ... ok
+test clause::tests::a_variable_predicate_round_trips ... ok
+test clause::tests::an_atomic_head_round_trips ... ok
+test clause::tests::an_empty_disjunct_is_refused_though_an_empty_head_is_not - should panic ... ok
+test clause::tests::an_empty_head_round_trips ... ok
+test clause::tests::an_existential_disjunction_classifies_as_existential ... ok
+test clause::tests::an_existential_head_round_trips ... ok
+test clause::tests::an_existential_in_no_disjunct_is_still_vacuous - should panic ... ok
+test clause::tests::an_existential_need_not_occur_in_every_disjunct ... ok
+test clause::tests::an_immutable_base_read_is_not_a_rule_head - should panic ... ok
+test clause::tests::clause_term_surface_is_the_stored_bytes_of_a_constant_only ... ok
+test clause::tests::the_default_graph_is_refused_in_a_term_position - should panic ... ok
+test clause::tests::the_default_graph_is_the_empty_surface ... ok
+test clause::tests::the_non_datalog_refusal_names_the_clause_and_the_form ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 345 filtered out; finished in 0.00s
+

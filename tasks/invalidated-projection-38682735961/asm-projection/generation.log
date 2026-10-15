@@ -1,0 +1,7 @@
+python3 scripts/check-simd-asm.py --doc --write-doc --jobs 2
+== x86_64: 2 Cargo jobs
+== x86_64 graph 0: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/fee46bfe4b411ef21a88f5564f613f132a98e076972cd37fb3f1ccb4f88e7a78/cargo.graph-0.stderr.log
+== x86_64 graph 1: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/fee46bfe4b411ef21a88f5564f613f132a98e076972cd37fb3f1ccb4f88e7a78/cargo.graph-1.stderr.log
+== x86_64 graph 2: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/fee46bfe4b411ef21a88f5564f613f132a98e076972cd37fb3f1ccb4f88e7a78/cargo.graph-2.stderr.log
+== x86_64-v3: 2 Cargo jobs
+== x86_64-v3 graph 0: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/9a9bdbe1a103584d9a948f0cf1db1ce47cceb00518a1bd2284180cedabffd051/cargo.graph-0.stderr.log

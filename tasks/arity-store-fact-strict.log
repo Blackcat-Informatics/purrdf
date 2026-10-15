@@ -1,0 +1,83 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0277]: the trait bound `store::Arity<N>: store::StoreShape<N>` is not satisfied
+   --> crates/datalog/src/store.rs:940:36
+    |
+940 |     fn fact(terms: [String; N]) -> ShapeFact<N>;
+    |                                    ^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `store::StoreShape<N>` is not implemented for `store::Arity<N>`
+   --> crates/datalog/src/store.rs:916:1
+    |
+916 | pub struct Arity<const N: usize>;
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `store::StoreShape<N>`
+   --> crates/datalog/src/store.rs:945:1
+    |
+945 | impl StoreShape<3> for Arity<3> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `store::Arity<3>` implements `store::StoreShape<3>`
+...
+975 | impl StoreShape<4> for Arity<4> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `store::Arity<4>` implements `store::StoreShape<4>`
+
+error: the type `store::Fact<<store::Arity<N> as store::StoreShape<N>>::Graph>` is not well-formed
+   --> crates/datalog/src/store.rs:940:36
+    |
+940 |     fn fact(terms: [String; N]) -> ShapeFact<N>;
+    |                                    ^^^^^^^^^^^^
+
+error[E0277]: the trait bound `store::Arity<N>: store::StoreShape<N>` is not satisfied
+   --> crates/datalog/src/store.rs:942:25
+    |
+942 |     fn fact_terms(fact: &ShapeFact<N>) -> [&str; N];
+    |                         ^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `store::StoreShape<N>` is not implemented for `store::Arity<N>`
+   --> crates/datalog/src/store.rs:916:1
+    |
+916 | pub struct Arity<const N: usize>;
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `store::StoreShape<N>`
+   --> crates/datalog/src/store.rs:945:1
+    |
+945 | impl StoreShape<3> for Arity<3> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `store::Arity<3>` implements `store::StoreShape<3>`
+...
+975 | impl StoreShape<4> for Arity<4> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `store::Arity<4>` implements `store::StoreShape<4>`
+
+error: the type `&store::Fact<<store::Arity<N> as store::StoreShape<N>>::Graph>` is not well-formed
+   --> crates/datalog/src/store.rs:942:25
+    |
+942 |     fn fact_terms(fact: &ShapeFact<N>) -> [&str; N];
+    |                         ^^^^^^^^^^^^^
+
+error[E0373]: closure may outlive the current function, but it borrows `self`, which is owned by the current function
+    --> crates/datalog/src/store.rs:1719:36
+     |
+1719 |         self.order.iter().flat_map(|&slot| {
+     |                                    ^^^^^^^ may outlive borrowed value `self`
+...
+1729 |                 terms[0] = self.interner.resolve(subject).to_owned();
+     |                            ------------- `self` is borrowed here
+     |
+note: closure is returned here
+    --> crates/datalog/src/store.rs:1719:9
+     |
+1719 | /         self.order.iter().flat_map(|&slot| {
+1720 | |             let (_, key) = self.keys[slot];
+1721 | |             let key_terms = match resolve_key::<TermInterner, N>(&self.interner, key) {
+1722 | |                 Ok(terms) => terms,
+...    |
+1738 | |             })
+1739 | |         })
+     | |__________^
+help: to force the closure to take ownership of `self` (and any other referenced variables), use the `move` keyword
+     |
+1719 |         self.order.iter().flat_map(move |&slot| {
+     |                                    ++++
+
+Some errors have detailed explanations: E0277, E0373.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib) due to 5 previous errors
+
+terminal_status=101

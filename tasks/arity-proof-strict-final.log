@@ -1,0 +1,58 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0433]: cannot find type `EvaluationProofs` in this scope
+   --> crates/datalog/tests/rules_runtime.rs:674:18
+    |
+674 |     let proofs = EvaluationProofs::of(&triples).unwrap();
+    |                  ^^^^^^^^^^^^^^^^ use of undeclared type `EvaluationProofs`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_datalog::proof::EvaluationProofs;
+    |
+
+error[E0433]: cannot find type `ProofContext` in this scope
+   --> crates/datalog/tests/rules_runtime.rs:675:19
+    |
+675 |     let context = ProofContext::new(&rules, &triple_input, triples.facts());
+    |                   ^^^^^^^^^^^^ use of undeclared type `ProofContext`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_datalog::proof::ProofContext;
+    |
+
+error[E0433]: cannot find type `ProofArena` in this scope
+   --> crates/datalog/tests/rules_runtime.rs:679:39
+    |
+679 |         let (decoded, decoded_root) = ProofArena::<3>::decode(&bytes).unwrap();
+    |                                       ^^^^^^^^^^ use of undeclared type `ProofArena`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_datalog::proof::ProofArena;
+    |
+
+error[E0433]: cannot find type `ProofArena` in this scope
+   --> crates/datalog/tests/rules_runtime.rs:683:17
+    |
+683 |         assert!(ProofArena::<4>::decode(&bytes).is_err());
+    |                 ^^^^^^^^^^ use of undeclared type `ProofArena`
+    |
+help: consider importing this struct
+    |
+  6 + use purrdf_datalog::proof::ProofArena;
+    |
+
+error: unused imports: `EvaluationProofs`, `ProofArena`, and `ProofContext`
+   --> crates/datalog/tests/rules_runtime.rs:315:33
+    |
+315 |     use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext};
+    |                                 ^^^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 5 previous errors
+
+terminal_status=101

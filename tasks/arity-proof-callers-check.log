@@ -1,0 +1,42 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0277]: a value of type `Vec<(usize, &ClauseAtom)>` cannot be built from an iterator over elements of type `(usize, &ClauseAtom<N>)`
+    --> crates/datalog/src/proof.rs:780:14
+     |
+ 780 |             .collect();
+     |              ^^^^^^^ value of type `Vec<(usize, &ClauseAtom)>` cannot be built from `std::iter::Iterator<Item=(usize, &ClauseAtom<N>)>`
+     |
+help: the trait `FromIterator<(_, &ClauseAtom<N>)>` is not implemented for `Vec<(usize, &ClauseAtom)>`
+      but trait `FromIterator<(_, &ClauseAtom<4>)>` is implemented for it
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/proof.rs:796:28
+     |
+ 796 |             if !match_atom(atom, fact, &mut subst) {
+     |                 ---------- ^^^^ expected `N`, found `4`
+     |                 |
+     |                 arguments to this function are incorrect
+     |
+     = note: expected reference `&ClauseAtom<N>`
+                found reference `&ClauseAtom<4>`
+note: function defined here
+    --> crates/datalog/src/proof.rs:1117:4
+     |
+1117 | fn match_atom<'r, 'f, const N: usize>(
+     |    ^^^^^^^^^^
+1118 |     atom: &'r ClauseAtom<N>,
+     |     -----------------------
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib) due to 2 previous errors
+
+terminal_status=101

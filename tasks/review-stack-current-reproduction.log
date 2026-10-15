@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 13.78s
+     Running tests/evaluation_stack.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-eval/622cd6fbec512942/out/evaluation_stack-622cd6fbec512942)
+
+running 1 test
+test every_stack_from_the_margin_up_answers_or_refuses_typed_far_past_the_removed_counts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 2.10s
+

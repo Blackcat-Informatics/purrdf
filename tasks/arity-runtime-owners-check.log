@@ -1,0 +1,21 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0609]: no field `subject` on type `SourceRow<u64>`
+   --> crates/datalog/src/seminaive/factors.rs:954:18
+    |
+954 |                 .subject,
+    |                  ^^^^^^^ unknown field
+    |
+    = note: available fields are: `body_index`, `terms`, `row`
+
+error[E0609]: no field `subject` on type `SourceRow<u64>`
+   --> crates/datalog/src/seminaive/factors.rs:967:18
+    |
+967 |                 .subject,
+    |                  ^^^^^^^ unknown field
+    |
+    = note: available fields are: `body_index`, `terms`, `row`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `purrdf-datalog` (lib test) due to 2 previous errors
+
+terminal_status=101

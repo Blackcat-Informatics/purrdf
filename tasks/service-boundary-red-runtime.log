@@ -1,0 +1,22 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 36.75s
+     Running tests/service_resolver.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-eval/40ff5678bdaf92e8/out/service_resolver-40ff5678bdaf92e8)
+
+running 1 test
+test triple_local_graph_support_stops_at_the_remote_service_boundary ... FAILED
+
+failures:
+
+---- triple_local_graph_support_stops_at_the_remote_service_boundary stdout ----
+
+thread 'triple_local_graph_support_stops_at_the_remote_service_boundary' (1168357) panicked at crates/sparql-eval/tests/service_resolver.rs:258:41:
+the remote quad carrier supports named graphs: Operational { error: NamedGraphsUnsupported, evidence: () }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    triple_local_graph_support_stops_at_the_remote_service_boundary
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test service_resolver`

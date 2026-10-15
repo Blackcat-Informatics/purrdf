@@ -1,0 +1,10 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/text)
+    Finished `test` profile [optimized] target(s) in 50.93s
+     Running tests/physical_shapes.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-text/4c8926fa3987b9d1/out/physical_shapes-4c8926fa3987b9d1)
+
+running 2 tests
+test graph_free_rdf12_partitions_and_named_refusal ... ok
+test graph_free_corpus_keys_ranking_and_query ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.01s
+

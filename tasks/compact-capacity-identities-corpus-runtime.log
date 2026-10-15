@@ -1,0 +1,32 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 5m 07s
+     Running unittests src/lib.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 2 tests
+test ir::builder::triple::tests::compact_rows_use_original_first_lexical_diagnostic ... ok
+test ir::builder::triple::tests::compact_misses_refuse_at_original_named_capacity_without_quad_staging ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1345 filtered out; finished in 0.00s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/text)
+    Finished `test` profile [optimized] target(s) in 4m 31s
+     Running tests/physical_shapes.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-text/4c8926fa3987b9d1/out/physical_shapes-4c8926fa3987b9d1)
+
+running 1 test
+test graph_free_corpus_keys_ranking_and_query ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.01s
+
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/conformance-kit)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 3m 24s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-conformance/23e78a717d7c506a/out/triple_carrier-23e78a717d7c506a)
+
+running 1 test
+triple corpus: 635 queries, 45 named-graph refusals; 590 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test official_default_graph_queries_use_compact_storage_and_original_grading ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.89s
+
+
+terminal_status=0

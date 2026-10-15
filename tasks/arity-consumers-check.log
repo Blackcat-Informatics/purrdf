@@ -1,0 +1,30 @@
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking ctutils v0.4.2
+    Checking cpubits v0.1.1
+    Checking universal-hash v0.6.1
+    Checking cipher v0.5.2
+    Checking polyval v0.7.3
+    Checking ghash v0.6.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+    Checking twox-hash v2.1.2
+    Checking fastrand v2.4.1
+    Checking structured-zstd v0.0.49
+    Checking aes-gcm v0.11.1
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo-kernel)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-algebra)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/ed25519)
+    Checking visual-hashing v1.0.0
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/gts)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 08s
+
+terminal_status=0

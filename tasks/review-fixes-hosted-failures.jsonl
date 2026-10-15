@@ -1,0 +1,7 @@
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116255199427","name":"simd-asm","state":"FAILURE"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862177","name":"simd-asm-config (x86_64)","state":"FAILURE"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862345","name":"test (integration-2)","state":"FAILURE"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862309","name":"simd-asm-config (aarch64-neoverse-v1)","state":"FAILURE"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862257","name":"simd-asm-config (x86_64-v4)","state":"FAILURE"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862174","name":"simd-asm-config (aarch64)","state":"FAILURE"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862477","name":"simd-asm-config (x86_64-v3)","state":"FAILURE"}

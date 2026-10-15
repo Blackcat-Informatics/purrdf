@@ -1,0 +1,17 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 51.91s
+     Running tests/host_identity.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-eval/77965b875fd28fec/out/host_identity-77965b875fd28fec)
+
+running 6 tests
+test host_deletion_discards_partial_output_and_preserves_first_typed_cause ... ok
+test original_host_ids_join_and_expand_triples_without_native_interning ... ok
+test certified_numeric_and_temporal_order_matches_fallback_and_keeps_source_failure ... ok
+test triple_local_graph_support_stops_at_the_remote_service_boundary ... ok
+test triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results ... ok
+test triple_graph_support_precedes_empty_and_nested_query_shortcuts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

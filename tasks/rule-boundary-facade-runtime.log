@@ -1,0 +1,41 @@
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 12m 16s
+     Running tests/rules_engine.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-shapes/613182c035ff0f49/out/rules_engine-613182c035ff0f49)
+
+running 1 test
+test empty_construct_preserves_the_neighbouring_rule ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.00s
+
+    Finished `test` profile [optimized] target(s) in 1.10s
+     Running tests/rules_engine.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-shapes/613182c035ff0f49/out/rules_engine-613182c035ff0f49)
+
+running 1 test
+test an_ill_formed_element_rule_is_refused ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.00s
+
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/entail)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/retrieval)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/validate)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/columnar)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/markdown)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/mime)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shex)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/json)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/purrdf)
+    Finished `test` profile [optimized] target(s) in 4m 05s
+     Running tests/base_surface.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf/218ed35c5167f332/out/base_surface-218ed35c5167f332)
+
+running 1 test
+test compact_triple_rule_carrier_is_available_through_the_facade ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+
+terminal_status=0

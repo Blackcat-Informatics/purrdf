@@ -1,0 +1,29 @@
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	﻿2026-10-14T19:43:14.9049703Z ##[group]Run # Bound scalar WASM compilation through the existing Cargo job budget.
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9050568Z ^[[36;1m# Bound scalar WASM compilation through the existing Cargo job budget.^[[0m
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9051035Z ^[[36;1m# Other configurations keep their current scheduling.^[[0m
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9051413Z ^[[36;1mif [ "aarch64-neoverse-v1" = wasm32 ]; then^[[0m
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9051738Z ^[[36;1m  export CARGO_BUILD_JOBS=2^[[0m
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9052002Z ^[[36;1mfi^[[0m
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9052516Z ^[[36;1mmake simd-asm SIMD_ASM_ARGS="--config aarch64-neoverse-v1 --jobs 1 --report target/asm-reports/aarch64-neoverse-v1.json"^[[0m
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9123920Z shell: /usr/bin/bash -e {0}
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9124218Z env:
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9124445Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9124733Z   CARGO_INCREMENTAL: 0
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9124962Z   CARGO_TERM_COLOR: always
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:14.9125199Z ##[endgroup]
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:15.0269842Z python3 scripts/check-simd-asm.py --doc --config aarch64-neoverse-v1 --jobs 1 --report target/asm-reports/aarch64-neoverse-v1.json
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:17.9326001Z == aarch64-neoverse-v1: 4 Cargo jobs
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:43:17.9330964Z == aarch64-neoverse-v1 graph 0: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/39fc30d68b1491d7d30ebf82bf624f87c080921bb962099b4ca6b7fd408bb81b/cargo.graph-0.stderr.log
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:53:39.3207337Z == aarch64-neoverse-v1 graph 1: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/39fc30d68b1491d7d30ebf82bf624f87c080921bb962099b4ca6b7fd408bb81b/cargo.graph-1.stderr.log
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T19:55:12.3644640Z == aarch64-neoverse-v1 graph 2: /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/39fc30d68b1491d7d30ebf82bf624f87c080921bb962099b4ca6b7fd408bb81b/cargo.graph-2.stderr.log
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1574438Z FAIL: `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` has 0 vector ops, below the floor of 6
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1576100Z `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` lacks the required `aese`
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1577546Z `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` lacks the required `aesmc`
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1578977Z `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` has 0 vector ops, below the floor of 6
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1580608Z `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` lacks the required `aese`
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1581980Z `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` lacks the required `aesmc`
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1583919Z `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` has 0 vector ops, below the floor of 6
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1585335Z `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` lacks the required `aese`
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.1586633Z `hash.fixed-terminal` [aes frozen lookup] on aarch64-neoverse-v1: `<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri` lacks the required `aesmc`
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.4600504Z make: *** [Makefile:700: simd-asm] Error 1
+simd-asm-config (aarch64-neoverse-v1)	Measure and check this configuration	2026-10-14T20:09:52.4619183Z ##[error]Process completed with exit code 2.

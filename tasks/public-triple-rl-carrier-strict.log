@@ -1,0 +1,92 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-events)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/stack)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo-kernel)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-algebra)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/ed25519)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/gts)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/slice)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/shapes/src/rules.rs:2061:17
+     |
+2061 | /                 self.push_owned_annotation(&::purrdf_rdf::RdfAnnotation::new(
+2062 | |                     subject.to_rdf_term(),
+2063 | |                     predicate,
+2064 | |                     object.to_rdf_term(),
+2065 | |                 ))?
+     | |___________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+     |
+2061 |                 self.push_owned_annotation(&::purrdf_rdf::RdfAnnotation::new(
+ ...
+2064 |                     object.to_rdf_term(),
+2065 ~                 ))?;
+     |
+
+error: this function has too many arguments (8/7)
+   --> crates/shapes/src/srl/eval.rs:357:1
+    |
+357 | / fn evaluate_shape<const N: usize, D>(
+358 | |     set: &RuleSet<'_>,
+359 | |     data: Option<&ShaclData>,
+360 | |     shapes: &Shapes,
+...   |
+371 | | where
+372 | |     Arity<N>: RuleShape<N>,
+    | |___________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: returning the result of a `let` binding from a block
+    --> crates/shapes/src/term.rs:1258:9
+     |
+1247 | /         let converted = try_fold_nested(
+1248 | |             id,
+1249 | |             &mut (),
+1250 | |             |(), id| {
+...    |
+1256 | |             |(), _, s, p, o| Ok(triple(s, p, o)),
+1257 | |         );
+     | |__________- unnecessary `let` binding
+1258 |           converted
+     |           ^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#let_and_return
+     = note: `-D clippy::let-and-return` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::let_and_return)]`
+help: return the expression directly
+     |
+1247 ~         
+1248 ~         try_fold_nested(
+1249 +             id,
+1250 +             &mut (),
+1251 +             |(), id| {
+1252 +                 Ok::<_, E>(match resolve(id)? {
+1253 +                     TermRef::Triple { s, p, o } => Nested::Triple(s, p, o),
+1254 +                     resolved => Nested::Leaf(leaf(resolve, resolved)?),
+1255 +                 })
+1256 +             },
+1257 +             |(), _, s, p, o| Ok(triple(s, p, o)),
+1258 +         )
+     |
+
+error: could not compile `purrdf-shapes` (lib) due to 3 previous errors
+
+terminal_status=101

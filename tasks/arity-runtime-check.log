@@ -1,0 +1,603 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0425]: cannot find type `N` in this scope
+    --> crates/datalog/src/seminaive.rs:3549:23
+     |
+3549 |     mine: &[ShapeFact<N>],
+     |                       ^ not found in this scope
+     |
+help: you might be missing a type parameter
+     |
+3548 | fn fact_preference<N>(
+     |                   +++
+
+error[E0425]: cannot find type `N` in this scope
+    --> crates/datalog/src/seminaive.rs:3551:25
+     |
+3551 |     theirs: &[ShapeFact<N>],
+     |                         ^ not found in this scope
+     |
+help: you might be missing a type parameter
+     |
+3548 | fn fact_preference<N>(
+     |                   +++
+
+error: unused import: `ATOM_ARITY`
+  --> crates/datalog/src/seminaive/factors.rs:16:5
+   |
+16 |     ATOM_ARITY, ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence,
+   |     ^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused imports: `POSITION_GRAPH` and `POSITION_PREDICATE`
+   --> crates/datalog/src/seminaive.rs:104:5
+    |
+104 |     POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT, Parsed, PositionPlan,
+    |     ^^^^^^^^^^^^^^                   ^^^^^^^^^^^^^^^^^^
+
+error: unused import: `Fact`
+   --> crates/datalog/src/seminaive.rs:109:19
+    |
+109 |     Arity, Bound, Fact, PartitionRef, RelationStore, ShapeFact, StoreShape, TermInterner,
+    |                   ^^^^
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:149:19
+     |
+ 149 |     runtimes: Vec<RuleRuntime<N>>,
+     |                   ^^^^^^^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RuleRuntime`
+    --> crates/datalog/src/seminaive.rs:3285:15
+     |
+3283 | pub(crate) struct RuleRuntime<const N: usize = 4>
+     |                   ----------- required by a bound in this struct
+3284 | where
+3285 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RuleRuntime`
+
+error[E0747]: unresolved item provided when a constant was expected
+    --> crates/datalog/src/seminaive.rs:3549:23
+     |
+3549 |     mine: &[ShapeFact<N>],
+     |                       ^
+     |
+help: if this generic argument was intended as a const parameter, surround it with braces
+     |
+3549 |     mine: &[ShapeFact<{ N }>],
+     |                       +   +
+
+error[E0747]: unresolved item provided when a constant was expected
+    --> crates/datalog/src/seminaive.rs:3551:25
+     |
+3551 |     theirs: &[ShapeFact<N>],
+     |                         ^
+     |
+help: if this generic argument was intended as a const parameter, surround it with braces
+     |
+3551 |     theirs: &[ShapeFact<{ N }>],
+     |                         +   +
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/cache.rs:722:79
+     |
+ 722 |             Some(declarations) => crate::seminaive::compile_with_declarations(rules, declarations),
+     |                                   ------------------------------------------- ^^^^^ unsatisfied trait bound
+     |                                   |
+     |                                   required by a bound introduced by this call
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `compile_with_declarations`
+    --> crates/datalog/src/seminaive.rs:1244:15
+     |
+1239 | pub fn compile_with_declarations<const N: usize>(
+     |        ------------------------- required by a bound in this function
+...
+1244 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `compile_with_declarations`
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/cache.rs:723:29
+     |
+ 723 |             None => compile(rules),
+     |                     ------- ^^^^^ unsatisfied trait bound
+     |                     |
+     |                     required by a bound introduced by this call
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `seminaive::compile`
+    --> crates/datalog/src/seminaive.rs:1266:15
+     |
+1264 | pub fn compile<const N: usize>(rules: Vec<DlClause<N>>) -> Result<Executable<N>, EvalError>
+     |        ------- required by a bound in this function
+1265 | where
+1266 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `compile`
+
+error[E0277]: the trait bound `&Vec<RuleRuntime<N>>: CoerceUnsized<&dyn Debug>` is not satisfied in `Vec<RuleRuntime<N>>`
+    --> crates/datalog/src/schedule.rs:149:5
+     |
+ 141 | #[derive(Debug, Clone)]
+     |          ----- in this derive macro expansion
+...
+ 149 |     runtimes: Vec<RuleRuntime<N>>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ within `Vec<RuleRuntime<N>>`, the trait `Debug` is not implemented for `Vec<RuleRuntime<N>>`
+     |
+help: the trait `Debug` is conditionally implemented for `Vec<T, A>`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4423:1
+     |
+4423 | impl<T: fmt::Debug, A: Allocator> fmt::Debug for Vec<T, A> {
+     | ^^^^^^^^----------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         unsatisfied requirement introduced here: `_: Debug`
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:149:5
+     |
+ 141 | #[derive(Debug, Clone)]
+     |                 ----- in this derive macro expansion
+...
+ 149 |     runtimes: Vec<RuleRuntime<N>>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RuleRuntime`
+    --> crates/datalog/src/seminaive.rs:3285:15
+     |
+3283 | pub(crate) struct RuleRuntime<const N: usize = 4>
+     |                   ----------- required by a bound in this struct
+3284 | where
+3285 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RuleRuntime`
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:221:28
+     |
+ 221 |     check_range_restricted(&rules)?;
+     |     ---------------------- ^^^^^^ unsatisfied trait bound
+     |     |
+     |     required by a bound introduced by this call
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `check_range_restricted`
+    --> crates/datalog/src/seminaive.rs:1324:15
+     |
+1322 | pub(crate) fn check_range_restricted<const N: usize>(rules: &[DlClause<N>]) -> Result<(), EvalError>
+     |               ---------------------- required by a bound in this function
+1323 | where
+1324 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `check_range_restricted`
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:247:29
+     |
+ 247 |         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+     |                             ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RuleRuntime::<N>::new`
+    --> crates/datalog/src/seminaive.rs:3303:15
+     |
+3303 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RuleRuntime::<N>::new`
+...
+3306 |     pub(crate) fn new(rule: &DlClause<N>, plan: &RulePlan<N>) -> Self {
+     |                   --- required by a bound in this associated function
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:244:20
+     |
+ 244 |       let runtimes = rules
+     |  ____________________^
+ 245 | |         .iter()
+ 246 | |         .zip(&plans)
+ 247 | |         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+     | |_________________________________________________________^ unsatisfied trait bound
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RuleRuntime`
+    --> crates/datalog/src/seminaive.rs:3285:15
+     |
+3283 | pub(crate) struct RuleRuntime<const N: usize = 4>
+     |                   ----------- required by a bound in this struct
+3284 | where
+3285 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RuleRuntime`
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:247:29
+     |
+ 247 |         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RuleRuntime`
+    --> crates/datalog/src/seminaive.rs:3285:15
+     |
+3283 | pub(crate) struct RuleRuntime<const N: usize = 4>
+     |                   ----------- required by a bound in this struct
+3284 | where
+3285 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RuleRuntime`
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:253:9
+     |
+ 253 |         runtimes,
+     |         ^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RuleRuntime`
+    --> crates/datalog/src/seminaive.rs:3285:15
+     |
+3283 | pub(crate) struct RuleRuntime<const N: usize = 4>
+     |                   ----------- required by a bound in this struct
+3284 | where
+3285 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RuleRuntime`
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:244:20
+     |
+ 244 |       let runtimes = rules
+     |  ____________________^
+ 245 | |         .iter()
+ 246 | |         .zip(&plans)
+ 247 | |         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+ 248 | |         .collect();
+     | |__________________^ unsatisfied trait bound
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RuleRuntime`
+    --> crates/datalog/src/seminaive.rs:3285:15
+     |
+3283 | pub(crate) struct RuleRuntime<const N: usize = 4>
+     |                   ----------- required by a bound in this struct
+3284 | where
+3285 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RuleRuntime`
+
+error[E0277]: the trait bound `Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/datalog/src/schedule.rs:248:10
+     |
+ 248 |         .collect();
+     |          ^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `StoreShape<N>` is not implemented for `Arity<N>`
+    --> crates/datalog/src/store.rs:914:1
+     |
+ 914 | pub struct Arity<const N: usize>;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:943:1
+     |
+ 943 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<3>` implements `StoreShape<3>`
+...
+ 973 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RuleRuntime`
+    --> crates/datalog/src/seminaive.rs:3285:15
+     |
+3283 | pub(crate) struct RuleRuntime<const N: usize = 4>
+     |                   ----------- required by a bound in this struct
+3284 | where
+3285 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RuleRuntime`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:2442:9
+     |
+2442 |     let [_, predicate, _, graph] = constant_positions(shape, snapshot.rel)?;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^ expected an array with a size of 4, found one with a size of N
+     |
+     = note: expected array `[Option<PositionValue<<D as TermDictionary>::Id>>; 4]`
+                found array `[Option<PositionValue<<D as TermDictionary>::Id>>; N]`
+
+error[E0599]: no method named `partitions` found for reference `&RelationStore<D, N>` in the current scope
+    --> crates/datalog/src/seminaive.rs:2454:10
+     |
+2452 |       Ok(snapshot
+     |  ________-
+2453 | |         .rel
+2454 | |         .partitions(predicate, graph)
+     | |_________-^^^^^^^^^^
+     |
+help: there is a method `partitions_for` with a similar name, but with different arguments
+    --> crates/datalog/src/store.rs:1621:5
+     |
+1621 |     pub fn partitions_for(&self, positions: [Option<D::Id>; N]) -> Partitions<'_, D, N> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:3604:9
+     |
+3603 |     pub(crate) fn into_derivation(self) -> Derivation {
+     |                                            ---------- expected `Derivation` because of return type
+3604 |         self.derivation
+     |         ^^^^^^^^^^^^^^^ expected `4`, found `N`
+     |
+     = note: expected struct `Derivation<4>`
+                found struct `Derivation<N>`
+
+error[E0308]: arguments to this function are incorrect
+    --> crates/datalog/src/seminaive.rs:3845:20
+     |
+3845 |             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `4`, found `N`
+    --> crates/datalog/src/seminaive.rs:3845:52
+     |
+3845 |             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
+     |                                                    ^^^^^
+     = note: expected struct `RuleEntry<'_, 4>`
+                found struct `RuleEntry<'r, N>`
+note: expected `4`, found `N`
+    --> crates/datalog/src/seminaive.rs:3845:59
+     |
+3845 |             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
+     |                                                           ^^^^^^^^
+     = note: expected struct `RoundSnapshot<'_, _, 4>`
+                found struct `RoundSnapshot<'_, D, N>`
+note: expected `4`, found `N`
+    --> crates/datalog/src/seminaive.rs:3845:84
+     |
+3845 |             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
+     |                                                                                    ^^^^^^^^
+     = note: expected enum `Option<&mut dyn RuleEvidence<_>>`
+                found enum `Option<&mut dyn RuleEvidence<D, N>>`
+note: function defined here
+    --> crates/datalog/src/seminaive/factors.rs:699:15
+     |
+ 699 | pub(super) fn evaluate_with_evidence<'r, D: TermDictionary>(
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+ 700 |     entry: RuleEntry<'r>,
+     |     --------------------
+ 701 |     snapshot: RoundSnapshot<'_, D>,
+     |     ------------------------------
+ 702 |     governor: &mut StepGovernor,
+ 703 |     mut evidence: Option<&mut dyn super::evidence::RuleEvidence<D>>,
+     |     ---------------------------------------------------------------
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:3973:12
+     |
+3973 |         Ok(buffer)
+     |         -- ^^^^^^ expected `4`, found `N`
+     |         |
+     |         arguments to this enum variant are incorrect
+     |
+     = note: expected struct `RoundBuffer<'_, _, 4>`
+                found struct `RoundBuffer<'_, <D as TermDictionary>::Id, N>`
+help: the type constructed contains `RoundBuffer<'_, <D as TermDictionary>::Id, N>` due to the type of the argument passed
+    --> crates/datalog/src/seminaive.rs:3973:9
+     |
+3973 |         Ok(buffer)
+     |         ^^^------^
+     |            |
+     |            this argument influences the type of `Ok`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+     |
+ 562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:3980:8
+     |
+3980 |     Ok(result)
+     |     -- ^^^^^^ expected `N`, found `4`
+     |     |
+     |     arguments to this enum variant are incorrect
+     |
+     = note: expected struct `RoundBuffer<'_, <D as TermDictionary>::Id, N>`
+                found struct `RoundBuffer<'_, _, 4>`
+help: the type constructed contains `RoundBuffer<'_, _>` due to the type of the argument passed
+    --> crates/datalog/src/seminaive.rs:3980:5
+     |
+3980 |     Ok(result)
+     |     ^^^------^
+     |        |
+     |        this argument influences the type of `Ok`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:562:5
+     |
+ 562 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^
+
+error[E0277]: `<Arity<N> as StoreShape<N>>::Graph` cannot be sent between threads safely
+    --> crates/datalog/src/seminaive.rs:4223:14
+     |
+4223 |             .map(|&entry| evaluate_rule(entry, snapshot, strategy, pool.task(), &NoGuards))
+     |              ^^^ `<Arity<N> as StoreShape<N>>::Graph` cannot be sent between threads safely
+     |
+     = help: within `Confirmation<N>`, the trait `Send` is not implemented for `<Arity<N> as StoreShape<N>>::Graph`
+note: required because it appears within the type `Fact<<Arity<N> as StoreShape<N>>::Graph>`
+    --> crates/datalog/src/store.rs:1019:12
+     |
+1019 | pub struct Fact<G = String> {
+     |            ^^^^
+note: required because it appears within the type `Derivation<N>`
+    --> crates/datalog/src/seminaive.rs:1155:12
+     |
+1155 | pub struct Derivation<const N: usize = 4>
+     |            ^^^^^^^^^^
+note: required because it appears within the type `Confirmation<N>`
+    --> crates/datalog/src/seminaive.rs:3564:19
+     |
+3564 | pub(crate) struct Confirmation<const N: usize = 4>
+     |                   ^^^^^^^^^^^^
+     = note: required for `NodeRef<Owned, Id<Row>, Confirmation<N>, LeafOrInternal>` to implement `Send`
+note: required because it appears within the type `Option<NodeRef<Owned, Id<Row>, Confirmation<N>, LeafOrInternal>>`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:598:10
+     |
+ 598 | pub enum Option<T> {
+     |          ^^^^^^
+note: required because it appears within the type `BTreeMap<Id<Row>, Confirmation<N>>`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/btree/map.rs:189:12
+     |
+ 189 | pub struct BTreeMap<
+     |            ^^^^^^^^
+note: required because it appears within the type `RoundBuffer<'_, <D as TermDictionary>::Id, N>`
+    --> crates/datalog/src/seminaive.rs:3627:19
+     |
+3627 | pub(crate) struct RoundBuffer<'r, I: TermIdentity = TermId, const N: usize = 4>
+     |                   ^^^^^^^^^^^
+note: required because it appears within the type `Result<RoundBuffer<'_, <D as TermDictionary>::Id, N>, EvalError<_>>`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:558:10
+     |
+ 558 | pub enum Result<T, E> {
+     |          ^^^^^^
+note: required by a bound in `rayon::iter::ParallelIterator::map`
+    --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/mod.rs:593:4
+     = note: the full name for the type has been written to '/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-datalog/673583bd8cf91601/out/purrdf_datalog-673583bd8cf91601.long-type-7913463723766971054.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0599]: the method `collect` exists for struct `Map<Iter<'_, RuleEntry<'_, N>>, {closure@seminaive.rs:4223:18}>`, but its trait bounds were not satisfied
+    --> crates/datalog/src/seminaive.rs:4224:14
+     |
+4221 |           let buffers: Vec<_> = entries
+     |  _______________________________-
+4222 | |             .par_iter()
+4223 | |             .map(|&entry| evaluate_rule(entry, snapshot, strategy, pool.task(), &NoGuards))
+4224 | |             .collect();
+     | |             -^^^^^^^ method cannot be called due to unsatisfied trait bounds
+     | |_____________|
+     |
+     |
+     = note: the following trait bounds were not satisfied:
+             `<Arity<N> as StoreShape<N>>::Graph: Send`
+             which is required by `rayon::iter::Map<rayon::slice::Iter<'_, RuleEntry<'_, N>>, {closure@crates/datalog/src/seminaive.rs:4223:18: 4223:26}>: rayon::iter::ParallelIterator`
+             `rayon::iter::Map<rayon::slice::Iter<'_, RuleEntry<'_, N>>, {closure@crates/datalog/src/seminaive.rs:4223:18: 4223:26}>: Iterator`
+             which is required by `&mut rayon::iter::Map<rayon::slice::Iter<'_, RuleEntry<'_, N>>, {closure@crates/datalog/src/seminaive.rs:4223:18: 4223:26}>: Iterator`
+     = note: the full name for the type has been written to '/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-datalog/673583bd8cf91601/out/purrdf_datalog-673583bd8cf91601.long-type-9811029112084625340.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+Some errors have detailed explanations: E0277, E0308, E0425, E0599, E0747.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib) due to 27 previous errors
+
+terminal_status=101

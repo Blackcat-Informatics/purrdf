@@ -1,0 +1,13 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-results)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 44s
+     Running tests/host_identity.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/cfe43c99924f835c/out/host_identity-cfe43c99924f835c.wasm)
+
+running 2 tests
+test triple_graph_support_precedes_empty_and_nested_query_shortcuts ... ok
+test triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.10s
+

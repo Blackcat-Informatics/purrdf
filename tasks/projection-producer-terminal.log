@@ -1,0 +1,680 @@
+simd-asm-projection	UNKNOWN STEP	﻿2026-10-14T22:38:03.4144139Z Current runner version: '2.337.0'
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4167924Z ##[group]Runner Image Provisioner
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4168880Z Hosted Compute Agent
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4169551Z Version: 20261012.601
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4170170Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4170945Z Build Date: 2026-10-12T17:48:21Z
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4171949Z Worker ID: {c791f6da-14bc-4fc0-9eea-aae6ec16aa41}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4172674Z Region: westus3
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4173266Z Cloud: Azure
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4173783Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4175085Z ##[group]Operating System
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4175719Z Ubuntu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4176254Z 24.04.5
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4176783Z LTS
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4177302Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4177861Z ##[group]Runner Image
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4178463Z Image: ubuntu-24.04
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4179012Z Version: 20261012.334.1
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4180290Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4182313Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4183291Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4184410Z ##[group]GITHUB_TOKEN Permissions
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4186477Z Contents: read
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4187079Z Metadata: read
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4187671Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4189617Z Secret source: Actions
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4190519Z Cache mode: write
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4191359Z Prepare workflow directory
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4541898Z Prepare all required actions
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.4597837Z Getting action download info
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.8437455Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:03.9916369Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.2267812Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.4643757Z Complete job name: simd-asm-projection
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5394041Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5395172Z with:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5395846Z   persist-credentials: false
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5396537Z   repository: Blackcat-Informatics/purrdf
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5400923Z   token: ***
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5401698Z   ssh-strict: true
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5402278Z   ssh-user: git
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5402850Z   clean: true
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5403477Z   sparse-checkout-cone-mode: true
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5404147Z   fetch-depth: 1
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5404751Z   fetch-tags: false
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5405340Z   show-progress: true
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5405932Z   lfs: false
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5406471Z   submodules: false
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5407038Z   set-safe-directory: true
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5407759Z   allow-unsafe-pr-checkout: false
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5408590Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5409121Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.5409741Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6386873Z Syncing repository: Blackcat-Informatics/purrdf
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6388969Z ##[group]Getting Git version info
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6389811Z Working directory is '/home/runner/work/purrdf/purrdf'
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6391403Z [command]/usr/bin/git version
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6448219Z git version 2.55.0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6466393Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6476858Z Temporarily overriding HOME='/home/runner/work/_temp/a106cf2f-8167-4979-9605-5da107c5d956' before making global git config changes
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6479275Z Adding repository directory to the temporary git global config as a safe directory
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6482702Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6527866Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6530933Z ##[group]Determining repository object format
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6532429Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6533413Z ##[group]Initializing the repository
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6535922Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6638959Z hint: Using 'master' as the name for the initial branch. This default branch name
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6640731Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6642679Z hint: to use in all of your new repositories, which will suppress this warning,
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6644085Z hint: call:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6644789Z hint:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6645678Z hint: 	git config --global init.defaultBranch <name>
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6646451Z hint:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6647191Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6648454Z hint: 'development'. The just-created branch can be renamed via this command:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6649713Z hint:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6650373Z hint: 	git branch -m <name>
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6650985Z hint:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6652133Z hint: Disable this message with "git config set advice.defaultBranchName false"
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6653377Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6655911Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6694954Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6695925Z ##[group]Disabling automatic garbage collection
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6697995Z [command]/usr/bin/git config --local gc.auto 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6726045Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6727258Z ##[group]Setting up auth
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6728111Z Removing SSH command configuration
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6730858Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.6760308Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7068110Z Removing HTTP extra header
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7073734Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7100367Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7276348Z Removing includeIf entries pointing to credentials config files
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7280652Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7309009Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7492359Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7522614Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7550199Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7584564Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7613264Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7637289Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7638321Z ##[group]Fetching the repository
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:04.7644394Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +463d0bf1622bd00a32a4325bba85ce45c5f9e274:refs/remotes/origin/paudley/492-triple-only-carrier-for-rdf-1-2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0916737Z From https://github.com/Blackcat-Informatics/purrdf
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0918106Z  * [new ref]           463d0bf1622bd00a32a4325bba85ce45c5f9e274 -> origin/paudley/492-triple-only-carrier-for-rdf-1-2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0926264Z [command]/usr/bin/git branch --list --remote origin/paudley/492-triple-only-carrier-for-rdf-1-2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0948611Z   origin/paudley/492-triple-only-carrier-for-rdf-1-2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0955838Z [command]/usr/bin/git rev-parse refs/remotes/origin/paudley/492-triple-only-carrier-for-rdf-1-2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0976660Z 463d0bf1622bd00a32a4325bba85ce45c5f9e274
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0979545Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0980540Z ##[group]Determining the checkout info
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0981778Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.0985737Z [command]/usr/bin/git sparse-checkout disable
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.1031659Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.1057388Z ##[group]Checking out the ref
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:10.1061849Z [command]/usr/bin/git checkout --progress --force -B paudley/492-triple-only-carrier-for-rdf-1-2 refs/remotes/origin/paudley/492-triple-only-carrier-for-rdf-1-2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1241354Z Updating files:  69% (13033/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1284560Z Updating files:  70% (13065/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1327711Z Updating files:  71% (13251/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1380613Z Updating files:  72% (13438/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1415874Z Updating files:  73% (13624/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1449963Z Updating files:  74% (13811/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1482872Z Updating files:  75% (13998/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1514661Z Updating files:  76% (14184/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1546885Z Updating files:  77% (14371/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1580574Z Updating files:  78% (14558/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1629078Z Updating files:  79% (14744/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1661289Z Updating files:  80% (14931/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1693403Z Updating files:  81% (15118/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1724716Z Updating files:  82% (15304/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1770434Z Updating files:  83% (15491/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1816543Z Updating files:  84% (15677/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1850270Z Updating files:  85% (15864/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1888312Z Updating files:  86% (16051/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1919205Z Updating files:  87% (16237/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.1953487Z Updating files:  88% (16424/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2015804Z Updating files:  89% (16611/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2045258Z Updating files:  90% (16797/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2074298Z Updating files:  91% (16984/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2104327Z Updating files:  92% (17170/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2135042Z Updating files:  93% (17357/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2165198Z Updating files:  94% (17544/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2196479Z Updating files:  95% (17730/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2228950Z Updating files:  96% (17917/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2260920Z Updating files:  97% (18104/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2294972Z Updating files:  98% (18290/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2327529Z Updating files:  99% (18477/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2328071Z Updating files: 100% (18663/18663)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2328648Z Updating files: 100% (18663/18663), done.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2516137Z Switched to a new branch 'paudley/492-triple-only-carrier-for-rdf-1-2'
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2519988Z branch 'paudley/492-triple-only-carrier-for-rdf-1-2' set up to track 'origin/paudley/492-triple-only-carrier-for-rdf-1-2'.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2538106Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2580747Z [command]/usr/bin/git log -1 --format=%H
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2603188Z 463d0bf1622bd00a32a4325bba85ce45c5f9e274
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2610548Z ##[group]Removing auth
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2610955Z Removing SSH command configuration
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2614120Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2639509Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2852217Z Removing HTTP extra header
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2856998Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.2887232Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3103486Z Removing includeIf entries pointing to credentials config files
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3106445Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3132610Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3133508Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3134310Z includeif.gitdir:/github/workspace/.git.path
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3134974Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3142340Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3162475Z /home/runner/work/_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3211598Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3245627Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3272979Z /home/runner/work/_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3291201Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3316522Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3336849Z /github/runner_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3344318Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3375476Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3395003Z /github/runner_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3403146Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3434046Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3640353Z Removing credentials config '/home/runner/work/_temp/git-credentials-d4fad3bb-2b53-4a07-9de9-eb256a6e11c1.config'
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3650804Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3944945Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3945442Z with:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3945793Z   toolchain: nightly
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3946207Z   targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3946650Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3946979Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.3947299Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4041432Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4085538Z ##[group]Run : parse toolchain version
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4086301Z ^[[36;1m: parse toolchain version^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4086748Z ^[[36;1mif [[ -z $toolchain ]]; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4087377Z ^[[36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4087988Z ^[[36;1m  echo "'toolchain' is a required input" >&2^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4088475Z ^[[36;1m  exit 1^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4088977Z ^[[36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4089545Z ^[[36;1m  if [[ Linux == macOS ]]; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4090158Z ^[[36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4090785Z ^[[36;1m  else^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4091417Z ^[[36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4091952Z ^[[36;1m  fi^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4092393Z ^[[36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4093034Z ^[[36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4093616Z ^[[36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4094229Z ^[[36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4094806Z ^[[36;1melse^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4095225Z ^[[36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4095719Z ^[[36;1mfi^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4266952Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4267502Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4267828Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4268159Z   toolchain: nightly
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4268502Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4390298Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=34]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4414259Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4438384Z ##[group]Run : construct rustup command line
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4438869Z ^[[36;1m: construct rustup command line^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4439448Z ^[[36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4440148Z ^[[36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4440706Z ^[[36;1mecho "downgrade=" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4482131Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4482665Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4482971Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4483425Z   targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4483886Z   components: 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4484213Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4564410Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=14]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4568678Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4591255Z ##[group]Run : set $CARGO_HOME
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4591669Z ^[[36;1m: set $CARGO_HOME^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4592303Z ^[[36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4632662Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4633125Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4633539Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4633859Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4703483Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=13]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4706289Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4735257Z ##[group]Run : install rustup if needed
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4735736Z ^[[36;1m: install rustup if needed^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4736252Z ^[[36;1mif ! command -v rustup &>/dev/null; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4737073Z ^[[36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4737894Z ^[[36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4738278Z ^[[36;1mfi^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4775646Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4776076Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4776443Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4776787Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4777148Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4842263Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=13]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4847324Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4855119Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4859317Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4882362Z ##[group]Run rustup toolchain install nightly --target wasm32-unknown-unknown --target aarch64-unknown-linux-gnu --profile minimal --no-self-update
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4883471Z ^[[36;1mrustup toolchain install nightly --target wasm32-unknown-unknown --target aarch64-unknown-linux-gnu --profile minimal --no-self-update^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4921421Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4921953Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4922256Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4922626Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4923001Z   RUSTUP_PERMIT_COPY_RENAME: 1
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.4923347Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:11.5802869Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:12.0502549Z info: latest update on 2026-10-14 for version 1.101.0-nightly (822182db4 2026-10-13)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:12.0503161Z info: downloading 5 components
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8591897Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8664863Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (822182db4 2026-10-13)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8665550Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8706706Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=13384]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8713008Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8734405Z ##[group]Run rustup default nightly
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8734842Z ^[[36;1mrustup default nightly^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8774168Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8774634Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8774946Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8775350Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8775738Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8875117Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8882988Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8883341Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8949659Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (822182db4 2026-10-13)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8950093Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8953197Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8964125Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=25]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8969224Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8990818Z ##[group]Run : create cachekey
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8991586Z ^[[36;1m: create cachekey^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8992218Z ^[[36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8993089Z ^[[36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.8993706Z ^[[36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9029894Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9030345Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9030648Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9031134Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9031662Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9329550Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=35]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9332919Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9352697Z ##[group]Run : disable incremental compilation
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9353150Z ^[[36;1m: disable incremental compilation^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9353588Z ^[[36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9354051Z ^[[36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9354413Z ^[[36;1mfi^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9390436Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9390972Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9391570Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9391948Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9392340Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9452165Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=11]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9454974Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9474813Z ##[group]Run : enable colors in Cargo output
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9475228Z ^[[36;1m: enable colors in Cargo output^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9475672Z ^[[36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9476133Z ^[[36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9476519Z ^[[36;1mfi^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9507217Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9507731Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9508056Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9508396Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9508806Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9509112Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9565645Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=10]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9571515Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9592786Z ##[group]Run : enable Cargo sparse registry
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9593290Z ^[[36;1m: enable Cargo sparse registry^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9593762Z ^[[36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9594612Z ^[[36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9595435Z ^[[36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9596133Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9596754Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9597476Z ^[[36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9598102Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9598749Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9599184Z ^[[36;1m  fi^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9599477Z ^[[36;1mfi^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9629011Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9629547Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9629844Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9630193Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9630674Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9631151Z   CARGO_TERM_COLOR: always
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9631588Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9903942Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=33]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9908777Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9930054Z ##[group]Run : work around spurious network errors in curl 8.0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9930638Z ^[[36;1m: work around spurious network errors in curl 8.0^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9931512Z ^[[36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9932223Z ^[[36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9932821Z ^[[36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9933245Z ^[[36;1mfi^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9969182Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9969640Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9969943Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9970289Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9970711Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9971184Z   CARGO_TERM_COLOR: always
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:24.9971518Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0142485Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=23]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0146969Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0167339Z ##[group]Run rustc +nightly --version --verbose
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0167806Z ^[[36;1mrustc +nightly --version --verbose^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0203448Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0203873Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0204248Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0204589Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0205040Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0205377Z   CARGO_TERM_COLOR: always
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0205685Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0357777Z rustc 1.101.0-nightly (822182db4 2026-10-13)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0358494Z binary: rustc
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0359066Z commit-hash: 822182db4c4a1827256881d8c7aa685f0bcf2b11
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0359630Z commit-date: 2026-10-13
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0360434Z host: x86_64-unknown-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0361128Z release: 1.101.0-nightly
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0361709Z LLVM version: 23.1.3
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0373996Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=22]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0436272Z ##[group]Run sudo apt-get update
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0436795Z ^[[36;1msudo apt-get update^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0437287Z ^[[36;1msudo apt-get install -y --no-install-recommends \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0437804Z ^[[36;1m  clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0474031Z shell: /usr/bin/bash -e {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0474420Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0474757Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0475120Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0475471Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0475781Z   CARGO_TERM_COLOR: always
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.0476180Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.1245281Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.1677483Z Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.1678874Z Get:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.1697736Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.1741898Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.1822897Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.2765566Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [581 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.2902720Z Get:8 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [12.4 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.2940577Z Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [522 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.3255433Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1397 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.3334593Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [308 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.3356167Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1702 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.3435460Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1805 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.3520953Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [411 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.4138733Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [1144 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.4204454Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [231 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.4211275Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1221 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.4267629Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [246 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.4284815Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1713 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:25.4823815Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [392 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:32.3921759Z Fetched 12.1 MB in 1s (9180 kB/s)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.3434366Z Reading package lists...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.3779678Z Reading package lists...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.5947544Z Building dependency tree...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.5953327Z Reading state information...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7687829Z The following additional packages will be installed:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7689107Z   binutils-aarch64-linux-gnu cpp-13-aarch64-linux-gnu cpp-aarch64-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7690071Z   gcc-13-aarch64-linux-gnu gcc-13-aarch64-linux-gnu-base gcc-13-cross-base
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7690882Z   gcc-14-cross-base libasan8-arm64-cross libatomic1-arm64-cross
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7691708Z   libc6-arm64-cross libgcc-13-dev-arm64-cross libgcc-s1-arm64-cross
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7692257Z   libgomp1-arm64-cross libhwasan0-arm64-cross libitm1-arm64-cross
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7693336Z   liblsan0-arm64-cross libstdc++6-arm64-cross libtsan2-arm64-cross
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7696977Z   libubsan1-arm64-cross linux-libc-dev-arm64-cross llvm-runtime
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7703983Z Suggested packages:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7705050Z   binutils-doc gcc-13-locales cpp-13-doc cpp-doc gcc-13-doc manpages-dev
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7706575Z   gdb-aarch64-linux-gnu gcc-doc
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7933953Z The following NEW packages will be installed:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7934793Z   binutils-aarch64-linux-gnu clang cpp-13-aarch64-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7935629Z   cpp-aarch64-linux-gnu gcc-13-aarch64-linux-gnu gcc-13-aarch64-linux-gnu-base
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7936491Z   gcc-13-cross-base gcc-14-cross-base gcc-aarch64-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7937210Z   libasan8-arm64-cross libatomic1-arm64-cross libc6-arm64-cross
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7937973Z   libc6-dev-arm64-cross libgcc-13-dev-arm64-cross libgcc-s1-arm64-cross
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7938720Z   libgomp1-arm64-cross libhwasan0-arm64-cross libitm1-arm64-cross
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7939624Z   liblsan0-arm64-cross libstdc++6-arm64-cross libtsan2-arm64-cross
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.7943061Z   libubsan1-arm64-cross linux-libc-dev-arm64-cross llvm llvm-runtime
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.8111732Z 0 upgraded, 25 newly installed, 0 to remove and 43 not upgraded.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.8113769Z Need to get 45.2 MB of archives.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.8114537Z After this operation, 168 MB of additional disk space will be used.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.8115055Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.9042242Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 clang amd64 1:18.0-59~exp2 [5846 B]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:33.9784762Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-aarch64-linux-gnu-base amd64 13.3.0-6ubuntu2~24.04.1cross1 [51.9 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:34.0442698Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 cpp-13-aarch64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1cross1 [10.8 MB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:34.3302264Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 cpp-aarch64-linux-gnu amd64 4:13.2.0-7ubuntu1 [5332 B]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:34.4556281Z Get:6 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 binutils-aarch64-linux-gnu amd64 2.42-4ubuntu2.10 [3711 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.0424869Z Get:7 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-cross-base all 13.3.0-6ubuntu2~24.04.1cross1 [46.5 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.1059717Z Get:8 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-14-cross-base all 14.2.0-4ubuntu2~24.04.1cross1 [46.1 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.1696984Z Get:9 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libc6-arm64-cross all 2.39-0ubuntu8cross1 [1197 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.2454017Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libgcc-s1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [61.9 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.3090471Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libgomp1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [110 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.3743931Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libitm1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [31.1 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.4390593Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libatomic1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [11.5 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.5084214Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libasan8-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [524 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.5767395Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 liblsan0-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [238 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.6429271Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libtsan2-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [500 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.7109545Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libstdc++6-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [659 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.7797263Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libubsan1-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [219 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.8460207Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libhwasan0-arm64-cross all 14.2.0-4ubuntu2~24.04.1cross1 [304 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.9125590Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libgcc-13-dev-arm64-cross all 13.3.0-6ubuntu2~24.04.1cross1 [2616 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:35.9992042Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 gcc-13-aarch64-linux-gnu amd64 13.3.0-6ubuntu2~24.04.1cross1 [21.1 MB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:36.4917145Z Get:22 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 gcc-aarch64-linux-gnu amd64 4:13.2.0-7ubuntu1 [1210 B]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:36.5566138Z Get:23 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 llvm-runtime amd64 1:18.0-59~exp2 [5496 B]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:36.6214287Z Get:24 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 llvm amd64 1:18.0-59~exp2 [4146 B]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:36.6861412Z Get:25 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 linux-libc-dev-arm64-cross all 6.8.0-25.25cross1 [1375 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:36.7767296Z Get:26 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libc6-dev-arm64-cross all 2.39-0ubuntu8cross1 [1629 kB]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.0736719Z Fetched 45.2 MB in 3s (15.0 MB/s)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1145226Z Selecting previously unselected package clang.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1371768Z (Reading database ... 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1372721Z (Reading database ... 5%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1373441Z (Reading database ... 10%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1373907Z (Reading database ... 15%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1374432Z (Reading database ... 20%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1374788Z (Reading database ... 25%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1375110Z (Reading database ... 30%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1375462Z (Reading database ... 35%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1375801Z (Reading database ... 40%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1376124Z (Reading database ... 45%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1376455Z (Reading database ... 50%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.1419910Z (Reading database ... 55%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.2647004Z (Reading database ... 60%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.4713337Z (Reading database ... 65%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.6774823Z (Reading database ... 70%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:37.8618763Z (Reading database ... 75%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.0238380Z (Reading database ... 80%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.2300321Z (Reading database ... 85%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.3982096Z (Reading database ... 90%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.5844487Z (Reading database ... 95%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.5845200Z (Reading database ... 100%
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.5846107Z (Reading database ... 203540 files and directories currently installed.)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.5892824Z Preparing to unpack .../00-clang_1%3a18.0-59~exp2_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.5922621Z Unpacking clang (1:18.0-59~exp2) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.6106075Z Selecting previously unselected package gcc-13-aarch64-linux-gnu-base:amd64.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.6238608Z Preparing to unpack .../01-gcc-13-aarch64-linux-gnu-base_13.3.0-6ubuntu2~24.04.1cross1_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.6249128Z Unpacking gcc-13-aarch64-linux-gnu-base:amd64 (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.6433925Z Selecting previously unselected package cpp-13-aarch64-linux-gnu.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.6560665Z Preparing to unpack .../02-cpp-13-aarch64-linux-gnu_13.3.0-6ubuntu2~24.04.1cross1_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.6588342Z Unpacking cpp-13-aarch64-linux-gnu (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.9357723Z Selecting previously unselected package cpp-aarch64-linux-gnu.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.9483367Z Preparing to unpack .../03-cpp-aarch64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.9493521Z Unpacking cpp-aarch64-linux-gnu (4:13.2.0-7ubuntu1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.9663201Z Selecting previously unselected package binutils-aarch64-linux-gnu.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.9788961Z Preparing to unpack .../04-binutils-aarch64-linux-gnu_2.42-4ubuntu2.10_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:38.9808786Z Unpacking binutils-aarch64-linux-gnu (2.42-4ubuntu2.10) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.1661690Z Selecting previously unselected package gcc-13-cross-base.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.1789569Z Preparing to unpack .../05-gcc-13-cross-base_13.3.0-6ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.1799533Z Unpacking gcc-13-cross-base (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.1958789Z Selecting previously unselected package gcc-14-cross-base.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.2086517Z Preparing to unpack .../06-gcc-14-cross-base_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.2095123Z Unpacking gcc-14-cross-base (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.2260595Z Selecting previously unselected package libc6-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.2386500Z Preparing to unpack .../07-libc6-arm64-cross_2.39-0ubuntu8cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.2394067Z Unpacking libc6-arm64-cross (2.39-0ubuntu8cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.2748246Z Selecting previously unselected package libgcc-s1-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.2871920Z Preparing to unpack .../08-libgcc-s1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.2879158Z Unpacking libgcc-s1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3044567Z Selecting previously unselected package libgomp1-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3170062Z Preparing to unpack .../09-libgomp1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3178334Z Unpacking libgomp1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3356003Z Selecting previously unselected package libitm1-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3483325Z Preparing to unpack .../10-libitm1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3491903Z Unpacking libitm1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3836944Z Selecting previously unselected package libatomic1-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3966266Z Preparing to unpack .../11-libatomic1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.3974898Z Unpacking libatomic1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.4137528Z Selecting previously unselected package libasan8-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.4263246Z Preparing to unpack .../12-libasan8-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.4271724Z Unpacking libasan8-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.4542781Z Selecting previously unselected package liblsan0-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.4669843Z Preparing to unpack .../13-liblsan0-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.4681184Z Unpacking liblsan0-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.4878940Z Selecting previously unselected package libtsan2-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.5007665Z Preparing to unpack .../14-libtsan2-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.5016233Z Unpacking libtsan2-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.5346660Z Selecting previously unselected package libstdc++6-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.5471491Z Preparing to unpack .../15-libstdc++6-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.5478499Z Unpacking libstdc++6-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.5759390Z Selecting previously unselected package libubsan1-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.5884393Z Preparing to unpack .../16-libubsan1-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.5892270Z Unpacking libubsan1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.6255790Z Selecting previously unselected package libhwasan0-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.6380376Z Preparing to unpack .../17-libhwasan0-arm64-cross_14.2.0-4ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.6387545Z Unpacking libhwasan0-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.6626884Z Selecting previously unselected package libgcc-13-dev-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.6754424Z Preparing to unpack .../18-libgcc-13-dev-arm64-cross_13.3.0-6ubuntu2~24.04.1cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.6765069Z Unpacking libgcc-13-dev-arm64-cross (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.8150287Z Selecting previously unselected package gcc-13-aarch64-linux-gnu.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.8282345Z Preparing to unpack .../19-gcc-13-aarch64-linux-gnu_13.3.0-6ubuntu2~24.04.1cross1_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:39.8446422Z Unpacking gcc-13-aarch64-linux-gnu (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.3538702Z Selecting previously unselected package gcc-aarch64-linux-gnu.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.3663866Z Preparing to unpack .../20-gcc-aarch64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.3726840Z Unpacking gcc-aarch64-linux-gnu (4:13.2.0-7ubuntu1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.3889133Z Selecting previously unselected package llvm-runtime:amd64.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.4014335Z Preparing to unpack .../21-llvm-runtime_1%3a18.0-59~exp2_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.4021395Z Unpacking llvm-runtime:amd64 (1:18.0-59~exp2) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.4174463Z Selecting previously unselected package llvm.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.4299116Z Preparing to unpack .../22-llvm_1%3a18.0-59~exp2_amd64.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.4324867Z Unpacking llvm (1:18.0-59~exp2) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.4521608Z Selecting previously unselected package linux-libc-dev-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.4645958Z Preparing to unpack .../23-linux-libc-dev-arm64-cross_6.8.0-25.25cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.4653051Z Unpacking linux-libc-dev-arm64-cross (6.8.0-25.25cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.6584491Z Selecting previously unselected package libc6-dev-arm64-cross.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.6716193Z Preparing to unpack .../24-libc6-dev-arm64-cross_2.39-0ubuntu8cross1_all.deb ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.6725958Z Unpacking libc6-dev-arm64-cross (2.39-0ubuntu8cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8126659Z Setting up binutils-aarch64-linux-gnu (2.42-4ubuntu2.10) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8151288Z Setting up gcc-14-cross-base (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8171936Z Setting up clang (1:18.0-59~exp2) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8362787Z Setting up gcc-13-cross-base (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8381219Z Setting up llvm-runtime:amd64 (1:18.0-59~exp2) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8399101Z Setting up libc6-arm64-cross (2.39-0ubuntu8cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8417910Z Setting up llvm (1:18.0-59~exp2) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8434343Z Setting up libitm1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8642149Z Setting up linux-libc-dev-arm64-cross (6.8.0-25.25cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8662062Z Setting up gcc-13-aarch64-linux-gnu-base:amd64 (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8680957Z Setting up libgcc-s1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8698477Z Setting up libatomic1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8715990Z Setting up liblsan0-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8733021Z Setting up libgomp1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8750338Z Setting up cpp-13-aarch64-linux-gnu (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8766906Z Setting up libhwasan0-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8784700Z Setting up libc6-dev-arm64-cross (2.39-0ubuntu8cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8802122Z Setting up libstdc++6-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8818971Z Setting up cpp-aarch64-linux-gnu (4:13.2.0-7ubuntu1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8836515Z Setting up libasan8-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8853161Z Setting up libtsan2-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8870738Z Setting up libubsan1-arm64-cross (14.2.0-4ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8888534Z Setting up libgcc-13-dev-arm64-cross (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8906220Z Setting up gcc-13-aarch64-linux-gnu (13.3.0-6ubuntu2~24.04.1cross1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8923769Z Setting up gcc-aarch64-linux-gnu (4:13.2.0-7ubuntu1) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8948373Z Processing triggers for man-db (2.12.0-4build2) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8973247Z Not building database; man-db/auto-update is not 'true'.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:40.8987848Z Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6588785Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6590013Z Running kernel seems to be up-to-date.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6590612Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6590896Z No services need to be restarted.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6591335Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6591581Z No containers need to be restarted.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6591897Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6592110Z No user sessions are running outdated binaries.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6592400Z 
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:41.6592625Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6725470Z ##[group]Run mkdir -p target/asm-projection/reports
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6726244Z ^[[36;1mmkdir -p target/asm-projection/reports^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6726981Z ^[[36;1mrustc -vV > target/asm-projection/compiler.txt^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6727743Z ^[[36;1mgit rev-parse HEAD 'HEAD^{tree}' > target/asm-projection/checkout.txt^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6728711Z ^[[36;1mgit status --porcelain=v1 > target/asm-projection/source-status-before.txt^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6729567Z ^[[36;1mtest ! -s target/asm-projection/source-status-before.txt^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6730517Z ^[[36;1msha256sum .github/workflows/ci.yaml Makefile Cargo.toml Cargo.lock rust-toolchain.toml \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6731823Z ^[[36;1m  scripts/check-simd-asm.py scripts/simd_asm_runtime.py \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6732608Z ^[[36;1m  scripts/simd-asm-manifest.toml crates/rdf-core/src/ir/dataset.rs \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6733577Z ^[[36;1m  crates/rdf-core/src/ir/paged/mod.rs crates/rdf-core/src/ir/paged/query.rs \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6734662Z ^[[36;1m  crates/rdf-core/src/ir/paged/translation.rs docs/design/purrdf-simd.md \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6735579Z ^[[36;1m  > target/asm-projection/inputs-before.sha256^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6779098Z shell: /usr/bin/bash -e {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6779538Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6779830Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6780239Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6780607Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6780941Z   CARGO_TERM_COLOR: always
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.6781589Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.7590102Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.9352587Z info: latest update on 2026-10-14 for version 1.101.0-nightly (822182db4 2026-10-13)
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.9472918Z info: component rust-std for target aarch64-unknown-linux-gnu is up to date
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.9473693Z info: component rust-std for target wasm32-unknown-unknown is up to date
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:42.9477469Z info: downloading 2 components
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6380344Z ##[group]Run make simd-asm SIMD_ASM_ARGS="--config x86_64-v3 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6381987Z ^[[36;1mmake simd-asm SIMD_ASM_ARGS="--config x86_64-v3 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6382921Z ^[[36;1m  > target/asm-projection/x86-v3-body-probe.log 2>&1^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6423552Z shell: /usr/bin/bash -e {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6423954Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6424274Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6424673Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6425033Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6425356Z   CARGO_TERM_COLOR: always
+simd-asm-projection	UNKNOWN STEP	2026-10-14T22:38:44.6425752Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6879122Z ##[group]Run make simd-asm SIMD_ASM_ARGS="--config x86_64-v4 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6880287Z ^[[36;1mmake simd-asm SIMD_ASM_ARGS="--config x86_64-v4 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6881274Z ^[[36;1m  > target/asm-projection/x86-v4-body-probe.log 2>&1^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6922289Z shell: /usr/bin/bash -e {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6922583Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6922798Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6923047Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6923307Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6923561Z   CARGO_TERM_COLOR: always
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:06:13.6923803Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3492439Z ##[group]Run make simd-asm SIMD_ASM_ARGS="--write-doc --jobs 2" \
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3492933Z ^[[36;1mmake simd-asm SIMD_ASM_ARGS="--write-doc --jobs 2" \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3493326Z ^[[36;1m  > target/asm-projection/generation.log 2>&1^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3493754Z ^[[36;1mgit diff --exit-code -- . ':(exclude)docs/design/purrdf-simd.md'^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3494292Z ^[[36;1mgit ls-files --others --exclude-standard > target/asm-projection/untracked-after.txt^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3494807Z ^[[36;1mtest ! -s target/asm-projection/untracked-after.txt^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3495312Z ^[[36;1mgit diff --binary -- docs/design/purrdf-simd.md > target/asm-projection/projection.patch^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3495874Z ^[[36;1mcp docs/design/purrdf-simd.md target/asm-projection/purrdf-simd.md^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3496385Z ^[[36;1msha256sum docs/design/purrdf-simd.md scripts/simd-asm-manifest.toml \^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3497006Z ^[[36;1m  > target/asm-projection/inputs-after.sha256^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3497441Z ^[[36;1mgit status --porcelain=v1 > target/asm-projection/source-status-after.txt^[[0m
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3537669Z shell: /usr/bin/bash -e {0}
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3537958Z env:
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3538174Z   CARGO_BUILD_JOBS: 2
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3538423Z   CARGO_HOME: /home/runner/.cargo
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3538690Z   CARGO_INCREMENTAL: 0
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3538928Z   CARGO_TERM_COLOR: always
+simd-asm-projection	UNKNOWN STEP	2026-10-14T23:33:39.3539165Z ##[endgroup]
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.3531572Z ##[error]The operation was canceled.
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.3739725Z Post job cleanup.
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.6565625Z [command]/usr/bin/git version
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.6632892Z git version 2.55.0
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.6681707Z Temporarily overriding HOME='/home/runner/work/_temp/f38534b7-652d-4548-b221-a791d8c7866a' before making global git config changes
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.6683098Z Adding repository directory to the temporary git global config as a safe directory
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.6690370Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.6728900Z Removing SSH command configuration
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.6737766Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.6782885Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.7094492Z Removing HTTP extra header
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.7122263Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.7164812Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.7464291Z Removing includeIf entries pointing to credentials config files
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.7487931Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.7544021Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.8187757Z Cleaning up orphan processes
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.8344280Z Terminate orphan process: pid (5993) (make)
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.8375087Z Terminate orphan process: pid (6001) (python3)
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.8504003Z Terminate orphan process: pid (8667) (cargo)
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.8587417Z Terminate orphan process: pid (9128) (rustc)
+simd-asm-projection	UNKNOWN STEP	2026-10-15T00:38:59.8626033Z Terminate orphan process: pid (9181) (rustc)

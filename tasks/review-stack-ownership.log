@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 7m 24s
+     Running unittests src/lib.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 3 tests
+test eval::tests::ordinary_runner_lateral_box_and_pending_spill_refuse_before_child_entry ... ok
+test eval::tests::ordinary_runner_exists_box_refusal_precedes_copied_scope_installation ... ok
+test eval::tests::ordinary_runner_nested_results_release_all_grants_after_the_last_output ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1627 filtered out; finished in 0.00s
+

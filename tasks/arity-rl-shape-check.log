@@ -1,0 +1,119 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+error[E0277]: the trait bound `purrdf_datalog::store::Arity<N>: StoreShape<N>` is not satisfied
+   --> crates/shapes/src/srl/lower.rs:56:24
+    |
+ 56 |     fn is_output(fact: &ShapeFact<N>) -> bool;
+    |                        ^^^^^^^^^^^^^ the trait `StoreShape<N>` is not implemented for `purrdf_datalog::store::Arity<N>`
+    |
+help: the following other types implement trait `StoreShape<N>`
+   --> crates/datalog/src/store.rs:956:1
+    |
+956 | impl StoreShape<3> for Arity<3> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<3>` implements `StoreShape<3>`
+...
+986 | impl StoreShape<4> for Arity<4> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<4>` implements `StoreShape<4>`
+
+error: the type `&Fact<<purrdf_datalog::store::Arity<N> as StoreShape<N>>::Graph>` is not well-formed
+  --> crates/shapes/src/srl/lower.rs:56:24
+   |
+56 |     fn is_output(fact: &ShapeFact<N>) -> bool;
+   |                        ^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `purrdf_datalog::store::Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/shapes/src/srl/lower.rs:59:17
+     |
+  59 |         store: &RelationStore<TermInterner, N>,
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `StoreShape<N>` is not implemented for `purrdf_datalog::store::Arity<N>`
+     |
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:956:1
+     |
+ 956 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<3>` implements `StoreShape<3>`
+...
+ 986 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RelationStore`
+    --> crates/datalog/src/store.rs:1227:15
+     |
+1225 | pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
+     |            ------------- required by a bound in this struct
+1226 | where
+1227 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RelationStore`
+
+error[E0277]: the trait bound `purrdf_datalog::store::Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/shapes/src/srl/lower.rs:64:21
+     |
+  64 |         store: &mut RelationStore<TermInterner, N>,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `StoreShape<N>` is not implemented for `purrdf_datalog::store::Arity<N>`
+     |
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:956:1
+     |
+ 956 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<3>` implements `StoreShape<3>`
+...
+ 986 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RelationStore`
+    --> crates/datalog/src/store.rs:1227:15
+     |
+1225 | pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
+     |            ------------- required by a bound in this struct
+1226 | where
+1227 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RelationStore`
+
+error[E0277]: the trait bound `purrdf_datalog::store::Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/shapes/src/srl/lower.rs:69:16
+     |
+  69 |         store: RelationStore<TermInterner, N>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `StoreShape<N>` is not implemented for `purrdf_datalog::store::Arity<N>`
+     |
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:956:1
+     |
+ 956 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<3>` implements `StoreShape<3>`
+...
+ 986 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RelationStore`
+    --> crates/datalog/src/store.rs:1227:15
+     |
+1225 | pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
+     |            ------------- required by a bound in this struct
+1226 | where
+1227 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RelationStore`
+
+error[E0277]: the trait bound `purrdf_datalog::store::Arity<N>: StoreShape<N>` is not satisfied
+    --> crates/shapes/src/srl/lower.rs:70:17
+     |
+  70 |     ) -> Result<RelationStore<TermInterner, N>, StorageError>;
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `StoreShape<N>` is not implemented for `purrdf_datalog::store::Arity<N>`
+     |
+help: the following other types implement trait `StoreShape<N>`
+    --> crates/datalog/src/store.rs:956:1
+     |
+ 956 | impl StoreShape<3> for Arity<3> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<3>` implements `StoreShape<3>`
+...
+ 986 | impl StoreShape<4> for Arity<4> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `purrdf_datalog::store::Arity<4>` implements `StoreShape<4>`
+note: required by a bound in `RelationStore`
+    --> crates/datalog/src/store.rs:1227:15
+     |
+1225 | pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
+     |            ------------- required by a bound in this struct
+1226 | where
+1227 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `RelationStore`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 6 previous errors
+
+terminal_status=101

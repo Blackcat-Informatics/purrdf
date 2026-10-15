@@ -1,0 +1,68 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+error[E0277]: the trait bound `ShapesError: From<NativeBuildError>` is not satisfied
+   --> crates/shapes/src/srl/eval.rs:337:13
+    |
+337 | /             builder
+338 | |                 .freeze()
+339 | |                 .map(Arc::new)
+340 | |                 .map_err(crate::error::ShapesError::from)
+    | |_________________________________________________________^ unsatisfied trait bound
+    |
+help: the trait `From<NativeBuildError>` is not implemented for `ShapesError`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = help: `ShapesError` implements trait `From<T>`:
+              From<&str>
+              From<DatasetImportError<!>>
+              From<IriReadError>
+              From<RdfDiagnostic>
+              From<ShapesImportError>
+              From<purrdf_lex::allocation::StorageError>
+              From<std::string::String>
+
+error[E0277]: the trait bound `ShapesError: From<NativeBuildError>` is not satisfied
+   --> crates/shapes/src/srl/eval.rs:340:18
+    |
+340 |                 .map_err(crate::error::ShapesError::from)
+    |                  ^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `From<NativeBuildError>` is not implemented for `ShapesError`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = help: `ShapesError` implements trait `From<T>`:
+              From<&str>
+              From<DatasetImportError<!>>
+              From<IriReadError>
+              From<RdfDiagnostic>
+              From<ShapesImportError>
+              From<purrdf_lex::allocation::StorageError>
+              From<std::string::String>
+
+error[E0277]: the trait bound `ShapesError: From<NativeBuildError>` is not satisfied
+   --> crates/shapes/src/srl/eval.rs:340:26
+    |
+340 |                 .map_err(crate::error::ShapesError::from)
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `From<NativeBuildError>` is not implemented for `ShapesError`
+   --> crates/shapes/src/error.rs:49:1
+    |
+ 49 | pub enum ShapesError {
+    | ^^^^^^^^^^^^^^^^^^^^
+    = help: `ShapesError` implements trait `From<T>`:
+              From<&str>
+              From<DatasetImportError<!>>
+              From<IriReadError>
+              From<RdfDiagnostic>
+              From<ShapesImportError>
+              From<purrdf_lex::allocation::StorageError>
+              From<std::string::String>
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 3 previous errors
+
+terminal_status=101

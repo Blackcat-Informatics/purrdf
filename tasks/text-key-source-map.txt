@@ -1,0 +1,91 @@
+10://! there is no default set — [`TextIndexConfig::new`] refuses an empty one
+46://! fewer rows. So [`TextIndex::from_dataset`] walks both layers. In the
+53://! Document ids are assigned only after every document has been sorted by
+89:/// Domain-separation prefix for [`TextIndex::fingerprint`].
+91:/// Domain-separation prefix for [`TextIndex::source_fingerprint`].
+124:pub struct TextIndexConfig {
+135:impl TextIndexConfig {
+231:/// [`TextIndex::from_dataset`] reads a configured predicate the dataset carries
+237:/// can read, off the index it already holds ([`TextIndex::source_coverage`]) or
+330:pub struct PartitionKey {
+337:impl PartitionKey {
+390:pub struct Document {
+409:impl Document {
+501:pub struct TextIndex {
+503:    config: TextIndexConfig,
+517:    documents: Vec<Document>,
+518:    /// Document ids sorted by `(subject, id)` — the side index a subject lookup
+527:    /// Partitions sorted by [`PartitionKey`], with their statistics.
+528:    partitions: Vec<(PartitionKey, PartitionStats)>,
+555:impl TextIndex {
+610:        config: &TextIndexConfig,
+632:        config: &TextIndexConfig,
+714:    pub fn field_totals(&self, partition: &PartitionKey) -> Option<&[u128]> {
+720:    pub fn field_populations(&self, partition: &PartitionKey) -> Option<&[u64]> {
+728:        partition: &PartitionKey,
+750:        partition: &PartitionKey,
+921:        partition: &PartitionKey,
+966:    pub const fn config(&self) -> &TextIndexConfig {
+1006:    /// Every partition and its statistics, ascending by [`PartitionKey`].
+1007:    pub fn partitions(&self) -> impl Iterator<Item = (&PartitionKey, &PartitionStats)> {
+1012:    pub fn partition_stats(&self, partition: &PartitionKey) -> Option<&PartitionStats> {
+1019:    pub fn documents(&self) -> impl Iterator<Item = &Document> {
+1024:    pub fn document(&self, id: u32) -> Option<&Document> {
+1060:            index: &TextIndex,
+1126:    pub fn partitions_holding_subject(&self, subject: &TermValue) -> Vec<PartitionKey> {
+1127:        let mut keys: Vec<PartitionKey> = self
+1138:    pub fn partition_key_of(&self, id: u32) -> Option<&PartitionKey> {
+1153:    pub(crate) fn local_partition_ordinal(&self, partition: &PartitionKey) -> Option<usize> {
+1155:        let stride = size_of::<(PartitionKey, PartitionStats)>();
+1171:        partition: &PartitionKey,
+1173:    ) -> Result<Option<&PartitionKey>, purrdf_sparql_eval::EvalError> {
+1205:        self.documents.get(id as usize).map(Document::length)
+1218:    pub fn document_frequency(&self, partition: &PartitionKey, term: &str) -> u64 {
+1229:        partition: &PartitionKey,
+1349:    fn partition_index(&self, partition: &PartitionKey) -> Option<u32> {
+1368:    fn partition_postings(&self, partition: &PartitionKey, term: &str) -> &[Posting] {
+1381:        config: TextIndexConfig,
+1382:        documents: Vec<AnalyzedDocument>,
+1397:        let table: Vec<Document> = documents
+1399:            .map(|document| Document {
+1565:/// Document ids sorted by `(subject, id)`.
+1571:fn build_subject_order(table: &[Document]) -> Vec<u32> {
+1603:/// row; [`SourceRow::literal`] rebuilds the term when the digest needs it.
+1608:struct SourceRow {
+1625:impl SourceRow {
+1639:struct DocumentKey {
+1664:struct AnalyzedDocument {
+1666:    key: DocumentKey,
+1696:    config: &TextIndexConfig,
+1697:) -> Result<(Vec<SourceRow>, SourceCoverage), TextError> {
+1774:        config: &TextIndexConfig,
+1795:    fn nothing_in_scope<D: DatasetView>(dataset: &D, config: &TextIndexConfig) -> Self {
+1823:    rows: &mut Vec<SourceRow>,
+1845:    rows.push(SourceRow {
+1882:    rows: &[SourceRow],
+1883:    config: &TextIndexConfig,
+1884:) -> Result<(Vec<AnalyzedDocument>, Vec<String>), TextError> {
+1885:    let mut groups: FastMap<DocumentKey, Vec<u32>> = FastMap::default();
+1887:        let key = DocumentKey {
+1898:    let mut documents: Vec<AnalyzedDocument> = Vec::with_capacity(groups.len());
+1975:        documents.push(AnalyzedDocument {
+1990:type Partitioning = (
+1991:    Vec<(PartitionKey, PartitionStats)>,
+1992:    FastMap<DocumentKey, u32>,
+1996:fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, TextError> {
+1997:    let mut totals: FastMap<PartitionKey, (u64, u64)> = FastMap::default();
+1999:        let key = PartitionKey {
+2008:    let mut keys: Vec<PartitionKey> = totals.keys().cloned().collect();
+2012:    let mut index_of: FastMap<PartitionKey, u32> = FastMap::default();
+2030:    let mut partition_of: FastMap<DocumentKey, u32> = FastMap::default();
+2032:        let key = PartitionKey {
+2049:    documents: &[AnalyzedDocument],
+2051:    table: &[Document],
+2147:/// ([`TextIndex::source_fingerprint`] and [`TextIndex::source_coverage`]).
+2164:    config: &TextIndexConfig,
+2171:fn digest_rows(rows: &[SourceRow]) -> [u8; FINGERPRINT_BYTES] {
+2284:        Digest, GraphSelector, PartitionKey, SOURCE_DIGEST_DOMAIN, TextIndexConfig, exact_average,
+2293:        let config = TextIndexConfig::new(
+2315:        let error = TextIndexConfig::new(
+2366:        let key = PartitionKey::new(None, None);
+2370:        let named = PartitionKey::new(

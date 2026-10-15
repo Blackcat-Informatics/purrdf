@@ -1,0 +1,123 @@
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.15
+   Compiling rustversion v1.0.22
+   Compiling syn v2.0.118
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling digest v0.11.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling sha2 v0.11.0
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-events)
+   Compiling once_cell v1.21.4
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/testkit)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/alloc-probe)
+    Finished `test` profile [optimized] target(s) in 3m 41s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-core/a6d3c80532194d33/out/triple_carrier-a6d3c80532194d33.wasm)
+
+running 5 tests
+test compact_statement_probes_populate_only_the_requested_ordinal_arrays ... ok
+test compact_layout_and_all_bound_shapes ... ok
+test owned_transfer_preserves_lexical_owner_and_flat_statement_identity ... ok
+test conversion_refuses_every_named_role_including_empty_declarations ... ok
+test refused_child_stops_existing_streams_and_fresh_session_is_healthy ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Compiling crossbeam-utils v0.8.21
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling either v1.16.0
+   Compiling rayon v1.12.0
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 57.90s
+     Running tests/rules_runtime.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-datalog/9d78c1fc5d2ce658/out/rules_runtime-9d78c1fc5d2ce658.wasm)
+
+running 4 tests
+test triple_base_authority_survives_data_growth_and_layer_retraction ... ok
+test triple_no_output_runs_the_body_without_fabricating_a_fact ... ok
+test triple_store_has_predicate_only_keys_and_transactional_original_ids ... ok
+test triple_compiler_preserves_static_arity_and_original_admission ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.03s
+
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo-kernel)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 10m 21s
+     Running tests/host_identity.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/cfe43c99924f835c/out/host_identity-cfe43c99924f835c.wasm)
+
+running 2 tests
+test triple_graph_support_precedes_empty_and_nested_query_shortcuts ... ok
+test triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.15s
+
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.2
+   Compiling cpubits v0.1.1
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling aead v0.6.1
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling structured-zstd v0.0.49
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling proc-macro2 v1.0.106
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/gts)
+   Compiling quote v1.0.46
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+   Compiling syn v2.0.118
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/jsonschema)
+    Finished `test` profile [optimized] target(s) in 7m 58s
+     Running tests/srl_language.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-shapes/6631858bad0af344/out/srl_language-6631858bad0af344.wasm)
+
+running 2 tests
+test triple_carrier_runs_the_public_rl_program_without_quad_storage ... ok
+test triple_rl_keeps_statement_roles_and_scoped_blank_identity ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.04s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/text)
+    Finished `test` profile [optimized] target(s) in 2m 14s
+     Running tests/physical_shapes.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-text/f3528ab5cf8bda87/out/physical_shapes-f3528ab5cf8bda87.wasm)
+
+running 2 tests
+test graph_free_corpus_keys_ranking_and_query ... ok
+test graph_free_rdf12_partitions_and_named_refusal ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.10s
+
+
+terminal_status=0

@@ -1,0 +1,34 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/rdf-core/benches/ir_layout.rs:403:13
+    |
+403 |             b.iter(|| std::hint::black_box(build_triple_corpus(rows)))
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `b.iter(|| std::hint::black_box(build_triple_corpus(rows)));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/rdf-core/benches/ir_layout.rs:406:13
+    |
+406 | /             b.iter(|| {
+407 | |                 std::hint::black_box(
+408 | |                     dataset
+409 | |                         .triples_for_pattern(None, Some(predicate), None)
+...   |
+413 | |             })
+    | |______________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+406 |             b.iter(|| {
+...
+412 |                 )
+413 ~             });
+    |
+
+error: could not compile `purrdf-core` (bench "ir_layout") due to 2 previous errors
+
+terminal_status=101

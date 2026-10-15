@@ -1,0 +1,22 @@
+    Finished `test` profile [optimized] target(s) in 0.28s
+     Running unittests src/lib.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 15 tests
+test binop::tests::empty_optional_padding_observes_cells_before_a_zero_limit ... ok
+test binop::tests::optional_keeps_unmatched_left_with_unbound_right ... ok
+test binop::tests::fuel_trip_mid_optional_probe_never_emits_an_unbound_extension ... ok
+test binop::tests::optional_inline_filter_excludes_failing_pairings ... ok
+test enf::tests::preserved_exists_maps_optional_nodes_and_the_synthetic_witness_wrapper ... ok
+test path::tests::same_var_reflexive_optional ... ok
+test service_endpoints::tests::a_service_under_a_further_optional_or_an_unprojecting_subselect_is_refused ... ok
+test service_endpoints::tests::optional_answers_per_endpoint_and_keeps_a_left_row_its_endpoint_answers_nothing_for ... ok
+test service_endpoints::tests::parent_served_lookup_keeps_optional_contextual_endpoints_indirect ... ok
+test eval::tests::optional_filter_forced_parallel_and_sequential_agree ... ok
+test user_fn::tests::a_user_function_argument_reaches_an_optional_right_arm ... ok
+test engine::tests::prebinding_reaches_an_optional_right_arm ... ok
+test user_fn::tests::invocation_admission::invocation_law_observes_actual_calls_and_all_optional_parameters ... ok
+test substitute::walk_tests::shacl_rewrites_deep_quoted_predicates_inside_an_optional_on_a_128_kib_thread ... ok
+test row_checkpoint_gate::a_forked_exact_filter_group_fold_and_optional_trip_where_the_direct_loops_do ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1615 filtered out; finished in 6.32s
+

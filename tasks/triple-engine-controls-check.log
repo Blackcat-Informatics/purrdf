@@ -1,0 +1,65 @@
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/alloc-probe)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+error[E0599]: no method named `clone` found for struct `purrdf_core::RdfDataset` in the current scope
+   --> crates/sparql-eval/tests/host_identity.rs:484:50
+    |
+484 |     let triple = TripleDataset::try_from((*quad).clone()).unwrap();
+    |                                                  ^^^^^ method not found in `purrdf_core::RdfDataset`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/host_identity.rs:583:17
+    |
+576 |           match (expected, actual) {
+    |                 ------------------ this expression has type `(SparqlResult, RetainedSparqlResult)`
+...
+583 | /                 SparqlResult::Solutions {
+584 | |                     variables: av,
+585 | |                     rows: ar,
+586 | |                     ..
+587 | |                 },
+    | |_________________^ expected `RetainedSparqlResult`, found `SparqlResult`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/host_identity.rs:592:47
+    |
+576 |         match (expected, actual) {
+    |               ------------------ this expression has type `(SparqlResult, RetainedSparqlResult)`
+...
+592 |             (SparqlResult::Boolean(expected), SparqlResult::Boolean(actual)) => {
+    |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RetainedSparqlResult`, found `SparqlResult`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/host_identity.rs:595:45
+    |
+576 |         match (expected, actual) {
+    |               ------------------ this expression has type `(SparqlResult, RetainedSparqlResult)`
+...
+595 |             (SparqlResult::Graph(expected), SparqlResult::Graph(actual)) => assert_eq!(
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RetainedSparqlResult`, found `SparqlResult`
+
+error[E0369]: binary operation `==` cannot be applied to type `Canonicalized`
+   --> crates/sparql-eval/tests/host_identity.rs:595:77
+    |
+595 |               (SparqlResult::Graph(expected), SparqlResult::Graph(actual)) => assert_eq!(
+    |  _____________________________________________________________________________^
+596 | |                 try_canonicalize_flat_view(actual.as_ref(), CanonHash::Sha256).unwrap(),
+597 | |                 try_canonicalize_flat_view(expected.as_ref(), CanonHash::Sha256).unwrap(),
+598 | |                 "{query}"
+599 | |             ),
+    | |             ^
+    | |             |
+    | |_____________Canonicalized
+    |               Canonicalized
+    |
+note: `Canonicalized` does not implement `PartialEq`
+   --> crates/rdf-core/src/ir/canon.rs:405:1
+    |
+405 | pub struct Canonicalized<Id = TermId> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Canonicalized` is defined in another crate
+
+Some errors have detailed explanations: E0308, E0369, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (test "host_identity") due to 5 previous errors
+
+terminal_status=101

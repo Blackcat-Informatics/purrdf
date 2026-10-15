@@ -1,0 +1,4 @@
+== x86_64-v4: 4 Cargo jobs
+== x86_64-v4 graph 0: /opt/.cargo/slots/d72a38990a2d7c16/0/cargo.graph-0.stderr.log
+== x86_64-v4 graph 1: /opt/.cargo/slots/d72a38990a2d7c16/0/cargo.graph-1.stderr.log
+== x86_64-v4: {"analysis_seconds": 20.916554476949386, "build_seconds": 89.34584929002449, "fresh_artifacts": 135, "lock_seconds": 0.0010125989792868495, "parsed_units": 139, "reused_units": 0, "rustc_invocations": 4, "seconds": 110.29531113000121}

@@ -1,0 +1,7 @@
+== aarch64: 4 Cargo jobs
+== aarch64 graph 0: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/8bb0b65be1332ebf738a524715984d1baee343d677b1461f72857940691d0fcc/cargo.graph-0.stderr.log
+== aarch64 graph 1: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/8bb0b65be1332ebf738a524715984d1baee343d677b1461f72857940691d0fcc/cargo.graph-1.stderr.log
+== aarch64 graph 2: /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/target/simd-asm/contexts/8bb0b65be1332ebf738a524715984d1baee343d677b1461f72857940691d0fcc/cargo.graph-2.stderr.log
+== aarch64: {"analysis_seconds": 32.54485556803411, "build_seconds": 1665.8418533760123, "fresh_artifacts": 65, "lock_seconds": 0.0002916310331784189, "parsed_units": 209, "reused_units": 0, "rustc_invocations": 144, "seconds": 1698.7463404939626}
+aarch64              purrdf_text  <purrdf_text::relation::TextSearchRelation>::holdings_owned
+                     v0 f0 r0  [multimodal_on_demand_read-df79c7f1f811d081.s]  add×65, sub×24

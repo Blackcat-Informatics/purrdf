@@ -1,0 +1,37 @@
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/helper-census)
+    Finished `test` profile [optimized] target(s) in 1m 44s
+     Running unittests src/main.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/helper-census/2fb2e3fd4c1dbfce/out/helper_census-2fb2e3fd4c1dbfce)
+
+running 1 test
+test capacity::tests::reconstruction_proofs_fail_closed_on_source_and_constructor_changes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.01s
+
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/testkit)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/helper-census)
+error: `format!(..)` appended to existing `String`
+    --> crates/helper-census/src/capacity.rs:1436:17
+     |
+1436 | /                 changed
+1437 | |                     .files
+1438 | |                     .get_mut("crates/rdf-core/src/ir/mod.rs")
+1439 | |                     .unwrap()
+1440 | |                     .push_str(&format!("{cfg} #[path=\"{mount}\"] mod escaped_owner;"));
+     | |_______________________________________________________________________________________^
+     |
+     = note: you may need to import the `std::fmt::Write` trait
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#format_push_string
+     = note: `-D clippy::format-push-string` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::format_push_string)]`
+help: consider using `write!` to avoid the extra allocation
+     |
+1436 ~                 let _ = write!(changed
+1437 +                     .files
+1438 +                     .get_mut("crates/rdf-core/src/ir/mod.rs")
+1439 ~                     .unwrap(), "{cfg} #[path=\"{mount}\"] mod escaped_owner;");
+     |
+
+error: could not compile `helper-census` (bin "helper-census" test) due to 1 previous error
+terminal_status=101

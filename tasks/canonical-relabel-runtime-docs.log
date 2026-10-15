@@ -1,0 +1,181 @@
+rustc 1.101.0-nightly (822182db4 2026-10-13)
+binary: rustc
+commit-hash: 822182db4c4a1827256881d8c7aa685f0bcf2b11
+commit-date: 2026-10-13
+host: x86_64-unknown-linux-gnu
+release: 1.101.0-nightly
+LLVM version: 23.1.3
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking digest v0.11.3
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling libc v0.2.186
+    Checking sha2 v0.11.0
+    Checking regex-automata v0.4.14
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/deflate)
+    Checking hashbrown v0.17.1
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/stack)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/alloc-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 51s
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling libc v0.2.186
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/alloc-probe)
+    Finished `test` profile [optimized] target(s) in 3m 44s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-core/b8de4aea1edcda05/out/triple_carrier-b8de4aea1edcda05)
+
+running 1 test
+test owned_transfer_preserves_lexical_owner_and_flat_statement_identity ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling quote v1.0.46
+   Compiling hybrid-array v0.4.15
+   Compiling rustversion v1.0.22
+   Compiling syn v2.0.118
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+   Compiling bumpalo v3.20.3
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling digest v0.11.3
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+   Compiling once_cell v1.21.4
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/alloc-probe)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/stack)
+    Finished `test` profile [optimized] target(s) in 5m 27s
+     Running tests/triple_carrier.rs (/opt/.cargo/e9/d4ac5e067d6fe0/wasm32-unknown-unknown/debug/build/purrdf-core/a6d3c80532194d33/out/triple_carrier-a6d3c80532194d33.wasm)
+
+running 1 test
+test owned_transfer_preserves_lexical_owner_and_flat_statement_identity ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.02s
+
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+   Compiling crossbeam-utils v0.8.21
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking digest v0.11.3
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-events)
+    Checking sha2 v0.11.0
+    Checking regex-syntax v0.8.11
+    Checking regex-automata v0.4.14
+    Checking crossbeam-epoch v0.9.18
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+    Checking crossbeam-deque v0.8.6
+    Checking regex v1.12.4
+    Checking inout v0.2.2
+    Checking hashbrown v0.17.1
+    Checking cmov v0.5.4
+    Checking ctutils v0.4.2
+    Checking either v1.16.0
+    Checking cpubits v0.1.1
+    Checking rayon v1.12.0
+    Checking universal-hash v0.6.1
+    Checking cipher v0.5.2
+    Checking polyval v0.7.3
+    Checking libc v0.2.186
+   Compiling getrandom v0.3.4
+    Checking ghash v0.6.0
+    Checking ctr v0.10.1
+    Checking aes v0.9.3
+    Checking aead v0.6.1
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking structured-zstd v0.0.49
+    Checking aes-gcm v0.11.1
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/stack)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-results)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-algebra)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/ed25519)
+    Checking visual-hashing v1.0.0
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/gts)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/slice)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+ Documenting purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/shapes)
+ Documenting purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error: unclosed HTML tag `N`
+    --> crates/datalog/src/chase.rs:1316:17
+     |
+1316 |     /// Position<N> `i` here is position `i` of [`Self::derived`] — the same facts, in the same
+     |                 ^^^
+     |
+     = note: `-D rustdoc::invalid-html-tags` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(rustdoc::invalid_html_tags)]`
+help: try marking as source code
+     |
+1316 |     /// `Position<N>` `i` here is position `i` of [`Self::derived`] — the same facts, in the same
+     |         +           +
+
+error: could not document `purrdf-datalog`
+
+terminal_status=101

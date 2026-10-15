@@ -1,0 +1,9 @@
+Auto-merging crates/sparql-eval/src/eval.rs
+Auto-merging docs/book/po/zh-Hans.po
+CONFLICT (content): Merge conflict in docs/book/po/zh-Hans.po
+Auto-merging docs/design/purrdf-simd.md
+Auto-merging helpers-ledger.toml
+CONFLICT (content): Merge conflict in helpers-ledger.toml
+Recorded preimage for 'docs/book/po/zh-Hans.po'
+Recorded preimage for 'helpers-ledger.toml'
+Automatic merge failed; fix conflicts and then commit the result.

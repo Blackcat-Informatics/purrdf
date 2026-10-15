@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [optimized] target(s) in 0.82s
+     Running unittests src/main.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/helper-census/2fb2e3fd4c1dbfce/out/helper_census-2fb2e3fd4c1dbfce)
+
+running 1 test
+test capacity::tests::reconstruction_proofs_fail_closed_on_source_and_constructor_changes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.01s
+
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/target/492-triple-only-carrier-for-rdf-1-2-0f2597f5/debug/helper-census --index`
+FAIL: job `frozen-nesting-bound`: forbidden fingerprint `shim:676d6014a0e29d48` matches nothing (STALE)
+
+terminal_status=1

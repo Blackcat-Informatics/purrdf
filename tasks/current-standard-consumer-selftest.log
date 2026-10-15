@@ -1,0 +1,44 @@
+Exception in thread Thread-1 (<lambda>):
+Traceback (most recent call last):
+  File "/home/paudley/.local/share/uv/python/cpython-3.13.5-linux-x86_64-gnu/lib/python3.13/threading.py", line 1043, in _bootstrap_inner
+    self.run()
+    ~~~~~~~~^^
+  File "/home/paudley/.local/share/uv/python/cpython-3.13.5-linux-x86_64-gnu/lib/python3.13/threading.py", line 994, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/scripts/test_simd_asm_runtime.py", line 287, in <lambda>
+    thread = threading.Thread(target=lambda: results.append(runtime.Runner.execute(
+                                                            ~~~~~~~~~~~~~~~~~~~~~~^
+        self.runner, [sys.executable, "-c", "import time; time.sleep(30)"],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        {**os.environ, "CARGO_TARGET_DIR": str(root / "target")}, lease)))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/scripts/simd_asm_runtime.py", line 102, in execute
+    directory = self.log_directory
+                ^^^^^^^^^^^^^^^^^^
+AttributeError: 'Runner' object has no attribute 'log_directory'
+F...........E....
+======================================================================
+ERROR: test_graph_logs_are_distinct_and_preserve_each_invocation (test_simd_asm_runtime.EvidenceTests.test_graph_logs_are_distinct_and_preserve_each_invocation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/scripts/test_simd_asm_runtime.py", line 187, in test_graph_logs_are_distinct_and_preserve_each_invocation
+    proc = runtime.Runner.execute(self.runner, cmd, env, lease, graph)
+  File "/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/scripts/simd_asm_runtime.py", line 102, in execute
+    directory = self.log_directory
+                ^^^^^^^^^^^^^^^^^^
+AttributeError: 'Runner' object has no attribute 'log_directory'
+
+======================================================================
+FAIL: test_cancellation_stops_owned_process_and_releases_lease (test_simd_asm_runtime.EvidenceTests.test_cancellation_stops_owned_process_and_releases_lease)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/scripts/test_simd_asm_runtime.py", line 297, in test_cancellation_stops_owned_process_and_releases_lease
+    self.assertEqual(len(results), 1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+----------------------------------------------------------------------
+Ran 17 tests in 5.263s
+
+FAILED (failures=1, errors=1)

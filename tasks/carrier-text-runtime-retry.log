@@ -1,0 +1,22 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/text)
+    Finished `test` profile [optimized] target(s) in 2m 44s
+     Running tests/physical_shapes.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-text/4c8926fa3987b9d1/out/physical_shapes-4c8926fa3987b9d1)
+
+running 2 tests
+test graph_free_rdf12_partitions_and_named_refusal ... ok
+graph-free index=08c1850e2ce03fbc0fb92bf89130ba78314c023a5235e7ed2193c05b168c5399 source=437159b6041d315f3d10e109b0e977c2301615708e64eae09e6eaf6b9319a9fa; quad index=d347ac0fd6363afafe681989dd20d4a45e854b2750b1e4e5744e477f1e90c68a source=8fe603c2d2943c0c01bc6119d5adf7d3391fd3aa9ee611c41cd73a7b7f1872fe
+test graph_free_corpus_keys_ranking_and_query ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/text)
+    Finished `test` profile [optimized] target(s) in 14.76s
+     Running tests/scoring.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/purrdf-text/9080425a30b0ab12/out/scoring-9080425a30b0ab12)
+
+running 1 test
+test the_published_text_identities_are_frozen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.00s
+
+
+terminal_status=0

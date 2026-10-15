@@ -1,0 +1,158 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/jsonschema)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/testkit)
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/helper-census)
+    Finished `test` profile [optimized] target(s) in 3m 00s
+     Running unittests src/main.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/helper-census/2fb2e3fd4c1dbfce/out/helper_census-2fb2e3fd4c1dbfce)
+
+running 82 tests
+test capacity::tests::checked_index_proofs_do_not_certify_shadowing_bindings ... ok
+test capacity::tests::fixed_constants_and_nonzero_width_proofs_keep_invalid_neighbours ... ok
+test capacity::tests::checked_concrete_vector_enumeration_does_not_prove_foreign_counts ... ok
+test capacity::tests::original_producer_shapes_and_csr_are_refused_without_message_matching ... ok
+test capacity::tests::physical_and_fixed_invariants_and_typed_propagation_are_not_capacity_panics ... ok
+test capacity::tests::shipping_function_and_impl_declarations_preserve_cfg_reachability ... ok
+test capacity::tests::dominating_slot_proof_is_operand_and_order_sensitive ... ok
+test capacity::tests::typed_aliases_locals_error_branches_and_macros_are_seen ... ok
+test glossary::pattern::tests::syntax_and_resource_errors_are_not_no_match ... ok
+test glossary::pattern::tests::python_unicode_classes_and_case ... ok
+test glossary::po::tests::continuations_context_plural_and_suppression ... ok
+test glossary::po::tests::malformed_inputs_fail ... ok
+test glossary::surface::tests::fences_and_exact_runs ... ok
+test glossary::surface::tests::form_feed_is_neither_title_separator_nor_fence_closing_space ... ok
+test capacity::tests::shipping_reachability_and_gate_projection_are_enforced ... ok
+test glossary::surface::tests::hidden_destinations_visible_labels_and_offsets ... ok
+test glossary::surface::tests::multiline_inline_links_preserve_labels_offsets_and_block_boundaries ... ok
+test glossary::tests::table_escapes_and_malformed_contract ... ok
+test glossary::tests::keep_english_requires_literal_anchors_and_non_keep_regex_remains_active ... ok
+test layout::tests::a_count_a_varint_and_a_hasher_integer_are_not_frames ... ok
+test layout::tests::a_field_written_after_its_own_length_is_found ... ok
+test layout::tests::a_first_mismatch_by_hand_is_found_and_its_neighbours_are_not ... ok
+test layout::tests::shipping_impl_walk_keeps_portable_items_and_omits_test_only_items ... ok
+test layout::tests::slice_indexed_integers_and_alignment_masks_are_found_and_nothing_else ... ok
+test ledger::tests::a_complete_row_is_read ... ok
+test ledger::tests::a_distinct_row_is_read_with_its_members_sorted ... ok
+test ledger::tests::a_distinct_row_needs_a_known_kind_two_members_and_no_twin ... ok
+test ledger::tests::a_missing_or_unknown_key_is_refused ... ok
+test ledger::tests::a_variant_needs_a_known_criterion ... ok
+test non_rust::tests::an_explanation_needs_the_marker_and_a_reason ... ok
+test non_rust::tests::extensions_and_shebangs_classify ... ok
+test non_rust::tests::heredocs_fed_to_a_runtime_count ... ok
+test non_rust::tests::line_count_counts_an_unterminated_last_line ... ok
+test non_rust::tests::ratcheted_roots_are_exact ... ok
+test normalize::tests::a_rule_id_is_a_census_rule_or_a_delegated_one ... ok
+test normalize::tests::a_thin_forwarder_gets_a_shim_print_and_a_long_body_does_not ... ok
+test normalize::tests::a_type_declared_inside_a_body_is_a_local_name ... ok
+test normalize::tests::binary_ampersand_and_star_are_kept ... ok
+test normalize::tests::bodies_that_differ_only_in_names_and_literals_collide ... ok
+test normalize::tests::borrow_deref_clone_and_index_forms_are_one_value_form ... ok
+test normalize::tests::different_control_flow_does_not_collide ... ok
+test normalize::tests::field_names_are_kept ... ok
+test normalize::tests::hex_tables_are_found_in_every_spelling_and_nothing_else_is ... ok
+test normalize::tests::integer_constants_compare_by_value_in_every_spelling ... ok
+test normalize::tests::joined_punctuation_is_distinct_from_separate_punctuation ... ok
+test normalize::tests::renaming_is_positional_so_a_repeated_name_is_not_two_names ... ok
+test normalize::tests::small_bodies_keep_their_literals ... ok
+test normalize::tests::string_literals_are_decoded_in_every_spelling_with_their_line ... ok
+test normalize::tests::types_are_erased_and_const_arguments_are_kept ... ok
+test policy::tests::all_policy_negative_vectors_and_valid_neighbors_hold ... ok
+test policy::tests::feature_maps_ignore_packages_outside_the_workspace ... ok
+test policy::tests::lines_and_rules_match_the_former_dead_test_guard ... ok
+test policy::tests::missing_governed_directory_fails_and_empty_directory_passes ... ok
+test policy::tests::python_sources_have_no_build_directory_exemption ... ok
+test policy::tests::the_source_walk_excludes_build_and_sibling_trees ... ok
+test rules::tests::a_bare_name_imported_from_elsewhere_is_not_std ... ok
+test rules::tests::a_byte_pair_radix_parse_and_a_digit_table_are_found ... ok
+test rules::tests::a_literal_equal_to_or_under_a_namespace_is_a_hit_and_a_neighbour_is_not ... ok
+test rules::tests::a_named_hasher_and_a_foreign_map_are_not_hits ... ok
+test rules::tests::a_pair_spec_in_a_loop_or_closure_is_found_and_nothing_else_is ... ok
+test rules::tests::an_embedded_document_needs_a_line_break_and_a_keyword ... ok
+test rules::tests::every_spelling_of_a_default_hasher_is_found ... ok
+test rules::tests::the_lexical_rules_fire_in_shipping_code_and_not_in_tests ... ok
+test source::tests::modules_resolve_through_reexports_and_impls_land_on_their_type ... ok
+test source::tests::paths_fold_and_escapes_are_excluded ... ok
+test source::tests::raw_module_identifiers_use_unprefixed_file_names ... ok
+test glossary::tests::whole_document_global_diagnostics_have_real_lines ... ok
+test source::tests::test_only_items_and_test_directories_are_not_walked ... ok
+test source::tests::test_targets_are_crates_and_a_shared_file_is_one_source ... ok
+test structure::tests::a_default_hasher_in_src_is_a_hit_even_in_a_test_module ... ok
+test capacity::tests::reconstruction_proofs_fail_closed_on_source_and_constructor_changes ... ok
+test structure::tests::a_looping_first_and_rest_reader_is_a_hit_and_a_neighbour_is_not ... ok
+test structure::tests::a_reifier_row_built_with_new_is_a_hit_and_a_plain_row_is_not ... ok
+test tests::baseline_takes_an_optional_path ... ok
+test structure::tests::a_second_date_now_or_reflect_get_import_is_a_hit_and_a_neighbour_is_not ... ok
+test tests::the_ratchet_needs_exactly_one_base_and_a_target ... ok
+test toml::tests::arrays_of_tables_nest_under_their_last_element ... ok
+test tests::two_modes_or_none_are_refused ... ok
+test toml::tests::constructs_outside_the_subset_are_refused_with_their_line ... ok
+test toml::tests::the_neighbouring_valid_spellings_are_accepted ... ok
+test tests::every_seeded_case_holds ... ok
+test glossary::tests::selected_glossary_runs_all_default_controls ... ok
+
+test result: ok. 82 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.76s
+
+     Running tests/glossary_callers.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/helper-census/2c857e2886dce291/out/glossary_callers-2c857e2886dce291)
+
+running 2 tests
+test production_parity_refuses_missing_native_glossary_callers ... ok
+test external_inputs_and_content_selected_renamed_markdown ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.27s
+
+     Running tests/non_rust_ratchet.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/helper-census/57ff80eebd0feaf4/out/non_rust_ratchet-57ff80eebd0feaf4)
+
+running 40 tests
+test a_missing_integration_ref_is_an_error_that_says_so ... ok
+test a_whitespace_only_neighbour_with_code_is_refused ... ok
+test a_short_or_misplaced_reason_is_refused ... ok
+test a_whitespace_only_python_file_needs_no_explanation ... ok
+test a_change_without_non_rust_code_is_accepted ... ok
+test an_explained_new_test_file_is_accepted ... ok
+test an_explicit_base_compares_against_that_commit ... ok
+test binary_neighbour_shrinking_under_binary_attributes_is_accepted ... ok
+test binary_attributes_cannot_hide_growth ... ok
+test an_unchanged_legacy_tree_is_accepted ... ok
+test f1_a_script_moved_out_of_scripts_and_grown_is_refused ... ok
+test f1_a_script_renamed_inside_scripts_and_grown_is_refused ... ok
+test f1_neighbour_a_moved_script_that_says_why_not_rust_is_accepted ... ok
+test f3_neighbour_an_unexplained_file_over_64_kib_is_refused ... ok
+test f3_an_explained_file_over_64_kib_is_accepted ... ok
+test f2_neighbour_an_explained_copy_is_accepted_under_every_setting ... ok
+test f4_cjs_and_mts_growth_in_crate_tests_is_refused ... ok
+test f4_cjs_growth_in_scripts_is_refused ... ok
+test f2_rename_and_copy_configuration_cannot_change_the_verdict ... ok
+test f4_mts_growth_in_scripts_is_refused ... ok
+test f4_neighbour_cjs_and_mts_shrinking_is_accepted ... ok
+test f5_neighbour_readding_no_larger_is_accepted ... ok
+test f6_a_new_shell_script_embedding_python_needs_an_explanation ... ok
+test f6_adding_a_node_heredoc_to_a_legacy_shell_script_is_refused ... ok
+test f5_deleting_then_readding_a_grown_legacy_file_is_refused ... ok
+test f6_extensionless_shebang_scripts_need_an_explanation ... ok
+test f6_growing_a_python_heredoc_in_a_legacy_shell_script_is_refused ... ok
+test f6_neighbour_a_new_shell_script_embedding_python_with_a_reason_is_accepted ... ok
+test f6_neighbour_explained_files_under_every_code_extension_are_accepted ... ok
+test f7_f8_every_enforcement_point_runs_the_ratchet ... ok
+test f6_neighbour_shebang_scripts_with_a_reason_and_plain_shell_are_accepted ... ok
+test f6_neighbour_shell_growth_outside_runtime_heredocs_and_shrinking_are_accepted ... ok
+test f6_new_pyw_pyi_cts_tsx_jsx_files_need_an_explanation ... ok
+test f8_a_merge_bringing_in_an_unexplained_file_is_refused ... ok
+test growth_under_every_ratcheted_root_is_refused ... ok
+test new_files_under_the_classic_code_extensions_need_an_explanation ... ok
+test f8_neighbour_merging_the_integration_branch_is_accepted ... ok
+test shipped_index_mjs_growth_is_accepted ... ok
+test vectors_and_generated_additions_need_no_explanation ... ok
+test the_working_tree_target_sees_unstaged_and_untracked_files ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+     Running tests/policy_guards.rs (/opt/.cargo/e9/d4ac5e067d6fe0/debug/build/helper-census/c0bd1ace1986e6e5/out/policy_guards-c0bd1ace1986e6e5)
+
+running 2 tests
+test python_test_policy_accepts_the_repository ... ok
+test feature_policy_accepts_the_repository ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.98s
+

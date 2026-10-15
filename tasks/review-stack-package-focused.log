@@ -1,0 +1,10 @@
+✔ a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included (5270.132756ms)
+ℹ deep no-poll-frame proof: 673128 polls, 457 yields
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5601.623272

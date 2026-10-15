@@ -1,0 +1,30 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error: assigning the result of `ToOwned::to_owned()` may be inefficient
+    --> crates/datalog/src/store.rs:1729:17
+     |
+1729 |                 terms[0] = self.interner.resolve(subject).to_owned();
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_into()`: `self.interner.resolve(subject).clone_into(&mut terms[0])`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+     = note: `-D clippy::assigning-clones` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assigning_clones)]`
+
+error: assigning the result of `ToOwned::to_owned()` may be inefficient
+    --> crates/datalog/src/store.rs:1730:17
+     |
+1730 |                 terms[2] = self.interner.resolve(object).to_owned();
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_into()`: `self.interner.resolve(object).clone_into(&mut terms[2])`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+
+error: assigning the result of `ToOwned::to_owned()` may be inefficient
+    --> crates/datalog/src/store.rs:1735:21
+     |
+1735 |                     terms[position] = (*surface).to_owned();
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_into()`: `(*surface).clone_into(&mut terms[position])`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+
+error: could not compile `purrdf-datalog` (lib) due to 3 previous errors
+
+terminal_status=101

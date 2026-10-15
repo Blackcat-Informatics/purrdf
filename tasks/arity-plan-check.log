@@ -1,0 +1,148 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0403]: the name `N` is already used for a generic parameter in this item's generic parameters
+    --> crates/datalog/src/plan.rs:1382:27
+     |
+1324 | impl<const N: usize> Parsed<N> {
+     |            - first use of `N`
+...
+1382 |     pub fn stratify<const N: usize>(self) -> Option<Stratified<N>> {
+     |                           ^ already used
+
+error[E0747]: unresolved item provided when a constant was expected
+    --> crates/datalog/src/plan.rs:1382:64
+     |
+1382 |     pub fn stratify<const N: usize>(self) -> Option<Stratified<N>> {
+     |                                                                ^
+     |
+help: if this generic argument was intended as a const parameter, surround it with braces
+     |
+1382 |     pub fn stratify<const N: usize>(self) -> Option<Stratified<{ N }>> {
+     |                                                                +   +
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/plan.rs:657:9
+    |
+656 |     pub fn shape(&self) -> &AtomShape {
+    |                            ---------- expected `&AtomShape` because of return type
+657 |         &self.shape
+    |         ^^^^^^^^^^^ expected `4`, found `N`
+    |
+    = note: expected reference `&AtomShape<4>`
+               found reference `&AtomShape<N>`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/plan.rs:684:5
+    |
+669 |   ) -> Vec<AtomOperator<N>> {
+    |        -------------------- expected `Vec<AtomOperator<N>>` because of return type
+...
+676 |           operators.push(AtomOperator {
+    |  _________---------______-
+    | |         |
+    | |         ... which causes `operators` to have type `Vec<AtomOperator>`
+677 | |             body_index,
+678 | |             positive_position,
+679 | |             index: index_choice(&shape),
+680 | |             shape,
+681 | |         });
+    | |_________- this argument has type `AtomOperator`...
+...
+684 |       operators
+    |       ^^^^^^^^^ expected `N`, found `4`
+    |
+    = note: expected struct `Vec<AtomOperator<N>>`
+               found struct `Vec<AtomOperator<4>>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/plan.rs:1266:9
+     |
+1265 |       pub fn operator_at(&self, positive_position: usize) -> &AtomOperator {
+     |                                                              ------------- expected `&AtomOperator` because of return type
+1266 | /         self.operators
+1267 | |             .iter()
+1268 | |             .find(|operator| operator.positive_position == positive_position)
+1269 | |             .expect("every positive atom has exactly one physical operator")
+     | |____________________________________________________________________________^ expected `4`, found `N`
+     |
+     = note: expected reference `&AtomOperator<4>`
+                found reference `&AtomOperator<N>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/plan.rs:1398:20
+     |
+1398 |             rules: self.rules,
+     |                    ^^^^^^^^^^ expected `4`, found `N`
+     |
+     = note: expected struct `Arc<[DlClause]>`
+                found struct `Arc<[DlClause<N>]>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/plan.rs:1413:5
+     |
+1412 |   pub(crate) fn datalog_head<const N: usize>(rule: &DlClause<N>) -> &ClauseAtom {
+     |                                                                     ----------- expected `&ClauseAtom` because of return type
+1413 | /     rule.datalog_head().unwrap_or_else(|| {
+1414 | |         unreachable!("the plan pipeline admits only atomic-head clauses (Parsed::new)")
+1415 | |     })
+     | |______^ expected `4`, found `N`
+     |
+     = note: expected reference `&ClauseAtom<4>`
+                found reference `&ClauseAtom<N>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/plan.rs:1434:20
+     |
+1434 |             rules: self.rules,
+     |                    ^^^^^^^^^^ expected `4`, found `N`
+     |
+     = note: expected struct `Arc<[DlClause]>`
+                found struct `Arc<[DlClause<N>]>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/plan.rs:1436:13
+     |
+1436 |             plans,
+     |             ^^^^^ expected `4`, found `N`
+     |
+     = note: expected struct `Vec<RulePlan<4>>`
+                found struct `Vec<RulePlan<N>>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/plan.rs:1464:20
+     |
+1464 |             rules: self.rules,
+     |                    ^^^^^^^^^^ expected `4`, found `N`
+     |
+     = note: expected struct `Arc<[DlClause]>`
+                found struct `Arc<[DlClause<N>]>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/plan.rs:1466:20
+     |
+1466 |             plans: self.plans,
+     |                    ^^^^^^^^^^ expected `4`, found `N`
+     |
+     = note: expected struct `Vec<RulePlan<4>>`
+                found struct `Vec<RulePlan<N>>`
+
+error[E0284]: type annotations needed
+    --> crates/datalog/src/seminaive.rs:1284:10
+     |
+1284 |         .stratify()
+     |          ^^^^^^^^ cannot infer the value of the const parameter `N` declared on the method `stratify`
+     |
+note: required by a const generic parameter in `Parsed::<N>::stratify`
+    --> crates/datalog/src/plan.rs:1382:21
+     |
+1382 |     pub fn stratify<const N: usize>(self) -> Option<Stratified<N>> {
+     |                     ^^^^^^^^^^^^^^ required by this const generic parameter in `Parsed::<N>::stratify`
+help: consider specifying a const for the const parameter `N`
+     |
+1284 |         .stratify::</* CONST */>()
+     |                  +++++++++++++++
+
+Some errors have detailed explanations: E0284, E0308, E0403, E0747.
+For more information about an error, try `rustc --explain E0284`.
+error: could not compile `purrdf-datalog` (lib) due to 12 previous errors
+
+terminal_status=101

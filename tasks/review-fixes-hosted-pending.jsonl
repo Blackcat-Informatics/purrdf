@@ -1,0 +1,40 @@
+{"link":"https://github.com/Blackcat-Informatics/purrdf/runs/116248012712","name":"CodeQL","state":"NEUTRAL"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862145","name":"aarch64","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862277","name":"simd-asm-config (wasm32-simd128)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862258","name":"conformance (shapes)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862345","name":"test (integration-2)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862214","name":"conformance (python)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862436","name":"test (integration-3)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862478","name":"test (integration-4)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862431","name":"miri","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862359","name":"cross-arch-riscv64 (determinism-serial)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862189","name":"capi","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862583","name":"test (integration-1)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862309","name":"simd-asm-config (aarch64-neoverse-v1)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862164","name":"wasm","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862177","name":"simd-asm-config (x86_64)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862216","name":"wasm-exec","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862410","name":"geo-determinism","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862299","name":"conformance (core)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862224","name":"projection-oracles","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862477","name":"simd-asm-config (x86_64-v3)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862257","name":"simd-asm-config (x86_64-v4)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862174","name":"simd-asm-config (aarch64)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862368","name":"simd-asm-config (wasm32)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862591","name":"test (lib)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827659/job/116247861200","name":"Build The PurRDF Book","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862358","name":"cross-arch-riscv64 (determinism-one-worker)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862504","name":"test (doc)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862208","name":"conformance (sparql)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862251","name":"workspace","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862414","name":"cross-arch","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862303","name":"wasm-schema-oracles","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862447","name":"wasm-package","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862267","name":"cross-arch-riscv64 (suites)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862282","name":"windows-mtime","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862261","name":"cross-arch-riscv64 (determinism-more-workers)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862191","name":"avx512-sde","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862207","name":"pytest","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681827689/job/116247862148","name":"test (integration-5)","state":"IN_PROGRESS"}
+{"link":"https://github.com/Blackcat-Informatics/purrdf/actions/runs/38681823005/job/116247850217","name":"Analyze (rust)","state":"IN_PROGRESS"}
+{"link":"","name":"CodeRabbit","state":"PENDING"}

@@ -1,0 +1,540 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0277]: `ProofError<N>` doesn't implement `std::fmt::Display`
+   --> crates/datalog/src/proof.rs:280:44
+    |
+280 | impl<const N: usize> std::error::Error for ProofError<N> where Arity<N>: StoreShape<N> {}
+    |                                            ^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `std::fmt::Display` is not implemented for `ProofError<N>`
+   --> crates/datalog/src/proof.rs:111:1
+    |
+111 | pub enum ProofError<const N: usize = 4>
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the trait `std::fmt::Display` is implemented for `ProofError`
+   --> crates/datalog/src/proof.rs:211:1
+    |
+211 | impl fmt::Display for ProofError {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `std::error::Error`
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/error.rs:59:26
+    |
+ 59 | pub trait Error: Debug + Display {
+    |                          ^^^^^^^ required by this bound in `Error`
+
+error[E0284]: type annotations needed
+   --> crates/datalog/src/proof.rs:219:17
+    |
+219 |                 render(goal)
+    |                 ^^^^^^ cannot infer the value of the const parameter `N` declared on the function `render`
+    |
+note: multiple `impl`s satisfying `Arity<_>: StoreShape<_>` found
+   --> crates/datalog/src/store.rs:943:1
+    |
+943 | impl StoreShape<3> for Arity<3> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+973 | impl StoreShape<4> for Arity<4> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: cannot satisfy `<Arity<_> as StoreShape<_>>::Graph == std::string::String`
+note: required by a const generic parameter in `proof::render`
+   --> crates/datalog/src/proof.rs:204:11
+    |
+204 | fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+    |           ^^^^^^^^^^^^^^ required by this const generic parameter in `render`
+note: required by a bound in `proof::render`
+   --> crates/datalog/src/proof.rs:206:15
+    |
+204 | fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+    |    ------ required by a bound in this function
+205 | where
+206 |     Arity<N>: StoreShape<N>,
+    |               ^^^^^^^^^^^^^ required by this bound in `render`
+help: consider specifying a const for the const parameter `N`
+    |
+219 |                 render::</* CONST */>(goal)
+    |                       +++++++++++++++
+
+error[E0284]: type annotations needed
+   --> crates/datalog/src/proof.rs:248:17
+    |
+248 |                 render(proven)
+    |                 ^^^^^^ cannot infer the value of the const parameter `N` declared on the function `render`
+    |
+    = note: cannot satisfy `Arity<_>: StoreShape<_>`
+    = note: cannot satisfy `<Arity<_> as StoreShape<_>>::Graph == std::string::String`
+note: required by a const generic parameter in `proof::render`
+   --> crates/datalog/src/proof.rs:204:11
+    |
+204 | fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+    |           ^^^^^^^^^^^^^^ required by this const generic parameter in `render`
+note: required by a bound in `proof::render`
+   --> crates/datalog/src/proof.rs:206:15
+    |
+204 | fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+    |    ------ required by a bound in this function
+205 | where
+206 |     Arity<N>: StoreShape<N>,
+    |               ^^^^^^^^^^^^^ required by this bound in `render`
+help: consider specifying a const for the const parameter `N`
+    |
+248 |                 render::</* CONST */>(proven)
+    |                       +++++++++++++++
+
+error[E0284]: type annotations needed
+   --> crates/datalog/src/proof.rs:273:17
+    |
+273 |                 render(derived),
+    |                 ^^^^^^ cannot infer the value of the const parameter `N` declared on the function `render`
+    |
+    = note: cannot satisfy `Arity<_>: StoreShape<_>`
+    = note: cannot satisfy `<Arity<_> as StoreShape<_>>::Graph == std::string::String`
+note: required by a const generic parameter in `proof::render`
+   --> crates/datalog/src/proof.rs:204:11
+    |
+204 | fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+    |           ^^^^^^^^^^^^^^ required by this const generic parameter in `render`
+note: required by a bound in `proof::render`
+   --> crates/datalog/src/proof.rs:206:15
+    |
+204 | fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+    |    ------ required by a bound in this function
+205 | where
+206 |     Arity<N>: StoreShape<N>,
+    |               ^^^^^^^^^^^^^ required by this bound in `render`
+help: consider specifying a const for the const parameter `N`
+    |
+273 |                 render::</* CONST */>(derived),
+    |                       +++++++++++++++
+
+error[E0284]: type annotations needed
+   --> crates/datalog/src/proof.rs:274:17
+    |
+274 |                 render(stated)
+    |                 ^^^^^^ cannot infer the value of the const parameter `N` declared on the function `render`
+    |
+    = note: cannot satisfy `Arity<_>: StoreShape<_>`
+    = note: cannot satisfy `<Arity<_> as StoreShape<_>>::Graph == std::string::String`
+note: required by a const generic parameter in `proof::render`
+   --> crates/datalog/src/proof.rs:204:11
+    |
+204 | fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+    |           ^^^^^^^^^^^^^^ required by this const generic parameter in `render`
+note: required by a bound in `proof::render`
+   --> crates/datalog/src/proof.rs:206:15
+    |
+204 | fn render<const N: usize>(fact: &ShapeFact<N>) -> String
+    |    ------ required by a bound in this function
+205 | where
+206 |     Arity<N>: StoreShape<N>,
+    |               ^^^^^^^^^^^^^ required by this bound in `render`
+help: consider specifying a const for the const parameter `N`
+    |
+274 |                 render::</* CONST */>(stated)
+    |                       +++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:600:9
+    |
+599 |     pub fn goal(&self, id: ProofId) -> &ShapeFact<N> {
+    |                                        ------------- expected `&Fact<<Arity<N> as StoreShape<N>>::Graph>` because of return type
+600 |         self.term(id).goal()
+    |         ^^^^^^^^^^^^^^^^^^^^ expected `&Fact<_>`, found `&Fact`
+    |
+    = note: expected reference `&Fact<<Arity<N> as StoreShape<N>>::Graph>`
+               found reference `&Fact<std::string::String>`
+    = help: consider constraining the associated type `<Arity<N> as StoreShape<N>>::Graph` to `std::string::String` or calling a method that returns `<Arity<N> as StoreShape<N>>::Graph`
+    = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:644:20
+    |
+644 |         id.slot_in(&self.terms, "ProofId", "proof")
+    |            ------- ^^^^^^^^^^^ expected `&[ProofTerm]`, found `&Vec<ProofTerm<N>>`
+    |            |
+    |            arguments to this method are incorrect
+    |
+    = note: expected reference `&[ProofTerm]`
+               found reference `&Vec<ProofTerm<N>>`
+note: method defined here
+   --> crates/datalog/src/id.rs:132:19
+    |
+132 |     pub(crate) fn slot_in<'a, T>(self, slots: &'a [T], kind: &str, noun: &str) -> &'a T {
+    |                   ^^^^^^^              --------------
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:676:9
+    |
+669 |       ) -> Result<ShapeFact<N>, ProofError<N>> {
+    |            ----------------------------------- expected `Result<Fact<<Arity<N> as StoreShape<N>>::Graph>, ProofError<N>>` because of return type
+...
+676 | /         proven
+677 | |             .remove(&root.address()?)
+678 | |             .ok_or_else(|| Self::malformed("the root of a proof is reachable from itself"))
+    | |___________________________________________________________________________________________^ expected `N`, found `4`
+    |
+    = note: expected enum `Result<_, ProofError<N>>`
+               found enum `Result<_, ProofError<4>>`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:683:9
+    |
+682 |       fn malformed(detail: &str) -> ProofError {
+    |                                     ---------- expected `ProofError` because of return type
+683 | /         ProofError::Malformed {
+684 | |             detail: detail.to_owned(),
+685 | |         }
+    | |_________^ expected `4`, found `N`
+    |
+    = note: expected enum `ProofError<4>`
+               found enum `ProofError<N>`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:696:24
+    |
+696 |             return Err(Self::malformed("the root is outside this arena"));
+    |                    --- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `N`, found `4`
+    |                    |
+    |                    arguments to this enum variant are incorrect
+    |
+    = note: expected enum `ProofError<N>`
+               found enum `ProofError<4>`
+help: the type constructed contains `ProofError` due to the type of the argument passed
+   --> crates/datalog/src/proof.rs:696:20
+    |
+696 |             return Err(Self::malformed("the root is outside this arena"));
+    |                    ^^^^-------------------------------------------------^
+    |                        |
+    |                        this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:707:36
+    |
+707 |                           return Err(Self::malformed(
+    |  ________________________________---_^
+    | |                                |
+    | |                                arguments to this enum variant are incorrect
+708 | |                             "a premise must be interned before the step it justifies",
+709 | |                         ));
+    | |_________________________^ expected `N`, found `4`
+    |
+    = note: expected enum `ProofError<N>`
+               found enum `ProofError<4>`
+help: the type constructed contains `ProofError` due to the type of the argument passed
+   --> crates/datalog/src/proof.rs:707:32
+    |
+707 |                            return Err(Self::malformed(
+    |   ________________________________^   -
+    |  |____________________________________|
+708 | ||                             "a premise must be interned before the step it justifies",
+709 | ||                         ));
+    | ||_________________________-^
+    | |__________________________|
+    |                            this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+
+error[E0277]: a value of type `Vec<(usize, &ClauseAtom)>` cannot be built from an iterator over elements of type `(usize, &ClauseAtom<N>)`
+    --> crates/datalog/src/proof.rs:777:14
+     |
+ 777 |             .collect();
+     |              ^^^^^^^ value of type `Vec<(usize, &ClauseAtom)>` cannot be built from `std::iter::Iterator<Item=(usize, &ClauseAtom<N>)>`
+     |
+help: the trait `FromIterator<(_, &ClauseAtom<N>)>` is not implemented for `Vec<(usize, &ClauseAtom)>`
+      but trait `FromIterator<(_, &ClauseAtom<4>)>` is implemented for it
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0277]: `?` couldn't convert the error to `ProofError<N>`
+   --> crates/datalog/src/proof.rs:792:15
+    |
+790 |               let fact = proven.get(&premise.address()?).ok_or_else(|| {
+    |  ________________________________________________________-
+791 | |                 Self::malformed("a premise was not established before the step that uses it")
+792 | |             })?;
+    | |              -^ the trait `From<ProofError>` is not implemented for `ProofError<N>`
+    | |______________|
+    |                this can't be annotated with `?` because it has type `Result<_, ProofError>`
+    |
+note: `ProofError<N>` needs to implement `From<ProofError>`
+   --> crates/datalog/src/proof.rs:111:1
+    |
+111 | pub enum ProofError<const N: usize = 4>
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<ProofError>` is not implemented for `ProofError<N>`
+      but trait `From<StorageError>` is implemented for it
+   --> crates/datalog/src/proof.rs:282:1
+    |
+282 | / impl<const N: usize> From<StorageError> for ProofError<N>
+283 | | where
+284 | |     Arity<N>: StoreShape<N>,
+    | |____________________________^
+    = help: for that trait implementation, expected `StorageError`, found `ProofError`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/proof.rs:793:28
+     |
+ 793 |             if !match_atom(atom, fact, &mut subst) {
+     |                 ---------- ^^^^ expected `N`, found `4`
+     |                 |
+     |                 arguments to this function are incorrect
+     |
+     = note: expected reference `&ClauseAtom<N>`
+                found reference `&ClauseAtom<4>`
+note: function defined here
+    --> crates/datalog/src/proof.rs:1114:4
+     |
+1114 | fn match_atom<'r, 'f, const N: usize>(
+     |    ^^^^^^^^^^
+1115 |     atom: &'r ClauseAtom<N>,
+     |     -----------------------
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:969:24
+    |
+969 |               return Err(Self::malformed(
+    |  ____________________---_^
+    | |                    |
+    | |                    arguments to this enum variant are incorrect
+970 | |                 "the proof encoding tag is absent or from another layout",
+971 | |             ));
+    | |_____________^ expected `N`, found `4`
+    |
+    = note: expected enum `ProofError<N>`
+               found enum `ProofError<4>`
+help: the type constructed contains `ProofError` due to the type of the argument passed
+   --> crates/datalog/src/proof.rs:969:20
+    |
+969 |                return Err(Self::malformed(
+    |   ____________________^   -
+    |  |________________________|
+970 | ||                 "the proof encoding tag is absent or from another layout",
+971 | ||             ));
+    | ||_____________-^
+    | |______________|
+    |                this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:975:24
+    |
+975 |             return Err(Self::malformed("a proof has at least one node"));
+    |                    --- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `N`, found `4`
+    |                    |
+    |                    arguments to this enum variant are incorrect
+    |
+    = note: expected enum `ProofError<N>`
+               found enum `ProofError<4>`
+help: the type constructed contains `ProofError` due to the type of the argument passed
+   --> crates/datalog/src/proof.rs:975:20
+    |
+975 |             return Err(Self::malformed("a proof has at least one node"));
+    |                    ^^^^------------------------------------------------^
+    |                        |
+    |                        this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/proof.rs:994:40
+    |
+994 |   ...                   return Err(Self::malformed(
+    |  ______________________________---_^
+    | |                              |
+    | |                              arguments to this enum variant are incorrect
+995 | | ...                       "a premise reference must point at an earlier node",
+996 | | ...                   ));
+    | |_______________________^ expected `N`, found `4`
+    |
+    = note: expected enum `ProofError<N>`
+               found enum `ProofError<4>`
+help: the type constructed contains `ProofError` due to the type of the argument passed
+   --> crates/datalog/src/proof.rs:994:36
+    |
+994 |    ...                   return Err(Self::malformed(
+    |   ______________________________^   -
+    |  |__________________________________|
+995 | || ...                       "a premise reference must point at an earlier node",
+996 | || ...                   ));
+    | ||_______________________-^
+    | |________________________|
+    |                          this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/proof.rs:1011:24
+     |
+1011 |               return Err(Self::malformed(
+     |  ____________________---_^
+     | |                    |
+     | |                    arguments to this enum variant are incorrect
+1012 | |                 "trailing bytes after the proof's last node",
+1013 | |             ));
+     | |_____________^ expected `N`, found `4`
+     |
+     = note: expected enum `ProofError<N>`
+                found enum `ProofError<4>`
+help: the type constructed contains `ProofError` due to the type of the argument passed
+    --> crates/datalog/src/proof.rs:1011:20
+     |
+1011 |                return Err(Self::malformed(
+     |   ____________________^   -
+     |  |________________________|
+1012 | ||                 "trailing bytes after the proof's last node",
+1013 | ||             ));
+     | ||_____________-^
+     | |______________|
+     |                this argument influences the type of `Err`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+     |
+ 567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+     |     ^^^
+
+error[E0277]: `?` couldn't convert the error to `ProofError<N>`
+    --> crates/datalog/src/proof.rs:1017:77
+     |
+1017 |             .ok_or_else(|| Self::malformed("a proof has at least one node"))?;
+     |              ---------------------------------------------------------------^ the trait `From<ProofError>` is not implemented for `ProofError<N>`
+     |              |
+     |              this can't be annotated with `?` because it has type `Result<_, ProofError>`
+     |
+note: `ProofError<N>` needs to implement `From<ProofError>`
+    --> crates/datalog/src/proof.rs:111:1
+     |
+ 111 | pub enum ProofError<const N: usize = 4>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<ProofError>` is not implemented for `ProofError<N>`
+      but trait `From<StorageError>` is implemented for it
+    --> crates/datalog/src/proof.rs:282:1
+     |
+ 282 | / impl<const N: usize> From<StorageError> for ProofError<N>
+ 283 | | where
+ 284 | |     Arity<N>: StoreShape<N>,
+     | |____________________________^
+     = help: for that trait implementation, expected `StorageError`, found `ProofError`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/proof.rs:1087:9
+     |
+1086 |     pub fn arena(&self) -> &ProofArena {
+     |                            ----------- expected `&ProofArena` because of return type
+1087 |         &self.arena
+     |         ^^^^^^^^^^^ expected `4`, found `N`
+     |
+     = note: expected reference `&ProofArena<4>`
+                found reference `&ProofArena<N>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/proof.rs:1274:24
+     |
+1274 |               return Err(ProofArena::<N>::malformed(
+     |  ____________________---_^
+     | |                    |
+     | |                    arguments to this enum variant are incorrect
+1275 | |                 "the proof encoding ends inside a field",
+1276 | |             ));
+     | |_____________^ expected `N`, found `4`
+     |
+     = note: expected enum `ProofError<N>`
+                found enum `ProofError<4>`
+help: the type constructed contains `ProofError` due to the type of the argument passed
+    --> crates/datalog/src/proof.rs:1274:20
+     |
+1274 |                return Err(ProofArena::<N>::malformed(
+     |   ____________________^   -
+     |  |________________________|
+1275 | ||                 "the proof encoding ends inside a field",
+1276 | ||             ));
+     | ||_____________-^
+     | |______________|
+     |                this argument influences the type of `Err`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+     |
+ 567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+     |     ^^^
+
+error[E0277]: `?` couldn't convert the error to `ProofError<N>`
+    --> crates/datalog/src/proof.rs:1293:97
+     |
+1293 |             .ok_or_else(|| ProofArena::<N>::malformed("the proof encoding ends inside a field"))?;
+     |              -----------------------------------------------------------------------------------^ the trait `From<ProofError>` is not implemented for `ProofError<N>`
+     |              |
+     |              this can't be annotated with `?` because it has type `Result<_, ProofError>`
+     |
+note: `ProofError<N>` needs to implement `From<ProofError>`
+    --> crates/datalog/src/proof.rs:111:1
+     |
+ 111 | pub enum ProofError<const N: usize = 4>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<ProofError>` is not implemented for `ProofError<N>`
+      but trait `From<StorageError>` is implemented for it
+    --> crates/datalog/src/proof.rs:282:1
+     |
+ 282 | / impl<const N: usize> From<StorageError> for ProofError<N>
+ 283 | | where
+ 284 | |     Arity<N>: StoreShape<N>,
+     | |____________________________^
+     = help: for that trait implementation, expected `StorageError`, found `ProofError`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/proof.rs:1304:9
+     |
+1303 |       fn length(&mut self) -> Result<usize, ProofError<N>> {
+     |                               ---------------------------- expected `Result<usize, ProofError<N>>` because of return type
+1304 | /         usize::try_from(self.u64()?).map_err(|_| {
+1305 | |             ProofArena::<N>::malformed("a length in the proof encoding exceeds this target's usize")
+1306 | |         })
+     | |__________^ expected `N`, found `4`
+     |
+     = note: expected enum `Result<_, ProofError<N>>`
+                found enum `Result<_, ProofError<4>>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/proof.rs:1318:9
+     |
+1316 |       fn surface(&mut self) -> Result<String, ProofError<N>> {
+     |                                ----------------------------- expected `Result<std::string::String, ProofError<N>>` because of return type
+1317 |           let bytes = self.frame()?;
+1318 | /         String::from_utf8(bytes.to_vec()).map_err(|_| {
+1319 | |             ProofArena::<N>::malformed("a term surface in the proof encoding is not UTF-8")
+1320 | |         })
+     | |__________^ expected `N`, found `4`
+     |
+     = note: expected enum `Result<_, ProofError<N>>`
+                found enum `Result<_, ProofError<4>>`
+
+Some errors have detailed explanations: E0277, E0284, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib) due to 24 previous errors
+
+terminal_status=101

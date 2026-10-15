@@ -1,0 +1,17 @@
+issue      /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/.stage/triple-only-carrier-for-rdf-1-2/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/.stage/triple-only-carrier-for-rdf-1-2/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/.stage/triple-only-carrier-for-rdf-1-2/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/.stage/triple-only-carrier-for-rdf-1-2/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/.stage/triple-only-carrier-for-rdf-1-2/brief.json  (+ requirements.json, references.json)
+
+  - issue #492 + 5 comment(s) via github
+  - link crawl: 11 issue(s) within 2 hop(s) of `#N` references
+  - ADR-0038 cited by the issue but no file in docs/adr/
+  - ADR-0032 cited by the issue but no file in docs/adr/
+  - ADRs: 2 cited; 0 resolved on disk
+  - forge search on ['Triple-only', 'carrier', 'consumers']: 14 other item(s)
+  - GhpRsq-Defect-Class trailers: 4 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #492 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #492: 1
+  - requirement candidates: 23 line(s); 2 comment(s) matched no rule
+  - referenced artifacts: 13 path(s) (10 on disk), 14 identifier(s), 0 workspace package(s), 0 URL(s)

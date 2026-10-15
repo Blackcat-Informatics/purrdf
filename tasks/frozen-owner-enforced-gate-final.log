@@ -1,0 +1,5 @@
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.25s
+     Running `/opt/.cargo/target/492-triple-only-carrier-for-rdf-1-2-0f2597f5/debug/helper-census --index`
+OK: 82 ledger jobs hold (82 enforced, 22 reasoned variants, 0 copies still open in unenforced jobs); 118 [[distinct]] rows each equal one group; no #[path] include leaves its crate (2267 files)
+
+terminal_status=0

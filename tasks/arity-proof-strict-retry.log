@@ -1,0 +1,177 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+error[E0284]: type annotations needed for `proof::ProofArena<_>`
+    --> crates/datalog/src/proof.rs:2029:13
+     |
+2029 |         let mut shifted = ProofArena::default();
+     |             ^^^^^^^^^^^   ---------- type must be known at this point
+     |
+note: required for `proof::ProofArena<_>` to implement `std::default::Default`
+    --> crates/datalog/src/proof.rs:454:12
+     |
+ 453 | #[derive(Debug, Clone, Default)]
+     |                        ------- in this derive macro expansion
+ 454 | pub struct ProofArena<const N: usize = 4>
+     |            ^^^^^^^^^^ ------------------ type parameter would need to implement `std::default::Default`
+help: consider giving `shifted` an explicit type, where the value of const parameter `N` is specified
+     |
+2029 |         let mut shifted: proof::ProofArena<N> = ProofArena::default();
+     |                        ++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `proof::ProofArena<_>`
+    --> crates/datalog/src/proof.rs:2029:13
+     |
+2029 |         let mut shifted = ProofArena::default();
+     |             ^^^^^^^^^^^
+2030 |         let _unrelated = shifted.axiom(fact("z", P, "z")).unwrap();
+     |                                  ----- type must be known at this point
+     |
+     = note: cannot satisfy `store::Arity<_>: store::StoreShape<_>`
+note: required by a const generic parameter in `proof::ProofArena::<N>::axiom`
+    --> crates/datalog/src/proof.rs:468:6
+     |
+ 468 | impl<const N: usize> ProofArena<N>
+     |      ^^^^^^^^^^^^^^ required by this const generic parameter in `ProofArena::<N>::axiom`
+...
+ 493 |     pub fn axiom(&mut self, goal: ShapeFact<N>) -> Result<ProofId, StorageError> {
+     |            ----- required by a bound in this associated function
+note: required by a bound in `proof::ProofArena::<N>::axiom`
+    --> crates/datalog/src/proof.rs:470:15
+     |
+ 470 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `ProofArena::<N>::axiom`
+...
+ 493 |     pub fn axiom(&mut self, goal: ShapeFact<N>) -> Result<ProofId, StorageError> {
+     |            ----- required by a bound in this associated function
+help: consider giving `shifted` an explicit type, where the value of const parameter `N` is specified
+     |
+2029 |         let mut shifted: proof::ProofArena<N> = ProofArena::default();
+     |                        ++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `proof::ProofArena<_>`
+    --> crates/datalog/src/proof.rs:2029:13
+     |
+2029 |         let mut shifted = ProofArena::default();
+     |             ^^^^^^^^^^^
+2030 |         let _unrelated = shifted.axiom(fact("z", P, "z")).unwrap();
+2031 |         let second = shifted.axiom(fact("b", P, "c")).unwrap();
+     |                              ----- type must be known at this point
+     |
+     = note: cannot satisfy `store::Arity<_>: store::StoreShape<_>`
+note: required by a const generic parameter in `proof::ProofArena::<N>::axiom`
+    --> crates/datalog/src/proof.rs:468:6
+     |
+ 468 | impl<const N: usize> ProofArena<N>
+     |      ^^^^^^^^^^^^^^ required by this const generic parameter in `ProofArena::<N>::axiom`
+...
+ 493 |     pub fn axiom(&mut self, goal: ShapeFact<N>) -> Result<ProofId, StorageError> {
+     |            ----- required by a bound in this associated function
+note: required by a bound in `proof::ProofArena::<N>::axiom`
+    --> crates/datalog/src/proof.rs:470:15
+     |
+ 470 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `ProofArena::<N>::axiom`
+...
+ 493 |     pub fn axiom(&mut self, goal: ShapeFact<N>) -> Result<ProofId, StorageError> {
+     |            ----- required by a bound in this associated function
+help: consider giving `shifted` an explicit type, where the value of const parameter `N` is specified
+     |
+2029 |         let mut shifted: proof::ProofArena<N> = ProofArena::default();
+     |                        ++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `proof::ProofArena<_>`
+    --> crates/datalog/src/proof.rs:2029:13
+     |
+2029 |         let mut shifted = ProofArena::default();
+     |             ^^^^^^^^^^^
+...
+2032 |         let first = shifted.axiom(fact("a", P, "b")).unwrap();
+     |                             ----- type must be known at this point
+     |
+     = note: cannot satisfy `store::Arity<_>: store::StoreShape<_>`
+note: required by a const generic parameter in `proof::ProofArena::<N>::axiom`
+    --> crates/datalog/src/proof.rs:468:6
+     |
+ 468 | impl<const N: usize> ProofArena<N>
+     |      ^^^^^^^^^^^^^^ required by this const generic parameter in `ProofArena::<N>::axiom`
+...
+ 493 |     pub fn axiom(&mut self, goal: ShapeFact<N>) -> Result<ProofId, StorageError> {
+     |            ----- required by a bound in this associated function
+note: required by a bound in `proof::ProofArena::<N>::axiom`
+    --> crates/datalog/src/proof.rs:470:15
+     |
+ 470 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `ProofArena::<N>::axiom`
+...
+ 493 |     pub fn axiom(&mut self, goal: ShapeFact<N>) -> Result<ProofId, StorageError> {
+     |            ----- required by a bound in this associated function
+help: consider giving `shifted` an explicit type, where the value of const parameter `N` is specified
+     |
+2029 |         let mut shifted: proof::ProofArena<N> = ProofArena::default();
+     |                        ++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `proof::ProofArena<_>`
+    --> crates/datalog/src/proof.rs:2029:13
+     |
+2029 |         let mut shifted = ProofArena::default();
+     |             ^^^^^^^^^^^
+...
+2034 |             .by_rule(fact("a", T, "c"), 0, &[first, second])
+     |              ------- type must be known at this point
+     |
+     = note: cannot satisfy `store::Arity<_>: store::StoreShape<_>`
+note: required by a const generic parameter in `proof::ProofArena::<N>::by_rule`
+    --> crates/datalog/src/proof.rs:468:6
+     |
+ 468 | impl<const N: usize> ProofArena<N>
+     |      ^^^^^^^^^^^^^^ required by this const generic parameter in `ProofArena::<N>::by_rule`
+...
+ 510 |     pub fn by_rule(
+     |            ------- required by a bound in this associated function
+note: required by a bound in `proof::ProofArena::<N>::by_rule`
+    --> crates/datalog/src/proof.rs:470:15
+     |
+ 470 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `ProofArena::<N>::by_rule`
+...
+ 510 |     pub fn by_rule(
+     |            ------- required by a bound in this associated function
+help: consider giving `shifted` an explicit type, where the value of const parameter `N` is specified
+     |
+2029 |         let mut shifted: proof::ProofArena<N> = ProofArena::default();
+     |                        ++++++++++++++++++++++
+
+error[E0284]: type annotations needed for `proof::ProofArena<_>`
+    --> crates/datalog/src/proof.rs:2029:13
+     |
+2029 |         let mut shifted = ProofArena::default();
+     |             ^^^^^^^^^^^
+...
+2041 |             shifted.encode(shifted_root),
+     |                     ------ type must be known at this point
+     |
+     = note: cannot satisfy `store::Arity<_>: store::StoreShape<_>`
+note: required by a const generic parameter in `proof::ProofArena::<N>::encode`
+    --> crates/datalog/src/proof.rs:468:6
+     |
+ 468 | impl<const N: usize> ProofArena<N>
+     |      ^^^^^^^^^^^^^^ required by this const generic parameter in `ProofArena::<N>::encode`
+...
+ 857 |     pub fn encode(&self, root: ProofId) -> Vec<u8> {
+     |            ------ required by a bound in this associated function
+note: required by a bound in `proof::ProofArena::<N>::encode`
+    --> crates/datalog/src/proof.rs:470:15
+     |
+ 470 |     Arity<N>: StoreShape<N>,
+     |               ^^^^^^^^^^^^^ required by this bound in `ProofArena::<N>::encode`
+...
+ 857 |     pub fn encode(&self, root: ProofId) -> Vec<u8> {
+     |            ------ required by a bound in this associated function
+help: consider giving `shifted` an explicit type, where the value of const parameter `N` is specified
+     |
+2029 |         let mut shifted: proof::ProofArena<N> = ProofArena::default();
+     |                        ++++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0284`.
+error: could not compile `purrdf-datalog` (lib test) due to 6 previous errors
+
+terminal_status=101

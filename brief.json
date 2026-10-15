@@ -1,0 +1,154 @@
+{
+  "issue": 492,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Triple-only carrier for RDF 1.2 consumers that use no named graphs (rows, permutations, Datalog atoms, identities)",
+  "state": "OPEN",
+  "adrs": [
+    {
+      "id": "ADR-0038",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    },
+    {
+      "id": "ADR-0032",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    }
+  ],
+  "linked_issues": {
+    "479": "rules: two rdf:type patterns with disjoint subjects are joined as a cross product (quadratic memory in SPARQL 1.2 RL)",
+    "471": "v4.0: remembered empty named graphs become the default",
+    "383": "Read one named graph of a native dataset as the default graph",
+    "400": "Opt-in remembered empty named graphs for the mutable dataset and SPARQL Update",
+    "492": "Triple-only carrier for RDF 1.2 consumers that use no named graphs (rows, permutations, Datalog atoms, identities)",
+    "292": "Add fallible borrowed flat-assertion canonicalization for shared dataset views",
+    "544": "Return typed capacity failures and add sparse segmented dataset stacks",
+    "549": "Add a graph-free RDF carrier with triple rule execution",
+    "551": "Segmented stack queries are quadratic in terms touched: Memory::reserve grows by one with a full copy",
+    "490": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+    "495": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment"
+  },
+  "link_relations": {
+    "479": "mentions",
+    "471": "mentions",
+    "383": "mentions",
+    "400": "mentions",
+    "492": "mentions",
+    "292": "mentions",
+    "544": "mentions",
+    "549": "mentions",
+    "551": "mentions",
+    "490": "2-hop",
+    "495": "2-hop"
+  },
+  "related": [
+    {
+      "number": 495,
+      "title": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment",
+      "state": "CLOSED"
+    },
+    {
+      "number": 292,
+      "title": "Add fallible borrowed flat-assertion canonicalization for shared dataset views",
+      "state": "CLOSED"
+    },
+    {
+      "number": 454,
+      "title": "rdflib shim: algebra-level reassignment rewrite so every case matches rdflib 7.6",
+      "state": "CLOSED"
+    },
+    {
+      "number": 516,
+      "title": "Loss ledger as queryable RDF 1.2: content-identified reasons, and merging accepted reasons into the answer",
+      "state": "CLOSED"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "CLOSED"
+    },
+    {
+      "number": 286,
+      "title": "perf: retain shared dataset views through pipeline bundles and GTS ingestion",
+      "state": "CLOSED"
+    },
+    {
+      "number": 511,
+      "title": "retrieval: field scoping applied inside each stratum's candidate generation, before depth, with undecided counts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 515,
+      "title": "sparql-eval/datalog: per-row evidence -- information state per standpoint, completeness, frame -- combined by the bilattice",
+      "state": "CLOSED"
+    },
+    {
+      "number": 457,
+      "title": "Paged tier: an LSM-style stack of sealed delta generations with removals, read as one snapshot",
+      "state": "CLOSED"
+    },
+    {
+      "number": 479,
+      "title": "rules: two rdf:type patterns with disjoint subjects are joined as a cross product (quadratic memory in SPARQL 1.2 RL)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 387,
+      "title": "Explore stronger blank-node scope representation and hazard detection",
+      "state": "CLOSED"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 136,
+      "title": "csvw: project_csvw_exact has no curated/summary profile (only the lossless full-carrier package)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 330,
+      "title": "Serializers build one whole-output allocation; offer an incremental io::Write sink",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "bug": 2,
+    "none": 22,
+    "performance": 3,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [
+      {
+        "number": 549,
+        "title": "Add a graph-free RDF carrier with triple rule execution",
+        "state": "OPEN",
+        "url": "https://github.com/Blackcat-Informatics/purrdf/pull/549",
+        "this_stage": true
+      }
+    ],
+    "own_branch": "paudley/492-triple-only-carrier-for-rdf-1-2"
+  },
+  "coverage": [
+    "issue #492 + 5 comment(s) via github",
+    "link crawl: 11 issue(s) within 2 hop(s) of `#N` references",
+    "ADR-0038 cited by the issue but no file in docs/adr/",
+    "ADR-0032 cited by the issue but no file in docs/adr/",
+    "ADRs: 2 cited; 0 resolved on disk",
+    "forge search on ['Triple-only', 'carrier', 'consumers']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 4 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #492 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #492: 1",
+    "requirement candidates: 23 line(s); 2 comment(s) matched no rule",
+    "referenced artifacts: 13 path(s) (10 on disk), 14 identifier(s), 0 workspace package(s), 0 URL(s)"
+  ]
+}

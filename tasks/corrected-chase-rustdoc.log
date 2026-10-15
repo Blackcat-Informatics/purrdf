@@ -1,0 +1,30 @@
+    Checking typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/hash)
+    Checking const-oid v0.10.2
+   Compiling rayon-core v1.13.0
+    Checking hybrid-array v0.4.15
+    Checking regex-syntax v0.8.11
+    Checking crossbeam-epoch v0.9.18
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/lex)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking crossbeam-deque v0.8.6
+    Checking digest v0.11.3
+    Checking regex-automata v0.4.14
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-core)
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/rdf-events)
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/deflate)
+    Checking either v1.16.0
+    Checking hashbrown v0.17.1
+    Checking rayon v1.12.0
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/cdt)
+ Documenting purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/492-triple-only-carrier-for-rdf-1-2/crates/datalog)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 19.93s
+   Generated /opt/.cargo/target/492-triple-only-carrier-for-rdf-1-2-0f2597f5/doc/purrdf_datalog/index.html
