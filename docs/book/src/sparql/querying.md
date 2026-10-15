@@ -22,16 +22,16 @@ All three are re-exported under `purrdf::sparql`.
 
 ## A first query
 
-```rust,ignore
+```rust
 use purrdf::{RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf::sparql::NativeSparqlEngine;
 
 // A tiny dataset in interned TermId space.
 let mut b = RdfDatasetBuilder::new();
-let cat = b.intern_iri("https://example.org/cat");
-let says = b.intern_iri("https://example.org/says");
-let meow = b.intern_literal(RdfLiteral::simple("meow"));
-b.push_quad(cat, says, meow, None);
+let cat = b.intern_iri("https://example.org/cat").expect("subject");
+let says = b.intern_iri("https://example.org/says").expect("predicate");
+let meow = b.intern_literal(RdfLiteral::simple("meow")).expect("object");
+b.push_quad(cat, says, meow, None).expect("quad");
 let ds = b.freeze().expect("freeze");
 
 // Evaluate through the SparqlEngine seam; parsed plans are memoized.
@@ -171,8 +171,7 @@ value is computed on an arbitrary-precision representation, and the answer is th
 same. `+`, `-` and `*` are exact: `"170141183460469231731687303715884105727"^^xsd:integer + 1`
 is `170141183460469231731687303715884105728`, and `0.1 * 0.1 * 0.1` is `0.001`.
 
-Three results are rounded, as XPath and XQuery Functions and Operators 3.1
-allows:
+Division and numeric casts use these precision rules:
 
 - **Division.** F&O leaves the precision of a decimal quotient to the
   implementation. By default PurRDF keeps every digit of a terminating quotient,
@@ -182,9 +181,9 @@ allows:
   precision with `QueryOptions::with_division` in Rust, `--division` in the
   command line, or the division setting of the C, WebAssembly and Python
   bindings. The setting is written `exact`, `N` (N digits, truncated toward zero),
-  `N:ROUNDING` (for example `5:half-even`) or `exact-or-N[:ROUNDING]`. Under `exact` every quotient that
-  ends is exact, and one that does not end, such as `1 / 3`, is an error like
-  `1 / 0`: the expression is unbound, with `err:FOAR0002`. `AVG` divides under
+  `N:ROUNDING` (for example `5:half-even`) or `exact-or-N[:ROUNDING]`. Under `exact` every terminating quotient
+  is exact. A non-terminating quotient, such as `1 / 3`, is an expression error
+  (`err:FOAR0002`) and leaves the result unbound. `AVG` divides under
   the same setting.
 - **To `xsd:float` or `xsd:double`.** The value is rounded once, to the nearest
   value, ties to even, from its exact value at any size.
@@ -629,7 +628,7 @@ implemented in Apache Jena 4.7.0, which this section follows. `LATERAL` adds one
 production to `GroupGraphPatternSub`, positioned alongside `OPTIONAL`/`MINUS`/
 `GRAPH` and left-associative the same way:
 
-```
+```text
 GroupGraphPatternSub ::= ... | 'LATERAL' GroupGraphPattern
 ```
 
@@ -685,7 +684,7 @@ SELECT * WHERE {
 }
 ```
 
-```
+```text
 # Illegal — refused with a typed ParseError naming ?o: ?o is already bound by
 # the left-hand triple pattern, and BIND tries to give it a NEW value at the
 # LATERAL right-hand side's own scope level.
@@ -1040,7 +1039,7 @@ SELECT ?s WHERE {
 }
 ```
 
-```
+```text
 # Illegal — refused with a typed ParseError naming ?o: ?o is already bound by
 # the row FILTER EXISTS is testing, and BIND tries to give it a NEW value at
 # the EXISTS body's own scope level.
