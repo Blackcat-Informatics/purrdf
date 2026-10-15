@@ -386,7 +386,7 @@ budget to discover it.
 ## 6. Bounds (normative)
 
 The n-degree search has a combinatorial worst case: a pathologically symmetric blank
-graph can force unbounded permutation backtracking. Complexity poisoning must
+graph can require prohibitively many permutation steps. Complexity poisoning must
 **refuse, not hang**.
 
 A fixed call/permutation budget of **1 000 000** bounds the search, exported as
