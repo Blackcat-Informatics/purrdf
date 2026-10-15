@@ -4,6 +4,10 @@
 //! Sparse, authenticated block admission with exact bounded evidence and live pins.
 
 use crate::dataset_view::lock_read_state;
+use crate::hash::{
+    hash_of, hash_table_allocation_bound, hash_table_retained_bound, reserve_table_with_memory,
+};
+use hashbrown::HashTable;
 use std::sync::{Arc, Mutex};
 
 use crate::dataset_view::{
@@ -11,12 +15,16 @@ use crate::dataset_view::{
 };
 use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, TermRef, TermValue};
 use purrdf_hash::blake3::Hasher;
+use purrdf_lex::allocation::StorageError;
 use purrdf_lex::allocation::shared::{Shared, SharedCloneError};
-use purrdf_lex::allocation::{StorageError, growth_capacity};
 
 use super::build::fixed_records;
 use super::format::{self, DecodedRecords, Header, Reader, Stream};
 use super::{SegmentedError, SegmentedProvider, SegmentedReceipt, SegmentedSnapshot};
+
+mod cache;
+#[cfg(test)]
+mod cache_control;
 
 // Both owners reserve through the same admission home after their own readiness
 // check; a session additionally verifies its provider's snapshot identity.
@@ -266,11 +274,17 @@ struct CachedBlock {
     decoded: Option<DecodedRecords>,
     reservation: SegmentedReservation,
 }
-#[derive(Debug)]
-struct CacheEntry {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct CacheKey {
     snapshot: SegmentedSnapshot,
     slot: u64,
+}
+#[derive(Debug)]
+struct CacheEntry {
+    key: CacheKey,
     block: Arc<CachedBlock>,
+    older: Option<CacheKey>,
+    newer: Option<CacheKey>,
 }
 #[derive(Clone, Copy)]
 enum ReaderBuffer {
@@ -278,7 +292,9 @@ enum ReaderBuffer {
     Requests,
 }
 struct State {
-    cache: Vec<CacheEntry>,
+    cache: HashTable<CacheEntry>,
+    oldest: Option<CacheKey>,
+    newest: Option<CacheKey>,
     requests: Vec<SegmentedRequest>,
     error: Option<SegmentedError>,
     io_bytes: u64,
@@ -291,22 +307,6 @@ struct State {
 }
 
 impl State {
-    fn evict_one(&mut self) -> Result<bool, SegmentedError> {
-        let Some(index) = self
-            .cache
-            .iter()
-            .position(|entry| Arc::strong_count(&entry.block) == 1)
-        else {
-            return Ok(false);
-        };
-        self.cache.remove(index);
-        self.evictions = self
-            .evictions
-            .checked_add(1)
-            .ok_or(SegmentedError::AddressExhausted)?;
-        Ok(true)
-    }
-
     fn reserve_buffer(&mut self, buffer: ReaderBuffer) -> Result<(), SegmentedError> {
         loop {
             // Memory checks the old/new replacement overlap. Also plan the
@@ -320,13 +320,11 @@ impl State {
                     .len()
                     .checked_add(1)
                     .ok_or(StorageError::SizeOverflow)?;
-                let next = growth_capacity::<CacheEntry>(self.cache.capacity(), required)?;
-                let layout = core::alloc::Layout::array::<CacheEntry>(next)
-                    .map_err(|_| StorageError::SizeOverflow)?;
-                let increase = layout
-                    .size()
-                    .checked_sub(size_of_val(self.cache.as_slice()))
+                let next = hash_table_allocation_bound::<CacheEntry>(required)
                     .ok_or(StorageError::SizeOverflow)?;
+                let old =
+                    hash_table_retained_bound(&self.cache).ok_or(StorageError::SizeOverflow)?;
+                let increase = next.saturating_sub(old);
                 let increase = u64::try_from(increase).map_err(|_| StorageError::SizeOverflow)?;
                 let budget = &self.storage.reservation.budget;
                 let live = lock_read_state(&budget.state).live;
@@ -345,9 +343,21 @@ impl State {
                 Err(error)
             } else {
                 match buffer {
-                    ReaderBuffer::Cache { .. } => self
-                        .storage
-                        .run(|memory| memory.reserve_for_push(&mut self.cache)),
+                    ReaderBuffer::Cache { .. } => {
+                        let required = self
+                            .cache
+                            .len()
+                            .checked_add(1)
+                            .ok_or(StorageError::SizeOverflow)?;
+                        self.storage.run(|memory| {
+                            reserve_table_with_memory(
+                                &mut self.cache,
+                                required,
+                                |entry| hash_of(&entry.key),
+                                memory,
+                            )
+                        })
+                    }
                     ReaderBuffer::Requests => self
                         .storage
                         .run(|memory| memory.reserve_for_push(&mut self.requests)),
@@ -642,7 +652,9 @@ impl SegmentedOperation {
             base: None,
         });
         let state = Arc::new(Mutex::new(State {
-            cache: Vec::new(),
+            cache: HashTable::new(),
+            oldest: None,
+            newest: None,
             requests: Vec::new(),
             error: None,
             io_bytes: 0,
@@ -964,14 +976,11 @@ impl SegmentedSession {
             drop(state);
             return Err(error);
         }
-        if let Some(index) = state
-            .cache
-            .iter()
-            .position(|entry| entry.snapshot == self.receipt.snapshot && entry.slot == slot)
-        {
-            let entry = state.cache.remove(index);
-            let block = Arc::clone(&entry.block);
-            state.cache.push(entry);
+        let key = CacheKey {
+            snapshot: self.receipt.snapshot,
+            slot,
+        };
+        if let Some(block) = state.cache_hit(key) {
             return Ok(block);
         }
         let proof_reads = self.receipt.leaf_count.trailing_zeros();
@@ -1106,11 +1115,7 @@ impl SegmentedSession {
         })();
         match result {
             Ok(block) => {
-                state.cache.push(CacheEntry {
-                    snapshot: self.receipt.snapshot,
-                    slot,
-                    block: Arc::clone(&block),
-                });
+                state.cache_insert(key, Arc::clone(&block));
                 Ok(block)
             }
             Err(error) => {
@@ -1807,7 +1812,7 @@ mod operation_tests {
         {
             let state = lock_read_state(&session.state);
             let buffers = state.requests.capacity() * size_of::<SegmentedRequest>()
-                + state.cache.capacity() * size_of::<CacheEntry>();
+                + hash_table_retained_bound(&state.cache).unwrap();
             drop(state);
             assert_eq!(
                 evidence.bookkeeping_bytes(),
@@ -1955,16 +1960,18 @@ mod operation_tests {
             .unwrap();
             let mut preload = vec![session.header.summaries.first];
             if grow_cache {
-                preload.extend([
-                    session.header.dictionary.first,
-                    session.header.reverse.first,
-                ]);
+                preload.push(session.header.dictionary.first);
             }
             for slot in preload {
                 drop(session.block(slot).unwrap());
             }
             {
-                let state = lock_read_state(&session.state);
+                let mut state = lock_read_state(&session.state);
+                // Fill the real ledger boundary independently of hash-table
+                // bucket counts; both buffer-growth arms remain exercised.
+                while state.requests.len() < state.requests.capacity() {
+                    session.request(&mut state, 0, &mut [0]).unwrap();
+                }
                 let requests_full = state.requests.len() == state.requests.capacity();
                 let cache_full = state.cache.len() == state.cache.capacity();
                 drop(state);
@@ -2023,26 +2030,44 @@ mod operation_tests {
             )
             .unwrap();
             let mut pinned = Vec::new();
-            for offset in 0..31 {
+            let mut offset = 0;
+            loop {
+                let state = lock_read_state(&session.state);
+                let full = state.cache.len() == state.cache.capacity() && state.cache.len() >= 16;
+                drop(state);
+                if full {
+                    break;
+                }
                 pinned.push(
                     session
                         .block(session.header.dictionary.first + offset)
                         .unwrap(),
                 );
+                offset += 1;
             }
             // Replaying the sole unpinned header gives the request ledger spare
             // capacity while restoring the full cache array and its pinned neighbors.
             assert!(lock_read_state(&session.state).evict_one().unwrap());
             drop(session.block(0).unwrap());
             let header_pin = pin_header.then(|| session.block(0).unwrap());
-            {
-                let state = lock_read_state(&session.state);
+            let (old_layout, next_layout) = {
+                let mut state = lock_read_state(&session.state);
                 let shape = (state.cache.len(), state.cache.capacity());
+                let required_requests = state.requests.len() + 32;
+                let State {
+                    storage, requests, ..
+                } = &mut *state;
+                storage
+                    .run(|memory| memory.reserve(requests, required_requests))
+                    .unwrap();
                 let request_room = state.requests.capacity() - state.requests.len();
-                drop(state);
-                assert_eq!(shape, (32, 32));
+                assert_eq!(shape.0, shape.1);
                 assert!(request_room > 8);
-            }
+                (
+                    hash_table_retained_bound(&state.cache).unwrap(),
+                    hash_table_allocation_bound::<CacheEntry>(state.cache.len() + 1).unwrap(),
+                )
+            };
             let records = u64::from(session.header.records_per_block);
             let charge = u64::from(session.receipt.block_bytes) * (records + 1)
                 + records
@@ -2051,14 +2076,18 @@ mod operation_tests {
             let before = session.evidence();
             let headroom = charge
                 + if pin_header {
-                    32 * u64::try_from(size_of::<CacheEntry>()).unwrap()
+                    u64::try_from(next_layout - old_layout).unwrap()
                 } else {
                     0
                 };
             let held = session
                 .reserve_workspace(CEILING - before.live_bytes() - headroom)
                 .unwrap();
-            drop(session.block(session.header.dictionary.first + 31).unwrap());
+            drop(
+                session
+                    .block(session.header.dictionary.first + offset)
+                    .unwrap(),
+            );
             if pin_header {
                 assert_eq!(session.evidence().evictions(), before.evictions());
             } else {
@@ -2067,8 +2096,8 @@ mod operation_tests {
             assert!(session.evidence().peak_bytes() <= CEILING);
             assert_eq!(session.read_error(), None);
             assert_eq!(
-                lock_read_state(&session.state).cache.capacity(),
-                if pin_header { 64 } else { 32 }
+                hash_table_retained_bound(&lock_read_state(&session.state).cache).unwrap(),
+                if pin_header { next_layout } else { old_layout }
             );
             drop(held);
             drop(header_pin);

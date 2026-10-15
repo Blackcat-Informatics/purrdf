@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
-use purrdf_core::TermFactory;
+use purrdf_core::{DatasetView, TermFactory};
 use purrdf_core::{
     RdfDatasetBuilder, SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError,
     SegmentedLayer, SegmentedLayerMetadata, SegmentedProvider, SegmentedReadLimits,
@@ -262,6 +262,25 @@ fn generated_chronological_publications_match_eager_typed_seals() {
             stack.publish(layers.clone(), limits()).unwrap();
             let snapshot = stack.snapshot().unwrap();
             let query = snapshot.query(limits()).unwrap();
+            // Keyed access must preserve the same historical classification,
+            // removal, graph and ordering semantics as the effective streams.
+            if let Some(reifier) = query.term_id_by_value(&TermValue::iri("urn:r")).unwrap() {
+                assert_eq!(
+                    query.reifier_quads_of(reifier).collect::<Vec<_>>(),
+                    query
+                        .reifier_quads()
+                        .filter(|row| row.s == reifier)
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    query.annotations_of_with_graph(reifier).collect::<Vec<_>>(),
+                    query
+                        .annotation_quads()
+                        .filter(|row| row.s == reifier)
+                        .map(|row| (row.p, row.o, row.g))
+                        .collect::<Vec<_>>()
+                );
+            }
             let sparse_fold = canonical_paged_seal(&query, page_rows).unwrap();
             query.check_ready().unwrap();
             let eager_fold = paged

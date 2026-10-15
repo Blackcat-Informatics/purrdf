@@ -686,6 +686,15 @@ impl DatasetView for SegmentedStackQuery<'_> {
         self.reifier_quads_in_graph(GraphMatch::Any)
     }
 
+    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.reifiers(ProbePattern {
+            s: Some(reifier),
+            p: None,
+            o: None,
+            g: GraphMatch::Any,
+        })
+    }
+
     fn reifier_quads_in_graph(
         &self,
         g: GraphMatch<Self::Id>,
@@ -700,6 +709,22 @@ impl DatasetView for SegmentedStackQuery<'_> {
 
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.annotation_quads_in_graph(GraphMatch::Any)
+    }
+
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        self.logical_rows(
+            StatementKind::Annotation,
+            ProbePattern {
+                s: Some(reifier),
+                p: None,
+                o: None,
+                g: GraphMatch::Any,
+            },
+        )
+        .map(|row| (row.p, row.o, row.g))
     }
 
     fn annotation_quads_in_graph(
