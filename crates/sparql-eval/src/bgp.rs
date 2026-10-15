@@ -3234,6 +3234,9 @@ pub(crate) struct PlanSurvey {
     /// Human-readable triple-pattern strings, in the order the planner chose, for every
     /// BGP with at least two patterns. The historical `explain_query` output.
     pub(crate) orders: AdmittedRecords<String>,
+    /// Immutable statistical inputs behind the surveyed BGP forecasts. These
+    /// retain exactness separately from the heuristic join/output estimates.
+    pub(crate) statistics: AdmittedRecords<String>,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
     pub(crate) estimates: AdmittedVec<Option<PlanEstimate>>,
@@ -3261,6 +3264,7 @@ impl PlanSurvey {
         }
         Ok(Self {
             orders: AdmittedRecords::new(workspace),
+            statistics: AdmittedRecords::new(workspace),
             estimates,
             shape: shape.clone(),
             workspace: workspace.clone(),
@@ -3699,21 +3703,9 @@ fn forecast_bgp<D: DatasetView>(
             initial.push_reserved(seed.bound.contains(variable));
         }
     }
-    let mut compiled = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
-    let mut any_absent = false;
-    for pattern in patterns {
-        match compile_pattern_admitted(pattern, &working, dataset, &workspace, &|value| {
-            dataset
-                .term_id_by_value(value)
-                .map_err(|error| account.source_error(error))
-        })? {
-            Some(pattern) => compiled.push_reserved(pattern),
-            None => {
-                any_absent = true;
-                break;
-            }
-        }
-    }
+    let compiled = compile_bgp_admitted(dataset, patterns, &working, account)?;
+    let any_absent = compiled.is_none();
+    let compiled = compiled.as_deref().unwrap_or(&[]);
     let order = if any_absent {
         let mut order = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
         for index in 0..patterns.len() {
@@ -3721,7 +3713,7 @@ fn forecast_bgp<D: DatasetView>(
         }
         order
     } else {
-        cost_based_order_from_admitted(&compiled, dataset, &scope, &initial, &workspace)?
+        cost_based_order_from_admitted(compiled, dataset, &scope, &initial, &workspace)?
     };
     let schema = VarSchema::from_vars_admitted(
         working
@@ -3737,7 +3729,7 @@ fn forecast_bgp<D: DatasetView>(
         (seed.rows, seed.rows)
     } else {
         replay_cost_estimate_from_admitted(
-            &compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
+            compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
         )?
     };
     let estimate = PlanEstimate {
@@ -3746,6 +3738,99 @@ fn forecast_bgp<D: DatasetView>(
         columns: u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
     };
     Ok((schema, estimate, order))
+}
+
+/// Compile through the same term/error home for forecasting and its immutable
+/// evidence. An absent constant makes the complete BGP empty before statistics
+/// are consulted, so no partial evidence may survive that case.
+fn compile_bgp_admitted<D: DatasetView>(
+    dataset: &D,
+    patterns: &[TriplePattern],
+    schema: &VarSchema,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<Option<AdmittedVec<CompiledPattern<D::Id>>>, EvalError> {
+    let workspace = account.capability();
+    let mut compiled = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
+    for pattern in patterns {
+        let Some(pattern) =
+            compile_pattern_admitted(pattern, schema, dataset, &workspace, &|value| {
+                dataset
+                    .term_id_by_value(value)
+                    .map_err(|error| account.source_error(error))
+            })?
+        else {
+            return Ok(None);
+        };
+        compiled.push_reserved(pattern);
+    }
+    Ok(Some(compiled))
+}
+
+/// Record the immutable provider inputs read by the forecast, including retained
+/// unit forecasts. Re-reading metadata is valid under SnapshotStatistics' frozen
+/// revision contract; it never samples execution counters. Term resolution keeps
+/// the original view's admission and first-cause path, as in the forecast.
+fn record_bgp_statistics<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    node: &GraphPattern,
+    survey: &mut PlanSurvey,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<(), EvalError> {
+    let Some(statistics) = dataset.statistics() else {
+        return Ok(());
+    };
+    let GraphPattern::Bgp { patterns } = node else {
+        unreachable!("statistics evidence receives a BGP node");
+    };
+    let workspace = account.capability();
+    let schema = collect_slots_admitted(patterns, None, &workspace)?;
+    let Some(compiled) = compile_bgp_admitted(dataset, patterns, &schema, account)? else {
+        return Ok(());
+    };
+    let node_id = survey.shape.node_of(node).expect("surveyed BGP").index();
+    let scope = active_dataset.scope_for(active_graph);
+    for (pattern_index, pattern) in compiled.iter().enumerate() {
+        let domains = if base_cardinality(dataset, pattern, &scope) == 0 {
+            [None; 3]
+        } else {
+            predicate_domains(dataset, pattern, &scope)
+        };
+        let mut record = |graph_index, graph| -> Result<(), EvalError> {
+            let rows = provider_cardinality(
+                dataset,
+                pattern,
+                purrdf_core::ProbePattern {
+                    s: constant_of(&pattern.s),
+                    p: constant_of(&pattern.p),
+                    o: constant_of(&pattern.o),
+                    g: graph,
+                },
+            );
+            let arguments = format_args!(
+                "#{node_id} pattern={pattern_index} graph={graph_index} source={:?} revision={} row-input={rows:?} subject-domain={:?} object-domain={:?}",
+                statistics.source(),
+                statistics.fingerprint(),
+                domains[0],
+                domains[2]
+            );
+            let bytes = crate::workspace::display_len(&arguments)?;
+            let allocation = workspace
+                .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+            let text = crate::workspace::format_exact(&arguments, bytes, "planner statistics")?;
+            survey.statistics.push(text, allocation)
+        };
+        match &scope {
+            GraphScope::One(graph) => record(0, *graph)?,
+            GraphScope::Merge(graphs) => {
+                for (index, &graph) in graphs.iter().enumerate() {
+                    record(index, GraphMatch::Named(graph))?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Record a BGP's forecast under its selected positive driver's bindings.
@@ -3770,6 +3855,7 @@ fn survey_bgp_seeded<D: DatasetView>(
         account,
     )?;
     record_bgp_forecast(node, patterns, estimate, &order, survey)?;
+    record_bgp_statistics(dataset, active_dataset, active_graph, node, survey, account)?;
     Ok(())
 }
 
@@ -4909,6 +4995,7 @@ mod tests {
         measured: Option<[purrdf_core::AccessCost; 3]>,
         cardinalities: Option<[u64; 3]>,
         supplied_statistics: bool,
+        statistics_accuracy: purrdf_core::StatisticsAccuracy,
         first_probe: std::sync::Mutex<Option<TermId>>,
     }
 
@@ -4925,6 +5012,7 @@ mod tests {
                 ]),
                 cardinalities: None,
                 supplied_statistics: false,
+                statistics_accuracy: purrdf_core::StatisticsAccuracy::Exact,
                 first_probe: std::sync::Mutex::new(None),
             }
         }
@@ -5036,7 +5124,10 @@ mod tests {
         }
 
         fn fingerprint(&self) -> u64 {
-            self.inner.stats_fingerprint()
+            purrdf_hash::fixed::hash_one(&(
+                self.inner.stats_fingerprint(),
+                self.statistics_accuracy,
+            ))
         }
 
         fn predicate(
@@ -5103,7 +5194,7 @@ mod tests {
             };
             purrdf_core::StatisticCount {
                 value,
-                accuracy: purrdf_core::StatisticsAccuracy::Exact,
+                accuracy: self.statistics_accuracy,
             }
         }
     }
@@ -5124,6 +5215,46 @@ mod tests {
         assert_eq!(supplied.take_first_probe(), Some(graph.rare));
         assert_eq!(actual, expected);
         assert_eq!(actual.len(), 100);
+
+        let engine = crate::NativeSparqlEngine::new();
+        let query = "SELECT * WHERE { ?hub <http://ex/hot> ?hot . ?hub <http://ex/mid> ?mid . ?hub <http://ex/rare> ?rare }";
+        let without = engine.explain_query_view(&fallback, query, None).unwrap();
+        assert_eq!(without.statistics(), [] as [String; 0]);
+        let exact = engine.explain_query_view(&supplied, query, None).unwrap();
+        assert_ne!(exact.join_orders(), without.join_orders());
+        assert_eq!(exact.statistics().len(), 3);
+        assert!(exact.statistics().iter().all(|input| {
+            input.contains("source=\"fixture-exact\"")
+                && input.contains("accuracy: Exact")
+                && input.contains("subject-domain=None object-domain=None")
+        }));
+        assert_eq!(exact.clone().render(), exact.render());
+        supplied.statistics_accuracy = purrdf_core::StatisticsAccuracy::UpperBound;
+        let bounded = engine.explain_query_view(&supplied, query, None).unwrap();
+        assert_eq!(bounded.join_orders(), exact.join_orders());
+        assert!(bounded.statistics().iter().all(|input| {
+            input.contains("accuracy: UpperBound") && !input.contains("accuracy: Exact")
+        }));
+        assert_ne!(bounded.statistics(), exact.statistics());
+
+        // A retained unit forecast and a seeded forecast both carry evidence.
+        for query in [
+            "SELECT * WHERE { { ?hub <http://ex/hot> ?hot } UNION { ?hub <http://ex/rare> ?rare } }",
+            "SELECT * WHERE { VALUES ?hub { <http://ex/hub> } ?hub <http://ex/hot> ?hot . ?hub <http://ex/rare> ?rare }",
+        ] {
+            let receipt = engine.explain_query_view(&supplied, query, None).unwrap();
+            assert_eq!(receipt.statistics().len(), 2);
+            assert!(receipt.render().contains("accuracy: UpperBound"));
+        }
+        // No statistical input was consulted when a constant made the BGP empty.
+        let empty = engine
+            .explain_query_view(
+                &supplied,
+                "SELECT * WHERE { ?s <http://ex/hot> ?o . ?s <http://ex/absent> ?other }",
+                None,
+            )
+            .unwrap();
+        assert_eq!(empty.statistics(), [] as [String; 0]);
     }
 
     fn host_cost_patterns(graph: &Skewed) -> Vec<TriplePattern> {

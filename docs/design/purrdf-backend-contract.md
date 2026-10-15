@@ -150,6 +150,19 @@ unimplemented families as `scan-default`. Optional cheap statement cardinalities
 are planner estimates, not output bounds or memory certificates. Operational
 failures still latch the original session cause before guarded completion.
 
+`statistics()` exposes optional immutable `SnapshotStatistics` in the view's
+own identity space. Counts distinguish `Exact` from `UpperBound`; absent counts
+are unknown. Native and compact resident views seal predicate/class, selected
+predicate/object, object-category, reifier-target-predicate and distinct-domain
+metadata at freeze. A provider's source and revision participate in retained
+order-cache identity. The planner uses available predicate-specific domains for
+join selectivity and keeps the existing fallback where they are unknown.
+EXPLAIN's `statistics` section and `QueryExplanation::statistics()` record the
+provider, revision and statistical inputs for each BGP pattern and graph scope,
+including retained positive plans. Exact input counts do not make the joined
+output estimate exact or turn it into an allocation certificate. Domain sizes
+from overlapping streams are upper bounds unless their identities are unioned.
+
 The graph slot is stored as `g: Option<TermId>` where `None` is the default
 graph. Because `Option<TermId>` alone cannot distinguish *any graph* from *the
 default graph*, the read view uses the dedicated three-way `GraphMatch` enum, which

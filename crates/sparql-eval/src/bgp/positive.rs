@@ -8,7 +8,7 @@
 use super::{
     ActiveDataset, BgpOrder, Binary64Scope, DatasetView, EvalError, GraphMatch, GraphPattern,
     PlanEstimate, PlanSurvey, SeedEstimate, VarSchema, forecast_bgp, record_bgp_forecast,
-    step_size, survey_bgp_seeded,
+    record_bgp_statistics, step_size, survey_bgp_seeded,
 };
 use crate::WorkspaceCapability;
 use crate::workspace::{AdmittedMap, AdmittedVec, QueryWorkspace, SharedWorkspace};
@@ -707,6 +707,14 @@ impl PositivePlan {
                                     .clone(),
                                 self.unit_orders.get(&key).map_or(&[][..], |order| &**order),
                                 survey,
+                            )?;
+                            record_bgp_statistics(
+                                dataset,
+                                active_dataset,
+                                active_graph,
+                                node,
+                                survey,
+                                account,
                             )?;
                         }
                     }
