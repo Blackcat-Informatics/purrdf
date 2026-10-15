@@ -437,8 +437,8 @@ SELECT ?next WHERE {
 
 ### Result datatype
 
-A `+`/`-` between two durations, or between a duration and an instant/Gregorian
-value, resolves its result's datatype from the operands' **declared tags**,
+A `+`/`-` between two durations resolves its result's datatype from the operands'
+**declared tags**,
 never from the computed component values: the result is `dayTimeDuration` iff
 every duration operand declares `dayTimeDuration`, `yearMonthDuration` iff
 every duration operand declares `yearMonthDuration`, and the general
@@ -460,8 +460,8 @@ SELECT ?zero WHERE {
 inspects the (zero) result rather than the (matching) declared tags would
 reach the same answer here, which is exactly why the second case is needed.
 Conversely, a sum whose *components* look exactly like a pure
-`yearMonthDuration` still widens to the general type the moment either
-operand's declared tag is the general one:
+`yearMonthDuration` still widens to the general type whenever the operands'
+declared tags do not name the same duration subtype:
 
 ```sparql
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
