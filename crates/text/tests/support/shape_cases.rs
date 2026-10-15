@@ -1560,11 +1560,11 @@ pub(crate) fn bounded_shapes_keep_original_owners() {
         let source = image
             .open_session(SegmentedReadLimits::new(CEILING, 2, 16_384, 20_000_000, 8))
             .unwrap();
-        let non_cache = |source: &purrdf_core::SegmentedSession| {
+        let owner_balance = |source: &purrdf_core::SegmentedSession| {
             let receipt = source.evidence();
-            receipt.live_bytes() - receipt.unpinned_cache_bytes()
+            receipt.live_bytes() - receipt.unpinned_cache_bytes() - receipt.bookkeeping_bytes()
         };
-        let baseline = non_cache(&source);
+        let baseline = owner_balance(&source);
         let window = CurrentThreadWindow::open();
         let result = match route {
             0 => {
@@ -1627,11 +1627,11 @@ pub(crate) fn bounded_shapes_keep_original_owners() {
         drop(prepared);
         drop(native);
         drop(env);
-        assert!(non_cache(&source) > baseline);
+        assert!(owner_balance(&source) > baseline);
         assert_eq!(clone.solutions().unwrap().1, expected);
         drop(clone);
         assert_eq!(
-            non_cache(&source),
+            owner_balance(&source),
             baseline,
             "payloads die before original grant release"
         );
@@ -1841,7 +1841,9 @@ pub(crate) fn cache_refusal_keeps_previous_owner() {
             32_000_000, 2, 16_384, 20_000_000, 8,
         ))
         .unwrap();
-    let baseline = healthy.evidence().live_bytes() - healthy.evidence().unpinned_cache_bytes();
+    let baseline = healthy.evidence().live_bytes()
+        - healthy.evidence().unpinned_cache_bytes()
+        - healthy.evidence().bookkeeping_bytes();
     let native = engine(false);
     let answer = native
         .query_fallible_view(
@@ -1854,12 +1856,17 @@ pub(crate) fn cache_refusal_keeps_previous_owner() {
     drop(answer);
     drop(native);
     assert!(
-        healthy.evidence().live_bytes() - healthy.evidence().unpinned_cache_bytes() > baseline,
+        healthy.evidence().live_bytes()
+            - healthy.evidence().unpinned_cache_bytes()
+            - healthy.evidence().bookkeeping_bytes()
+            > baseline,
         "cache retains its ORIGINAL native compilation grant"
     );
     cache.clear();
     assert_eq!(
-        healthy.evidence().live_bytes() - healthy.evidence().unpinned_cache_bytes(),
+        healthy.evidence().live_bytes()
+            - healthy.evidence().unpinned_cache_bytes()
+            - healthy.evidence().bookkeeping_bytes(),
         baseline
     );
 }

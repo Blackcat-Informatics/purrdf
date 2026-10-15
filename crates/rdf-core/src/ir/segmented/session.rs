@@ -12,6 +12,7 @@ use crate::dataset_view::{
 use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, TermRef, TermValue};
 use purrdf_hash::blake3::Hasher;
 use purrdf_lex::allocation::shared::{Shared, SharedCloneError};
+use purrdf_lex::allocation::{StorageError, growth_capacity};
 
 use super::build::fixed_records;
 use super::format::{self, DecodedRecords, Header, Reader, Stream};
@@ -271,6 +272,11 @@ struct CacheEntry {
     slot: u64,
     block: Arc<CachedBlock>,
 }
+#[derive(Clone, Copy)]
+enum ReaderBuffer {
+    Cache { block_charge: u64 },
+    Requests,
+}
 struct State {
     cache: Vec<CacheEntry>,
     requests: Vec<SegmentedRequest>,
@@ -278,6 +284,83 @@ struct State {
     io_bytes: u64,
     evictions: u64,
     hash: Hasher,
+    // Buffers die before their original live-byte grant is released. This
+    // reservation has no cache backlink: resizing while holding State must not
+    // lock State again.
+    storage: super::query::QueryStorage,
+}
+
+impl State {
+    fn evict_one(&mut self) -> Result<bool, SegmentedError> {
+        let Some(index) = self
+            .cache
+            .iter()
+            .position(|entry| Arc::strong_count(&entry.block) == 1)
+        else {
+            return Ok(false);
+        };
+        self.cache.remove(index);
+        self.evictions = self
+            .evictions
+            .checked_add(1)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        Ok(true)
+    }
+
+    fn reserve_buffer(&mut self, buffer: ReaderBuffer) -> Result<(), SegmentedError> {
+        loop {
+            // Memory checks the old/new replacement overlap. Also plan the
+            // final cache-plus-block layout before allocating: reclaiming one
+            // slot can avoid growth altogether, especially beside pinned blocks.
+            let refusal = if let ReaderBuffer::Cache { block_charge } = buffer
+                && self.cache.len() == self.cache.capacity()
+            {
+                let required = self
+                    .cache
+                    .len()
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                let next = growth_capacity::<CacheEntry>(self.cache.capacity(), required)?;
+                let layout = core::alloc::Layout::array::<CacheEntry>(next)
+                    .map_err(|_| StorageError::SizeOverflow)?;
+                let increase = layout
+                    .size()
+                    .checked_sub(size_of_val(self.cache.as_slice()))
+                    .ok_or(StorageError::SizeOverflow)?;
+                let increase = u64::try_from(increase).map_err(|_| StorageError::SizeOverflow)?;
+                let budget = &self.storage.reservation.budget;
+                let live = lock_read_state(&budget.state).live;
+                let requested = live
+                    .checked_add(increase)
+                    .and_then(|live| live.checked_add(block_charge))
+                    .ok_or(SegmentedError::AddressExhausted)?;
+                (requested > budget.limit).then_some(SegmentedError::Residency {
+                    requested,
+                    limit: budget.limit,
+                })
+            } else {
+                None
+            };
+            let result = if let Some(error) = refusal {
+                Err(error)
+            } else {
+                match buffer {
+                    ReaderBuffer::Cache { .. } => self
+                        .storage
+                        .run(|memory| memory.reserve_for_push(&mut self.cache)),
+                    ReaderBuffer::Requests => self
+                        .storage
+                        .run(|memory| memory.reserve_for_push(&mut self.requests)),
+                }
+            };
+            // State is already locked. Evict here rather than installing a
+            // reservation backlink that would recursively acquire that lock.
+            if matches!(&result, Err(SegmentedError::Residency { .. })) && self.evict_one()? {
+                continue;
+            }
+            return result;
+        }
+    }
 }
 
 // Workspace growth and block loading evict through the same account. A pinned
@@ -303,17 +386,7 @@ fn make_room(
         if requested <= budget.limit && slots_available {
             return Ok(());
         }
-        if let Some(index) = state
-            .cache
-            .iter()
-            .position(|entry| Arc::strong_count(&entry.block) == 1)
-        {
-            state.cache.remove(index);
-            state.evictions = state
-                .evictions
-                .checked_add(1)
-                .ok_or(SegmentedError::AddressExhausted)?;
-        } else {
+        if !state.evict_one()? {
             let error = if state.cache.is_empty() {
                 SegmentedError::Residency {
                     requested,
@@ -364,6 +437,7 @@ pub struct SegmentedEvidence<Identity = SegmentedSnapshot> {
     io_bytes: u64,
     live_bytes: u64,
     unpinned_cache_bytes: u64,
+    bookkeeping_bytes: u64,
     peak_bytes: u64,
     evictions: u64,
     _base: Arc<SegmentedReservation>,
@@ -376,6 +450,7 @@ impl<Identity: PartialEq> PartialEq for SegmentedEvidence<Identity> {
             || self.io_bytes != other.io_bytes
             || self.live_bytes != other.live_bytes
             || self.unpinned_cache_bytes != other.unpinned_cache_bytes
+            || self.bookkeeping_bytes != other.bookkeeping_bytes
             || self.peak_bytes != other.peak_bytes
             || self.evictions != other.evictions
         {
@@ -441,9 +516,19 @@ impl<Identity> SegmentedEvidence<Identity> {
     /// Subtracting this from [`Self::live_bytes`] isolates the original account's
     /// other live owners. Pinned blocks remain in that balance: a leaked pin or
     /// query grant cannot be hidden by a legitimate cache eviction or reload.
+    /// Reader array capacity is reported separately by [`Self::bookkeeping_bytes`].
     #[must_use]
     pub const fn unpinned_cache_bytes(&self) -> u64 {
         self.unpinned_cache_bytes
+    }
+    /// Charged request-ledger and cache-slot capacity retained by the reader.
+    ///
+    /// These buffers grow on demand and survive individual query results.
+    /// Subtract this and [`Self::unpinned_cache_bytes`] from live residency to
+    /// compare the original control, pinned blocks and external workspace owners.
+    #[must_use]
+    pub const fn bookkeeping_bytes(&self) -> u64 {
+        self.bookkeeping_bytes
     }
     /// Highest pre-admitted live capacity so far; never exceeds the caller's ceiling.
     #[must_use]
@@ -480,6 +565,7 @@ fn checkpoint<I>(
         hash: *state.hash.finalize().as_bytes(),
         io_bytes: state.io_bytes,
         live_bytes: residency.live,
+        bookkeeping_bytes: state.storage.reservation.bytes(),
         // Disjoint charged reservations cannot sum past checked live residency.
         unpinned_cache_bytes: state
             .cache
@@ -526,33 +612,19 @@ impl SegmentedOperation {
     pub(super) fn new(limits: SegmentedReadLimits) -> Result<Self, SegmentedError> {
         let cache_count =
             usize::try_from(limits.cache_blocks).map_err(|_| SegmentedError::AddressExhausted)?;
-        let requests =
-            usize::try_from(limits.requests).map_err(|_| SegmentedError::AddressExhausted)?;
         if cache_count == 0 {
             return Err(SegmentedError::PinnedBlocks);
         }
         let base_bytes =
             u64::try_from(size_of::<Self>() + size_of::<State>() + size_of::<Budget>() + 192)
-                .map_err(|_| SegmentedError::AddressExhausted)?
-                .checked_add(
-                    u64::from(limits.cache_blocks)
-                        * u64::try_from(size_of::<CacheEntry>())
-                            .map_err(|_| SegmentedError::AddressExhausted)?,
-                )
-                .and_then(|v| {
-                    v.checked_add(
-                        u64::from(limits.requests)
-                            * u64::try_from(size_of::<SegmentedRequest>()).ok()?,
-                    )
-                })
-                .ok_or(SegmentedError::AddressExhausted)?;
+                .map_err(|_| SegmentedError::AddressExhausted)?;
         if base_bytes > limits.live_bytes {
             return Err(SegmentedError::Residency {
                 requested: base_bytes,
                 limit: limits.live_bytes,
             });
         }
-        // Reserve before creating the session's heap owners or fixed capacities.
+        // Reserve actual account/control layouts, not permitted future reads.
         let budget = Arc::new(Budget {
             state: Mutex::new(Residency {
                 live: base_bytes,
@@ -570,8 +642,8 @@ impl SegmentedOperation {
             base: None,
         });
         let state = Arc::new(Mutex::new(State {
-            cache: Vec::with_capacity(cache_count),
-            requests: Vec::with_capacity(requests),
+            cache: Vec::new(),
+            requests: Vec::new(),
             error: None,
             io_bytes: 0,
             evictions: 0,
@@ -579,6 +651,10 @@ impl SegmentedOperation {
                 let mut hash = Hasher::new();
                 hash.update(super::SEGMENTED_REQUESTS_DOMAIN.as_bytes());
                 hash
+            },
+            storage: super::query::QueryStorage {
+                reservation: budget.reserve(0)?,
+                cause: None,
             },
         }));
         Ok(Self {
@@ -828,7 +904,9 @@ impl SegmentedSession {
         position: u64,
         output: &mut [u8],
     ) -> Result<(), SegmentedError> {
-        if state.requests.len() == state.requests.capacity() {
+        if u64::try_from(state.requests.len()).map_err(|_| SegmentedError::AddressExhausted)?
+            >= u64::from(self.limits.requests)
+        {
             return Err(SegmentedError::EvidenceExhausted);
         }
         let bytes = u32::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
@@ -848,6 +926,7 @@ impl SegmentedSession {
         {
             return Err(SegmentedError::Corrupt("range escapes certified provider"));
         }
+        state.reserve_buffer(ReaderBuffer::Requests)?;
         state.requests.push(SegmentedRequest {
             snapshot: self
                 .identity
@@ -879,6 +958,12 @@ impl SegmentedSession {
             return self.fail(SegmentedError::Corrupt("block outside certified directory"));
         }
         let mut state = lock_read_state(&self.state);
+        // Another operation can fail after ready() releases State. Inspect the
+        // original fault again under this lock, before cache reuse or preflight.
+        if let Some(error) = state.error.clone() {
+            drop(state);
+            return Err(error);
+        }
         if let Some(index) = state
             .cache
             .iter()
@@ -898,7 +983,9 @@ impl SegmentedSession {
             .requests
             .len()
             .checked_add(needed)
-            .is_none_or(|count| count > state.requests.capacity())
+            .is_none_or(|count| {
+                u64::try_from(count).map_or(true, |count| count > u64::from(self.limits.requests))
+            })
         {
             state.error = Some(SegmentedError::EvidenceExhausted);
             return Err(SegmentedError::EvidenceExhausted);
@@ -942,6 +1029,15 @@ impl SegmentedSession {
             .and_then(|v| v.checked_add(entries))
             .and_then(|v| v.checked_add(overhead))
             .ok_or(SegmentedError::AddressExhausted)?;
+        self.make_room(&mut state, charge, true)?;
+        if let Err(error) = state.reserve_buffer(ReaderBuffer::Cache {
+            block_charge: charge,
+        }) {
+            state.error.get_or_insert_with(|| error.clone());
+            return Err(error);
+        }
+        // Admitted cache capacity can consume the room previously left for
+        // this block. Reclaim against the actual combined live layouts.
         self.make_room(&mut state, charge, true)?;
         let mut reservation = self.budget.reserve(charge)?;
         let mut bytes = vec![
@@ -1224,7 +1320,11 @@ impl SegmentedSession {
         self.header.streams[table].rows != 0
     }
 
-    fn stream(&self, table: usize, pattern: Pattern) -> QuadIter<'_> {
+    pub(super) fn stream(
+        &self,
+        table: usize,
+        pattern: Pattern,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         QuadIter {
             session: self,
             table,
@@ -1623,6 +1723,16 @@ impl DatasetView for SegmentedSession {
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.stream(1, (None, None, None, GraphMatch::Any))
     }
+    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.stream(1, (Some(reifier), None, None, GraphMatch::Any))
+    }
+    fn annotations_of_with_graph(
+        &self,
+        reifier: Self::Id,
+    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
+        self.stream(2, (Some(reifier), None, None, GraphMatch::Any))
+            .map(|row| (row.p, row.o, row.g))
+    }
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.stream(2, (None, None, None, GraphMatch::Any))
     }
@@ -1694,6 +1804,16 @@ mod operation_tests {
         let retained = session.base.bytes
             + u64::try_from(Shared::<RequestIdentity>::allocation_layout().size()).unwrap();
         let evidence = session.evidence();
+        {
+            let state = lock_read_state(&session.state);
+            let buffers = state.requests.capacity() * size_of::<SegmentedRequest>()
+                + state.cache.capacity() * size_of::<CacheEntry>();
+            drop(state);
+            assert_eq!(
+                evidence.bookkeeping_bytes(),
+                u64::try_from(buffers).unwrap()
+            );
+        }
         let request = evidence.with_requests(|requests| requests[0].try_clone().unwrap());
         let duplicate = request.try_clone().unwrap();
         assert_eq!(request, duplicate);
@@ -1762,6 +1882,198 @@ mod operation_tests {
             })
             .unwrap();
         (builder.seal().unwrap(), id)
+    }
+
+    #[test]
+    fn fault_between_ready_and_block_lock_preserves_the_first_cause() {
+        const FIRST: SegmentedError = SegmentedError::Provider {
+            operation: "interleaved first failure",
+            host_code: Some(17),
+        };
+        #[derive(Debug)]
+        struct InterleavedProvider {
+            inner: super::super::SegmentedBytes,
+            pending: Mutex<Option<std::sync::Weak<Mutex<State>>>>,
+        }
+        impl SegmentedProvider for InterleavedProvider {
+            fn snapshot(&self) -> SegmentedSnapshot {
+                let pending = lock_read_state(&self.pending).take();
+                if let Some(state) = pending.and_then(|owner| owner.upgrade()) {
+                    lock_read_state(&state).error = Some(FIRST);
+                }
+                self.inner.snapshot()
+            }
+            fn byte_len(&self) -> u64 {
+                self.inner.byte_len()
+            }
+            fn read_at(&self, position: u64, output: &mut [u8]) -> Result<(), SegmentedError> {
+                self.inner.read_at(position, output)
+            }
+        }
+        let (image, _) = image("urn:interleaved-first-fault");
+        for (cached, requests_tight) in [(false, true), (false, false), (true, true)] {
+            let provider = Arc::new(InterleavedProvider {
+                inner: image.provider(),
+                pending: Mutex::new(None),
+            });
+            let mut session = SegmentedSession::open(
+                provider.clone(),
+                image.receipt(),
+                SegmentedReadLimits::new(2_000_000, 2, 2000, 10_000_000, 4),
+            )
+            .unwrap();
+            let before = session.evidence();
+            if requests_tight {
+                session.limits.requests = u32::try_from(before.request_count()).unwrap();
+            } else {
+                session.limits.io_bytes = before.io_bytes();
+            }
+            *lock_read_state(&provider.pending) = Some(Arc::downgrade(&session.state));
+            // The provider callback deterministically latches another operation's
+            // fault after ready inspected State and before block takes its lock.
+            let slot = if cached {
+                0
+            } else {
+                session.header.dictionary.first
+            };
+            assert!(matches!(session.block(slot), Err(error) if error == FIRST));
+            assert_eq!(session.read_error(), Some(FIRST));
+            assert_eq!(session.evidence().request_count(), before.request_count());
+        }
+    }
+
+    #[test]
+    fn reader_buffer_growth_reclaims_unpinned_blocks_before_refusal() {
+        const CEILING: u64 = 2_000_000;
+        let (image, _) = image("urn:reader-buffer-eviction");
+        for grow_cache in [false, true] {
+            let session = SegmentedSession::open(
+                Arc::new(image.provider()),
+                image.receipt(),
+                SegmentedReadLimits::new(CEILING, 8, 2000, 10_000_000, 4),
+            )
+            .unwrap();
+            let mut preload = vec![session.header.summaries.first];
+            if grow_cache {
+                preload.extend([
+                    session.header.dictionary.first,
+                    session.header.reverse.first,
+                ]);
+            }
+            for slot in preload {
+                drop(session.block(slot).unwrap());
+            }
+            {
+                let state = lock_read_state(&session.state);
+                let requests_full = state.requests.len() == state.requests.capacity();
+                let cache_full = state.cache.len() == state.cache.capacity();
+                drop(state);
+                assert!(requests_full);
+                assert_eq!(cache_full, grow_cache);
+            }
+            let before = session.evidence();
+            // The ordinary row block fits exactly. A growing reader buffer also
+            // needs room, and the original unpinned header can provide it.
+            let charge = u64::from(session.receipt.block_bytes)
+                + u64::try_from(size_of::<CachedBlock>() + 64).unwrap();
+            let held = session
+                .reserve_workspace(CEILING - before.live_bytes() - charge)
+                .unwrap();
+            let target = session.header.streams[0].first;
+            drop(session.block(target).unwrap());
+            let after = session.evidence();
+            assert!(after.evictions() > before.evictions());
+            assert_eq!(
+                after.request_count() - before.request_count(),
+                usize::try_from(session.receipt.leaf_count.trailing_zeros()).unwrap() + 1
+            );
+            assert!(after.peak_bytes() <= CEILING);
+            assert_eq!(session.read_error(), None);
+            drop(held);
+        }
+    }
+
+    #[test]
+    fn cache_slot_growth_counts_the_pending_block_before_allocating() {
+        const CEILING: u64 = 2_000_000;
+        let mut builder =
+            SegmentedBuilder::new(SegmentedBuildLimits::new(4096, 200_000, 4096, 1024, 4).unwrap())
+                .unwrap();
+        let values: Vec<_> = (0..128)
+            .map(|index| TermValue::iri(format!("urn:pending-cache:{index:03}")))
+            .collect();
+        let mut ids = Vec::new();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        for &id in &ids {
+            builder
+                .push_quad(QuadIds {
+                    s: ids[0],
+                    p: ids[0],
+                    o: id,
+                    g: None,
+                })
+                .unwrap();
+        }
+        let image = builder.seal().unwrap();
+        for pin_header in [false, true] {
+            let session = SegmentedSession::open(
+                Arc::new(image.provider()),
+                image.receipt(),
+                SegmentedReadLimits::new(CEILING, 64, 2000, 10_000_000, 64),
+            )
+            .unwrap();
+            let mut pinned = Vec::new();
+            for offset in 0..31 {
+                pinned.push(
+                    session
+                        .block(session.header.dictionary.first + offset)
+                        .unwrap(),
+                );
+            }
+            // Replaying the sole unpinned header gives the request ledger spare
+            // capacity while restoring the full cache array and its pinned neighbors.
+            assert!(lock_read_state(&session.state).evict_one().unwrap());
+            drop(session.block(0).unwrap());
+            let header_pin = pin_header.then(|| session.block(0).unwrap());
+            {
+                let state = lock_read_state(&session.state);
+                let shape = (state.cache.len(), state.cache.capacity());
+                let request_room = state.requests.capacity() - state.requests.len();
+                drop(state);
+                assert_eq!(shape, (32, 32));
+                assert!(request_room > 8);
+            }
+            let records = u64::from(session.header.records_per_block);
+            let charge = u64::from(session.receipt.block_bytes) * (records + 1)
+                + records
+                    * u64::try_from(size_of::<(GlobalTermId, core::ops::Range<usize>)>()).unwrap()
+                + u64::try_from(size_of::<CachedBlock>() + 64).unwrap();
+            let before = session.evidence();
+            let headroom = charge
+                + if pin_header {
+                    32 * u64::try_from(size_of::<CacheEntry>()).unwrap()
+                } else {
+                    0
+                };
+            let held = session
+                .reserve_workspace(CEILING - before.live_bytes() - headroom)
+                .unwrap();
+            drop(session.block(session.header.dictionary.first + 31).unwrap());
+            if pin_header {
+                assert_eq!(session.evidence().evictions(), before.evictions());
+            } else {
+                assert!(session.evidence().evictions() > before.evictions());
+            }
+            assert!(session.evidence().peak_bytes() <= CEILING);
+            assert_eq!(session.read_error(), None);
+            assert_eq!(
+                lock_read_state(&session.state).cache.capacity(),
+                if pin_header { 64 } else { 32 }
+            );
+            drop(held);
+            drop(header_pin);
+            drop(pinned);
+        }
     }
 
     #[test]

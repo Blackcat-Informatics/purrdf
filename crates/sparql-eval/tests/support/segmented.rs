@@ -75,10 +75,11 @@ pub fn open(image: &SegmentedImage, ceiling: u64) -> SegmentedSession {
     open_with_cache(image, ceiling, 2)
 }
 
-/// The actual fixed session footprint, leaving no room for an owned query control.
+/// The opening peak, including overlapping old/new reader buffers during growth.
+/// Query controls must still refuse at this independently measured ceiling.
 pub fn baseline_ceiling(image: &SegmentedImage) -> u64 {
     let source = open(image, CEILING);
-    source.evidence().live_bytes()
+    source.evidence().peak_bytes()
 }
 
 /// Open a session with explicit cache occupancy for hot/cold benchmark cases.

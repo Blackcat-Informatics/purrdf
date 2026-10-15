@@ -110,6 +110,8 @@ pub use pipeline_bundle::{
     BundleDigestWork, CanonScopeName, GraphLayer, HandleEntry, HandleKey, PIPELINE_ROOT_DOMAIN,
     PipelineBundle, PipelineBundleError, PipelineViewBundle,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use segmented::SegmentedFileProvider;
 pub use segmented::{
     SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError, SegmentedEvidence,
     SegmentedExportError, SegmentedHandle, SegmentedImage, SegmentedLayer, SegmentedLayerMetadata,

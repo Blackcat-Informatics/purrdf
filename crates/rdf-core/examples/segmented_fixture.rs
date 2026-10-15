@@ -8,46 +8,15 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
     use std::fs::{File, OpenOptions};
-    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::io::{Read, Write};
     use std::path::Path;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use purrdf_core::{
         DatasetView, GraphMatch, QuadIds, SegmentedBuildLimits, SegmentedBuilder, SegmentedError,
-        SegmentedProvider, SegmentedReadLimits, SegmentedReceipt, SegmentedReceiptAuthority,
-        SegmentedSession, SegmentedSnapshot, TermValue,
+        SegmentedFileProvider, SegmentedReadLimits, SegmentedReceipt, SegmentedReceiptAuthority,
+        SegmentedSession, TermValue,
     };
-
-    #[derive(Debug)]
-    struct FileProvider {
-        file: Mutex<File>,
-        bytes: u64,
-        snapshot: SegmentedSnapshot,
-    }
-    impl SegmentedProvider for FileProvider {
-        fn snapshot(&self) -> SegmentedSnapshot {
-            self.snapshot
-        }
-        fn byte_len(&self) -> u64 {
-            self.bytes
-        }
-        fn read_at(&self, position: u64, output: &mut [u8]) -> Result<(), SegmentedError> {
-            let mut file = self.file.lock().map_err(|_| SegmentedError::Provider {
-                operation: "file mutex",
-                host_code: None,
-            })?;
-            file.seek(SeekFrom::Start(position))
-                .map_err(|error| SegmentedError::Provider {
-                    operation: "file seek",
-                    host_code: error.raw_os_error(),
-                })?;
-            file.read_exact(output)
-                .map_err(|error| SegmentedError::Provider {
-                    operation: "file read_exact",
-                    host_code: error.raw_os_error(),
-                })
-        }
-    }
 
     struct ReceiptPin([u8; 32]);
     impl SegmentedReceiptAuthority for ReceiptPin {
@@ -127,11 +96,7 @@ mod host {
         receipt_file.read_exact(&mut encoded_receipt)?;
         let receipt = SegmentedReceipt::from_authenticated_bytes(&encoded_receipt, &pin)?;
         let file = File::open(path)?;
-        let provider = Arc::new(FileProvider {
-            bytes: file.metadata()?.len(),
-            file: Mutex::new(file),
-            snapshot: receipt.snapshot(),
-        });
+        let provider = Arc::new(SegmentedFileProvider::from_file(file, receipt.snapshot())?);
         let window = purrdf_alloc_probe::WholeProcessWindow::open();
         let session = SegmentedSession::open(
             provider,
