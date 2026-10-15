@@ -778,6 +778,19 @@ fn every_stack_from_the_margin_up_answers_or_refuses_typed_far_past_the_removed_
     }
 }
 
+/// Sibling OPTIONALs use heap-owned pending parents, not one call frame per sibling.
+/// The separate whole-plan admission still prices 512 bytes per algebra level,
+/// so 2 MiB admits this plan; the 256 KiB fixture deliberately cannot admit it.
+#[test]
+fn a_flat_optional_spine_answers_with_the_plan_admission_stack_budget() {
+    let query = optional_spine(2_500);
+    assert_eq!(
+        request(&query, 2 * 1024 * 1024)
+            .expect("an admitted flat OPTIONAL spine does not consume recursive stack"),
+        ["s1", "s2", "s3", "s4"]
+    );
+}
+
 /// The peak live heap a thousand nested `LATERAL` levels may use, parse and evaluation
 /// together. Measured at 6 MB. An evaluation that copied the whole chain below every
 /// level, for every left row, passed this at a few dozen levels: its peak grew with the

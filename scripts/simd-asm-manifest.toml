@@ -3478,19 +3478,11 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
   max_fma = 0
   forbid_relaxed = true
 
+  # The existing out-of-line term writer owns the inlined escape calls on
+  # current native compilers as well as wasm32; the thin helper may have no body.
   [[site.measure]]
   label = "writer"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_sparql_results"
-  symbol = "purrdf_sparql_results::xml::xml_escape_text::<purrdf_core::sink::TextSink>"
-  min_vector_ops = 0
-  max_fma = 0
-  forbid_relaxed = true
-
-  # wasm32 inlines `xml_escape_text` into the term writer.
-  [[site.measure]]
-  label = "writer"
-  configs = ["wasm32", "wasm32-simd128"]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_results"
   symbol = "purrdf_sparql_results::xml::write_term::<purrdf_core::sink::TextSink>"
   min_vector_ops = 0
