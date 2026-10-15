@@ -56,6 +56,17 @@ the order and multiplicity their evaluation clauses define. Rules follow SHACL
 temporary triples and expected predicates. `purrdf_shapes::srl` parses,
 checks, stratifies and evaluates SPARQL 1.2 RL rule sets.
 
+Its public `srl::infer` entry retains the quad carrier and return type.
+For an explicit graph-free source, open `TripleDataset::read` and call
+`srl::infer_triples`; both the full inference dataset and
+`Inference<TripleDataset>::inferred_dataset` retain compact triple, reifier
+and annotation tables. The shared rule engine compiles three-position atoms
+and predicate-only keys for this carrier. Immutable `WHERE DATA` reads retain
+the input source independently of inferred growth, and an empty legal rule
+head publishes no fact. A latched read failure is returned as the original
+typed `SrlError::TripleSource`; opening a new read on the same frozen source
+starts a fresh operation.
+
 A shapes graph is loaded faithfully or refused. An unknown term, an ill-typed
 parameter value, or a term the engine does not evaluate fails the load with
 its name, rather than dropping the constraint. The terms the SHACL

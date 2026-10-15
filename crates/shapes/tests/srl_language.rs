@@ -34,11 +34,31 @@ fn rules(text: &str) -> String {
     format!("PREFIX : <{EX}>\n{text}")
 }
 
-/// Parse, check and infer; the inferred triples.
+/// Parse, check and infer; successful original fixtures also compare compact output.
 fn infer(rule_text: &str, ttl: &str) -> Result<Vec<[Term; 3]>, SrlError> {
+    use purrdf_core::{CanonHash, TripleDataset, try_canonicalize_flat_view};
+
     let document = srl::parse_and_check(&rules(rule_text), None)?;
-    srl::infer(&document, &data(ttl), &InferOptions::default())
-        .map(|inference| inference.inferred().to_vec())
+    let source = data(ttl);
+    let options = InferOptions::default();
+    let original = srl::infer(&document, &source, &options)?;
+    let compact = TripleDataset::try_from(Arc::try_unwrap(source).expect("single fixture owner"))
+        .expect("the original Turtle fixture has no named graphs");
+    let read = compact.read().unwrap();
+    let triple = srl::infer_triples(&document, &read, &options)
+        .expect("the same valid rule program accepts compact input");
+    let expected = original.inferred_dataset().unwrap();
+    let actual = triple.inferred_dataset().unwrap();
+    assert_eq!(
+        try_canonicalize_flat_view(&actual.read().unwrap(), CanonHash::Sha256)
+            .unwrap()
+            .nquads,
+        try_canonicalize_flat_view(expected.as_ref(), CanonHash::Sha256)
+            .unwrap()
+            .nquads,
+        "{rule_text}"
+    );
+    Ok(original.inferred().to_vec())
 }
 
 fn syntax_error(text: &str) -> String {
@@ -48,10 +68,138 @@ fn syntax_error(text: &str) -> String {
     }
 }
 
+/// The same parsed program runs with three physical positions, including immutable
+/// Base reads, variable predicates, recursion, DATA and a legal empty head.
+fn triple_carrier_runs_the_public_rl_program_without_quad_storage() {
+    use purrdf_core::{DatasetView as _, TripleDataset, TripleReadError};
+    let quad = data(":a :p :b . :b :p :e .");
+    let compact =
+        TripleDataset::try_from(Arc::try_unwrap(data(":a :p :b . :b :p :e .")).unwrap()).unwrap();
+    let document = srl::parse_and_check(
+        &rules(
+            "DATA { :c :p :d }
+         RULE { ?s :q ?o } WHERE DATA { ?s :p ?o }
+         RULE { ?s :seen ?o } WHERE DATA { ?s ?p ?o }
+         RULE { ?s :r ?o } WHERE { ?s :p ?o NOT DATA { ?s :p ?o } }
+         RULE { ?s :path ?o } WHERE { ?s :p ?o }
+         RULE { ?s :path ?o } WHERE { ?s :path ?m . ?m :path ?o }
+         RULE {} WHERE { ?s :p ?o }",
+        ),
+        None,
+    )
+    .unwrap();
+    let options = InferOptions::default();
+    let original = srl::infer(&document, &quad, &options).unwrap();
+    let read = compact.read().unwrap();
+    let inference = srl::infer_triples(&document, &read, &options).unwrap();
+    let cloned = inference.clone();
+    assert!(Arc::ptr_eq(cloned.dataset(), inference.dataset()));
+    let original_clone = original.clone();
+    assert!(Arc::ptr_eq(original_clone.dataset(), original.dataset()));
+    assert_eq!(inference.inferred(), original.inferred());
+    assert_eq!(inference.proof_text(), original.proof_text());
+    assert_ne!(inference.contract_hash(), original.contract_hash());
+    let mut expected = vec![
+        [iri("c"), iri("p"), iri("d")],
+        [iri("a"), iri("q"), iri("b")],
+        [iri("b"), iri("q"), iri("e")],
+        [iri("a"), iri("seen"), iri("b")],
+        [iri("b"), iri("seen"), iri("e")],
+        [iri("c"), iri("r"), iri("d")],
+        [iri("a"), iri("path"), iri("b")],
+        [iri("b"), iri("path"), iri("e")],
+        [iri("a"), iri("path"), iri("e")],
+        [iri("c"), iri("path"), iri("d")],
+    ];
+    expected.sort_by_cached_key(|row| row.each_ref().map(ToString::to_string));
+    assert_eq!(inference.inferred(), expected);
+    assert_eq!(inference.dataset().storage_layout().triples, 12 * 12);
+    assert_eq!(
+        inference
+            .inferred_dataset()
+            .unwrap()
+            .storage_layout()
+            .triples,
+        10 * 12
+    );
+    assert_eq!(inference.dataset().reifiers().len(), 0);
+    assert_eq!(inference.dataset().annotations().len(), 0);
+
+    let cause = read.require_named_graphs().unwrap_err();
+    assert_eq!(cause, TripleReadError::NamedGraphsUnsupported);
+    assert!(matches!(
+        srl::infer_triples(&document, &read, &options),
+        Err(SrlError::TripleSource(error)) if error == cause
+    ));
+    let fresh = compact.read().unwrap();
+    assert_eq!(
+        srl::infer_triples(&document, &fresh, &options)
+            .unwrap()
+            .inferred(),
+        expected
+    );
+}
+
+/// Reified statements and two same-spelling scoped blanks retain their exact identity.
+fn triple_rl_keeps_statement_roles_and_scoped_blank_identity() {
+    use purrdf_core::{BlankScope, DatasetView as _, TermValue, TripleDatasetBuilder};
+    let mut builder = TripleDatasetBuilder::default();
+    let left = builder.intern_blank("same", BlankScope(7)).unwrap();
+    let right = builder.intern_blank("same", BlankScope(8)).unwrap();
+    let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+    builder.push_triple(left, p, right).unwrap();
+    let quoted = builder.intern_triple(left, p, right).unwrap();
+    let reifier = builder.intern_iri(&format!("{EX}claim")).unwrap();
+    builder.push_reifier(reifier, quoted).unwrap();
+    let about = builder.intern_iri(&format!("{EX}about")).unwrap();
+    builder.push_annotation(reifier, about, quoted).unwrap();
+    let source = builder.freeze().unwrap();
+    let read = source.read().unwrap();
+    let document =
+        srl::parse_and_check(&rules("RULE { ?s :q ?o } WHERE { ?s :p ?o }"), None).unwrap();
+    let inference = srl::infer_triples(&document, &read, &InferOptions::default()).unwrap();
+    let output = inference.dataset();
+    assert_eq!(output.storage_layout().triples, 24);
+    assert_eq!(output.storage_layout().reifiers, 8);
+    assert_eq!(output.storage_layout().annotations, 12);
+    for scope in [7, 8] {
+        assert!(
+            output
+                .term_id_by_value(&TermValue::Blank {
+                    label: "same".to_owned(),
+                    scope: BlankScope(scope),
+                })
+                .is_some()
+        );
+    }
+    let returned = output.read().unwrap();
+    let row = returned
+        .quads_for_pattern(
+            None,
+            output.term_id_by_value(&TermValue::Iri(format!("{EX}q"))),
+            None,
+            purrdf_core::GraphMatch::Default,
+        )
+        .next()
+        .unwrap();
+    assert_eq!(
+        returned.term_value(row.s).unwrap(),
+        read.term_value(left).unwrap()
+    );
+    assert_eq!(
+        returned.term_value(row.o).unwrap(),
+        read.term_value(right).unwrap()
+    );
+    let declaration = returned.reifier_quads().next().unwrap();
+    assert_eq!(
+        returned.term_value(declaration.o).unwrap(),
+        read.term_value(quoted).unwrap()
+    );
+}
+
 // ── grammar ───────────────────────────────────────────────────────────────────────
 
 /// `':='`, `'<<('` and `')>>'` are single terminals: their two halves must touch.
-#[test]
 fn multi_character_terminals_must_be_contiguous() {
     srl::parse(&rules("RULE { :s :p ?x } WHERE { SET(?x := 1) }"), None).expect(":= parses");
     assert!(syntax_error("RULE { :s :p ?x } WHERE { SET(?x : = 1) }").contains(":="));
@@ -66,7 +214,6 @@ fn multi_character_terminals_must_be_contiguous() {
 /// rule or data blocks interleave freely. Two rule blocks and a data block after a
 /// declaration that follows a rule all parse, and every rule runs — each one's own
 /// inferred triple appears, over the base data and over the data block's triple.
-#[test]
 fn declarations_and_rule_blocks_interleave_freely() {
     let inferred = infer(
         "RULE { ?x :r1 :yes } WHERE { ?x :p ?y }
@@ -98,7 +245,6 @@ fn declarations_and_rule_blocks_interleave_freely() {
 
 /// The neighbours the interleaving does not admit: a declaration is not a rule
 /// element, and a rule needs its `WHERE` body.
-#[test]
 fn a_declaration_inside_a_rule_or_a_bodiless_rule_is_refused() {
     let message =
         syntax_error("RULE { ?x :r :yes } WHERE { PREFIX a: <http://example.org/a#> ?x :p ?y }");
@@ -113,7 +259,6 @@ fn a_declaration_inside_a_rule_or_a_bodiless_rule_is_refused() {
 
 /// SRL's `BuiltInCall` is its own list: SPARQL-only built-ins are refused, their SRL
 /// neighbours accepted.
-#[test]
 fn builtins_are_srls_list() {
     for refused in [
         "COALESCE(?x, 1)",
@@ -155,7 +300,6 @@ fn builtins_are_srls_list() {
 
 /// A property path is sequences and inverses; an annotation names one triple, so it
 /// may follow a one-step path but not a longer one.
-#[test]
 fn paths_expand_and_annotations_need_one_triple() {
     let document = srl::parse(&rules("RULE {} WHERE { ?x ^:p/:q ?y }"), None).expect("parses");
     assert_eq!(
@@ -171,7 +315,6 @@ fn paths_expand_and_annotations_need_one_triple() {
 }
 
 /// A language tag's direction is `ltr` or `rtl`; `VERSION` labels are recorded.
-#[test]
 fn lang_dir_and_version() {
     srl::parse(&rules("DATA { :s :p \"a\"@en--rtl }"), None).expect("rtl parses");
     assert!(syntax_error("DATA { :s :p \"a\"@en--up }").contains("--up"));
@@ -186,7 +329,6 @@ fn lang_dir_and_version() {
 /// `VERSION` after an early first one (each directive applies to what follows it), and
 /// a document that announces no version at all — and the early one's rule is observed
 /// inferring.
-#[test]
 fn the_version_announcement_is_made_early() {
     for late in [
         "DATA { :a :p :o }\nVERSION \"1.2\"",
@@ -220,7 +362,6 @@ fn the_version_announcement_is_made_early() {
 
 /// A negation element sees only the variables of the elements BEFORE it: a variable a
 /// later pattern binds is a local variable inside it.
-#[test]
 fn a_negation_sees_only_earlier_variables() {
     let before = infer(
         "RULE { ?s :r :z } WHERE { NOT { ?s :q ?o } ?s :p ?o }",
@@ -239,20 +380,26 @@ fn a_negation_sees_only_earlier_variables() {
     assert_eq!(after, [[iri("a"), iri("r"), iri("z")]]);
 }
 
-/// An assignment's variable may be used by a later pattern: the pattern must match the
-/// assigned value.
-#[test]
-fn an_assigned_variable_joins_a_later_pattern() {
-    let inferred = infer(
-        "RULE { :x :found ?p } WHERE { SET(?x := 1) :s ?p ?x }",
-        ":s :p 1 . :s :q 2 .",
-    )
-    .expect("evaluates");
-    assert_eq!(inferred, [[iri("x"), iri("found"), iri("p")]]);
+macro_rules! single_inferred_case {
+    ($(#[$meta:meta])* $name:ident, $rule:literal, $data:literal, [$s:literal, $p:literal, $o:literal]) => {
+        $(#[$meta])*
+        fn $name() {
+            let inferred = infer($rule, $data).expect("evaluates");
+            assert_eq!(inferred, [[iri($s), iri($p), iri($o)]]);
+        }
+    };
+}
+
+single_inferred_case! {
+    /// An assignment's variable may be used by a later pattern: the pattern must match the
+    /// assigned value.
+    an_assigned_variable_joins_a_later_pattern,
+    "RULE { :x :found ?p } WHERE { SET(?x := 1) :s ?p ?x }",
+    ":s :p 1 . :s :q 2 .",
+    ["x", "found", "p"]
 }
 
 /// `BNODE()` in an assignment is fresh per solution, and fresh against the base graph.
-#[test]
 fn an_assigned_blank_node_is_fresh_per_solution() {
     let inferred = infer(
         "RULE { ?b :of ?s } WHERE { ?s :p ?o SET(?b := BNODE()) }",
@@ -278,7 +425,6 @@ fn an_assigned_blank_node_is_fresh_per_solution() {
 /// Independent positive components remain a multiplicity barrier for opaque
 /// minting guards. Both kinds of blank mint run once per logical solution, even
 /// when a head mentions only one component; an empty component mints nothing.
-#[test]
 fn independent_guarded_components_preserve_both_blank_mints() {
     let rule =
         "RULE { _:h :of ?s ; :assigned ?b } WHERE { ?s :p ?o . ?x :q ?y SET(?b := BNODE()) }";
@@ -316,7 +462,6 @@ fn independent_guarded_components_preserve_both_blank_mints() {
 
 /// An assignment creates a surface absent from the model; negation must probe
 /// that computed value, not an unbound variable or an interned-only shortcut.
-#[test]
 fn computed_assignment_values_reach_negative_patterns() {
     let inferred = infer(
         "RULE { ?s :allowed ?n } WHERE { ?s :p ?o SET(?n := ?o + 1) NOT { ?s :blocked ?n } }",
@@ -327,7 +472,6 @@ fn computed_assignment_values_reach_negative_patterns() {
 }
 
 /// A data block's blank node is not the base graph's blank node of the same label.
-#[test]
 fn data_block_blank_nodes_are_standardized_apart() {
     let rule = "RULE { ?s :both :yes } WHERE { ?s :p :o . ?s :q :o }";
     let apart = infer(&format!("DATA {{ _:b :q :o }} {rule}"), "_:b :p :o .").expect("ok");
@@ -341,7 +485,6 @@ fn data_block_blank_nodes_are_standardized_apart() {
 
 /// A head instantiated into something that is not an RDF triple is refused by name;
 /// the neighbour whose binding is an IRI evaluates.
-#[test]
 fn a_non_rdf_head_instantiation_is_refused() {
     let rule = "RULE { ?o :inverse ?s } WHERE { ?s :p ?o }";
     let error = infer(rule, ":a :p \"lit\" .").expect_err("literal subject");
@@ -357,7 +500,6 @@ fn a_non_rdf_head_instantiation_is_refused() {
 
 /// Dependencies unify through triple terms: a negation over a triple term the head can
 /// never build is no dependency, and the neighbour that can build it is refused.
-#[test]
 fn triple_term_dependencies_are_exact() {
     let head = "RULE { ?x :p <<( ?a :b :c )>> } WHERE { ?x :q ?a . ";
     let inferred = infer(
@@ -374,19 +516,15 @@ fn triple_term_dependencies_are_exact() {
     assert!(matches!(error, SrlError::Stratification { .. }), "{error}");
 }
 
-/// `RULE {} WHERE { … }` generates nothing, and a neighbouring rule still runs.
-#[test]
-fn an_empty_head_generates_nothing() {
-    let inferred = infer(
-        "RULE {} WHERE { ?s :p ?o } RULE { ?s :r ?o } WHERE { ?s :p ?o }",
-        ":a :p :b .",
-    )
-    .expect("evaluates");
-    assert_eq!(inferred, [[iri("a"), iri("r"), iri("b")]]);
+single_inferred_case! {
+    /// `RULE {} WHERE { … }` generates nothing, and a neighbouring rule still runs.
+    an_empty_head_generates_nothing,
+    "RULE {} WHERE { ?s :p ?o } RULE { ?s :r ?o } WHERE { ?s :p ?o }",
+    ":a :p :b .",
+    ["a", "r", "b"]
 }
 
 /// Stages are typed: a well-formedness error is not a syntax error.
-#[test]
 fn stages_are_typed() {
     let bad = rules("RULE { ?s :p ?o } WHERE { FILTER(?o < 50) ?s :p ?o }");
     let document = srl::parse(&bad, None).expect("the grammar accepts it");
@@ -414,7 +552,6 @@ fn stages_are_typed() {
 
 /// Imports resolve through the caller's resolver, each once, their data merged apart;
 /// an unresolved or declined import is an import error.
-#[test]
 fn imports_resolve_through_the_callers_resolver() {
     let main = format!(
         "PREFIX : <{EX}>\nIMPORTS <{EX}lib>\nDATA {{ _:b :p :o }}\nRULE {{ ?s :tagged :yes }} WHERE {{ ?s :p :o }}"
@@ -478,7 +615,6 @@ fn imports_resolve_through_the_callers_resolver() {
 /// passes the first two levels and is refused at the third, by the stratification stage —
 /// while its stratifiable neighbour, differing only in the negated predicate, passes all
 /// three and names its strata.
-#[test]
 fn check_answers_each_level_and_refuses_by_stage() {
     use srl::CheckLevel;
     let cyclic = rules("RULE { ?x :p :z } WHERE { ?x :q :o NOT { ?x :p :z } }");
@@ -525,7 +661,6 @@ fn check_answers_each_level_and_refuses_by_stage() {
 
 /// `srl::check` resolves the `IMPORTS` closure from the table exactly as a rules run does,
 /// holds an imported rule to §4.2 like the importer's own, and names what it read.
-#[test]
 fn check_resolves_imports_from_the_table() {
     use srl::CheckLevel;
     let main = format!(
@@ -585,7 +720,6 @@ fn check_resolves_imports_from_the_table() {
     );
 }
 
-#[test]
 fn numeric_and_boolean_terms() {
     let inferred = infer(
         "DATA { :s :n -1, +2, true } RULE { :s :sum ?t } WHERE { :s :n ?a . :s :n ?b FILTER(?a < ?b) SET(?t := ?a + ?b) }",
@@ -605,7 +739,6 @@ fn numeric_and_boolean_terms() {
 /// [`SrlError::LimitExceeded`], naming the limit, the numbers and the rule by its
 /// document position; under the defaults it is refused too, by name, never as
 /// "divergent".
-#[test]
 fn a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit() {
     let document = srl::parse_and_check(
         &rules("RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }"),
@@ -651,7 +784,6 @@ fn a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit() {
 /// The neighbour: a recursive rule over a long chain infers no term the store did not
 /// hold — every `:connected` object is a chain node — so no term-generating round is
 /// counted, and the closure completes in full.
-#[test]
 fn a_closure_deeper_than_the_floor_completes() {
     const LENGTH: usize = 300;
     let mut ttl = String::new();
@@ -667,3 +799,31 @@ fn a_closure_deeper_than_the_floor_completes() {
     assert_eq!(inferred.len(), LENGTH * (LENGTH + 1) / 2);
     assert!(inferred.contains(&[iri("n0"), iri("connected"), iri(&format!("n{LENGTH}"))]));
 }
+
+purrdf_testkit::harness_main!(
+    triple_carrier_runs_the_public_rl_program_without_quad_storage,
+    triple_rl_keeps_statement_roles_and_scoped_blank_identity,
+    multi_character_terminals_must_be_contiguous,
+    declarations_and_rule_blocks_interleave_freely,
+    a_declaration_inside_a_rule_or_a_bodiless_rule_is_refused,
+    builtins_are_srls_list,
+    paths_expand_and_annotations_need_one_triple,
+    lang_dir_and_version,
+    the_version_announcement_is_made_early,
+    a_negation_sees_only_earlier_variables,
+    an_assigned_variable_joins_a_later_pattern,
+    an_assigned_blank_node_is_fresh_per_solution,
+    independent_guarded_components_preserve_both_blank_mints,
+    computed_assignment_values_reach_negative_patterns,
+    data_block_blank_nodes_are_standardized_apart,
+    a_non_rdf_head_instantiation_is_refused,
+    triple_term_dependencies_are_exact,
+    an_empty_head_generates_nothing,
+    stages_are_typed,
+    imports_resolve_through_the_callers_resolver,
+    check_answers_each_level_and_refuses_by_stage,
+    check_resolves_imports_from_the_table,
+    numeric_and_boolean_terms,
+    a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit,
+    a_closure_deeper_than_the_floor_completes,
+);

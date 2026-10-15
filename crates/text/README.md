@@ -24,6 +24,23 @@ describes scoped accents, English stemming, all five full baseline dictionaries,
 emoji, HTML references, source evidence, positional substrings and the independent
 Han-character producer.
 
+## Explicit graph-free corpora
+
+The default `GraphLanguage` profile retains the existing graph/subject/language
+documents and graph/language partitions. For a `TripleDataset`, select
+`TextIndexConfig::<GraphFree>::for_triples` and pass its explicit fallible read session to the
+original index constructor. The resulting `TextIndex<GraphFree>` stores
+subject/language document keys and language-only partition keys; its graph
+coordinate occupies no storage and contributes no identity field.
+
+Both profiles use the same analyzer, scorer, dictionary, term-occurrence and
+phrase-occurrence machinery. Graph-free corpus, index and retrieval-source
+identities use distinct domains, so they cannot alias the graph-language
+profile. The graph-free constructor refuses a graph-capable source rather than
+silently projecting away named graphs. The partition and document ordering
+below describes the default graph-language profile; the graph-free profile
+omits its graph coordinate.
+
 ## Caller-supplied IRIs
 
 PurRDF mints no vocabulary. This crate exposes ranked retrieval to SPARQL
@@ -67,10 +84,17 @@ surface-presence byte and distinguishes an omitted index from an empty one.
 This intentionally changes index fingerprints in both modes; source fingerprints
 and serialized ranked answers retain their existing encodings.
 
+`TextIndexConfig::<GraphFree>::for_triples` selects subject/language documents
+and language-only partitions. Their `purrdf-text/triples/index/v1` identity
+includes the same surface-presence field and omits every graph coordinate and
+selector. The separate `purrdf-text/triples/source/v1` identity covers the source
+triples and remains unchanged when surface indexing is omitted.
+
 Ranking uses one fielded BM25F path, including the single-field case. The
-immutable `RankingProfile` binds up to sixteen named fields, each field's
-weight and length normalization, total predicate routing, exact arithmetic,
-query aggregation, input bounds and the score bound into a fingerprint.
+immutable `RankingProfile` binds caller-named fields, each field's weight and
+length normalization, total predicate routing and the field-population law into
+a fingerprint. `PreparedQuery` separately carries the query's certified score
+bound from its corpus statistics.
 `k1 = 1.2` is fixed. `RankingProfile::single_field()` explicitly routes every
 selected predicate to one field with weight one and `b = 0.75`.
 

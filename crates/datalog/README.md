@@ -29,6 +29,22 @@ ran instead of a claim about which rules were meant to — and
 [`purrdf-shapes`](https://crates.io/crates/purrdf-shapes), whose SHACL rules
 and SPARQL 1.2 RL rule sets run on this crate's ordered schedule.
 
+## Static triple and quad shapes
+
+The default arity-four API retains its graph term and predicate/graph partition
+keys. `ClauseAtom<3>` and `RelationStore<_, 3>` select three physical term
+positions and predicate-only keys. They share the original compiler,
+semi-naive joins, schedule, chase and proof implementation; no fourth default
+graph term is manufactured.
+
+Scheduled triple programs can read an admitted immutable Base snapshot through
+explicit source metadata. Its original term identities survive evaluation
+growth and layer retraction. A legal empty rule head uses `NoOutput`, which
+executes its body without publishing a fact; it is distinct from an empty
+disjunction meaning inconsistency. These source and head laws participate in
+triple program identity. Existing quad program identities retain their original
+encoding.
+
 ## Design commitments
 
 * **One rule IR: the DL-clause.** Every rule is

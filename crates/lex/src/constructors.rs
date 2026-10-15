@@ -240,41 +240,54 @@ macro_rules! __text_field {
 ///     Operational::Message(error.to_string()),
 /// );
 /// ```
+///
+/// Const parameters and explicit bounds use bracketed token lists:
+///
+/// ```
+/// #[derive(Debug, PartialEq, Eq)]
+/// enum Fixed<const N: usize> { Bytes([u8; N]) }
+/// purrdf_lex::variant_from!(impl [const N: usize] Fixed<N>
+///     where [[u8; N]: AsRef<[u8]>] { Bytes([u8; N]) });
+/// assert_eq!(Fixed::<3>::from([1, 2, 3]), Fixed::Bytes([1, 2, 3]));
+/// ```
 #[macro_export]
 macro_rules! variant_from {
+    (impl [$($parameters:tt)*] $type:ty where [$($bounds:tt)*] { $($items:tt)* }) => {
+        $crate::variant_from!(@variants [<$($parameters)*>] [where $($bounds)*] $type { $($items)* });
+    };
     (impl <$($parameter:ident),+ $(,)?> $type:ty { $($items:tt)* }) => {
-        $crate::variant_from!(@variants [<$($parameter),+>] $type { $($items)* });
+        $crate::variant_from!(@variants [<$($parameter),+>] [] $type { $($items)* });
     };
     ($type:ty { $($items:tt)* }) => {
-        $crate::variant_from!(@variants [] $type { $($items)* });
+        $crate::variant_from!(@variants [] [] $type { $($items)* });
     };
-    (@variants $parameters:tt $type:ty {
+    (@variants $parameters:tt $bounds:tt $type:ty {
         $variant:ident($($source:ty),+ $(,)?) as $convert:path
     }) => {
         $(
-            $crate::variant_from!(@render $parameters $type {
+            $crate::variant_from!(@render $parameters $bounds $type {
                 $variant($source) as $convert
             });
         )+
     };
-    (@variants $parameters:tt $type:ty {
+    (@variants $parameters:tt $bounds:tt $type:ty {
         $($variant:ident($source:ty)),+ $(,)?
     }) => {
         $(
-            $crate::variant_from!(@wrap $parameters $type { $variant($source) });
+            $crate::variant_from!(@wrap $parameters $bounds $type { $variant($source) });
         )+
     };
-    (@render [$($parameters:tt)*] $type:ty {
+    (@render [$($parameters:tt)*] [$($bounds:tt)*] $type:ty {
         $variant:ident($source:ty) as $convert:path
     }) => {
-        impl $($parameters)* ::core::convert::From<$source> for $type {
+        impl $($parameters)* ::core::convert::From<$source> for $type $($bounds)* {
             fn from(value: $source) -> Self {
                 Self::$variant($convert(&value))
             }
         }
     };
-    (@wrap [$($parameters:tt)*] $type:ty { $variant:ident($source:ty) }) => {
-        impl $($parameters)* ::core::convert::From<$source> for $type {
+    (@wrap [$($parameters:tt)*] [$($bounds:tt)*] $type:ty { $variant:ident($source:ty) }) => {
+        impl $($parameters)* ::core::convert::From<$source> for $type $($bounds)* {
             fn from(value: $source) -> Self {
                 Self::$variant(value)
             }

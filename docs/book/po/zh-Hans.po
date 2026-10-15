@@ -2314,13 +2314,12 @@ msgstr ""
 
 #: src/concepts/interned-dataset.md:8
 msgid ""
-"Everything in PurRDF evaluates over one intermediate representation: an "
-"immutable, value-interned RDF 1.2 dataset owned by the ring-fenced [`purrdf-"
-"core`](https://docs.rs/purrdf-core) kernel."
+"PurRDF's resident carriers share one value-interned RDF 1.2 term "
+"representation, owned by the ring-fenced [`purrdf-core`](https://docs.rs/"
+"purrdf-core) kernel."
 msgstr ""
-"PurRDF 中的一切都在同一种中间表示上求值：一个由隔离的 [`purrdf-core`]"
-"(https://docs.rs/purrdf-core) 内核所拥有的、不可变且按值驻留的 RDF 1.2 数据"
-"集。"
+"PurRDF 的驻留载体共享一种按值驻留的 RDF 1.2 项表示，由隔离的 "
+"[`purrdf-core`](https://docs.rs/purrdf-core) 内核拥有。"
 
 #: src/concepts/interned-dataset.md:12
 msgid "Terms are interned once"
@@ -2402,10 +2401,64 @@ msgstr ""
 "取（C ABI 正是把它作为一个 `Send + Sync` 句柄提供）。"
 
 #: src/concepts/interned-dataset.md:53
+msgid "An explicit graph-free carrier"
+msgstr "显式无图名载体"
+
+#: src/concepts/interned-dataset.md:55
+msgid ""
+"Choose `TripleDatasetBuilder` when the data has no named graphs. Its "
+"asserted rows store subject, predicate and object in 12 bytes; reifier "
+"bindings take 8 bytes and annotations take 12 bytes. It shares term "
+"interning and validation with `RdfDatasetBuilder`, but accumulates no quad "
+"rows or graph table."
+msgstr ""
+"当数据没有命名图时，选择 `TripleDatasetBuilder`。其断言行以 12 字节存储主语、"
+"谓词和宾语；具体化绑定占 8 字节，注释占 12 字节。它与 `RdfDatasetBuilder` "
+"共享项驻留和验证，但不累积四元组行或图表。"
+
+#: src/concepts/interned-dataset.md:60
+msgid ""
+"`TripleDataset::try_from` moves the original term owner out of an all-"
+"default quad dataset. It refuses any named row or named graph declaration, "
+"including an empty graph, with `TripleReadError::NamedGraphsUnsupported`."
+msgstr ""
+"`TripleDataset::try_from` 从仅含默认图的四元组数据集中移出原有的项所有者。"
+"对于任何命名行或命名图声明（包括空图），它都会以 "
+"`TripleReadError::NamedGraphsUnsupported` 拒绝转换。"
+
+#: src/concepts/interned-dataset.md:64
+msgid ""
+"Open `TripleDataset::read()` for a fallible view. Named-graph query requests "
+"refuse even when the carrier is empty or the graph name is absent. All "
+"children of that read retain the same first failure; a new read over the "
+"unchanged carrier starts an independent operation. The engine's ordinary "
+"default-graph query path uses the compact carrier's SPO, POS and OSP orders."
+msgstr ""
+"通过 `TripleDataset::read()` 打开可失败的视图。即使载体为空或图名不存在，"
+"命名图查询请求也会被拒绝。该读取操作的所有子读取都保留相同的首个失败；"
+"在未改变的载体上重新打开读取会启动独立操作。引擎的普通默认图查询路径使用"
+"紧凑载体的 SPO、POS 和 OSP 顺序。"
+
+#: src/concepts/interned-dataset.md:70
+msgid ""
+"For rule materialization, `purrdf::shapes::srl::infer_triples` accepts that "
+"read and returns `Inference<TripleDataset>`. Its Datalog rows have three "
+"positions and predicate-only partition keys. The ordinary quad `srl::infer` "
+"API keeps its existing result type. Text indexing selects "
+"`TextIndexConfig::for_triples` explicitly; document keys become subject/"
+"language and partition keys language, with distinct graph-free identities."
+msgstr ""
+"进行规则物化时，`purrdf::shapes::srl::infer_triples` 接受该读取视图并返回 "
+"`Inference<TripleDataset>`。其 Datalog 行有三个位置，分区键只含谓词。"
+"普通四元组 `srl::infer` API 保留原有返回类型。文本索引显式选择 "
+"`TextIndexConfig::for_triples`；文档键变为主语/语言，分区键变为语言，"
+"并采用独立的无图名身份。"
+
+#: src/concepts/interned-dataset.md:77
 msgid "Copy-on-write mutation"
 msgstr "写时复制修改"
 
-#: src/concepts/interned-dataset.md:55
+#: src/concepts/interned-dataset.md:79
 msgid ""
 "\"Immutable\" does not mean \"static\". Mutation happens through a copy-on-"
 "write delta over a frozen base: edits accumulate in a lightweight overlay, "
@@ -2418,19 +2471,19 @@ msgstr ""
 "行，也无需重新驻留共享的项。SPARQL UPDATE 与 C ABI 的可变 `PurrdfGraph` 句柄"
 "都走这条路径。"
 
-#: src/concepts/interned-dataset.md:61
+#: src/concepts/interned-dataset.md:85
 msgid "What else lives in the kernel"
 msgstr "内核中还有什么"
 
-#: src/concepts/interned-dataset.md:63
+#: src/concepts/interned-dataset.md:87
 msgid "Beyond the IR itself, `purrdf-core` owns:"
 msgstr "在 IR 本身之外，`purrdf-core` 还拥有："
 
-#: src/concepts/interned-dataset.md:65
+#: src/concepts/interned-dataset.md:89
 msgid "**`DatasetView`** — the static read trait every engine evaluates over."
 msgstr "**`DatasetView`**——每个引擎都在其上求值的静态读取 trait。"
 
-#: src/concepts/interned-dataset.md:66
+#: src/concepts/interned-dataset.md:90
 msgid ""
 "**Structured diagnostics** — typed `RdfDiagnostic`s with source locations "
 "(deliberately SARIF-free; the SARIF boundary is [`purrdf-validate`](https://"
@@ -2439,7 +2492,7 @@ msgstr ""
 "**结构化诊断**——带源位置的类型化 `RdfDiagnostic`（刻意不涉及 SARIF；SARIF 边"
 "界位于 [`purrdf-validate`](https://docs.rs/purrdf-validate)）。"
 
-#: src/concepts/interned-dataset.md:69
+#: src/concepts/interned-dataset.md:93
 msgid ""
 "**Canonicalization** (RDFC-1.0 on the RDF 1.1 subset; the `purrdf-rdfc12` "
 "profile over reifiers and annotations), dataset diff, and isomorphism — see "
@@ -2449,7 +2502,7 @@ msgstr ""
 "rdfc12` profile）、数据集差异比较以及同构判定——参见[规范化与差异比较]"
 "(canonicalization.md)。"
 
-#: src/concepts/interned-dataset.md:72
+#: src/concepts/interned-dataset.md:96
 msgid ""
 "**Store and engine seams** — the narrow parser-ingress, serializer-egress, "
 "and `SparqlEngine` traits that adapters implement in sibling crates."
@@ -2457,7 +2510,7 @@ msgstr ""
 "**存储与引擎扩展点**——由兄弟 crate 中的适配器实现的、窄小的解析器入口、序列化"
 "器出口与 `SparqlEngine` trait。"
 
-#: src/concepts/interned-dataset.md:74
+#: src/concepts/interned-dataset.md:98
 msgid ""
 "**Provenance and the loss ledger** — a generic provenance sidecar and the "
 "machine-readable RDF↔GTS loss matrix, plus native FnO and SSSOM codecs (see "
@@ -2466,7 +2519,7 @@ msgstr ""
 "**溯源与损失台账**——一个通用的溯源旁挂结构以及机器可读的 RDF↔GTS 损失矩阵，外"
 "加原生的 FnO 与 SSSOM 编解码器（参见[切片、映射与溯源](../slices.md)）。"
 
-#: src/concepts/interned-dataset.md:78
+#: src/concepts/interned-dataset.md:102
 msgid ""
 "Text codecs are _not_ in the kernel — parsing and serialization live one "
 "layer up in [`purrdf-rdf`](https://docs.rs/purrdf-rdf). The split keeps the "
@@ -2479,11 +2532,11 @@ msgstr ""
 "强制执行：不含 PyO3（一项卫生检查会对依赖树进行断言），`wasm32`\\-clean（可干"
 "净构建到该目标），且 IR 层不涉及文件 IO。"
 
-#: src/concepts/interned-dataset.md:84
+#: src/concepts/interned-dataset.md:108
 msgid "Why this design"
 msgstr "为何如此设计"
 
-#: src/concepts/interned-dataset.md:86
+#: src/concepts/interned-dataset.md:110
 msgid ""
 "The layout is chosen by measurement, not assertion: the bench `crates/rdf-"
 "core/benches/ir_layout.rs` compares array-of-structs, struct-of-arrays, and "

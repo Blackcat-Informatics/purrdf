@@ -29,6 +29,71 @@ use crate::convert::named_node_to_value;
 use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability};
 use purrdf_core::small::Shared;
 
+/// Admit named-graph support before graph lookup, enumeration or evaluation of
+/// an empty branch. The existing admitted algebra walker includes expressions,
+/// correlated EXISTS and subqueries; it is not a second query interpreter.
+pub(crate) fn require_query_graph_support<D: DatasetView>(
+    query: &purrdf_sparql_algebra::Query,
+    dataset: &D,
+    workspace: &WorkspaceCapability,
+    source_error: impl Fn(D::ReadError) -> EvalError,
+) -> Result<(), EvalError> {
+    if dataset.supports_named_graphs() {
+        return Ok(());
+    }
+    let clauses = query.dataset();
+    if !clauses.default.is_empty() || !clauses.named.is_empty() {
+        return dataset.require_named_graphs().map_err(source_error);
+    }
+    require_pattern_graph_support(query.pattern(), dataset, workspace, source_error)
+}
+
+pub(crate) fn require_pattern_graph_support<D: DatasetView>(
+    pattern: &purrdf_sparql_algebra::GraphPattern,
+    dataset: &D,
+    workspace: &WorkspaceCapability,
+    source_error: impl Fn(D::ReadError) -> EvalError,
+) -> Result<(), EvalError> {
+    if dataset.supports_named_graphs() {
+        return Ok(());
+    }
+    let mut required = false;
+    {
+        use purrdf_sparql_algebra::{
+            Flow, GraphPattern, NodeRef, Visit, walk_pre_post_with_memory,
+        };
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        walk_pre_post_with_memory(
+            NodeRef::Pattern(pattern),
+            |visit, node, _| -> Result<Flow, purrdf_lex::allocation::StorageError> {
+                if visit == Visit::Enter {
+                    match node {
+                        // The resolver admits this body against its own dataset.
+                        NodeRef::Pattern(GraphPattern::Service { .. }) => return Ok(Flow::Skip),
+                        NodeRef::Pattern(GraphPattern::Graph { .. }) => {
+                            required = true;
+                            return Ok(Flow::Stop);
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Flow::Descend)
+            },
+            &mut memory,
+        )
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "query graph support walk")
+        })?;
+    }
+    if required {
+        dataset.require_named_graphs().map_err(source_error)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct GraphIdsPayload<I> {
     values: Vec<I>,
@@ -173,6 +238,7 @@ impl<I: ViewTermId> ActiveDataset<I> {
         if qd.default.is_empty() && qd.named.is_empty() {
             return Ok(Self::store_default());
         }
+        dataset.require_named_graphs().map_err(&source_error)?;
         Ok(Self {
             default: DefaultSpec::Merged(resolve_graphs(
                 &qd.default,

@@ -1182,9 +1182,30 @@ fn write_literal<W: TextOut + ?Sized>(l: &Literal, out: &mut W) {
 /// subject, predicate and object are resolved in that order, each fully before the
 /// next.
 pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
+    match fold_native_term(term, &|id| Ok::<_, Infallible>(dataset.resolve_term(id))) {
+        Ok(term) => term,
+    }
+}
+
+/// Convert through the original bottom-up home, preserving an operational read refusal.
+pub(crate) fn try_term_id_to_native<'a, D>(dataset: &'a D, id: TermId) -> Result<Term, D::ReadError>
+where
+    D: ::purrdf_rdf::DatasetView<Id = TermId, TermGuard<'a> = TermRef<'a>>,
+{
+    fold_native_term(dataset.resolve(id)?, &|id| dataset.resolve(id))
+}
+
+/// One scoped RDF term conversion for resident and fallible read owners.
+fn fold_native_term<'a, E>(
+    term: TermRef<'a>,
+    resolve: &impl Fn(TermId) -> Result<TermRef<'a>, E>,
+) -> Result<Term, E> {
     /// The native form of a resolved term that is not a triple term.
-    fn leaf(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
-        match term {
+    fn leaf<'a, E>(
+        resolve: &impl Fn(TermId) -> Result<TermRef<'a>, E>,
+        term: TermRef<'a>,
+    ) -> Result<Term, E> {
+        Ok(match term {
             TermRef::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),
             TermRef::Blank { label, scope } => {
                 Term::BlankNode(scope.qualify_label(label).into_owned())
@@ -1195,7 +1216,7 @@ pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
                 language,
                 direction,
             } => {
-                let datatype_iri = match dataset.resolve_term(datatype) {
+                let datatype_iri = match resolve(datatype)? {
                     TermRef::Iri(iri) => iri.to_owned(),
                     other => {
                         unreachable!("a literal datatype must resolve to an IRI, got {other:?}")
@@ -1209,7 +1230,7 @@ pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
                 })
             }
             TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-        }
+        })
     }
     /// Assemble a native quoted triple from its three converted components.
     fn triple(subject: Term, predicate: Term, object: Term) -> Term {
@@ -1220,25 +1241,22 @@ pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
         Term::Triple(Box::new(Triple::new(subject, predicate, object)))
     }
     let TermRef::Triple { s, p, o } = term else {
-        return leaf(dataset, term);
+        return leaf(resolve, term);
     };
     let convert = |id: TermId| {
-        let converted = try_fold_nested(
+        try_fold_nested(
             id,
             &mut (),
             |(), id| {
-                Ok::<_, Infallible>(match dataset.resolve_term(id) {
+                Ok::<_, E>(match resolve(id)? {
                     TermRef::Triple { s, p, o } => Nested::Triple(s, p, o),
-                    resolved => Nested::Leaf(leaf(dataset, resolved)),
+                    resolved => Nested::Leaf(leaf(resolve, resolved)?),
                 })
             },
             |(), _, s, p, o| Ok(triple(s, p, o)),
-        );
-        match converted {
-            Ok(term) => term,
-        }
+        )
     };
-    triple(convert(s), convert(p), convert(o))
+    Ok(triple(convert(s)?, convert(p)?, convert(o)?))
 }
 
 /// Convert a resolved IR term id into a native [`Term`].

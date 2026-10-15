@@ -77,6 +77,7 @@ use purrdf_sparql_eval::NativeDiagnosticKind;
 use std::cmp::Ordering;
 
 use crate::SurfaceIndex;
+use crate::{CorpusProfile, GraphFree, GraphLanguage};
 
 use purrdf_core::{DatasetView, FastMap, RdfTextDirection, TermValue};
 
@@ -90,6 +91,9 @@ use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v4");
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`].
 const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v1");
+/// Graph-free source and index identities omit every graph coordinate.
+const TRIPLE_INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/index/v1");
+const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v1");
 
 /// Digest tag for [`GraphSelector::Any`].
 const SELECTOR_ANY: u8 = 0x01;
@@ -121,11 +125,11 @@ enum IndexProjection {
 /// There is no [`Default`] implementation and there never will be one: a default
 /// would have to name predicate IRIs, and PurRDF mints none.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TextIndexConfig {
+pub struct TextIndexConfig<P: CorpusProfile = GraphLanguage> {
     /// The indexed predicates, sorted and known to be distinct IRIs.
     predicates: Vec<TermValue>,
     /// Which graph the index is drawn from.
-    graph: GraphSelector,
+    graph: P::Selector,
     /// Independent lexical or Han-character corpus law.
     projection: IndexProjection,
     /// The immutable analysis law used on both sides of retrieval.
@@ -134,7 +138,32 @@ pub struct TextIndexConfig {
     surface: bool,
 }
 
-impl TextIndexConfig {
+impl TextIndexConfig<GraphLanguage> {
+    /// Select the existing graph-language corpus profile.
+    ///
+    /// # Errors
+    /// Refuses empty/duplicate predicates, non-IRI predicates or a non-IRI named graph.
+    pub fn new(
+        predicates: Vec<TermValue>,
+        graph: GraphSelector,
+        analyzer: Analyzer,
+    ) -> Result<Self, TextError> {
+        Self::build(predicates, graph, analyzer)
+    }
+}
+
+impl TextIndexConfig<GraphFree> {
+    /// Select graph-free subject/language documents and language partitions.
+    /// There is no graph selector or default-graph sentinel in this profile.
+    ///
+    /// # Errors
+    /// Refuses empty/duplicate predicates or a non-IRI predicate.
+    pub fn for_triples(predicates: Vec<TermValue>, analyzer: Analyzer) -> Result<Self, TextError> {
+        Self::build(predicates, (), analyzer)
+    }
+}
+
+impl<P: CorpusProfile> TextIndexConfig<P> {
     /// A configuration over `predicates`, restricted to `graph`.
     ///
     /// The predicate list is sorted on the way in, so two callers who name the
@@ -148,9 +177,9 @@ impl TextIndexConfig {
     /// looking like it indexed something), if any predicate is repeated (a
     /// repeat is a caller mistake, and silently deduplicating it would hide the
     /// mistake), or if a [`GraphSelector::Named`] does not hold an IRI.
-    pub fn new(
+    fn build(
         predicates: Vec<TermValue>,
-        graph: GraphSelector,
+        graph: P::Selector,
         analyzer: Analyzer,
     ) -> Result<Self, TextError> {
         if predicates.is_empty() {
@@ -167,7 +196,7 @@ impl TextIndexConfig {
                 )));
             }
         }
-        if let GraphSelector::Named(name) = &graph
+        if let Some(GraphSelector::Named(name)) = P::selector(&graph)
             && !matches!(name, TermValue::Iri(_))
         {
             return Err(TextError::config(format!(
@@ -232,7 +261,7 @@ impl TextIndexConfig {
     }
 
     /// The graph this configuration draws from.
-    pub const fn graph(&self) -> &GraphSelector {
+    pub const fn graph(&self) -> &P::Selector {
         &self.graph
     }
 }
@@ -342,14 +371,14 @@ impl SourceCoverage {
 /// untagged literals; neither is a sentinel that a real value could collide
 /// with.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PartitionKey {
+pub struct PartitionKey<P: CorpusProfile = GraphLanguage> {
     /// The graph name, or `None` for the default graph.
-    graph: Option<TermValue>,
+    graph: P::Graph,
     /// The literals' language tag, or `None` for untagged literals.
     language: Option<String>,
 }
 
-impl PartitionKey {
+impl PartitionKey<GraphLanguage> {
     /// The partition for `graph` (`None` = the default graph) and `language`
     /// (`None` = untagged literals).
     pub const fn new(graph: Option<TermValue>, language: Option<String>) -> Self {
@@ -359,6 +388,23 @@ impl PartitionKey {
     /// The graph name, or `None` for the default graph.
     pub const fn graph(&self) -> Option<&TermValue> {
         self.graph.as_ref()
+    }
+}
+
+impl PartitionKey<GraphFree> {
+    /// A language-only partition, with no graph coordinate.
+    pub const fn for_language(language: Option<String>) -> Self {
+        Self {
+            graph: (),
+            language,
+        }
+    }
+}
+
+impl<P: CorpusProfile> PartitionKey<P> {
+    /// The graph name, or `None` for the default graph.
+    pub(crate) fn graph_coordinate(&self) -> Option<&TermValue> {
+        P::graph(&self.graph)
     }
 
     /// The language tag, or `None` for untagged literals.
@@ -402,10 +448,10 @@ impl PartitionStats {
 /// One indexed document: the text of one `(graph, subject, language)` triple
 /// key.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Document {
+pub struct Document<P: CorpusProfile = GraphLanguage> {
     /// The graph the document's literals were read from, `None` for the default
     /// graph.
-    graph: Option<TermValue>,
+    graph: P::Graph,
     /// The subject the literals hang off — an IRI, a blank node, or (for a
     /// backend that admits one) a triple term. In the annotation layer this is
     /// the reifier.
@@ -421,12 +467,14 @@ pub struct Document {
     partition: u32,
 }
 
-impl Document {
+impl Document<GraphLanguage> {
     /// The graph, or `None` for the default graph.
     pub const fn graph(&self) -> Option<&TermValue> {
         self.graph.as_ref()
     }
+}
 
+impl<P: CorpusProfile> Document<P> {
     /// The subject — the reifier, for text read from the annotation layer.
     pub const fn subject(&self) -> &TermValue {
         &self.subject
@@ -513,9 +561,9 @@ struct TermEntry {
 /// configuration found none of them, which is a
 /// [`SourceCoverage::shortfall`] rather than a corpus that has not landed yet.
 #[derive(Clone, Debug)]
-pub struct TextIndex {
+pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
     /// The configuration this index was built under.
-    config: TextIndexConfig,
+    config: TextIndexConfig<P>,
     /// Complete immutable fielded ranking law.
     ranking: RankingProfile,
     /// Selected predicate ordinals mapped to ranking fields.
@@ -529,7 +577,7 @@ pub struct TextIndex {
     /// The Unicode table versions the analyzer resolved against at build time.
     unicode: UnicodeVersions,
     /// Documents in id order — that is, sorted by `(graph, subject, language)`.
-    documents: Vec<Document>,
+    documents: Vec<Document<P>>,
     /// Document ids sorted by `(subject, id)` — the side index a subject lookup
     /// binary-searches.
     ///
@@ -540,7 +588,7 @@ pub struct TextIndex {
     /// first, so the documents sharing one subject are not contiguous in it.
     subject_order: Vec<u32>,
     /// Partitions sorted by [`PartitionKey`], with their statistics.
-    partitions: Vec<(PartitionKey, PartitionStats)>,
+    partitions: Vec<(PartitionKey<P>, PartitionStats)>,
     /// The term dictionary, sorted by term text.
     terms: Vec<TermEntry>,
     /// Original streams, sharing dictionary strings instead of re-analyzing documents.
@@ -567,7 +615,12 @@ pub struct TextIndex {
     coverage: SourceCoverage,
 }
 
-impl TextIndex {
+impl<P: CorpusProfile> TextIndex<P> {
+    /// The explicit physical document and partition law for this index.
+    pub const fn corpus_profile(&self) -> &'static str {
+        P::ID
+    }
+
     /// Build an index over `dataset` as `config` describes.
     ///
     /// Both RDF 1.2 layers are read: the asserted triple table, and the
@@ -622,7 +675,7 @@ impl TextIndex {
     /// hand.
     pub fn from_dataset<D: DatasetView>(
         dataset: &D,
-        config: &TextIndexConfig,
+        config: &TextIndexConfig<P>,
     ) -> Result<Self, TextError> {
         let (rows, coverage) = collect_rows(dataset, config)?;
         let source_fingerprint = digest_rows(&rows);
@@ -644,7 +697,7 @@ impl TextIndex {
     /// Propagates indexing errors and refuses incomplete routing or field bounds.
     pub fn from_dataset_with_ranking<D: DatasetView>(
         dataset: &D,
-        config: &TextIndexConfig,
+        config: &TextIndexConfig<P>,
         profile: RankingProfile,
     ) -> Result<Self, TextError> {
         for predicate in config.predicates() {
@@ -729,13 +782,13 @@ impl TextIndex {
     }
 
     /// Exact field token totals for a partition, in ranking field order.
-    pub fn field_totals(&self, partition: &PartitionKey) -> Option<&[u128]> {
+    pub fn field_totals(&self, partition: &PartitionKey<P>) -> Option<&[u128]> {
         self.partition_index(partition)
             .map(|at| self.field_totals[at as usize].as_slice())
     }
 
     /// Documents with positive analyzed length in each field, in ranking order.
-    pub fn field_populations(&self, partition: &PartitionKey) -> Option<&[u64]> {
+    pub fn field_populations(&self, partition: &PartitionKey<P>) -> Option<&[u64]> {
         self.partition_index(partition)
             .map(|at| self.field_populations[at as usize].as_slice())
     }
@@ -743,7 +796,7 @@ impl TextIndex {
     /// Admit a partition under its selected population law without walking documents.
     pub(crate) fn prepared_corpus(
         &self,
-        partition: &PartitionKey,
+        partition: &PartitionKey<P>,
     ) -> Result<PreparedCorpus<'_>, TextError> {
         let at = self
             .partition_index(partition)
@@ -765,7 +818,7 @@ impl TextIndex {
 
     pub(crate) fn prepared_corpus_owned(
         &self,
-        partition: &PartitionKey,
+        partition: &PartitionKey<P>,
         workspace: &purrdf_sparql_eval::WorkspaceCapability,
     ) -> Result<PreparedCorpus<'_>, TextError> {
         let partition =
@@ -936,9 +989,9 @@ impl TextIndex {
     /// statistics input, where `postings` yields its token positions.
     pub(crate) fn field_postings<'a>(
         &'a self,
-        partition: &PartitionKey,
+        partition: &PartitionKey<P>,
         term: &str,
-    ) -> impl Iterator<Item = (u32, &'a [(u32, u64)])> + use<'a> {
+    ) -> impl Iterator<Item = (u32, &'a [(u32, u64)])> + use<'a, P> {
         self.partition_postings(partition, term)
             .iter()
             .map(|posting| (posting.document, posting.predicate_frequencies.as_slice()))
@@ -981,7 +1034,7 @@ impl TextIndex {
     }
 
     /// The configuration this index was built under.
-    pub const fn config(&self) -> &TextIndexConfig {
+    pub const fn config(&self) -> &TextIndexConfig<P> {
         &self.config
     }
 
@@ -1022,24 +1075,24 @@ impl TextIndex {
     }
 
     /// Every partition and its statistics, ascending by [`PartitionKey`].
-    pub fn partitions(&self) -> impl Iterator<Item = (&PartitionKey, &PartitionStats)> {
+    pub fn partitions(&self) -> impl Iterator<Item = (&PartitionKey<P>, &PartitionStats)> {
         self.partitions.iter().map(|(key, stats)| (key, stats))
     }
 
     /// One partition's statistics, or `None` if the index has no such partition.
-    pub fn partition_stats(&self, partition: &PartitionKey) -> Option<&PartitionStats> {
+    pub fn partition_stats(&self, partition: &PartitionKey<P>) -> Option<&PartitionStats> {
         self.partition_index(partition)
             .and_then(|index| self.partitions.get(index as usize))
             .map(|(_, stats)| stats)
     }
 
     /// Every document, in id order.
-    pub fn documents(&self) -> impl Iterator<Item = &Document> {
+    pub fn documents(&self) -> impl Iterator<Item = &Document<P>> {
         self.documents.iter()
     }
 
     /// The document `id` names, or `None` if there is no such document.
-    pub fn document(&self, id: u32) -> Option<&Document> {
+    pub fn document(&self, id: u32) -> Option<&Document<P>> {
         self.documents.get(id as usize)
     }
 
@@ -1074,8 +1127,8 @@ impl TextIndex {
         subject: &TermValue,
         workspace: &purrdf_sparql_eval::WorkspaceCapability,
     ) -> Result<&[u32], purrdf_sparql_eval::EvalError> {
-        fn partition(
-            index: &TextIndex,
+        fn partition<P: CorpusProfile>(
+            index: &TextIndex<P>,
             subject: &TermValue,
             workspace: &purrdf_sparql_eval::WorkspaceCapability,
             upper: bool,
@@ -1141,8 +1194,8 @@ impl TextIndex {
     /// Empty for a subject the index holds no text for, which admits no
     /// partition and so retrieves nothing — the same answer a per-row filter
     /// would have reached, arrived at without ranking anything.
-    pub fn partitions_holding_subject(&self, subject: &TermValue) -> Vec<PartitionKey> {
-        let mut keys: Vec<PartitionKey> = self
+    pub fn partitions_holding_subject(&self, subject: &TermValue) -> Vec<PartitionKey<P>> {
+        let mut keys: Vec<PartitionKey<P>> = self
             .documents_with_subject(subject)
             .iter()
             .filter_map(|&id| self.partition_key_of(id).cloned())
@@ -1153,7 +1206,7 @@ impl TextIndex {
     }
 
     /// The partition the document `id` names belongs to.
-    pub fn partition_key_of(&self, id: u32) -> Option<&PartitionKey> {
+    pub fn partition_key_of(&self, id: u32) -> Option<&PartitionKey<P>> {
         let document = self.documents.get(id as usize)?;
         self.partitions
             .get(document.partition as usize)
@@ -1168,9 +1221,9 @@ impl TextIndex {
     }
 
     /// Resolve an actual index-owned key borrow to its stable ordinal.
-    pub(crate) fn local_partition_ordinal(&self, partition: &PartitionKey) -> Option<usize> {
+    pub(crate) fn local_partition_ordinal(&self, partition: &PartitionKey<P>) -> Option<usize> {
         let first = &self.partitions.first()?.0;
-        let stride = size_of::<(PartitionKey, PartitionStats)>();
+        let stride = size_of::<(PartitionKey<P>, PartitionStats)>();
         let distance = core::ptr::from_ref(partition)
             .addr()
             .checked_sub(core::ptr::from_ref(first).addr())?;
@@ -1186,9 +1239,9 @@ impl TextIndex {
     /// A failed comparator's search result is discarded before publication.
     pub(crate) fn partition_key_owned(
         &self,
-        partition: &PartitionKey,
+        partition: &PartitionKey<P>,
         workspace: &purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<Option<&PartitionKey>, purrdf_sparql_eval::EvalError> {
+    ) -> Result<Option<&PartitionKey<P>>, purrdf_sparql_eval::EvalError> {
         if let Some(ordinal) = self.local_partition_ordinal(partition) {
             return Ok(Some(&self.partitions[ordinal].0));
         }
@@ -1197,7 +1250,7 @@ impl TextIndex {
             if failure.is_some() {
                 return Ordering::Equal;
             }
-            let graph = match (key.graph(), partition.graph()) {
+            let graph = match (key.graph_coordinate(), partition.graph_coordinate()) {
                 (None, None) => Ok(Ordering::Equal),
                 (None, Some(_)) => Ok(Ordering::Less),
                 (Some(_), None) => Ok(Ordering::Greater),
@@ -1233,7 +1286,7 @@ impl TextIndex {
     /// Zero for a term the dictionary does not hold and for a partition the
     /// index does not hold — in both readings that is the true count, because no
     /// document there contains it.
-    pub fn document_frequency(&self, partition: &PartitionKey, term: &str) -> u64 {
+    pub fn document_frequency(&self, partition: &PartitionKey<P>, term: &str) -> u64 {
         self.partition_postings(partition, term).len() as u64
     }
 
@@ -1244,9 +1297,9 @@ impl TextIndex {
     /// occurrence rows a property function emits.
     pub fn postings<'a>(
         &'a self,
-        partition: &PartitionKey,
+        partition: &PartitionKey<P>,
         term: &str,
-    ) -> impl Iterator<Item = (u32, &'a [u32])> + use<'a> {
+    ) -> impl Iterator<Item = (u32, &'a [u32])> + use<'a, P> {
         self.partition_postings(partition, term)
             .iter()
             .map(|posting| (posting.document, posting.positions.as_slice()))
@@ -1364,7 +1417,7 @@ impl TextIndex {
     }
 
     /// The index of `partition` in [`Self::partitions`], if the index holds it.
-    fn partition_index(&self, partition: &PartitionKey) -> Option<u32> {
+    fn partition_index(&self, partition: &PartitionKey<P>) -> Option<u32> {
         if let Some(ordinal) = self.local_partition_ordinal(partition) {
             return u32::try_from(ordinal).ok();
         }
@@ -1383,7 +1436,7 @@ impl TextIndex {
     }
 
     /// `term`'s postings restricted to `partition`; empty when either is absent.
-    fn partition_postings(&self, partition: &PartitionKey, term: &str) -> &[Posting] {
+    fn partition_postings(&self, partition: &PartitionKey<P>, term: &str) -> &[Posting] {
         let Some(partition) = self.partition_index(partition) else {
             return &[];
         };
@@ -1396,8 +1449,8 @@ impl TextIndex {
     /// Turn sorted documents and an intern-ordered dictionary into the finished
     /// index: partitions, statistics, postings and the fingerprint.
     fn assemble(
-        config: TextIndexConfig,
-        documents: Vec<AnalyzedDocument>,
+        config: TextIndexConfig<P>,
+        documents: Vec<AnalyzedDocument<P>>,
         dictionary: &[String],
         source_fingerprint: [u8; FINGERPRINT_BYTES],
         coverage: SourceCoverage,
@@ -1412,7 +1465,7 @@ impl TextIndex {
         }
 
         let (partitions, partition_of) = build_partitions(&documents)?;
-        let table: Vec<Document> = documents
+        let table: Vec<Document<P>> = documents
             .iter()
             .map(|document| Document {
                 graph: document.key.graph.clone(),
@@ -1493,7 +1546,11 @@ impl TextIndex {
 
     /// Digest the whole index, in the order [`Self::fingerprint`] documents.
     fn compute_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
-        let mut digest = Digest::new(INDEX_DIGEST_DOMAIN);
+        let mut digest = Digest::new(if P::GRAPH_FREE {
+            TRIPLE_INDEX_DIGEST_DOMAIN
+        } else {
+            INDEX_DIGEST_DOMAIN
+        });
         digest.text(crate::ANALYZER_PROFILE_ID);
         digest.text(match self.config.projection {
             IndexProjection::Lexical => "lexical",
@@ -1515,13 +1572,14 @@ impl TextIndex {
         for predicate in &self.config.predicates {
             digest.term(predicate);
         }
-        match &self.config.graph {
-            GraphSelector::Any => digest.tag(SELECTOR_ANY),
-            GraphSelector::Default => digest.tag(SELECTOR_DEFAULT),
-            GraphSelector::Named(name) => {
+        match P::selector(&self.config.graph) {
+            Some(GraphSelector::Any) => digest.tag(SELECTOR_ANY),
+            Some(GraphSelector::Default) => digest.tag(SELECTOR_DEFAULT),
+            Some(GraphSelector::Named(name)) => {
                 digest.tag(SELECTOR_NAMED);
                 digest.term(name);
             }
+            None => {}
         }
 
         for version in [
@@ -1551,7 +1609,9 @@ impl TextIndex {
 
         digest.count(self.documents.len());
         for document in &self.documents {
-            digest.optional_term(document.graph.as_ref());
+            if !P::GRAPH_FREE {
+                digest.optional_term(P::graph(&document.graph));
+            }
             digest.term(&document.subject);
             digest.optional_text(document.language.as_deref());
             digest.number(document.length);
@@ -1583,7 +1643,9 @@ impl TextIndex {
 
         digest.count(self.partitions.len());
         for (key, stats) in &self.partitions {
-            digest.optional_term(key.graph.as_ref());
+            if !P::GRAPH_FREE {
+                digest.optional_term(P::graph(&key.graph));
+            }
             digest.optional_text(key.language.as_deref());
             digest.number(stats.document_count);
             digest.number(stats.total_tokens);
@@ -1600,7 +1662,7 @@ impl TextIndex {
 /// carries, so the side index is a pure function of the document table exactly
 /// as the document table is a pure function of the content. The `id` tiebreak
 /// keeps a subject's run ascending, so a lookup's result is ascending too.
-fn build_subject_order(table: &[Document]) -> Vec<u32> {
+fn build_subject_order<P: CorpusProfile>(table: &[Document<P>]) -> Vec<u32> {
     let mut order: Vec<u32> = (0..table.len())
         .map(|id| u32::try_from(id).expect("the caller has already bounded the id space"))
         .collect();
@@ -1637,9 +1699,9 @@ fn span_slice(entry: &TermEntry, partition: u32) -> &[Posting] {
 /// The derived order is the field order, which is what makes the row list — and
 /// so the source digest — independent of the order the dataset yielded rows in.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct SourceRow {
+struct SourceRow<P: CorpusProfile = GraphLanguage> {
     /// The graph the row was read from, `None` for the default graph.
-    graph: Option<TermValue>,
+    graph: P::Graph,
     /// The subject; in the annotation layer, the reifier.
     subject: TermValue,
     /// The predicate, always one of the configured IRIs.
@@ -1654,7 +1716,7 @@ struct SourceRow {
     direction: Option<RdfTextDirection>,
 }
 
-impl SourceRow {
+impl<P: CorpusProfile> SourceRow<P> {
     /// The row's object, rebuilt as a term for the source digest.
     fn literal(&self) -> TermValue {
         TermValue::Literal {
@@ -1668,9 +1730,9 @@ impl SourceRow {
 
 /// The `(graph, subject, language)` key that identifies a document.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct DocumentKey {
+struct DocumentKey<P: CorpusProfile = GraphLanguage> {
     /// The graph, `None` for the default graph.
-    graph: Option<TermValue>,
+    graph: P::Graph,
     /// The subject.
     subject: TermValue,
     /// The language tag, `None` for untagged literals.
@@ -1693,9 +1755,9 @@ pub struct TokenOccurrence {
 
 /// A document with its analyzed token stream, before ids are assigned.
 #[derive(Clone, Debug)]
-struct AnalyzedDocument {
+struct AnalyzedDocument<P: CorpusProfile = GraphLanguage> {
     /// The document's identity.
-    key: DocumentKey,
+    key: DocumentKey<P>,
     /// `(dictionary ordinal, position)` for each token, in stream order.
     tokens: Vec<(u32, u32, u32)>,
     /// Token counts by predicate ordinal, before field routing.
@@ -1723,15 +1785,18 @@ struct AnalyzedDocument {
 /// IRIs is represented and carries no text, which is data rather than a mistake —
 /// and the coverage separates "this dataset holds nothing yet" from "this dataset
 /// holds things, and has none of these".
-fn collect_rows<D: DatasetView>(
+fn collect_rows<D: DatasetView, P: CorpusProfile>(
     dataset: &D,
-    config: &TextIndexConfig,
-) -> Result<(Vec<SourceRow>, SourceCoverage), TextError> {
+    config: &TextIndexConfig<P>,
+) -> Result<(Vec<SourceRow<P>>, SourceCoverage), TextError> {
+    if P::GRAPH_FREE && dataset.supports_named_graphs() {
+        return Err(TextError::config(
+            "the graph-free text profile requires a graph-free source",
+        ));
+    }
     dataset
         .checked_read(|dataset| {
-            let Some(graph) = config
-                .graph()
-                .resolve(dataset)
+            let Some(graph) = P::resolve(config.graph(), dataset)
                 .map_err(|error| TextError::source_read(error.to_string()))?
             else {
                 return Ok((
@@ -1801,9 +1866,9 @@ impl SourceCoverage {
     /// unrepresented cases apart: where every configured predicate was found there
     /// is nothing to tell apart, and a configuration holds at least one predicate,
     /// so finding them all is itself proof the dataset holds statements.
-    fn of_walk<D: DatasetView>(
+    fn of_walk<D: DatasetView, P: CorpusProfile>(
         dataset: &D,
-        config: &TextIndexConfig,
+        config: &TextIndexConfig<P>,
         represented: &[bool],
     ) -> Self {
         let unrepresented: Vec<TermValue> = config
@@ -1824,7 +1889,10 @@ impl SourceCoverage {
     /// interned, or the configured named graph is not a term of this dataset. No
     /// in-scope statement carries any configured predicate, because there is no
     /// in-scope statement to carry one.
-    fn nothing_in_scope<D: DatasetView>(dataset: &D, config: &TextIndexConfig) -> Self {
+    fn nothing_in_scope<D: DatasetView, P: CorpusProfile>(
+        dataset: &D,
+        config: &TextIndexConfig<P>,
+    ) -> Self {
         Self {
             dataset_holds_statements: holds_a_statement(dataset),
             unrepresented: config.predicates().to_vec(),
@@ -1850,9 +1918,9 @@ fn holds_a_statement<D: DatasetView>(dataset: &D) -> bool {
 }
 
 /// Resolve one row's terms and append it, unless its object is not a literal.
-fn push_row<D: DatasetView>(
+fn push_row<D: DatasetView, P: CorpusProfile>(
     dataset: &D,
-    rows: &mut Vec<SourceRow>,
+    rows: &mut Vec<SourceRow<P>>,
     graph: Option<D::Id>,
     subject: D::Id,
     predicate: &TermValue,
@@ -1875,7 +1943,7 @@ fn push_row<D: DatasetView>(
         None => None,
     };
     rows.push(SourceRow {
-        graph,
+        graph: P::retain_graph(graph)?,
         subject: resolve_value(dataset, subject)?,
         predicate: predicate.clone(),
         datatype,
@@ -1910,11 +1978,11 @@ fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, Te
 ///
 /// Returns the documents and the term dictionary in **intern** order; the
 /// dictionary is re-sorted and the ordinals remapped in [`build_terms`].
-fn analyze_rows(
-    rows: &[SourceRow],
-    config: &TextIndexConfig,
-) -> Result<(Vec<AnalyzedDocument>, Vec<String>), TextError> {
-    let mut groups: FastMap<DocumentKey, Vec<u32>> = FastMap::default();
+fn analyze_rows<P: CorpusProfile>(
+    rows: &[SourceRow<P>],
+    config: &TextIndexConfig<P>,
+) -> Result<(Vec<AnalyzedDocument<P>>, Vec<String>), TextError> {
+    let mut groups: FastMap<DocumentKey<P>, Vec<u32>> = FastMap::default();
     for (index, row) in rows.iter().enumerate() {
         let key = DocumentKey {
             graph: row.graph.clone(),
@@ -1927,7 +1995,7 @@ fn analyze_rows(
     let analyzer = config.analyzer();
     let mut ordinals: FastMap<String, u32> = FastMap::default();
     let mut dictionary: Vec<String> = Vec::new();
-    let mut documents: Vec<AnalyzedDocument> = Vec::with_capacity(groups.len());
+    let mut documents: Vec<AnalyzedDocument<P>> = Vec::with_capacity(groups.len());
 
     for (key, mut indices) in groups {
         // The token stream is the document's literals concatenated in sorted
@@ -2019,14 +2087,16 @@ fn analyze_rows(
 
 /// The partition table and the map from a document's key to its partition
 /// index — [`build_partitions`]'s two results.
-type Partitioning = (
-    Vec<(PartitionKey, PartitionStats)>,
-    FastMap<DocumentKey, u32>,
+type Partitioning<P> = (
+    Vec<(PartitionKey<P>, PartitionStats)>,
+    FastMap<DocumentKey<P>, u32>,
 );
 
 /// Assign partition indices and compute each partition's statistics.
-fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, TextError> {
-    let mut totals: FastMap<PartitionKey, (u64, u64)> = FastMap::default();
+fn build_partitions<P: CorpusProfile>(
+    documents: &[AnalyzedDocument<P>],
+) -> Result<Partitioning<P>, TextError> {
+    let mut totals: FastMap<PartitionKey<P>, (u64, u64)> = FastMap::default();
     for document in documents {
         let key = PartitionKey {
             graph: document.key.graph.clone(),
@@ -2037,11 +2107,11 @@ fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, Text
         entry.1 += document.tokens.len() as u64;
     }
 
-    let mut keys: Vec<PartitionKey> = totals.keys().cloned().collect();
+    let mut keys: Vec<PartitionKey<P>> = totals.keys().cloned().collect();
     keys.sort();
 
     let mut partitions = Vec::with_capacity(keys.len());
-    let mut index_of: FastMap<PartitionKey, u32> = FastMap::default();
+    let mut index_of: FastMap<PartitionKey<P>, u32> = FastMap::default();
     for (index, key) in keys.into_iter().enumerate() {
         let (document_count, total_tokens) = totals[&key];
         partitions.push((
@@ -2059,7 +2129,7 @@ fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, Text
         index_of.insert(key, index as u32);
     }
 
-    let mut partition_of: FastMap<DocumentKey, u32> = FastMap::default();
+    let mut partition_of: FastMap<DocumentKey<P>, u32> = FastMap::default();
     for document in documents {
         let key = PartitionKey {
             graph: document.key.graph.clone(),
@@ -2077,10 +2147,10 @@ fn exact_average(total: u64, count: u64) -> Result<Fixed, TextError> {
 }
 
 /// Sort the dictionary, remap the token ordinals onto it, and build the postings.
-fn build_terms(
-    documents: &[AnalyzedDocument],
+fn build_terms<P: CorpusProfile>(
+    documents: &[AnalyzedDocument<P>],
     dictionary: &[String],
-    table: &[Document],
+    table: &[Document<P>],
 ) -> (Vec<TermEntry>, Vec<Vec<TokenOccurrence>>) {
     let mut order: Vec<u32> = (0..dictionary.len() as u32).collect();
     order.sort_by(|&left, &right| dictionary[left as usize].cmp(&dictionary[right as usize]));
@@ -2191,20 +2261,26 @@ fn build_terms(
 /// the digest of an empty row set: the value an index built over it holds. The
 /// coverage beside it is what distinguishes that dataset from one holding
 /// statements under everything but a configured predicate.
-pub(crate) fn source_digest<D: DatasetView>(
+pub(crate) fn source_digest<D: DatasetView, P: CorpusProfile>(
     dataset: &D,
-    config: &TextIndexConfig,
+    config: &TextIndexConfig<P>,
 ) -> Result<([u8; FINGERPRINT_BYTES], SourceCoverage), TextError> {
     let (rows, coverage) = collect_rows(dataset, config)?;
     Ok((digest_rows(&rows), coverage))
 }
 
 /// Digest the source rows: what the index actually walked, and nothing else.
-fn digest_rows(rows: &[SourceRow]) -> [u8; FINGERPRINT_BYTES] {
-    let mut digest = Digest::new(SOURCE_DIGEST_DOMAIN);
+fn digest_rows<P: CorpusProfile>(rows: &[SourceRow<P>]) -> [u8; FINGERPRINT_BYTES] {
+    let mut digest = Digest::new(if P::GRAPH_FREE {
+        TRIPLE_SOURCE_DIGEST_DOMAIN
+    } else {
+        SOURCE_DIGEST_DOMAIN
+    });
     digest.count(rows.len());
     for row in rows {
-        digest.optional_term(row.graph.as_ref());
+        if !P::GRAPH_FREE {
+            digest.optional_term(P::graph(&row.graph));
+        }
         digest.term(&row.subject);
         digest.term(&row.predicate);
         digest.term(&row.literal());

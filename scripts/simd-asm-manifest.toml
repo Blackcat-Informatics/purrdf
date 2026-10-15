@@ -44,6 +44,9 @@ packages = [
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
 rlib_packages = ["purrdf-wasm"]
+# Compile the real generic text/retrieval consumer to assembly, without linking
+# or executing its report-only benchmark.
+consumer_benches = ["purrdf:multimodal_on_demand_read"]
 
 [[site]]
 id = "lex.find-byte2-sparql-string"
@@ -3036,12 +3039,12 @@ summary = "`gallop_lower_bound` (in `Batch::subject_run`) and `LeapfrogValueCurs
 
 [[site]]
 id = "datalog.chase"
-summary = "`chase::chase_until`, the chase fixpoint"
+summary = "`chase::chase_with`, the shared chase fixpoint reached by `chase_until`"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_datalog"
-  symbol = "purrdf_datalog::chase::chase_until"
+  symbol = "purrdf_datalog::chase::chase_with"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -6932,7 +6935,7 @@ summary = "Fixed-key table hashing: the portable engine uses folded multiplies; 
 
 [[site]]
 id = "hash.fixed-terminal"
-summary = "the primary IRI index's tagged terminal-slice hash, `FixedHasher::hash_terminal`, called through `purrdf_core::hash::hash_iri_for_interner` by builder, global and frozen lookup. On portable builds it inlines into frozen `RdfDataset::term_id_by_iri`, whose measured vector count also includes the table probe. On Arm neoverse-v1 the short AES terminal body also inlines into frozen lookup, whose emitted body must contain AES round mnemonics. Borrowed/stored/frozen protocol agreement is checked by tests"
+summary = "the primary IRI index's tagged terminal-slice hash, `FixedHasher::hash_terminal`, called through `purrdf_core::hash::hash_iri_for_interner` by builder, global and frozen lookup. Frozen lookup runs in the shared `FrozenTerms::term_id_by_iri` owner used by both native carriers; its measured vector count also includes the table probe. On Arm neoverse-v1 the short AES terminal body also inlines into this owner, whose emitted body must contain AES round mnemonics. Borrowed/stored/frozen protocol agreement is checked by tests"
 
   # On portable targets the terminal and helper inline into the frozen
   # lookup, which remains out of line. The hash is folded-multiply
@@ -6941,7 +6944,7 @@ summary = "the primary IRI index's tagged terminal-slice hash, `FixedHasher::has
   label = "portable frozen lookup"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "wasm32", "wasm32-simd128"]
   crate = "purrdf_core"
-  symbol = "<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri"
+  symbol = "<purrdf_core::ir::frozen_terms::FrozenTerms>::term_id_by_iri"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -6953,7 +6956,7 @@ summary = "the primary IRI index's tagged terminal-slice hash, `FixedHasher::has
   label = "aes frozen lookup"
   configs = ["aarch64-neoverse-v1"]
   crate = "purrdf_core"
-  symbol = "<purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri"
+  symbol = "<purrdf_core::ir::frozen_terms::FrozenTerms>::term_id_by_iri"
   min_vector_ops = 6
   require_mnemonics = ["aese", "aesmc"]
   max_fma = 0

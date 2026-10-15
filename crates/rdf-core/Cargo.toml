@@ -276,3 +276,7 @@ harness = false
 [[test]]
 name = "byte_cover"
 harness = false
+
+[[test]]
+name = "triple_carrier"
+harness = false

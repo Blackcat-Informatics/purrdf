@@ -20,6 +20,13 @@ use crate::rules::{RuleHit, Scoped as _};
 
 /// The enforced ledger fingerprint for logical table-capacity panic sinks.
 pub(crate) const LOGICAL_CAPACITY_PANIC: &str = "rule:logical-capacity-panic";
+
+/// The actual visibility domain of the frozen lexical owner's private fields.
+pub(crate) fn frozen_owner_domain(package: &str, module: &str) -> bool {
+    package == "purrdf-core"
+        && (module == "purrdf_core::ir" || module.starts_with("purrdf_core::ir::"))
+}
+
 const COUNT: u8 = 1;
 const LOGICAL: u8 = 2;
 const LIMIT: u8 = 4;
@@ -72,7 +79,7 @@ pub(crate) fn references_constructor(tokens: TokenStream, parsed: &syn::File) ->
     expansion.0 || token_words(tokens).iter().any(|word| word == "from_parts")
 }
 
-/// Identity of every shipping core source that can name the crate-private constructor.
+/// Identity of shipping constructor references and the frozen owner's visible module domain.
 pub(crate) fn constructor_identity(workspace: &crate::source::Workspace) -> String {
     let records = workspace
         .capacity_constructors
@@ -106,6 +113,7 @@ pub(crate) fn proofs(
             "local-stored-index" | "concrete-frozen-term-range" | "resident-permutation" => &[
                 "crates/rdf-core/src/ir/builder.rs",
                 "crates/rdf-core/src/ir/dataset.rs",
+                "crates/rdf-core/src/ir/frozen_terms.rs",
                 "crates/rdf-core/src/ir/term.rs",
                 "crates/lex/src/allocation.rs",
             ],
@@ -118,6 +126,7 @@ pub(crate) fn proofs(
                 "crates/rdf-core/src/ir/segmented/mod.rs",
                 "crates/rdf-core/src/ir/builder.rs",
                 "crates/rdf-core/src/ir/dataset.rs",
+                "crates/rdf-core/src/ir/frozen_terms.rs",
                 "crates/rdf-core/src/ir/term.rs",
                 "crates/rdf-core/src/ir/global.rs",
                 "crates/lex/src/allocation.rs",
@@ -1268,6 +1277,7 @@ pub(crate) fn check(package: &str, file: &str, source: &str, parsed: &syn::File)
 mod tests {
     use super::*;
     use crate::source::{Memory, Workspace};
+    use std::fmt::Write as _;
 
     fn hits(source: &str) -> Vec<RuleHit> {
         check(
@@ -1347,10 +1357,13 @@ mod tests {
         let tree = Memory { files: [
             ("crates/rdf-core/Cargo.toml", "[package]\nname=\"purrdf-core\"\n"),
             ("crates/rdf-core/src/lib.rs", "mod ir;"),
-            ("crates/rdf-core/src/ir/mod.rs", "mod builder;mod dataset;mod term;"),
+            ("crates/rdf-core/src/ir/mod.rs", "mod builder;mod dataset;mod term;mod frozen_terms;mod sibling;#[path=\"../mounted_owner.rs\"] mod mounted_owner;"),
             ("crates/rdf-core/src/ir/builder.rs", "fn mint()->Result<(),Error>{CapacityError::slot(space,count,u32::MAX)?;RdfDataset::from_parts(terms);Ok(())}"),
             ("crates/rdf-core/src/ir/dataset.rs", "struct RdfDataset {terms:Vec<Term>} impl RdfDataset {pub(crate) fn from_parts(terms:Vec<Term>)->Self{Self{terms}} fn read(&self){TermId::from_index(index).expect(\"stored\");}}"),
             ("crates/rdf-core/src/ir/term.rs", "struct TermId(u32);"),
+            ("crates/rdf-core/src/ir/frozen_terms.rs", "pub(super) struct FrozenTerms {pub(super) index:Vec<u32>}"),
+            ("crates/rdf-core/src/ir/sibling.rs", "fn untouched(){}"),
+            ("crates/rdf-core/src/mounted_owner.rs", "fn untouched(){}"),
             ("crates/lex/Cargo.toml", "[package]\nname=\"purrdf-lex\"\n"),
             ("crates/lex/src/lib.rs", "pub mod allocation;"),
             ("crates/lex/src/allocation.rs", "pub struct CapacityError;impl CapacityError{pub fn slot(){}}"),
@@ -1377,6 +1390,7 @@ mod tests {
             authorities: [
                 "crates/rdf-core/src/ir/builder.rs",
                 "crates/rdf-core/src/ir/dataset.rs",
+                "crates/rdf-core/src/ir/frozen_terms.rs",
                 "crates/rdf-core/src/ir/term.rs",
                 "crates/lex/src/allocation.rs",
             ]
@@ -1389,6 +1403,72 @@ mod tests {
             proofs(std::slice::from_ref(&row), &workspace),
             (BTreeSet::from([index]), Vec::new())
         );
+        let mut missing_owner = row.clone();
+        missing_owner
+            .authorities
+            .retain(|authority| !authority.starts_with("crates/rdf-core/src/ir/frozen_terms.rs="));
+        assert_ne!(
+            proofs(&[missing_owner], &workspace).1,
+            [] as [String; 0],
+            "the constructor aggregate alone cannot replace the explicit frozen owner authority"
+        );
+        for file in [
+            "crates/rdf-core/src/ir/sibling.rs",
+            "crates/rdf-core/src/mounted_owner.rs",
+        ] {
+            assert!(workspace.capacity_constructors.contains(file));
+            let mut changed = Memory {
+                files: tree.files.clone(),
+            };
+            // No from_parts token or opaque expansion: the actual module
+            // visibility alone permits this unvalidated writer.
+            changed.files.insert(
+                file.to_owned(),
+                "fn mutate(owner:&mut super::frozen_terms::FrozenTerms){owner.index.push(u32::MAX);}"
+                    .to_owned(),
+            );
+            assert_ne!(
+                proofs(std::slice::from_ref(&row), &Workspace::walk(&changed)).1,
+                [] as [String; 0],
+                "unreviewed visible owner writer: {file}"
+            );
+        }
+        for (mount, file) in [
+            ("../../../../outside_owner.rs", "outside_owner.rs"),
+            ("../../tests/owner.rs", "crates/rdf-core/tests/owner.rs"),
+            (
+                "../../generated/owner.rs",
+                "crates/rdf-core/generated/owner.rs",
+            ),
+        ] {
+            for test_only in [false, true] {
+                let mut changed = Memory {
+                    files: tree.files.clone(),
+                };
+                let cfg = if test_only { "#[cfg(test)]" } else { "" };
+                write!(
+                    changed
+                        .files
+                        .get_mut("crates/rdf-core/src/ir/mod.rs")
+                        .unwrap(),
+                    "{cfg} #[path=\"{mount}\"] mod escaped_owner;"
+                )
+                .unwrap();
+                changed.files.insert(
+                    file.to_owned(),
+                    "fn mutate(owner:&mut super::frozen_terms::FrozenTerms){owner.index.push(u32::MAX);}"
+                        .to_owned(),
+                );
+                let changed = Workspace::walk(&changed);
+                assert_eq!(
+                    changed.errors.iter().any(|error| error == &format!(
+                        "{file}: shipping frozen-owner module purrdf_core::ir::escaped_owner is outside the audited source domain"
+                    )),
+                    !test_only,
+                    "mounted owner path {mount}, test-only={test_only}"
+                );
+            }
+        }
         let mut duplicate = vec![row.clone(), row.clone()];
         assert_ne!(proofs(&duplicate, &workspace).1, [] as [String; 0]);
         duplicate.truncate(1);

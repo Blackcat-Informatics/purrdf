@@ -180,10 +180,12 @@ pub enum CapacitySpace {
     DatalogMetas,
     /// Datalog atomic symbols.
     DatalogSymbols,
+    /// Resident graph-free asserted triples.
+    Triples,
 }
 
 impl CapacitySpace {
-    const NAMES: [(Self, &'static str); 22] = [
+    const NAMES: [(Self, &'static str); 23] = [
         (Self::LocalTerms, "rdf-local-terms"),
         (Self::LocalTermBytes, "rdf-local-text"),
         (Self::GlobalTerms, "rdf-global-terms"),
@@ -206,6 +208,7 @@ impl CapacitySpace {
         (Self::DatalogNodes, "datalog-nodes"),
         (Self::DatalogMetas, "datalog-metavariables"),
         (Self::DatalogSymbols, "datalog-symbols"),
+        (Self::Triples, "rdf-triples"),
     ];
 
     /// Stable allocation-free identity for error publication.

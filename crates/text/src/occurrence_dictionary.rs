@@ -5,7 +5,7 @@
 //! Logical VALUES identity and each authored token are part of compilation identity.
 
 use crate::{
-    TextIndex,
+    CorpusProfile, TextIndex,
     dictionary::{Dictionary, DictionaryCache, DictionaryEntry, DictionaryMatches},
 };
 use purrdf_core::TermValue;
@@ -38,8 +38,8 @@ fn text(value: &TermValue) -> Option<&str> {
 /// Validates the ORIGINAL token calls, then compiles the authored phrases.
 /// This does not traverse an occurrence stream. A semantic mismatch declines
 /// before physical source execution; physical refusals are never downgraded.
-pub(crate) fn prepare(
-    index: &Arc<TextIndex>,
+pub(crate) fn prepare<P: CorpusProfile>(
+    index: &Arc<TextIndex<P>>,
     cache: &DictionaryCache,
     generation: &Arc<str>,
     inputs: &[OccurrenceDictionaryInput],
@@ -110,7 +110,7 @@ pub(crate) fn prepare(
     }
     let dictionary = cache.get(index, &entries, workspace)?;
     let allocation = workspace.charge(
-        u64::try_from(size_of::<Prepared>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        u64::try_from(size_of::<Prepared<P>>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
     )?;
     let prepared = purrdf_core::small::try_boxed(Prepared {
         dictionary,
@@ -124,20 +124,21 @@ pub(crate) fn prepare(
     Ok(Some(prepared))
 }
 
-struct Prepared {
+struct Prepared<P: CorpusProfile> {
     dictionary: Dictionary,
-    index: Arc<TextIndex>,
+    index: Arc<TextIndex<P>>,
     generation: Arc<str>,
     _allocation: WorkspaceAllocation,
 }
-impl OccurrenceDictionary for Prepared {
+impl<P: CorpusProfile> OccurrenceDictionary for Prepared<P> {
     fn scan(
         &self,
         workspace: &WorkspaceCapability,
     ) -> Result<Box<dyn OccurrenceMatches>, EvalError> {
         let matches = self.dictionary.scan(self.index.clone(), None, workspace)?;
         let allocation = workspace.charge(
-            u64::try_from(size_of::<Matches>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            u64::try_from(size_of::<Matches<P>>())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
         )?;
         purrdf_core::small::try_boxed(Matches {
             found: matches,
@@ -152,13 +153,13 @@ impl OccurrenceDictionary for Prepared {
     }
 }
 
-struct Matches {
-    found: DictionaryMatches,
+struct Matches<P: CorpusProfile> {
+    found: DictionaryMatches<P>,
     at: usize,
     generation: Arc<str>,
     _allocation: WorkspaceAllocation,
 }
-impl OccurrenceMatches for Matches {
+impl<P: CorpusProfile> OccurrenceMatches for Matches<P> {
     fn work(&self) -> purrdf_sparql_eval::shapes::ShapeWork {
         let work = self.found.work();
         purrdf_sparql_eval::shapes::ShapeWork {

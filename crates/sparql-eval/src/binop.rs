@@ -2527,7 +2527,7 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
 /// Keep these locals out of the frame retained while descending an OPTIONAL
 /// spine, just as the node dispatcher keeps operator work out of its frame.
 #[inline(never)]
-fn finish_left_join<D: DatasetView + Sync>(
+pub(crate) fn finish_left_join<D: DatasetView + Sync>(
     node: &GraphPattern,
     evaluated: Evaluated<D::Id>,
     right: &GraphPattern,

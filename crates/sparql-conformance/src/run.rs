@@ -49,6 +49,13 @@ pub enum RunOutcome {
         /// carries no ordered flag, so it is derived here from the parsed query.
         ordered: bool,
     },
+    /// A fallible carrier query result retaining its original admitted owner.
+    RetainedEval {
+        /// The complete retained engine result.
+        result: purrdf_sparql_eval::RetainedSparqlResult,
+        /// Whether top-level ordering is observable.
+        ordered: bool,
+    },
     /// An `UpdateEvaluationTest` post-state: the dataset after applying the update.
     Update(Arc<RdfDataset>),
     /// A syntax test: did the query parse?

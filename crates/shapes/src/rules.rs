@@ -1999,6 +1999,129 @@ pub(crate) fn reifier_subjects<'t>(facts: impl Iterator<Item = &'t [Term; 3]>) -
         .collect()
 }
 
+/// Physical role selected by the existing RDF 1.2 statement classifier.
+#[derive(Clone, Copy)]
+pub(crate) enum RuleRow {
+    /// An asserted base triple.
+    Triple,
+    /// A reifier declaration whose object is a quoted triple.
+    Reifier,
+    /// An annotation belonging to a reifier.
+    Annotation,
+}
+
+/// The existing rule classifier writes either physical carrier through this seam.
+pub(crate) trait RuleFactSink {
+    /// Frozen physical carrier produced by this builder.
+    type Dataset;
+    /// Complete validation and publish this carrier through its original freeze home.
+    fn finish_rules(self) -> Result<Arc<Self::Dataset>, crate::error::ShapesError>;
+    /// Publish at the carrier's original owned-term and row insertion homes.
+    fn publish_rule_row(
+        &mut self,
+        role: RuleRow,
+        subject: &Term,
+        predicate: &str,
+        object: &Term,
+    ) -> Result<(), crate::error::ShapesError>;
+}
+
+/// Publish inferred and source-rule triples through their one physical classifier.
+pub(crate) fn publish_inference<B: RuleFactSink>(
+    mut builder: B,
+    inferred: &[[Term; 3]],
+    sources: &[[Term; 3]],
+    reifiers: &FastSet<Term>,
+) -> Result<Arc<B::Dataset>, crate::error::ShapesError> {
+    for triple in inferred.iter().chain(sources) {
+        push_fact(&mut builder, triple, reifiers)?;
+    }
+    builder.finish_rules()
+}
+
+impl RuleFactSink for RdfDatasetBuilder {
+    type Dataset = RdfDataset;
+    fn finish_rules(self) -> Result<Arc<RdfDataset>, crate::error::ShapesError> {
+        self.freeze().map_err(crate::error::ShapesError::from)
+    }
+    fn publish_rule_row(
+        &mut self,
+        role: RuleRow,
+        subject: &Term,
+        predicate: &str,
+        object: &Term,
+    ) -> Result<(), crate::error::ShapesError> {
+        match role {
+            RuleRow::Triple => self.push_owned_quad(&RdfQuad::new(
+                subject.to_rdf_term(),
+                predicate,
+                object.to_rdf_term(),
+            ))?,
+            RuleRow::Reifier => {
+                let Term::Triple(statement) = object else {
+                    return Err("internal error: reifier object is not a triple term".into());
+                };
+                self.push_owned_reifier(&::purrdf_rdf::RdfReifier::new(
+                    subject.to_rdf_term(),
+                    ::purrdf_rdf::RdfTriple::new(
+                        statement.subject.to_rdf_term(),
+                        statement.predicate.as_str(),
+                        statement.object.to_rdf_term(),
+                    ),
+                ))?;
+            }
+            RuleRow::Annotation => {
+                self.push_owned_annotation(&::purrdf_rdf::RdfAnnotation::new(
+                    subject.to_rdf_term(),
+                    predicate,
+                    object.to_rdf_term(),
+                ))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RuleFactSink for purrdf_core::TripleDatasetBuilder {
+    type Dataset = purrdf_core::TripleDataset;
+    fn finish_rules(self) -> Result<Arc<Self::Dataset>, crate::error::ShapesError> {
+        self.freeze()
+            .map(Arc::new)
+            .map_err(purrdf_core::RdfDiagnostic::from)
+            .map_err(crate::error::ShapesError::from)
+    }
+    fn publish_rule_row(
+        &mut self,
+        role: RuleRow,
+        subject: &Term,
+        predicate: &str,
+        object: &Term,
+    ) -> Result<(), crate::error::ShapesError> {
+        let s = self.intern_owned_term(&subject.to_rdf_term())?;
+        let p = self.intern_iri(predicate)?;
+        let o = self.intern_owned_term(&object.to_rdf_term())?;
+        match role {
+            RuleRow::Triple => self.push_triple(s, p, o)?,
+            RuleRow::Reifier => self.push_reifier(s, o)?,
+            RuleRow::Annotation => self.push_annotation(s, p, o)?,
+        }
+        Ok(())
+    }
+}
+
+/// Publish one already-classified RDF triple through its actual carrier's builder.
+pub(crate) fn push_rule_row(
+    builder: &mut impl RuleFactSink,
+    triple: &[Term; 3],
+    role: RuleRow,
+) -> Result<(), crate::error::ShapesError> {
+    let [s, p, o] = triple;
+    let Term::NamedNode(predicate) = p else {
+        return Err(format!("internal error: inferred triple has non-IRI predicate {p}").into());
+    };
+    builder.publish_rule_row(role, s, predicate.as_str(), o)
+}
+
 /// Push one owned triple into `builder`, into the layer RDF 1.2 puts it in:
 /// `r rdf:reifies <<( s p o )>>` is a reifier declaration, a triple whose subject is one
 /// of `reifiers` is that reifier's annotation, and every other triple is a quad — the
@@ -2009,39 +2132,21 @@ pub(crate) fn reifier_subjects<'t>(facts: impl Iterator<Item = &'t [Term; 3]>) -
 ///
 /// An internal-invariant breach: a non-IRI predicate, which the producers never emit.
 pub(crate) fn push_fact(
-    builder: &mut RdfDatasetBuilder,
+    builder: &mut impl RuleFactSink,
     triple: &[Term; 3],
     reifiers: &FastSet<Term>,
 ) -> Result<(), crate::error::ShapesError> {
     let [s, p, o] = triple;
-    let Term::NamedNode(predicate) = p else {
-        return Err(format!("internal error: inferred triple has non-IRI predicate {p}").into());
-    };
-    if predicate.as_str() == rdf::REIFIES
-        && let Term::Triple(statement) = o
+    let role = if matches!(p, Term::NamedNode(predicate) if predicate.as_str() == rdf::REIFIES)
+        && matches!(o, Term::Triple(_))
     {
-        builder.push_owned_reifier(&::purrdf_rdf::RdfReifier::new(
-            s.to_rdf_term(),
-            ::purrdf_rdf::RdfTriple::new(
-                statement.subject.to_rdf_term(),
-                statement.predicate.as_str(),
-                statement.object.to_rdf_term(),
-            ),
-        ))?;
+        RuleRow::Reifier
     } else if reifiers.contains(s) {
-        builder.push_owned_annotation(&::purrdf_rdf::RdfAnnotation::new(
-            s.to_rdf_term(),
-            predicate.as_str(),
-            o.to_rdf_term(),
-        ))?;
+        RuleRow::Annotation
     } else {
-        builder.push_owned_quad(&RdfQuad::new(
-            s.to_rdf_term(),
-            predicate.as_str(),
-            o.to_rdf_term(),
-        ))?;
-    }
-    Ok(())
+        RuleRow::Triple
+    };
+    push_rule_row(builder, triple, role)
 }
 
 /// Build the evaluation dataset's SPARQL half: the projected data (default graph) plus

@@ -815,7 +815,8 @@ jobs:
   simd-asm-projection:
     if: github.event_name == 'workflow_dispatch' && inputs.simd_projection
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Complete cold generation and checked replay of all seven configurations.
+    timeout-minutes: 360
     env:
       CARGO_BUILD_JOBS: 2
     steps:
@@ -846,14 +847,6 @@ jobs:
             crates/rdf-core/src/ir/paged/mod.rs crates/rdf-core/src/ir/paged/query.rs \
             crates/rdf-core/src/ir/paged/translation.rs docs/design/purrdf-simd.md \
             > target/asm-projection/inputs-before.sha256
-      - name: Inspect the actual x86-v3 eager seal and mapping bodies
-        run: |
-          make simd-asm SIMD_ASM_ARGS="--config x86_64-v3 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
-            > target/asm-projection/x86-v3-body-probe.log 2>&1
-      - name: Inspect the actual x86-v4 eager seal and mapping bodies
-        run: |
-          make simd-asm SIMD_ASM_ARGS="--config x86_64-v4 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
-            > target/asm-projection/x86-v4-body-probe.log 2>&1
       - name: Generate the complete seven-configuration projection
         run: |
           make simd-asm SIMD_ASM_ARGS="--write-doc --jobs 2" \
@@ -883,7 +876,7 @@ jobs:
           find target/asm-projection -type f ! -name artifacts.sha256 -print0 \
             | sort -z | xargs -0 sha256sum > target/asm-projection/artifacts.sha256
       - name: Upload projection and emitted-body evidence
-        if: ${{ !cancelled() }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: asm-projection

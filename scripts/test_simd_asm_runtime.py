@@ -45,7 +45,6 @@ class EvidenceTests(unittest.TestCase):
         self.runner.gate = self.gate
         self.runner.options = argparse.Namespace(probe=None)
         self.runner.compiler = "fixture compiler"
-        self.runner.stage = None
         self.runner.root = self.root
         self.runner.nonce = ""
         self.runner.stopped = threading.Event()
@@ -61,7 +60,8 @@ class EvidenceTests(unittest.TestCase):
         self.runner.execute = self.execute
 
     def execute(self, cmd, env, lease, graph=0):
-        self.context_root = Path(env["CARGO_TARGET_DIR"]).parent
+        self.context_root = self.runner.log_directory
+        self.assertEqual({k: v for k, v in env.items() if k in {"CARGO_TARGET_DIR", "CARGO_BUILD_BUILD_DIR", "STAGE_CARGO_ASM_CONTEXT", "STAGE_CARGO_ASM_LEASE_FD"}}, {k: v for k, v in os.environ.items() if k in {"CARGO_TARGET_DIR", "CARGO_BUILD_BUILD_DIR", "STAGE_CARGO_ASM_CONTEXT", "STAGE_CARGO_ASM_LEASE_FD"}})
         self.executions.append((graph, self.context_root, lease))
         folder = self.context_root / "build" / self.config.triple / "release" / "deps"
         folder.mkdir(parents=True, exist_ok=True)
@@ -157,22 +157,22 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(self.context_root, promoted)
             self.assertEqual(self.runner.timings[self.config.name]["rustc_invocations"], 0)
 
-    def test_configuration_lease_covers_both_builds_and_verdict(self):
+    def test_shared_target_lease_covers_both_builds_and_verdict(self):
         self.graph_artifacts = [[dict()], [dict(fresh=True)]]
         execute = self.runner.execute
         evaluate = self.gate.evaluate_config
 
-        def require_lease(root):
-            with (root / "lease.lock").open("a+") as contender:
+        def require_lease():
+            with (self.root / "lease.lock").open("a+") as contender:
                 with self.assertRaises(BlockingIOError):
                     fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
         def leased_execute(cmd, env, lease, graph):
-            require_lease(Path(env["CARGO_TARGET_DIR"]).parent)
+            require_lease()
             return execute(cmd, env, lease, graph)
 
         def leased_evaluate(*args):
-            require_lease(self.context_root)
+            require_lease()
             return evaluate(*args)
 
         with self.two_graphs(), patch.object(self.runner, "execute", side_effect=leased_execute), \

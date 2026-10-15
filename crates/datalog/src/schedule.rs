@@ -69,7 +69,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::cache::{self, ContractHash};
-use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
+use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm, ReadSource};
 use crate::guard::{GuardEvaluator, Negation};
 use crate::paths::{relax_strata, shortest_path};
 use crate::plan::RulePlan;
@@ -78,7 +78,9 @@ use crate::seminaive::{
     RoundSnapshot, RuleEntry, RuleRuntime, check_budget, check_range_restricted, evaluate_round,
 };
 use crate::stop::{StopSignal, is_stopped};
-use crate::store::{Fact, RelationStore};
+#[cfg(test)]
+use crate::store::Fact;
+use crate::store::{Arity, RelationStore, ShapeFact, StoreShape, TermInterner};
 
 /// One layer of an ordered schedule: its run-once groups and its iterating groups.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -139,19 +141,25 @@ impl Schedule {
 
 /// A rule program compiled for the ordered schedule.
 #[derive(Debug, Clone)]
-pub struct ScheduledProgram {
+pub struct ScheduledProgram<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
-    rules: Arc<[DlClause]>,
+    rules: Arc<[DlClause<N>]>,
     /// One store-independent join plan per rule.
-    plans: Vec<RulePlan>,
+    plans: Vec<RulePlan<N>>,
     /// One lowered runtime per rule.
-    runtimes: Vec<RuleRuntime>,
+    runtimes: Vec<RuleRuntime<N>>,
     /// The schedule the program runs under.
     schedule: Schedule,
 }
 
-impl ScheduledProgram {
+impl<const N: usize> ScheduledProgram<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Every source retained by this program's declaration union.
     #[must_use]
     pub fn declarations(&self) -> Option<&crate::admission::NeverDeriveDeclarations> {
@@ -163,7 +171,7 @@ impl ScheduledProgram {
     crate::admission::program_declarations!();
 
     /// The program's rules, in authored order.
-    pub fn rules(&self) -> &[DlClause] {
+    pub fn rules(&self) -> &[DlClause<N>] {
         &self.rules
     }
 
@@ -184,11 +192,14 @@ impl ScheduledProgram {
 /// # Errors
 /// Returns exact protected/undecidable head refusal before the ordinary
 /// executor's fragment checks, then the same errors as [`compile_scheduled`].
-pub fn compile_scheduled_with_declarations(
-    rules: Vec<DlClause>,
+pub fn compile_scheduled_with_declarations<const N: usize>(
+    rules: Vec<DlClause<N>>,
     schedule: Schedule,
     declarations: &crate::admission::NeverDeriveDeclarations,
-) -> Result<ScheduledProgram, EvalError> {
+) -> Result<ScheduledProgram<N>, EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     declarations.admit(&rules).map_err(EvalError::NeverDerive)?;
     compile_scheduled(rules, schedule)?
         .admit_declarations(declarations)
@@ -208,13 +219,19 @@ pub fn compile_scheduled_with_declarations(
 ///
 /// [`EvalError::NonDatalogHead`], [`EvalError::UnboundHeadVariable`] or
 /// [`EvalError::MalformedSchedule`].
-pub fn compile_scheduled(
-    rules: Vec<DlClause>,
+pub fn compile_scheduled<const N: usize>(
+    rules: Vec<DlClause<N>>,
     schedule: Schedule,
-) -> Result<ScheduledProgram, EvalError> {
+) -> Result<ScheduledProgram<N>, EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     for (index, rule) in rules.iter().enumerate() {
         let form = rule.head_form();
-        if !matches!(form, HeadForm::Atomic | HeadForm::Conjunctive) {
+        if !matches!(
+            form,
+            HeadForm::Atomic | HeadForm::Conjunctive | HeadForm::NoOutput
+        ) {
             return Err(EvalError::NonDatalogHead { rule: index, form });
         }
     }
@@ -240,7 +257,7 @@ pub fn compile_scheduled(
             detail: format!("rule {missing} is not scheduled"),
         });
     }
-    let plans: Vec<RulePlan> = rules.iter().map(RulePlan::for_rule).collect();
+    let plans: Vec<RulePlan<N>> = rules.iter().map(RulePlan::for_rule).collect();
     let runtimes = rules
         .iter()
         .zip(&plans)
@@ -256,7 +273,10 @@ pub fn compile_scheduled(
 }
 
 /// The caller's layer-boundary actions. Every method has a do-nothing default.
-pub trait LayerHooks {
+pub trait LayerHooks<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The facts to ASSUME for the duration of layer `layer`, read over the model it
     /// starts from. See the [module docs](self).
     ///
@@ -266,8 +286,8 @@ pub trait LayerHooks {
     fn assume(
         &mut self,
         layer: usize,
-        model: &RelationStore,
-    ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
+        model: &RelationStore<TermInterner, N>,
+    ) -> Result<Vec<ShapeFact<N>>, crate::guard::CallbackError> {
         let _ = (layer, model);
         Ok(Vec::new())
     }
@@ -282,9 +302,9 @@ pub trait LayerHooks {
     fn retract(
         &mut self,
         layer: usize,
-        model: &RelationStore,
-        withdrawn: &[Fact],
-    ) -> Result<Vec<Fact>, crate::guard::CallbackError> {
+        model: &RelationStore<TermInterner, N>,
+        withdrawn: &[ShapeFact<N>],
+    ) -> Result<Vec<ShapeFact<N>>, crate::guard::CallbackError> {
         let _ = (layer, model, withdrawn);
         Ok(Vec::new())
     }
@@ -294,7 +314,10 @@ pub trait LayerHooks {
     /// # Errors
     ///
     /// A message, which aborts the evaluation as [`EvalError::LayerHook`].
-    fn finish(&mut self, model: &RelationStore) -> Result<Vec<Fact>, crate::guard::CallbackError> {
+    fn finish(
+        &mut self,
+        model: &RelationStore<TermInterner, N>,
+    ) -> Result<Vec<ShapeFact<N>>, crate::guard::CallbackError> {
         let _ = model;
         Ok(Vec::new())
     }
@@ -304,7 +327,7 @@ pub trait LayerHooks {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoHooks;
 
-impl LayerHooks for NoHooks {}
+impl<const N: usize> LayerHooks<N> for NoHooks where Arity<N>: StoreShape<N> {}
 
 /// Evaluate `program` over the seeded store `edb` under its schedule.
 ///
@@ -317,14 +340,22 @@ impl LayerHooks for NoHooks {}
 ///
 /// Every refusal [`crate::seminaive::evaluate_guarded`] makes, plus
 /// [`EvalError::LayerHook`].
-pub fn evaluate_scheduled(
-    program: &ScheduledProgram,
-    edb: RelationStore,
-    guards: &dyn GuardEvaluator,
-    hooks: &mut dyn LayerHooks,
+pub fn evaluate_scheduled<const N: usize>(
+    program: &ScheduledProgram<N>,
+    edb: RelationStore<TermInterner, N>,
+    guards: &dyn GuardEvaluator<TermInterner, N>,
+    hooks: &mut dyn LayerHooks<N>,
     options: &EvalOptions,
     stop: Option<&dyn StopSignal>,
-) -> Result<Evaluation, EvalError> {
+) -> Result<Evaluation<TermInterner, N>, EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
+    if !edb.has_base()
+        && let Some(rule) = program.rules.iter().position(DlClause::reads_base)
+    {
+        return Err(EvalError::MissingBase { rule });
+    }
     let mut state = FixpointState::seeded(edb, *options);
     check_budget(&state)?;
     for (layer_index, layer) in program.schedule.layers.iter().enumerate() {
@@ -341,15 +372,18 @@ pub fn evaluate_scheduled(
 }
 
 /// Run one layer into `state`.
-fn run_layer(
-    program: &ScheduledProgram,
+fn run_layer<const N: usize>(
+    program: &ScheduledProgram<N>,
     layer_index: usize,
     layer: &Layer,
-    state: &mut FixpointState,
-    guards: &dyn GuardEvaluator,
-    hooks: &mut dyn LayerHooks,
+    state: &mut FixpointState<TermInterner, N>,
+    guards: &dyn GuardEvaluator<TermInterner, N>,
+    hooks: &mut dyn LayerHooks<N>,
     stop: Option<&dyn StopSignal>,
-) -> Result<(), EvalError> {
+) -> Result<(), EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     let hook_error = |error: crate::guard::CallbackError| {
         error.into_eval_error(|message| EvalError::LayerHook {
             layer: Some(layer_index),
@@ -361,11 +395,7 @@ fn run_layer(
     let assumptions = hooks.assume(layer_index, &state.rel).map_err(hook_error)?;
     let mut assumed = vec![false; state.rel.row_count()];
     for fact in &assumptions {
-        if let Some((_, _, row)) =
-            state
-                .rel
-                .insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph)?
-        {
+        if let Some((_, _, row)) = state.rel.insert_row(Arity::<N>::fact_terms(fact))? {
             state.depth.push(0);
             assumed.push(true);
             debug_assert_eq!(
@@ -376,7 +406,7 @@ fn run_layer(
         }
     }
     check_budget(state)?;
-    let mut confirmed: BTreeMap<Fact, crate::seminaive::Confirmation> = BTreeMap::new();
+    let mut confirmed: BTreeMap<ShapeFact<N>, crate::seminaive::Confirmation<N>> = BTreeMap::new();
 
     // Run-once groups: each rule evaluated exactly once, against the whole model.
     for group in &layer.once {
@@ -422,7 +452,7 @@ fn run_layer(
     // Withdraw every assumption no rule derived, and whatever the hook retracts with them;
     // record the derivations of the ones a rule did derive.
     let rows = state.rel.facts_in_row_order();
-    let withdrawn: Vec<Fact> = rows
+    let withdrawn: Vec<ShapeFact<N>> = rows
         .iter()
         .filter(|(row, fact)| {
             assumed.get(row.resident_index()).copied().unwrap_or(false)
@@ -444,34 +474,40 @@ fn run_layer(
 }
 
 /// The per-layer state one group evaluation reads and updates.
-struct GroupRun<'a, 'g> {
+struct GroupRun<'a, 'g, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The caller's guard evaluator.
-    guards: &'g dyn GuardEvaluator,
+    guards: &'g dyn GuardEvaluator<TermInterner, N>,
     /// The caller's stop signal.
     stop: Option<&'g dyn StopSignal>,
     /// Per-row assumed flags.
     assumed: &'a mut Vec<bool>,
     /// The canonical derivation of each assumed fact a rule derived again.
-    confirmed: &'a mut BTreeMap<Fact, crate::seminaive::Confirmation>,
+    confirmed: &'a mut BTreeMap<ShapeFact<N>, crate::seminaive::Confirmation<N>>,
     /// For an iterating group, the row count each rule last ran against; `None` for a
     /// run-once group, whose rules run once against everything.
     seen: Option<&'a mut Vec<Option<usize>>>,
 }
 
 /// Evaluate one group as one round and commit it. Returns whether it committed anything.
-fn run_group(
-    program: &ScheduledProgram,
+fn run_group<const N: usize>(
+    program: &ScheduledProgram<N>,
     group: &[usize],
-    state: &mut FixpointState,
-    run: GroupRun<'_, '_>,
-) -> Result<bool, EvalError> {
+    state: &mut FixpointState<TermInterner, N>,
+    run: GroupRun<'_, '_, N>,
+) -> Result<bool, EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     if is_stopped(run.stop) {
         return Err(EvalError::Stopped {
             report: state.report(),
         });
     }
     let hi = state.rel.row_count();
-    let mut entries: Vec<RuleEntry<'_>> = Vec::with_capacity(group.len());
+    let mut entries: Vec<RuleEntry<'_, N>> = Vec::with_capacity(group.len());
     let mut seen = run.seen;
     for &index in group {
         let (rule, plan) = (&program.rules[index], &program.plans[index]);
@@ -480,9 +516,15 @@ fn run_group(
             Some(seen) => {
                 let last = seen[index].replace(hi);
                 match last {
-                    // A rule whose guard reads the model may change its answer when any
-                    // fact changes: it always runs against everything.
-                    _ if rule.reads_model() => Delta::all(hi),
+                    // Model-reading guards need the full model. Positive Base probes
+                    // have no model row-id delta; negative Base filters preserve it.
+                    _ if rule.reads_model()
+                        || rule.body().iter().any(|atom| {
+                            !atom.is_negated() && atom.read_source() == ReadSource::Base
+                        }) =>
+                    {
+                        Delta::all(hi)
+                    }
                     None => Delta::all(hi),
                     // Nothing the rule's positive join could read has changed, and a rule
                     // with no positive atom has no delta at all: its answer can only have
@@ -531,20 +573,28 @@ fn run_group(
 
 /// Retract `facts` from `state`, rebuilding the store from the surviving rows in their
 /// original row order and dropping the derivations of the retracted facts.
-fn retract(state: &mut FixpointState, facts: &[Fact]) -> Result<(), EvalError> {
+fn retract<const N: usize>(
+    state: &mut FixpointState<TermInterner, N>,
+    facts: &[ShapeFact<N>],
+) -> Result<(), EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     if facts.is_empty() {
         return Ok(());
     }
-    let doomed: BTreeSet<&Fact> = facts.iter().collect();
-    let mut rebuilt = RelationStore::new();
+    let doomed: BTreeSet<&ShapeFact<N>> = facts.iter().collect();
+    let mut rebuilt =
+        RelationStore::<TermInterner, N>::with_dictionary(state.rel.retraction_dictionary()?);
     let mut depth = Vec::with_capacity(state.depth.len());
     for (row, fact) in state.rel.facts_in_row_order() {
         if doomed.contains(&fact) {
             continue;
         }
-        rebuilt.insert(&fact.subject, &fact.predicate, &fact.object, &fact.graph)?;
+        rebuilt.insert_row(Arity::<N>::fact_terms(&fact))?;
         depth.push(state.depth[row.resident_index()]);
     }
+    state.rel.transfer_base(&mut rebuilt);
     state.rel = rebuilt;
     state.depth = depth;
     state
@@ -565,7 +615,10 @@ fn retract(state: &mut FixpointState, facts: &[Fact]) -> Result<(), EvalError> {
 /// position a guard fills (a triple term built or taken apart by caller code) is a
 /// variable here, so it may match anything — the conservative direction, which can only
 /// add a dependency, never lose one.
-fn may_generate(pattern: &ClauseAtom, template: &ClauseAtom) -> bool {
+fn may_generate<const N: usize>(pattern: &ClauseAtom<N>, template: &ClauseAtom<N>) -> bool {
+    if pattern.read_source() == ReadSource::Base {
+        return false;
+    }
     let mut unifier = Unifier::default();
     pattern
         .terms()
@@ -635,7 +688,7 @@ impl<'a> Unifier<'a> {
 }
 
 /// One rule's body reads, each with whether the dependency it induces is CLOSED.
-fn body_reads(rule: &DlClause) -> Vec<(&ClauseAtom, bool)> {
+fn body_reads<const N: usize>(rule: &DlClause<N>) -> Vec<(&ClauseAtom<N>, bool)> {
     rule.body()
         .iter()
         .map(|atom| (atom, atom.is_negated()))
@@ -676,7 +729,10 @@ fn body_reads(rule: &DlClause) -> Vec<(&ClauseAtom, bool)> {
 /// # Panics
 ///
 /// Panics if `run_once` does not have one entry per rule — a construction bug.
-pub fn stratify_rules(rules: &[DlClause], run_once: &[bool]) -> Result<Schedule, EvalError> {
+pub fn stratify_rules<const N: usize>(
+    rules: &[DlClause<N>],
+    run_once: &[bool],
+) -> Result<Schedule, EvalError> {
     assert_eq!(
         rules.len(),
         run_once.len(),

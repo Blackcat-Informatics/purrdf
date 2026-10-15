@@ -5,8 +5,8 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # The Interned Dataset IR
 
-Everything in PurRDF evaluates over one intermediate representation: an
-immutable, value-interned RDF 1.2 dataset owned by the ring-fenced
+PurRDF's resident carriers share one value-interned RDF 1.2 term representation,
+owned by the ring-fenced
 [`purrdf-core`](https://docs.rs/purrdf-core) kernel.
 
 ## Terms are interned once
@@ -29,10 +29,10 @@ use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
 
 // Intern terms once; quads are rows of copyable TermIds.
 let mut b = RdfDatasetBuilder::new();
-let cat = b.intern_iri("https://example.org/cat");
-let says = b.intern_iri("https://example.org/says");
-let meow = b.intern_literal(RdfLiteral::simple("meow"));
-b.push_quad(cat, says, meow, None);
+let cat = b.intern_iri("https://example.org/cat")?;
+let says = b.intern_iri("https://example.org/says")?;
+let meow = b.intern_literal(RdfLiteral::simple("meow"))?;
+b.push_quad(cat, says, meow, None)?;
 
 // Freeze into the immutable, indexed dataset the engines evaluate over.
 let ds = b.freeze().expect("well-formed dataset");
@@ -49,6 +49,30 @@ the allocation-free `DatasetView` trait.
 Freezing is also what makes concurrency simple: a frozen dataset is immutable,
 so it can be shared and read from many threads (the C ABI exposes exactly this
 as a `Send + Sync` handle).
+
+## An explicit graph-free carrier
+
+Choose `TripleDatasetBuilder` when the data has no named graphs. Its asserted
+rows store subject, predicate and object in 12 bytes; reifier bindings take
+8 bytes and annotations take 12 bytes. It shares term interning and validation
+with `RdfDatasetBuilder`, but accumulates no quad rows or graph table.
+
+`TripleDataset::try_from` moves the original term owner out of an all-default
+quad dataset. It refuses any named row or named graph declaration, including an
+empty graph, with `TripleReadError::NamedGraphsUnsupported`.
+
+Open `TripleDataset::read()` for a fallible view. Named-graph query requests
+refuse even when the carrier is empty or the graph name is absent. All children
+of that read retain the same first failure; a new read over the unchanged
+carrier starts an independent operation. The engine's ordinary default-graph
+query path uses the compact carrier's SPO, POS and OSP orders.
+
+For rule materialization, `purrdf::shapes::srl::infer_triples` accepts that read
+and returns `Inference<TripleDataset>`. Its Datalog rows have three positions
+and predicate-only partition keys. The ordinary quad `srl::infer` API keeps
+its existing result type. Text indexing selects `TextIndexConfig::for_triples`
+explicitly; document keys become subject/language and partition keys language,
+with distinct graph-free identities.
 
 ## Copy-on-write mutation
 
