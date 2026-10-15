@@ -120,6 +120,9 @@ pub fn visit_list<'error>(
 /// `"name" => Kind(value)`, `"name" => Absent`, or `"name" => List(iterator)`.
 /// `Value(expression)` forwards an existing value, for example an optional
 /// cause mapped to either `Cause` or `Absent`.
+/// For a named struct, `@record self { all, physical, fields } => "code" { ... }`
+/// checks its complete shape while expressions use its existing semantic
+/// accessors. Encoded private fields need not be decoded a second time.
 ///
 /// A producer cannot add a variant without exposing it:
 ///
@@ -142,8 +145,38 @@ pub fn visit_list<'error>(
 ///     }
 /// }
 /// ```
+///
+/// Structs must also account for every physical field:
+///
+/// ```compile_fail
+/// use purrdf_hash::error::StructuredError;
+/// pub struct Failure { attempted: u128, limit: u128 }
+/// impl StructuredError for Failure {
+///     purrdf_hash::error_visit! {
+///         @record self { attempted } => "refused" {
+///             "attempted" => Unsigned(self.attempted),
+///         }
+///     }
+/// }
+/// ```
 #[macro_export]
 macro_rules! error_visit {
+    (
+        @record $this:ident { $($member:ident),* $(,)? } => $code:literal {
+            $($field:literal => $kind:ident $(($value:expr))?),* $(,)?
+        }
+    ) => {
+        fn visit<'error>(
+            &'error $this,
+            visitor: &mut dyn $crate::error::ErrorVisitor<'error>,
+        ) {
+            // Check the complete physical shape, while semantic accessors can
+            // decode private representations without duplicating their logic.
+            let Self { $($member: _),* } = $this;
+            visitor.variant($code);
+            $($crate::error_visit!(@field visitor, $field, $kind $(($value))?);)*
+        }
+    };
     (
         $(
             $variant:ident
