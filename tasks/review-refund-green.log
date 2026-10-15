@@ -1,0 +1,34 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/lex)
+    Finished `test` profile [optimized] target(s) in 2m 39s
+     Running unittests src/lib.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-lex/fe1d3e916639c520/out/purrdf_lex-fe1d3e916639c520)
+
+running 25 tests
+test allocation::ordered::tests::borrowed_lookup_and_clear_need_no_new_storage ... ok
+test allocation::ordered::tests::refused_growth_changes_no_live_association_and_release_destroys_first ... ok
+test allocation::original_failure_cleanup_regressions::array_refund_failure_is_hard_when_original_operation_succeeded ... ok
+test allocation::original_failure_cleanup_regressions::array_refund_preserves_original_error_after_destroying_actual_elements ... ok
+test allocation::original_failure_cleanup_regressions::native_scope_preserves_checked_layout_failure_when_shrink_refuses ... ok
+test allocation::original_scope_regressions::native_failed_child_dies_before_refund_without_releasing_parent ... ok
+test allocation::original_scope_regressions::native_success_keeps_original_output_grant_after_scope_returns ... ok
+test allocation::resumed_memory_regressions::capacity_counts_preserve_full_width_numeric_identity_without_wide_alignment ... ok
+test allocation::ordered::tests::associations_survive_rotations_deletions_and_vacant_slot_reuse ... ok
+test allocation::resumed_memory_regressions::failed_array_allocation_refunds_only_the_replacement_layout ... ok
+test allocation::resumed_memory_regressions::resume_preserves_original_payload_during_refused_buffer_growth ... ok
+test allocation::shared::buffers::tests::overflowing_layout_and_refused_birth_leave_the_original_account_empty ... ok
+test allocation::shared::buffers::tests::packed_destinations_preserve_disjoint_ranges_and_immutable_clones ... ok
+test allocation::shared::buffers::tests::independent_ranges_mutate_concurrently_while_a_clone_keeps_the_array_alive ... ok
+test allocation::shared::tests::allocation_refusal_never_invokes_payload_factory ... ok
+test allocation::shared::tests::checked_clone_refuses_without_wrapping_count ... ok
+test allocation::shared::tests::factory_constructs_once_and_shared_clones_do_not_repeat_it ... ok
+test allocation::shared::tests::moving_an_unpin_owner_preserves_a_non_unpin_payload_address ... ok
+test allocation::shared::tests::null_allocator_refusal_drops_input_once ... ok
+test allocation::shared::tests::projected_view_retains_the_original_owner_through_move_and_last_drop ... ok
+test allocation::shared::tests::last_owner_drops_payload_once_across_threads ... ok
+test allocation::shared::tests::shallow_clone_keeps_original_payload_live ... ok
+test allocation::shared::tests::zero_sized_and_overaligned_payloads_keep_valid_layouts ... ok
+test allocation::ordered::tests::wide_sorted_lookup_does_not_degrade_to_quadratic_work ... ok
+test allocation::ordered::tests::ordered_ranges_and_crossing_walks_match_independent_ordered_oracle ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 287 filtered out; finished in 0.00s
+

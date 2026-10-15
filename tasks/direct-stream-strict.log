@@ -1,0 +1,102 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:255:41
+    |
+255 | ...                   dataset.quads_for_pattern(
+    |                       ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:268:57
+    |
+268 | ...                   dataset.reifier_quads_of(subject)
+    |                       ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:277:65
+    |
+277 | ...                   dataset.reifier_quads_in_graph(
+    |                       ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:294:57
+    |
+294 | ...                   dataset
+    |                       ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:310:65
+    |
+310 | ...                   dataset.annotation_quads_in_graph(
+    |                       ^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:255:41
+    |
+255 | ...                   dataset.quads_for_pattern(
+    |                       ^^^^^^^ not found in this scope
+    |
+note: function `crate::describe::tests::dataset` exists but is inaccessible
+   --> crates/rdf-core/src/describe.rs:576:5
+    |
+576 |     fn dataset(quads: &[RdfQuad]) -> Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:268:57
+    |
+268 | ...                   dataset.reifier_quads_of(subject)
+    |                       ^^^^^^^ not found in this scope
+    |
+note: function `crate::describe::tests::dataset` exists but is inaccessible
+   --> crates/rdf-core/src/describe.rs:576:5
+    |
+576 |     fn dataset(quads: &[RdfQuad]) -> Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:277:65
+    |
+277 | ...                   dataset.reifier_quads_in_graph(
+    |                       ^^^^^^^ not found in this scope
+    |
+note: function `crate::describe::tests::dataset` exists but is inaccessible
+   --> crates/rdf-core/src/describe.rs:576:5
+    |
+576 |     fn dataset(quads: &[RdfQuad]) -> Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:294:57
+    |
+294 | ...                   dataset
+    |                       ^^^^^^^ not found in this scope
+    |
+note: function `crate::describe::tests::dataset` exists but is inaccessible
+   --> crates/rdf-core/src/describe.rs:576:5
+    |
+576 |     fn dataset(quads: &[RdfQuad]) -> Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:310:65
+    |
+310 | ...                   dataset.annotation_quads_in_graph(
+    |                       ^^^^^^^ not found in this scope
+    |
+note: function `crate::describe::tests::dataset` exists but is inaccessible
+   --> crates/rdf-core/src/describe.rs:576:5
+    |
+576 |     fn dataset(quads: &[RdfQuad]) -> Arc<RdfDataset> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0433]: cannot find type `D` in this scope
+   --> crates/rdf-core/src/ir/segmented/query/view.rs:245:67
+    |
+245 | ...                   let matches = move |row: &QuadIds<D::Id>| {
+    |                                                         ^ use of undeclared type `D`
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `purrdf-core` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-core` (lib test) due to 6 previous errors

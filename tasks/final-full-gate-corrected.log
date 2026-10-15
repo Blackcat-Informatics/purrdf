@@ -1,0 +1,40 @@
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/json)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/entail)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/columnar)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/mime)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/conformance-kit)
+error: temporary with significant `Drop` can be early dropped
+    --> crates/rdf-core/src/ir/segmented/session.rs:1731:17
+     |
+1730 | /         {
+1731 | |             let state = lock_read_state(&session.state);
+     | |                 ^^^^^
+1732 | |             let buffers = state.requests.capacity() * size_of::<SegmentedRequest>()
+1733 | |                 + state.cache.capacity() * size_of::<CacheEntry>();
+...    |
+1737 | |             );
+1738 | |         }
+     | |_________- temporary `state` is currently being dropped at the end of its contained scope
+     |
+     = note: this might lead to unnecessary resource contention
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+     = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+     |
+1733 ~                 + state.cache.capacity() * size_of::<CacheEntry>();
+1734 +             drop(state);
+     |
+
+error: could not compile `purrdf-core` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+make: *** [Makefile:94: check] Error 101

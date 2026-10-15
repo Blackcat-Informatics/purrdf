@@ -1,0 +1,15 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 37.31s
+     Running tests/segmented_query.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-sparql-eval/75e071c550c35b0c/out/segmented_query-75e071c550c35b0c)
+
+running 1 test
+claims=2000 terms=6260 pack_bytes=80373 image_bytes=1777664
+claims=2000 limit_touched=21 requests=280 io_bytes=122752 peak_bytes=312273
+claims=2000 count_touched=4258 requests=7410 io_bytes=3248544 peak_bytes=2016413
+claims=200000 terms=600260 pack_bytes=9291797 image_bytes=171057152
+claims=200000 limit_touched=21 requests=27710 io_bytes=7511040 peak_bytes=1347857
+claims=200000 count_touched=400258 requests=1818303 io_bytes=492867072 peak_bytes=193296356
+test persisted_reifier_limit_bounds_touched_terms_and_full_count_matches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 11.40s
+

@@ -1,0 +1,61 @@
+# Prior art — issue #551: Segmented stack queries are quadratic in terms touched: Memory::reserve grows by one with a full copy
+
+Assembled by `stagectl brief`. Every hash and path below came from this
+repository; nothing here is recalled or inferred. Read the Coverage
+section at the bottom before concluding anything is absent — an empty
+section can mean 'nothing found' or 'could not look'.
+
+## Governing ADRs
+
+The issue cites no ADRs.
+
+## Linked issues (2-hop `#N` crawl)
+
+- #544: Return typed capacity failures and add sparse segmented dataset stacks  [MERGED]  (mentions)
+- #490: Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text  [CLOSED]  (2-hop)
+- #495: Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment  [CLOSED]  (2-hop)
+
+## Prior attempts at this issue
+
+Commits citing it (including inside squash merges):
+
+- None found.
+
+Other branches named for it:
+
+- None.
+
+PRs citing it:
+
+- #552: Bound segmented query growth and stop completed LIMIT scans  [OPEN]  (this stage's own PR)
+
+## Related items on the forge
+
+- #496: Benchmarks: measured evidence at 10^8-10^9 triples, including a reifier-heavy RDF 1.2 claims workload  [OPEN]
+- #490: Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text  [CLOSED]
+- #495: Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment  [CLOSED]
+- #508: sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN  [CLOSED]
+- #425: Keep general semantic coverage native and focus existing WASM execution on target behavior  [CLOSED]
+- #375: Prep v3.0 release  [CLOSED]
+
+## Recurrence
+
+Counted from `GhpRsq-Defect-Class` trailers — these are tallies, not estimates:
+
+- `none`: 23 prior instance(s)
+- `performance`: 3 prior instance(s)
+- `semantic-identity-loss`: 2 prior instance(s)
+- `bug`: 1 prior instance(s)
+
+## Coverage
+
+What was searched, and what was not:
+
+- issue #551 + 4 comment(s) via github
+- link crawl: 3 issue(s) within 2 hop(s) of `#N` references
+- forge search on ['Segmented', 'stack', 'queries']: 6 other item(s)
+- GhpRsq-Defect-Class trailers: 4 distinct class(es) in the last 200 commits
+- prior attempts: 0 commit(s) citing #551 (second parents walked), 0 other branch(es) named for it
+- PRs citing #551: 1
+- requirement candidates: 5 line(s); 3 comment(s) matched no rule
+- referenced artifacts: 5 path(s) (4 on disk), 19 identifier(s), 1 workspace package(s), 0 URL(s)

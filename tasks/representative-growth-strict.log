@@ -1,0 +1,53 @@
+    Blocking waiting for file lock on build directory
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/hash)
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+   Compiling libc v0.2.186
+    Checking cpufeatures v0.3.0
+    Checking hybrid-array v0.4.15
+    Checking cfg-if v1.0.4
+    Checking regex-automata v0.4.14
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/lex)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+    Checking regex v1.12.4
+    Checking digest v0.11.3
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/xsd)
+    Checking sha2 v0.11.0
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/deflate)
+    Checking hashbrown v0.17.1
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/alloc-probe)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/stack)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/cdt)
+error: temporary with significant `Drop` can be early dropped
+   --> crates/rdf-core/src/ir/segmented/query.rs:467:17
+    |
+457 |           for id in &ids {
+    |  ________________________-
+458 | |             let previous = lock_read_state(&query.identities)
+459 | |                 .representatives
+460 | |                 .capacity();
+...   |
+467 | |             let identities = lock_read_state(&query.identities);
+    | |                 ^^^^^^^^^^
+...   |
+472 | |         }
+    | |_________- temporary `identities` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+    = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+    |
+469 ~                 copied += identities.representatives.len() - 1;
+470 +                 drop(identities);
+    |
+
+error: could not compile `purrdf-core` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

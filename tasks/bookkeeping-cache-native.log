@@ -1,0 +1,13 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/text)
+    Finished `test` profile [optimized] target(s) in 28.15s
+     Running tests/physical_shapes.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-text/4c8926fa3987b9d1/out/physical_shapes-4c8926fa3987b9d1)
+
+running 1 test
+test cache_refusal_keeps_previous_owner ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.02s
+

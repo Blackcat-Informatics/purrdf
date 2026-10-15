@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 4m 16s
+     Running unittests src/lib.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::segmented::session::operation_tests::escaped_request_retains_its_identity_and_original_charge ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1344 filtered out; finished in 0.00s
+

@@ -1,0 +1,15 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 11s
+     Running unittests src/lib.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 7 tests
+test ir::segmented::session::operation_tests::fault_between_ready_and_block_lock_preserves_the_first_cause ... ok
+test ir::segmented::session::operation_tests::escaped_request_retains_its_identity_and_original_charge ... ok
+test ir::segmented::session::operation_tests::composed_sources_share_cache_admission_and_qualified_requests ... ok
+test ir::segmented::session::operation_tests::reader_buffer_growth_reclaims_unpinned_blocks_before_refusal ... ok
+test ir::segmented::session::operation_tests::workspace_outlives_session_with_original_budget_control_charge ... ok
+test ir::segmented::session::operation_tests::second_source_exhaustion_is_first_fault_for_every_session ... ok
+test ir::segmented::session::operation_tests::cache_slot_growth_counts_the_pending_block_before_allocating ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1341 filtered out; finished in 0.00s
+

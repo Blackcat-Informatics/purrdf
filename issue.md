@@ -1,0 +1,191 @@
+# Issue #551: Segmented stack queries are quadratic in terms touched: Memory::reserve grows by one with a full copy
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+## Summary
+
+Querying a persisted segmented image of a realistic size never returns: interning each newly touched term copies the whole query-local representative table, so a query's cost is quadratic in the terms it touches. Even `LIMIT 10` doesn't return, because the query touches far more terms than it emits.
+
+Found while measuring Katamari's restart cost against purrdf's segmented snapshots (`main` at `541427dc2`, #544).
+
+## Repro shape
+
+- 200,000 RDF 1.2 claims, synthetic: each one is a reifier (`rdf:reifies` a triple term) plus its annotations. Projected into one `RdfDatasetBuilder`: 600,263 terms.
+- Frozen, `PackBuilder::build_view_bytes`, then `SegmentedImage::from_pack_v1` with `SegmentedBuildLimits::new(u32::MAX - 1, u32::MAX, u32::MAX, 4096, 32)`. Pack 25,409,077 B; image 190,832,640 B.
+- Fresh process: `SegmentedReceipt::from_authenticated_bytes`, a file-backed `SegmentedProvider` (`read_exact_at`), one `SegmentedLayer` (no removals or declarations), `SegmentedStack::publish`, `snapshot().query(limits)`, then `NativeSparqlEngine::query_fallible_view`.
+
+## What happens
+
+| Step | Result |
+|---|---|
+| layer, publish, snapshot and header open | under 1 ms; 34 reads, 9,216 B; RSS ~10 MB. Excellent. |
+| `SELECT ?r WHERE { ?r rdf:reifies ?t } LIMIT 10` | no answer within 300 s (two runs) |
+| `SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }` | no answer within 300 s; also killed at 1,200 s |
+
+`perf record -F 199 -e cycles:u --call-graph=dwarf` for 60 s during the `LIMIT 10` query:
+
+- `Vec<purrdf_core::ir::segmented::query::Representative>::append_elements`: 84-85% inclusive
+- `SegmentedSession::block`: 11.2% self
+- everything else: under 1%
+
+## Cause
+
+- `crates/rdf-core/src/ir/segmented/query.rs:228-232`: on each new term, `memory.reserve(representatives, representatives.len() + 1)`, and `reserve_table_with_memory(values, next, ..)` likewise.
+- `crates/lex/src/allocation.rs:503-526` (`Memory::reserve`): when `required > capacity`, it does `try_reserve_exact(required)` into a new `Vec` and then `replacement.append(values)`. That's a full copy at every growth step, growing by exactly one element.
+
+So n touched terms cost O(n^2) element copies. The hash tables reserved alongside may have the same shape.
+
+## Suggested direction
+
+- Geometric growth inside `Memory::reserve`, e.g. reserve `max(required, 2 * capacity)`, admitting the larger layout through the same accounting. The admission stays exact; the growth step stops being one element.
+- Separately: should `LIMIT 10` over a single pattern need to intern every term the scan passes? A streaming page that touches about 10 representatives would make first results independent of image size.
+
+## Two related observations
+
+1. **Publish admission.** With `SegmentedReadLimits` live bytes at 256 MiB, `SegmentedStack::publish` of this single 191 MB layer refuses with `Residency { requested: 2400215288, limit: 268435456 }`. With 4 GiB it succeeds, and RSS stays around 10 MB. Is the 2.4 GB a worst-case admission rather than real use? If so, a caller that has to pick a budget can't distinguish the two.
+2. **Image size.** At 4 KiB blocks of 32 records, the segmented image is 7.5x the compact pack of the same data (954 B vs 127 B per claim). We'll measure other block sizes on our side. If you know which part of the layout dominates (block authentication, dictionary blocks, the three orders), that would help us pick sizes.
+
+The harness is Katamari's `crates/katamari-unlock/tests/idle_cost.rs`, test `the_segmented_graph`. We can share the exact construction code or run a candidate fix against the same 200k image.
+
+
+## Comments (4)
+
+### paudley — 2026-10-14T19:45:32Z
+
+# Segmented query growth and physical admission
+
+The issue body and all comments are captured by the Stage brief. Repository law,
+baseline and goals apply. Work starts from landed main in the assigned checkout.
+No subagents, dependencies, alternate runners, custom targets or timing acceptance.
+This is the implementation owner's plan, not an independent review.
+
+Source diagnosis: representative interning requests exact length-plus-one on every
+insert. The shared allocation home already provides `reserve_for_push` and checked
+`growth_capacity`. Reuse that amortized path at the incremental caller rather than
+changing exact reservations used by known-size construction throughout the tree.
+The hash table already checks capacity and rounds bucket layouts; measure its
+behavior independently. No duplicate allocation implementation is warranted.
+
+## Task 1: Bounded representative growth
+
+Extend the existing retained-term ownership control with 4096 distinct production
+imports. Count actual representative capacity transitions and copied elements.
+Require at most 12 growths and fewer than twice the population in copied entries.
+Capture the original failing control before wiring the amortized home. Verify
+typed refusal, original contents, retained result ownership and final release,
+then native and actual portable affected execution. Review real callers locally,
+commit and push normally. Do not claim independent review.
+
+## Task 2: Real persisted query consumption
+
+Use existing segmented test/provider and SPARQL homes to reproduce 200,000 RDF 1.2
+claims, reifiers and annotations, pack conversion and a file-backed authenticated
+image. Run actual fallible engine LIMIT and COUNT against the eager dataset.
+Record touched terms, reads/bytes, allocations and live bytes. Diagnose and repair
+unnecessary full-input consumption for the single-pattern LIMIT while preserving
+chronological removals, bags, identities and first-error behavior. Use fixed-work
+instructions when needed; no time-derived criteria.
+
+## Task 3: Publish admission and image explanation
+
+Reproduce 256 MiB refusal. Session construction currently reserves arrays from
+maximum request/cache counts. Confirm their concrete contribution, then grow
+actual retained bookkeeping under the existing original admission rather than
+preallocating permitted future work. Keep hard limits and authentication intact.
+Measure full image bytes by block type, padding, proofs, dictionary and orders at
+the reported 4096-byte/32-record settings and supported alternatives. Provide
+verified layout guidance and fix demonstrated defects; do not invent a ratio.
+
+## Task 4: Complete delivery
+
+Run focused affected consumers during implementation and the required final gate
+after source settles. Assess all issue observations and material review findings;
+publish the complete PR and satisfy hosted checks. Integrate only through ghprsq,
+verify closure and mirror, archive evidence and remove the delivery branch. Shared
+allocation changes must preserve existing exact-capacity conversion and ownership
+contracts. The large-scale issue consumes this repair but does not block it.
+
+
+### paudley — 2026-10-14T19:50:39Z
+
+# Representative growth checkpoint
+
+The original control reproduced 4096 replacements for 4096 imported identities.
+Commit `dc9741fcc` changes the sole incremental representative caller to the
+existing checked amortized reserve_for_push home. Exact reservations throughout
+the workspace remain unchanged. No duplicate helper or allocation path is added.
+
+Actual native owner regression passes: at most 12 capacity transitions and fewer
+than 8192 copied entries, with original retained-term ownership intact. The
+existing public identity control passes natively and on actual WASM, importing
+4096 values with under 16 MiB cumulative requested allocation, zero final retained
+bytes and peak within the caller's live-byte limit. Memoized zero-allocation hits
+and sticky failed import pass. Warning-denied all-target Clippy passes after
+explicit last-use guard release. Normal commit signing/hooks passed.
+
+The unsuccessful portable unit-harness invocation remains recorded; the correct
+existing portable integration runner passes without a tooling change. This is
+an owner assessment, not an independent review or complete issue qualification.
+The full persisted consumer, LIMIT consumption, publish admission and image byte
+breakdown remain active tasks in plan.md. No PR, merge or closure is claimed.
+
+
+### paudley — 2026-10-14T20:01:57Z
+
+# Demand-grown request and cache admission
+
+Published checkpoint `b5db98eb7` removes the request/cache maximum arrays from
+session opening. Their buffers now grow through the existing QueryStorage and
+Memory admission home. The original typed causes survive. Request limits are
+checked against counts rather than incidental vector capacity. Cache capacity
+growth is admitted before block birth, and its grant has no State backlink,
+avoiding recursive lock acquisition. State fields destroy both buffers before
+the original storage reservation is dropped.
+
+All 14 existing segmented-stack controls pass. The extended 1000-source header
+control also opens with maximum u32 request/cache ceilings under 256 MiB, with
+under 16 MiB cumulative allocator traffic and peak, and zero retained bytes.
+That registered control passes on actual WASM. The four native session owner
+controls pass: escaped request identity, shared request/cache/source admission,
+first source exhaustion and workspace lifetime after session destruction.
+Warning-denied all-target Clippy passes. Normal commit/push hooks passed.
+
+These receipts establish physical demand growth and preserved ownership; they
+do not establish the full 200,000-claim consumer or explain its image layout.
+Those remain active tasks. This is owner source assessment, not independent
+review or whole-issue completion. No runner or host tooling changed.
+
+
+### paudley — 2026-10-14T21:32:16Z
+
+# Persisted query and block-layout repair
+
+Published `47725646e` stops statement-layer traversal through the existing shared
+ControlFlow consumer, preserves original source-local addresses for same-source
+probes, and uses indexed reifier/annotation membership. The native file provider
+is consolidated with the old example into one implementation. Resident image
+Debug output is bounded. No dependency or Cargo feature is added.
+
+Actual file-backed tests pass at 2000 and 200,000 claims, under a 256 MiB query
+budget. The large source has 600,260 terms. LIMIT 10 touches 21 representatives;
+COUNT independently returns 400,000 rows. Three fitting layouts preserve answers:
+
+- 4096 bytes / 32 records: image 171,057,152 bytes; COUNT peak 193,296,356 bytes.
+- 4096 / 64: image 92,127,232 bytes; COUNT peak 193,296,356 bytes.
+- 8192 / 128: image 90,906,624 bytes; COUNT peak 168,261,604 bytes.
+
+The 4096 / 128 neighbor explicitly refuses both populations because its encoded
+record block does not fit. The measured byte-kind breakdown identifies the two
+dictionary indexes as about 90% of the original image; authentication accounts
+for 4,194,304 bytes. The sizing guide describes these measured inputs and their
+limits without a universal ratio or timing claim.
+
+All fourteen actual portable segmented-stack controls, strict affected all-target
+compilation, helper hygiene, metadata generation and normal commit/push hooks
+pass. The mandatory final whole gate is running. No whole-gate PASS, complete PR
+qualification, merge or issue closure is claimed. Original failures remain
+retained, including the losslessly compressed oversized Debug receipt.
+
+

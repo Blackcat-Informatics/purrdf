@@ -1,0 +1,76 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 30,
+      "rules": [
+        "modal"
+      ],
+      "text": "- `crates/lex/src/allocation.rs:503-526` (`Memory::reserve`): when `required > capacity`, it does `try_reserve_exact(required)` into a new `Vec` and then `replacement.append(values)`. That's a full copy at every growth step, growing by exactly one element.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 36,
+      "rules": [
+        "modal"
+      ],
+      "text": "- Geometric growth inside `Memory::reserve`, e.g. reserve `max(required, 2 * capacity)`, admitting the larger layout through the same accounting. The admission stays exact; the growth step stops being one element.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 37,
+      "rules": [
+        "modal"
+      ],
+      "text": "- Separately: should `LIMIT 10` over a single pattern need to intern every term the scan passes? A streaming page that touches about 10 representatives would make first results independent of image size.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "C1.1",
+      "line": 47,
+      "rules": [
+        "modal"
+      ],
+      "text": "Run focused affected consumers during implementation and the required final gate",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-14T19:45:32Z"
+    },
+    {
+      "id": "C1.2",
+      "line": 51,
+      "rules": [
+        "modal"
+      ],
+      "text": "allocation changes must preserve existing exact-capacity conversion and ownership",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-14T19:45:32Z"
+    }
+  ],
+  "silent_comments": [
+    {
+      "comment": 2,
+      "author": "paudley",
+      "date": "2026-10-14T19:50:39Z"
+    },
+    {
+      "comment": 3,
+      "author": "paudley",
+      "date": "2026-10-14T20:01:57Z"
+    },
+    {
+      "comment": 4,
+      "author": "paudley",
+      "date": "2026-10-14T21:32:16Z"
+    }
+  ]
+}

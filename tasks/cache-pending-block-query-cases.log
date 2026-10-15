@@ -1,0 +1,32 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 32s
+     Running tests/segmented_query.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-sparql-eval/75e071c550c35b0c/out/segmented_query-75e071c550c35b0c)
+
+running 22 tests
+test chronological_segmented_provider_failure_preserves_original_final_evidence ... ok
+test bounded_ask_construct_describe_match_resident_across_public_entries ... ok
+test bounded_virtual_streams_and_empty_graph_declarations_match_resident ... ok
+test construct_mint_prefix_completes_and_tight_refusal_preserves_destination ... ok
+test dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal ... ok
+test configured_explain_matches_resident_and_retains_last_owner ... ok
+test explain_tight_capacity_releases_native_preparation_and_reporting ... ok
+test fallible_explain_measures_the_segmented_store_within_its_certified_reservation ... ok
+test fallible_explain_preserves_a_segmented_provider_fault_over_a_fired_stop ... ok
+test governed_reporting_refuses_independently_tight_capacity ... ok
+test interned_graph_retention_keeps_original_account_until_last_extraction ... ok
+test bounded_select_algebra_matches_resident_bags_across_public_entries ... ok
+test long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation ... ok
+test duplicate_computed_payload_releases_temporaries_and_retains_extracted_output ... ok
+test ordered_query_matches_resident_and_tiny_capacity_refuses ... ok
+test persistent_id_binding_retains_original_admission_and_refuses_atomically ... ok
+test raw_evaluator_cannot_bypass_a_bounded_source_ownership_capability ... ok
+test scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption ... ok
+test prepared_governed_cold_sessions_match_text_receipts_and_release_reporting ... ok
+test selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger ... ok
+test request_metadata_and_prefix_match_resident_and_refuse_tight_capacity ... ok
+test chronological_segmented_stack_matches_eager_raw_and_prepared_queries ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.44s
+

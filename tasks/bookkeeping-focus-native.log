@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/text)
+    Finished `test` profile [optimized] target(s) in 2m 40s
+     Running tests/bounded_text_focus.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-text/a44e356ae12e44cb/out/bounded_text_focus-a44e356ae12e44cb)
+
+running 1 test
+test native_text_search_occurrence_and_focus_keep_exact_answers_and_original_owners ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

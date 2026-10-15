@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 17s
+     Running tests/segmented_stack.rs (/opt/.cargo/03/98038387619cdf/wasm32-unknown-unknown/debug/build/purrdf-core/88eff25baed8444c/out/segmented_stack-88eff25baed8444c.wasm)
+
+running 14 tests
+test generated_chronological_publications_match_eager_typed_seals ... ok
+test empty_certified_streams_do_not_probe_dictionary_for_bound_head_row ... ok
+test persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last ... ok
+test chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs ... ok
+test effective_annotation_classification_uses_original_chronology_and_first_occurrence ... ok
+test removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view ... ok
+test fallible_evidence_pins_complete_publication_and_immutable_request_prefix ... ok
+test thousand_distinct_sources_open_only_headers_under_one_request_budget ... ok
+test tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation ... ok
+test query_ids_touch_only_values_and_preserve_source_scopes ... ok
+test memoized_term_hits_allocate_nothing_and_failed_import_latches ... ok
+test admitted_identity_walk_releases_spill_and_preserves_hash_law ... ok
+test final_query_readiness_checks_untouched_evicted_descriptors ... ok
+test resident_head_copy_refuses_under_the_shared_operation_grant ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+

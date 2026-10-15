@@ -1,0 +1,384 @@
+diff --git crates/rdf-core/src/ir/segmented/query/view.rs crates/rdf-core/src/ir/segmented/query/view.rs
+index 74f328aa5..271f1e46a 100644
+--- crates/rdf-core/src/ir/segmented/query/view.rs
++++ crates/rdf-core/src/ir/segmented/query/view.rs
+@@ -106,11 +106,26 @@ impl SegmentedStackQuery<'_> {
+     fn translate_pattern<D: DatasetView>(
+         &self,
+         source: &D,
++        origin: SegmentedStackSource,
+         pattern: ProbePattern<GlobalTermId>,
++        local: impl Fn(u64) -> Result<D::Id, SegmentedError>,
+         error: impl Fn(D::ReadError) -> SegmentedError,
+     ) -> Result<Option<ProbePattern<D::Id>>, SegmentedError> {
+         let convert = |id: Option<GlobalTermId>| {
+             id.map(|id| {
++                // IDs originally imported from this source already carry its
++                // exact local address. Do not materialize and reverse-search
++                // that same value again for each annotation membership probe.
++                let original = {
++                    let identities = lock_read_state(&self.identities);
++                    usize::try_from(id.index())
++                        .ok()
++                        .and_then(|index| identities.representatives.get(index))
++                        .map(|representative| representative.term)
++                };
++                if let Some(term) = original.filter(|term| term.source == origin) {
++                    return local(term.index).map(Some);
++                }
+                 let value = self.term_value(id)?;
+                 source.term_id_by_value(value.value()).map_err(&error)
+             })
+@@ -142,65 +157,38 @@ impl SegmentedStackQuery<'_> {
+         }))
+     }
+ 
+-    fn rows_from<'a, D: DatasetView>(
++    fn rows_from<'a, D: DatasetView, R: Iterator<Item = QuadIds<D::Id>> + 'a>(
+         &'a self,
+         dataset: &'a D,
+         origin: SegmentedStackSource,
+-        stream: Stream,
++        rows: impl Fn(ProbePattern<D::Id>) -> R + 'a,
+         pattern: ProbePattern<GlobalTermId>,
+-        index: impl Fn(D::Id) -> u64 + Copy + 'a,
++        ids: (
++            impl Fn(D::Id) -> u64 + Copy + 'a,
++            impl Fn(u64) -> Result<D::Id, SegmentedError>,
++        ),
+         error: impl Fn(D::ReadError) -> SegmentedError,
+     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
++        let (index, local) = ids;
+         let pattern = self
+-            .translate_pattern(dataset, pattern, error)
++            .translate_pattern(dataset, origin, pattern, local, error)
+             .or_else(|error| self.operation.fail(error))
+             .ok()
+             .flatten();
+-        pattern
+-            .into_iter()
+-            .flat_map(move |pattern| {
+-                let matches = move |row: &QuadIds<D::Id>| {
+-                    pattern.s.is_none_or(|id| row.s == id)
+-                        && pattern.p.is_none_or(|id| row.p == id)
+-                        && pattern.o.is_none_or(|id| row.o == id)
+-                };
+-                (stream == Stream::Ordinary)
+-                    .then_some(())
+-                    .into_iter()
+-                    .flat_map(move |()| {
+-                        dataset.quads_for_pattern(pattern.s, pattern.p, pattern.o, pattern.g)
+-                    })
+-                    .chain(
+-                        (stream == Stream::Reifier)
+-                            .then_some(())
+-                            .into_iter()
+-                            .flat_map(move |()| {
+-                                dataset.reifier_quads_in_graph(pattern.g).filter(matches)
+-                            }),
+-                    )
+-                    .chain(
+-                        (stream == Stream::Annotation)
+-                            .then_some(())
+-                            .into_iter()
+-                            .flat_map(move |()| {
+-                                dataset.annotation_quads_in_graph(pattern.g).filter(matches)
+-                            }),
+-                    )
+-            })
+-            .map_while(move |row| {
+-                let translate = || {
+-                    Ok(QuadIds {
+-                        s: self.intern_source_term(origin, index(row.s))?,
+-                        p: self.intern_source_term(origin, index(row.p))?,
+-                        o: self.intern_source_term(origin, index(row.o))?,
+-                        g: row
+-                            .g
+-                            .map(|id| self.intern_source_term(origin, index(id)))
+-                            .transpose()?,
+-                    })
+-                };
+-                translate().or_else(|error| self.operation.fail(error)).ok()
+-            })
++        pattern.into_iter().flat_map(rows).map_while(move |row| {
++            let translate = || {
++                Ok(QuadIds {
++                    s: self.intern_source_term(origin, index(row.s))?,
++                    p: self.intern_source_term(origin, index(row.p))?,
++                    o: self.intern_source_term(origin, index(row.o))?,
++                    g: row
++                        .g
++                        .map(|id| self.intern_source_term(origin, index(id)))
++                        .transpose()?,
++                })
++            };
++            translate().or_else(|error| self.operation.fail(error)).ok()
++        })
+     }
+ 
+     fn physical_rows(
+@@ -224,9 +212,17 @@ impl SegmentedStackQuery<'_> {
+                 self.rows_from(
+                     source,
+                     origin,
+-                    stream,
++                    move |pattern| {
++                        source.stream(
++                            stream as usize,
++                            (pattern.s, pattern.p, pattern.o, pattern.g),
++                        )
++                    },
+                     pattern,
+-                    GlobalTermId::index,
++                    (GlobalTermId::index, |index| {
++                        GlobalTermId::from_index(index)
++                            .map_err(|error| StorageError::from(error).into())
++                    }),
+                     |error| error,
+                 )
+             })
+@@ -242,9 +238,94 @@ impl SegmentedStackQuery<'_> {
+                             }
+                     })
+                     .flat_map(move |source| {
+-                        self.rows_from(source, origin, stream, pattern, local_index, |error| {
+-                            match error {}
+-                        })
++                        self.rows_from(
++                            source,
++                            origin,
++                            move |pattern| {
++                                let dataset = source;
++                                let matches = move |row: &QuadIds| {
++                                    pattern.s.is_none_or(|id| row.s == id)
++                                        && pattern.p.is_none_or(|id| row.p == id)
++                                        && pattern.o.is_none_or(|id| row.o == id)
++                                        && pattern.g.matches(row.g)
++                                };
++                                (stream == Stream::Ordinary)
++                                    .then_some(())
++                                    .into_iter()
++                                    .flat_map(move |()| {
++                                        dataset.quads_for_pattern(
++                                            pattern.s, pattern.p, pattern.o, pattern.g,
++                                        )
++                                    })
++                                    .chain(
++                                        (stream == Stream::Reifier)
++                                            .then_some(())
++                                            .into_iter()
++                                            .flat_map(move |()| {
++                                                pattern
++                                                    .s
++                                                    .into_iter()
++                                                    .flat_map(move |subject| {
++                                                        dataset.reifier_quads_of(subject)
++                                                    })
++                                                    .chain(
++                                                        pattern
++                                                            .s
++                                                            .is_none()
++                                                            .then_some(())
++                                                            .into_iter()
++                                                            .flat_map(move |()| {
++                                                                dataset.reifier_quads_in_graph(
++                                                                    pattern.g,
++                                                                )
++                                                            }),
++                                                    )
++                                                    .filter(matches)
++                                            }),
++                                    )
++                                    .chain(
++                                        (stream == Stream::Annotation)
++                                            .then_some(())
++                                            .into_iter()
++                                            .flat_map(move |()| {
++                                                pattern
++                                                    .s
++                                                    .into_iter()
++                                                    .flat_map(move |subject| {
++                                                        dataset
++                                                            .annotations_of_with_graph(subject)
++                                                            .map(move |(p, o, g)| QuadIds {
++                                                                s: subject,
++                                                                p,
++                                                                o,
++                                                                g,
++                                                            })
++                                                    })
++                                                    .chain(
++                                                        pattern
++                                                            .s
++                                                            .is_none()
++                                                            .then_some(())
++                                                            .into_iter()
++                                                            .flat_map(move |()| {
++                                                                dataset.annotation_quads_in_graph(
++                                                                    pattern.g,
++                                                                )
++                                                            }),
++                                                    )
++                                                    .filter(matches)
++                                            }),
++                                    )
++                            },
++                            pattern,
++                            (local_index, |index| {
++                                let index = u32::try_from(index)
++                                    .map_err(|_| SegmentedError::AddressExhausted)?;
++                                TermId::from_index(index)
++                                    .map_err(|error| StorageError::from(error).into())
++                            }),
++                            |error| match error {},
++                        )
+                     }),
+             )
+     }
+diff --git crates/rdf-core/src/ir/segmented/session.rs crates/rdf-core/src/ir/segmented/session.rs
+index 6c762c6eb..560b14912 100644
+--- crates/rdf-core/src/ir/segmented/session.rs
++++ crates/rdf-core/src/ir/segmented/session.rs
+@@ -278,6 +278,10 @@ struct State {
+     io_bytes: u64,
+     evictions: u64,
+     hash: Hasher,
++    // Buffers die before their original live-byte grant is released. This
++    // reservation has no cache backlink: resizing while holding State must not
++    // lock State again.
++    storage: super::query::QueryStorage,
+ }
+ 
+ // Workspace growth and block loading evict through the same account. A pinned
+@@ -526,33 +530,19 @@ impl SegmentedOperation {
+     pub(super) fn new(limits: SegmentedReadLimits) -> Result<Self, SegmentedError> {
+         let cache_count =
+             usize::try_from(limits.cache_blocks).map_err(|_| SegmentedError::AddressExhausted)?;
+-        let requests =
+-            usize::try_from(limits.requests).map_err(|_| SegmentedError::AddressExhausted)?;
+         if cache_count == 0 {
+             return Err(SegmentedError::PinnedBlocks);
+         }
+         let base_bytes =
+             u64::try_from(size_of::<Self>() + size_of::<State>() + size_of::<Budget>() + 192)
+-                .map_err(|_| SegmentedError::AddressExhausted)?
+-                .checked_add(
+-                    u64::from(limits.cache_blocks)
+-                        * u64::try_from(size_of::<CacheEntry>())
+-                            .map_err(|_| SegmentedError::AddressExhausted)?,
+-                )
+-                .and_then(|v| {
+-                    v.checked_add(
+-                        u64::from(limits.requests)
+-                            * u64::try_from(size_of::<SegmentedRequest>()).ok()?,
+-                    )
+-                })
+-                .ok_or(SegmentedError::AddressExhausted)?;
++                .map_err(|_| SegmentedError::AddressExhausted)?;
+         if base_bytes > limits.live_bytes {
+             return Err(SegmentedError::Residency {
+                 requested: base_bytes,
+                 limit: limits.live_bytes,
+             });
+         }
+-        // Reserve before creating the session's heap owners or fixed capacities.
++        // Reserve actual account/control layouts, not permitted future reads.
+         let budget = Arc::new(Budget {
+             state: Mutex::new(Residency {
+                 live: base_bytes,
+@@ -570,8 +560,8 @@ impl SegmentedOperation {
+             base: None,
+         });
+         let state = Arc::new(Mutex::new(State {
+-            cache: Vec::with_capacity(cache_count),
+-            requests: Vec::with_capacity(requests),
++            cache: Vec::new(),
++            requests: Vec::new(),
+             error: None,
+             io_bytes: 0,
+             evictions: 0,
+@@ -580,6 +570,10 @@ impl SegmentedOperation {
+                 hash.update(super::SEGMENTED_REQUESTS_DOMAIN.as_bytes());
+                 hash
+             },
++            storage: super::query::QueryStorage {
++                reservation: budget.reserve(0)?,
++                cause: None,
++            },
+         }));
+         Ok(Self {
+             limits,
+@@ -828,7 +822,9 @@ impl SegmentedSession {
+         position: u64,
+         output: &mut [u8],
+     ) -> Result<(), SegmentedError> {
+-        if state.requests.len() == state.requests.capacity() {
++        if u64::try_from(state.requests.len()).map_err(|_| SegmentedError::AddressExhausted)?
++            >= u64::from(self.limits.requests)
++        {
+             return Err(SegmentedError::EvidenceExhausted);
+         }
+         let bytes = u32::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+@@ -848,6 +844,9 @@ impl SegmentedSession {
+         {
+             return Err(SegmentedError::Corrupt("range escapes certified provider"));
+         }
++        state
++            .storage
++            .run(|memory| memory.reserve_for_push(&mut state.requests))?;
+         state.requests.push(SegmentedRequest {
+             snapshot: self
+                 .identity
+@@ -898,7 +897,9 @@ impl SegmentedSession {
+             .requests
+             .len()
+             .checked_add(needed)
+-            .is_none_or(|count| count > state.requests.capacity())
++            .is_none_or(|count| {
++                u64::try_from(count).map_or(true, |count| count > u64::from(self.limits.requests))
++            })
+         {
+             state.error = Some(SegmentedError::EvidenceExhausted);
+             return Err(SegmentedError::EvidenceExhausted);
+@@ -943,6 +944,11 @@ impl SegmentedSession {
+             .and_then(|v| v.checked_add(overhead))
+             .ok_or(SegmentedError::AddressExhausted)?;
+         self.make_room(&mut state, charge, true)?;
++        let State { cache, storage, .. } = &mut *state;
++        if let Err(error) = storage.run(|memory| memory.reserve_for_push(cache)) {
++            state.error.get_or_insert_with(|| error.clone());
++            return Err(error);
++        }
+         let mut reservation = self.budget.reserve(charge)?;
+         let mut bytes = vec![
+             0_u8;
+@@ -1224,7 +1230,11 @@ impl SegmentedSession {
+         self.header.streams[table].rows != 0
+     }
+ 
+-    fn stream(&self, table: usize, pattern: Pattern) -> QuadIter<'_> {
++    pub(super) fn stream(
++        &self,
++        table: usize,
++        pattern: Pattern,
++    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+         QuadIter {
+             session: self,
+             table,
+@@ -1623,6 +1633,16 @@ impl DatasetView for SegmentedSession {
+     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+         self.stream(1, (None, None, None, GraphMatch::Any))
+     }
++    fn reifier_quads_of(&self, reifier: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
++        self.stream(1, (Some(reifier), None, None, GraphMatch::Any))
++    }
++    fn annotations_of_with_graph(
++        &self,
++        reifier: Self::Id,
++    ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
++        self.stream(2, (Some(reifier), None, None, GraphMatch::Any))
++            .map(|row| (row.p, row.o, row.g))
++    }
+     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+         self.stream(2, (None, None, None, GraphMatch::Any))
+     }

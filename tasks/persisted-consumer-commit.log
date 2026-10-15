@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 85cdcc90511c (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/551-segmented-stack-queries-are-quadratic 47725646e] Stop bounded statement scans and index segmented source probes
+ 14 files changed, 558 insertions(+), 152 deletions(-)
+ create mode 100644 crates/rdf-core/src/ir/segmented/file.rs
+ create mode 100644 docs/design/purrdf-segmented-query-storage.md

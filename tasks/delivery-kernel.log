@@ -1,0 +1,3 @@
+OK: purrdf-core has no PyO3 normal dependency
+python3 scripts/check-layers.py --ring-fence
+OK: `purrdf-hash` has zero runtime dependencies; every runtime dependency of purrdf-deflate, purrdf-ed25519, purrdf-events, purrdf-iri, purrdf-lex, purrdf-testkit, purrdf-xsd is listed in its layers.toml row

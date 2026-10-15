@@ -1,0 +1,41 @@
+{
+  "issue": 551,
+  "branch": "paudley/551-segmented-stack-queries-are-quadratic",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "47725646e241105c0df76233976543865ae66dfe",
+      "subject": "Stop bounded statement scans and index segmented source probes",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "b5db98eb75b2affcc0498b12b4a61b3e2385e97e",
+      "subject": "Admit segmented request and cache buffers as they grow",
+      "date": "2026-10-14"
+    },
+    {
+      "oid": "dc9741fcc7d84cbb98719e1ac2ae035dc92df08e",
+      "subject": "Use admitted amortized growth for segmented term representatives",
+      "date": "2026-10-14"
+    }
+  ],
+  "files": [
+    "crates/rdf-core/examples/segmented_fixture.rs",
+    "crates/rdf-core/src/ir/mod.rs",
+    "crates/rdf-core/src/ir/segmented/file.rs",
+    "crates/rdf-core/src/ir/segmented/mod.rs",
+    "crates/rdf-core/src/ir/segmented/query.rs",
+    "crates/rdf-core/src/ir/segmented/query/view.rs",
+    "crates/rdf-core/src/ir/segmented/session.rs",
+    "crates/rdf-core/src/lib.rs",
+    "crates/rdf-core/tests/segmented_stack.rs",
+    "crates/sparql-eval/src/bgp.rs",
+    "crates/sparql-eval/src/bgp/window.rs",
+    "crates/sparql-eval/src/path_relation.rs",
+    "crates/sparql-eval/src/statement_layer.rs",
+    "crates/sparql-eval/tests/segmented_query.rs",
+    "docs/design/purrdf-segmented-query-storage.md",
+    "helpers-ledger.toml"
+  ],
+  "adrs_touched": []
+}

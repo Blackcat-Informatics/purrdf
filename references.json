@@ -1,0 +1,159 @@
+{
+  "paths": [
+    {
+      "ref": "crates/rdf-core/src/ir/segmented/query.rs:228-232",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/ir/segmented/query.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 436,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "15bc79027 Propagate typed capacity failures through workspace consumers",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views"
+      ]
+    },
+    {
+      "ref": "crates/lex/src/allocation.rs:503-526",
+      "path": "/home/paudley/Active/purrdf/crates/lex/src/allocation.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1229,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "78d32abe0 Keep ordinary evaluator child continuations on admitted worklists",
+        "15bc79027 Propagate typed capacity failures through workspace consumers",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "f49c2f1a5 Carry query evidence and scoped ranked retrieval through physical shapes",
+        "675df1658 Implement native geodesic kernel and physical spatial ownership",
+        "2ce33c668 feat(entail): reason over regular OWL role chains",
+        "c3171c015 Admit complete operational SPARQL storage before allocation"
+      ]
+    },
+    {
+      "ref": "crates/katamari-unlock/tests/idle_cost.rs",
+      "path": "/home/paudley/Active/purrdf/crates/katamari-unlock/tests/idle_cost.rs",
+      "where": "not here; exists in sibling(s): katamari",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/rdf-core/src/ir/segmented/query.rs",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/ir/segmented/query.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 436,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "15bc79027 Propagate typed capacity failures through workspace consumers",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views"
+      ]
+    },
+    {
+      "ref": "crates/lex/src/allocation.rs",
+      "path": "/home/paudley/Active/purrdf/crates/lex/src/allocation.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1229,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "78d32abe0 Keep ordinary evaluator child continuations on admitted worklists",
+        "15bc79027 Propagate typed capacity failures through workspace consumers",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "f49c2f1a5 Carry query evidence and scoped ranked retrieval through physical shapes",
+        "675df1658 Implement native geodesic kernel and physical spatial ownership",
+        "2ce33c668 feat(entail): reason over regular OWL role chains",
+        "c3171c015 Admit complete operational SPARQL storage before allocation"
+      ]
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "main",
+      "files": 2068
+    },
+    {
+      "name": "RdfDatasetBuilder",
+      "files": 505
+    },
+    {
+      "name": "PackBuilder::build_view_bytes",
+      "files": 9
+    },
+    {
+      "name": "SegmentedImage::from_pack_v1",
+      "files": 3
+    },
+    {
+      "name": "SegmentedReceipt::from_authenticated_bytes",
+      "files": 3
+    },
+    {
+      "name": "SegmentedProvider",
+      "files": 11
+    },
+    {
+      "name": "read_exact_at",
+      "files": 0
+    },
+    {
+      "name": "SegmentedLayer",
+      "files": 8
+    },
+    {
+      "name": "SegmentedStack::publish",
+      "files": 0
+    },
+    {
+      "name": "NativeSparqlEngine::query_fallible_view",
+      "files": 0
+    },
+    {
+      "name": "SegmentedSession::block",
+      "files": 0
+    },
+    {
+      "name": "Memory::reserve",
+      "files": 1
+    },
+    {
+      "name": "Vec",
+      "files": 1641
+    },
+    {
+      "name": "SegmentedReadLimits",
+      "files": 23
+    },
+    {
+      "name": "the_segmented_graph",
+      "files": 0
+    },
+    {
+      "name": "reserve_for_push",
+      "files": 13
+    },
+    {
+      "name": "growth_capacity",
+      "files": 6
+    },
+    {
+      "name": "dc9741fcc",
+      "files": 0
+    },
+    {
+      "name": "b5db98eb7",
+      "files": 0
+    }
+  ],
+  "packages": [
+    "purrdf"
+  ],
+  "urls": [],
+  "truncated": []
+}

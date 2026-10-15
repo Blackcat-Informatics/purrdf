@@ -1,0 +1,49 @@
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling typenum v1.20.1
+   Compiling rustversion v1.0.22
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/hash)
+   Compiling bumpalo v3.20.3
+   Compiling hybrid-array v0.4.15
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/lex)
+   Compiling syn v2.0.118
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling digest v0.11.3
+   Compiling once_cell v1.21.4
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/iri)
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/xsd)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-events)
+   Compiling regex v1.12.4
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/deflate)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/alloc-probe)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/testkit)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/cdt)
+    Finished `test` profile [optimized] target(s) in 57.76s
+     Running unittests src/lib.rs (/opt/.cargo/03/98038387619cdf/wasm32-unknown-unknown/debug/build/purrdf-core/b1194e7f2d3990b6/out/purrdf_core-b1194e7f2d3990b6.wasm)
+error: the wasm32 module failed outside any test case:
+RuntimeError: unreachable
+    at purrdf_core-b1194e7f2d3990b6.wasm.__rustc[611f7a7a19d737f7]::__rust_abort (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[10781]:0x9bd920)
+    at purrdf_core-b1194e7f2d3990b6.wasm.__rustc[611f7a7a19d737f7]::__rust_start_panic (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[10765]:0x9bd8c1)
+    at purrdf_core-b1194e7f2d3990b6.wasm.__rustc[611f7a7a19d737f7]::rust_panic (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[10491]:0x9bcb9d)
+    at purrdf_core-b1194e7f2d3990b6.wasm.std[20479c4d650b61f9]::panicking::panic_with_hook (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[6748]:0x951b91)
+    at purrdf_core-b1194e7f2d3990b6.wasm.std[20479c4d650b61f9]::panicking::panic_handler::{closure#0} (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[8249]:0x99528a)
+    at purrdf_core-b1194e7f2d3990b6.wasm.std[20479c4d650b61f9]::sys::backtrace::__rust_end_short_backtrace::<std[20479c4d650b61f9]::panicking::panic_handler::{closure#0}, !> (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[10711]:0x9bd706)
+    at purrdf_core-b1194e7f2d3990b6.wasm.__rustc[611f7a7a19d737f7]::rust_begin_unwind (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[10083]:0x9ba04a)
+    at purrdf_core-b1194e7f2d3990b6.wasm.core[e8e77cc1e90bd3b0]::panicking::panic_fmt (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[9336]:0x9af558)
+    at purrdf_core-b1194e7f2d3990b6.wasm.core[e8e77cc1e90bd3b0]::result::unwrap_failed (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[8767]:0x9a37d8)
+    at purrdf_core-b1194e7f2d3990b6.wasm.std[20479c4d650b61f9]::thread::functions::spawn::<purrdf_core[277cf0cf504b6db7]::ir::dataset::tests::content_addressing::predecessors_concurrent_first_build_is_consistent::{closure#0}, alloc[6a665ba0e7790d46]::vec::Vec<purrdf_core[277cf0cf504b6db7]::ir::term::TermId>> (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a29c3e:wasm-function[9137]:0x9abb93)
+error: test failed, to rerun pass `-p purrdf-core --lib`

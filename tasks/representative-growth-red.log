@@ -1,0 +1,46 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling hybrid-array v0.4.15
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/lex)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling regex-automata v0.4.14
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-events)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/xsd)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+   Compiling regex v1.12.4
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/testkit)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/alloc-probe)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/cdt)
+    Finished `test` profile [optimized] target(s) in 1m 19s
+     Running unittests src/lib.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::segmented::query::tests::returned_term_retains_original_base_and_payload_charge_after_query_drop ... FAILED
+
+failures:
+
+---- ir::segmented::query::tests::returned_term_retains_original_base_and_payload_charge_after_query_drop stdout ----
+
+thread 'ir::segmented::query::tests::returned_term_retains_original_base_and_payload_charge_after_query_drop' (662878) panicked at crates/rdf-core/src/ir/segmented/query.rs:469:9:
+representative growths: 4096
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ir::segmented::query::tests::returned_term_retains_original_base_and_payload_charge_after_query_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1344 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`

@@ -1,0 +1,25 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/testkit)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/lex)
+    Finished `test` profile [optimized] target(s) in 57.85s
+     Running unittests src/lib.rs (/opt/.cargo/03/98038387619cdf/debug/build/purrdf-lex/fe1d3e916639c520/out/purrdf_lex-fe1d3e916639c520)
+
+running 1 test
+test allocation::resumed_memory_regressions::failed_array_allocation_refunds_only_the_replacement_layout ... FAILED
+
+failures:
+
+---- allocation::resumed_memory_regressions::failed_array_allocation_refunds_only_the_replacement_layout stdout ----
+
+thread 'allocation::resumed_memory_regressions::failed_array_allocation_refunds_only_the_replacement_layout' (2746588) panicked at crates/lex/src/allocation.rs:1010:9:
+assertion `left == right` failed
+  left: 9223372036854775820
+ right: 13
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    allocation::resumed_memory_regressions::failed_array_allocation_refunds_only_the_replacement_layout
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 311 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-lex --lib`

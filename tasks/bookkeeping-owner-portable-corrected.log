@@ -1,0 +1,15 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/551-segmented-stack-queries-are-quadratic/crates/text)
+    Finished `test` profile [optimized] target(s) in 4m 11s
+     Running tests/physical_shapes.rs (/opt/.cargo/03/98038387619cdf/wasm32-unknown-unknown/debug/build/purrdf-text/f3528ab5cf8bda87/out/physical_shapes-f3528ab5cf8bda87.wasm)
+
+running 2 tests
+test bounded_shapes_keep_original_owners ... ok
+test cache_refusal_keeps_previous_owner ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.13s
+

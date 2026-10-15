@@ -1,0 +1,80 @@
+{
+  "issue": 551,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Segmented stack queries are quadratic in terms touched: Memory::reserve grows by one with a full copy",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "544": "Return typed capacity failures and add sparse segmented dataset stacks",
+    "490": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+    "495": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment"
+  },
+  "link_relations": {
+    "544": "mentions",
+    "490": "2-hop",
+    "495": "2-hop"
+  },
+  "related": [
+    {
+      "number": 496,
+      "title": "Benchmarks: measured evidence at 10^8-10^9 triples, including a reifier-heavy RDF 1.2 claims workload",
+      "state": "OPEN"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "CLOSED"
+    },
+    {
+      "number": 495,
+      "title": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment",
+      "state": "CLOSED"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 425,
+      "title": "Keep general semantic coverage native and focus existing WASM execution on target behavior",
+      "state": "CLOSED"
+    },
+    {
+      "number": 375,
+      "title": "Prep v3.0 release",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "bug": 1,
+    "none": 23,
+    "performance": 3,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [
+      {
+        "number": 552,
+        "title": "Bound segmented query growth and stop completed LIMIT scans",
+        "state": "OPEN",
+        "url": "https://github.com/Blackcat-Informatics/purrdf/pull/552",
+        "this_stage": true
+      }
+    ],
+    "own_branch": "paudley/551-segmented-stack-queries-are-quadratic"
+  },
+  "coverage": [
+    "issue #551 + 4 comment(s) via github",
+    "link crawl: 3 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Segmented', 'stack', 'queries']: 6 other item(s)",
+    "GhpRsq-Defect-Class trailers: 4 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #551 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #551: 1",
+    "requirement candidates: 5 line(s); 3 comment(s) matched no rule",
+    "referenced artifacts: 5 path(s) (4 on disk), 19 identifier(s), 1 workspace package(s), 0 URL(s)"
+  ]
+}
