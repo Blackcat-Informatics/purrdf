@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T17:48:47-06:00\n"
+"POT-Creation-Date: 2026-10-15T18:39:29-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -42,7 +42,7 @@ msgid "Rust"
 msgstr "Rust"
 
 #: src/SUMMARY.md:13 src/concepts/projections.md:451
-#: src/concepts/base-iris.md:55 src/concepts/jsonld.md:74
+#: src/concepts/base-iris.md:55 src/concepts/jsonld.md:80
 #: src/sparql/querying.md:2238 src/validation/shacl.md:304
 #: src/validation/shacl.md:403 src/validation/shacl.md:438
 #: src/validation/shacl.md:1360 src/validation/shacl.md:1466
@@ -62,7 +62,7 @@ msgstr "Python API 签名"
 msgid "JavaScript / WebAssembly"
 msgstr "JavaScript / WebAssembly"
 
-#: src/SUMMARY.md:17 src/concepts/projections.md:453 src/concepts/jsonld.md:114
+#: src/SUMMARY.md:17 src/concepts/projections.md:453 src/concepts/jsonld.md:120
 #: src/sparql/querying.md:2240 src/validation/shacl.md:405
 #: src/validation/shacl.md:440 src/validation/shacl.md:1468
 #: src/entailment.md:53 src/entailment.md:98
@@ -1240,13 +1240,13 @@ msgid "'@prefix ex: <https://example.org/> . ex:alice ex:name \"Alice\" .'"
 msgstr "'@prefix ex: <https://example.org/> . ex:alice ex:name \"Alice\" .'"
 
 #: src/reference/python-api.md:34 src/concepts/jsonld.md:29
-#: src/concepts/jsonld.md:50 src/concepts/jsonld.md:83
+#: src/concepts/jsonld.md:50 src/concepts/jsonld.md:89
 msgid "\"ex\""
 msgstr "\"ex\""
 
 #: src/reference/python-api.md:34 src/concepts/jsonld.md:29
-#: src/concepts/jsonld.md:50 src/concepts/jsonld.md:83
-#: src/concepts/jsonld.md:104
+#: src/concepts/jsonld.md:50 src/concepts/jsonld.md:89
+#: src/concepts/jsonld.md:110
 msgid "\"https://example.org/\""
 msgstr "\"https://example.org/\""
 
@@ -6327,7 +6327,7 @@ msgstr "\"scope\""
 #: src/concepts/projections.md:304 src/concepts/projections.md:327
 #: src/concepts/projections.md:330 src/concepts/projections.md:334
 #: src/concepts/projections.md:335 src/concepts/projections.md:336
-#: src/concepts/jsonld.md:27 src/concepts/jsonld.md:82
+#: src/concepts/jsonld.md:27 src/concepts/jsonld.md:88
 msgid "\"mode\""
 msgstr "\"mode\""
 
@@ -6642,7 +6642,7 @@ msgstr "`project_lpg_artifacts_to_sink`"
 msgid "`lift_archive`"
 msgstr "`lift_archive`"
 
-#: src/concepts/projections.md:450 src/concepts/jsonld.md:62
+#: src/concepts/projections.md:450 src/concepts/jsonld.md:68
 #: src/sparql/querying.md:2237 src/validation/shacl.md:303
 #: src/validation/shacl.md:402 src/validation/shacl.md:437
 #: src/validation/shacl.md:1190 src/validation/shacl.md:1359
@@ -6989,7 +6989,8 @@ msgid ""
 "// Serialize back out through any native codec — byte-deterministic output.\n"
 msgstr "// 通过任一原生编解码器序列化输出——逐字节确定性的输出。\n"
 
-#: src/concepts/codecs.md:39
+#: src/concepts/codecs.md:39 src/concepts/jsonld.md:57
+#: src/concepts/jsonld.md:58
 msgid "\"application/n-quads\""
 msgstr "\"application/n-quads\""
 
@@ -8124,7 +8125,9 @@ msgstr "# stdin 没有获取 IRI，因此其中的相对 IRI 需要显式提供�
 msgid ""
 "If `data.ttl` declares its own base, keep that parsing base while writing a "
 "new output base:"
-msgstr "如果 `data.ttl` 声明了自己的基准，则保留该解析基准，同时写出一个新的输出基准："
+msgstr ""
+"如果 `data.ttl` 声明了自己的基准，则保留该解析基准，同时写出一个新的输出基"
+"准："
 
 #: src/concepts/base-iris.md:253
 msgid ""
@@ -8202,16 +8205,16 @@ msgstr ""
 "文档，并在输出之前拒绝重复成员、未知字段、无效上下文、只能经网络获取的上下文"
 "引用、环以及超出资源上限的情况。"
 
-#: src/concepts/jsonld.md:26 src/concepts/jsonld.md:81
+#: src/concepts/jsonld.md:26 src/concepts/jsonld.md:87
 msgid "\"version\""
 msgstr "\"version\""
 
-#: src/concepts/jsonld.md:27 src/concepts/jsonld.md:82
-#: src/concepts/jsonld.md:103
+#: src/concepts/jsonld.md:27 src/concepts/jsonld.md:88
+#: src/concepts/jsonld.md:109
 msgid "\"context\""
 msgstr "\"context\""
 
-#: src/concepts/jsonld.md:28 src/concepts/jsonld.md:83
+#: src/concepts/jsonld.md:28 src/concepts/jsonld.md:89
 msgid "\"prefixes\""
 msgstr "\"prefixes\""
 
@@ -8241,7 +8244,15 @@ msgstr ""
 msgid "\"application/n-triples\""
 msgstr "\"application/n-triples\""
 
-#: src/concepts/jsonld.md:57
+#: src/concepts/jsonld.md:54
+msgid "\"\\\"schema:name\\\"\""
+msgstr "\"\\\"schema:name\\\"\""
+
+#: src/concepts/jsonld.md:55
+msgid "\"application/ld+json\""
+msgstr "\"application/ld+json\""
+
+#: src/concepts/jsonld.md:63
 msgid ""
 "Keep a `CompiledJsonLdContext` (or `JsonLdSerializeOptions::compiled`) when "
 "the same application context is used for many datasets. "
@@ -8254,13 +8265,13 @@ msgstr ""
 "的不可变本地文档中解析上下文 IRI 与 `@import`；PurRDF 从不经由网络加载上下"
 "文。"
 
-#: src/concepts/jsonld.md:64
+#: src/concepts/jsonld.md:70
 msgid ""
 "Write the versioned document to a file, then pass it to any RDF-producing "
 "CLI path:"
 msgstr "把带版本的文档写入文件，然后把它传给任何产生 RDF 的 CLI 路径："
 
-#: src/concepts/jsonld.md:71
+#: src/concepts/jsonld.md:77
 msgid ""
 "The option is rejected for non-JSON-LD/YAML-LD output, canonical output, non-"
 "graph SPARQL results, and carrier projections rather than being ignored."
@@ -8268,11 +8279,11 @@ msgstr ""
 "对于非 JSON-LD/YAML-LD 输出、规范化输出、非图形式的 SPARQL 结果以及载体投影，"
 "该选项会被拒绝，而不是被忽略。"
 
-#: src/concepts/jsonld.md:89 src/concepts/jsonld.md:107
+#: src/concepts/jsonld.md:95 src/concepts/jsonld.md:113
 msgid "\"jsonld\""
 msgstr "\"jsonld\""
 
-#: src/concepts/jsonld.md:94
+#: src/concepts/jsonld.md:100
 msgid ""
 "`Store.dump`, `MutableDataset.dump`, immutable `RdfDataset`, and the RDFLib "
 "compatibility `Graph.serialize` surface accept the same configuration. "
@@ -8282,11 +8293,11 @@ msgstr ""
 "的 `Graph.serialize` 接口都接受同一配置。在兼容层图上显式绑定的前缀，会成为其"
 "调用方上下文。"
 
-#: src/concepts/jsonld.md:98
+#: src/concepts/jsonld.md:104
 msgid "JavaScript and WebAssembly"
 msgstr "JavaScript 与 WebAssembly"
 
-#: src/concepts/jsonld.md:110
+#: src/concepts/jsonld.md:116
 msgid ""
 "Use `serializeConfigured` for one-shot requests. `QueryEngine` exposes "
 "matching configured methods for CONSTRUCT and DESCRIBE graph results, and "
@@ -8297,7 +8308,7 @@ msgstr ""
 "DESCRIBE 图结果提供对应的可配置方法，playground 的 worker 在其序列化路径上也"
 "接受同一份选项文档。"
 
-#: src/concepts/jsonld.md:116
+#: src/concepts/jsonld.md:122
 msgid ""
 "Compile options with `purrdf_jsonld_context_compile`, reuse the returned "
 "`PurrdfJsonLdContext` with `purrdf_serialize_jsonld_configured`, then "
@@ -8310,7 +8321,7 @@ msgstr ""
 "用 `purrdf_jsonld_context_free` 释放它。序列化器只接受恰好一个选项字节切片或"
 "一个已编译句柄。缓冲区与错误仍遵循 libpurrdf 通常的所有权规则。"
 
-#: src/concepts/jsonld.md:122
+#: src/concepts/jsonld.md:128
 msgid ""
 "YAML-LD uses the same context lens. Its optional schema URL changes only the "
 "deterministic YAML language-server header; it does not change RDF semantics."
