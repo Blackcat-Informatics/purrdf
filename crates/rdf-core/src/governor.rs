@@ -44,6 +44,13 @@ pub enum StopCause {
     Deadline,
 }
 
+impl purrdf_hash::error::StructuredError for StopCause {
+    purrdf_hash::error_visit! {
+        Cancelled => "stop-cancelled" {},
+        Deadline => "stop-deadline" {},
+    }
+}
+
 impl StopCause {
     /// A stable diagnostic label for this stop cause.
     ///

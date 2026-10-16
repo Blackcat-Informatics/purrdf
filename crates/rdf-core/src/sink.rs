@@ -119,6 +119,22 @@ pub enum DrainErrorKind {
     Other,
 }
 
+impl purrdf_hash::error::StructuredError for DrainErrorKind {
+    purrdf_hash::error_visit! {
+        BrokenPipe => "drain-broken-pipe" {},
+        Other => "drain-other" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for DrainError {
+    purrdf_hash::error_visit! {
+        @record self { kind, message } => "drain" {
+            "kind" => Record(&self.kind),
+            "message" => Text(&self.message),
+        }
+    }
+}
+
 impl DrainError {
     /// A drain failure of `kind`, described by `message`.
     #[must_use]
@@ -723,6 +739,13 @@ mod tests {
         assert_eq!(sink.written(), 0, "no bytes were delivered");
         let error = sink.finish().expect_err("the failure is reported here");
         assert_eq!(error.kind(), DrainErrorKind::BrokenPipe);
+        let record = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(record.code, "drain");
+        assert_eq!(record.child("kind").code, "drain-broken-pipe");
+        assert!(matches!(
+            record.field("message"),
+            purrdf_hash::error::ErrorValue::Text("closed")
+        ));
     }
 
     /// `Tee` feeds both drains the same bytes in one pass.

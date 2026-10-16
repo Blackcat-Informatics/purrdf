@@ -204,9 +204,17 @@ fn cache_eviction_preserves_exact_non_cache_owner_conservation() {
         owners + 3000
     );
     reservation.resize(4000).unwrap();
+    let error = reservation.resize(3_000_000).unwrap_err();
+    assert!(matches!(error, SegmentedError::Residency { .. }));
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "segmented-residency");
     assert!(matches!(
-        reservation.resize(3_000_000),
-        Err(SegmentedError::Residency { .. })
+        record.field("requested"),
+        purrdf_hash::error::ErrorValue::ByteCount(value) if value >= 3_000_000
+    ));
+    assert!(matches!(
+        record.field("limit"),
+        purrdf_hash::error::ErrorValue::ByteCount(value) if value == u128::from(read.storage_live_budget().unwrap())
     ));
     let refused = read.evidence();
     assert_eq!(
@@ -345,6 +353,24 @@ fn rdf12_references_empty_graphs_and_streamed_lines_survive() {
     assert!(output.contains("@zh--rtl"));
     assert!(output.contains("<<("));
     assert!(read.max_owned_term_bytes().unwrap() >= u64::try_from(size_of::<TermValue>()).unwrap());
+    let mut full: &mut [u8] = &mut [];
+    let error = read
+        .export_trig_lines(&mut purrdf_core::sink::WriterDrain(&mut full))
+        .expect_err("a full caller drain refuses publication");
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "segmented-export-output");
+    let cause = record.child("cause");
+    assert_eq!(cause.code, "drain");
+    assert_eq!(cause.child("kind").code, "drain-other");
+    assert!(matches!(
+        cause.field("message"),
+        purrdf_hash::error::ErrorValue::Text(message) if !message.is_empty()
+    ));
+    assert_eq!(
+        read.read_error(),
+        None,
+        "sink failure does not poison source"
+    );
 }
 
 fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
@@ -504,15 +530,23 @@ fn cancellation_retains_the_exact_failed_request_and_refuses_partial_drains() {
     provider
         .stop_after
         .store(0, std::sync::atomic::Ordering::Relaxed);
-    assert!(matches!(
-        read.resolve(ids[0]),
-        Err(SegmentedError::Stopped(_))
-    ));
+    let error = read.resolve(ids[0]).expect_err("host cancellation");
+    assert!(matches!(error, SegmentedError::Stopped(_)));
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "segmented-stopped");
+    assert_eq!(record.child("cause").code, "stop-cancelled");
     let after = read.evidence();
     assert_eq!(after.request_count(), before.request_count() + 1);
     after.with_requests(|requests| assert!(!requests.last().unwrap().completed()));
     assert!(read.checked_read(|view| view.quads().count()).is_err());
     assert!(purrdf_core::try_blank_count_view(&read).is_err());
+    let error = read
+        .export_trig_lines(&mut purrdf_core::sink::Measure::new())
+        .expect_err("no partial export after cancellation");
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "segmented-export-source");
+    assert_eq!(record.child("cause").code, "segmented-stopped");
+    assert_eq!(record.child("cause").child("cause").code, "stop-cancelled");
 }
 
 fn charged_read_peak_covers_measured_allocations_including_streamed_output() {
