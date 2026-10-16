@@ -1055,7 +1055,7 @@ makes `EXISTS`'s substitution semantics defensible at every site — SPARQL
 
 ## SHA-3 hashing (SEP-0008)
 
-SPARQL 1.1 §17.4.4 ships five hash built-ins — `MD5`, `SHA1`, `SHA256`,
+SPARQL 1.1 §17.4.6 ships five hash built-ins — `MD5`, `SHA1`, `SHA256`,
 `SHA384`, `SHA512`. `purrdf` adds the four SHA-3 (FIPS 202 Keccak) functions
 [SEP-0008](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0008/sep-0008.md)
 proposes, on exactly the same call convention. SEP-0008 is a proposal, **not
@@ -1136,7 +1136,7 @@ own built-in list, or a `FunctionCall ::= iri ArgList` whose `iri` is an
 `SHA3_256(?o)` spelling fails for the same reason. The failure is therefore
 loud and immediate rather than a quietly unbound column.
 
-The portable substitute is one of the SPARQL 1.1 §17.4.4 hashes. `SHA256` takes
+The portable substitute is one of the SPARQL 1.1 §17.4.6 hashes. `SHA256` takes
 the same single argument and returns the same lowercase-hex `xsd:string`, so
 swapping the name is the whole edit — it changes the digest, and nothing else
 about the query. Reach for the SHA-3 names when you control the engine and want
