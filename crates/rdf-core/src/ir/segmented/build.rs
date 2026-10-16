@@ -43,7 +43,7 @@ impl SegmentedBuildLimits {
         if terms == u32::MAX
             || !(512..=1_048_576).contains(&block_bytes)
             || records_per_block == 0
-            || records_per_block > 256
+            || records_per_block > format::MAX_RECORDS_PER_BLOCK
         {
             return Err(SegmentedError::ConstructionLimit);
         }

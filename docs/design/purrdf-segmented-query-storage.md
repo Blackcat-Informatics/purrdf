@@ -20,14 +20,14 @@ opening still loads no dictionary directory or term map. Existing full-count
 blocks retain their encoding and their direct first-probe lookup.
 
 `SegmentedReadLimits` specifies ceilings, not arrays to allocate at opening.
-The exact request ledger and cache hash table grow as they are used. Their
+The exact request ledger, payload cache and learned routing bounds grow as they are used. Their
 concrete capacities, copied/decoded blocks, pins and query scratch share the
 live-byte admission. Buffer replacement admits both the old and new layouts
 until the old allocation is destroyed. A refusal reports the original typed
 cause; evidence is never truncated to fit a smaller ledger.
 
 `SegmentedEvidence::bookkeeping_bytes()` reports the exact charged capacity of
-the reader's retained request ledger and cache buckets. It is included in
+the reader's retained request ledger, cache buckets and routing-bound buckets. It is included in
 `live_bytes()` and can grow across queries. For query-owner release checks,
 exclude this capacity and `unpinned_cache_bytes()` from both observations;
 the original control, pinned blocks and query workspace remain in the balance.
@@ -53,6 +53,13 @@ scanning or shifting the retained blocks. Eviction follows oldest-first links,
 skipping pinned owners, and unlinks the first eligible block. Hash buckets,
 control bytes and replacement overlap are admitted through the shared physical
 table allocator; cached payloads and escaped pins keep their original grants.
+
+Authenticated dictionary reads also teach a source-qualified page-range index.
+It retains only bounds learned from actual reads, without lexical bytes or payload
+pins. Those bounds survive payload eviction, so reloading a known page does not
+repeat its fence search. Cold searches use nearby known ranges to narrow their
+ordinal interval. Routing metadata shares the original live-byte grant and is
+released with the operation; opening never preloads a directory or term map.
 
 ## Measured layout controls
 

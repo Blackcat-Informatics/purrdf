@@ -139,7 +139,7 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
             ))
         })
         .collect();
-    let first = (1_u64 << 54) + 19;
+    let first = (1_u64 << 54) + 251;
     let limits = SegmentedBuildLimits::new(100, 100_000, 100, 512, 8)
         .unwrap()
         .with_first_term_index(first)
@@ -215,6 +215,62 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
     }
     assert!(read.evidence().peak_bytes() <= read.storage_live_budget().unwrap());
     assert_eq!(read.read_error(), None);
+
+    let sequential = session(&certified, 2);
+    for (id, value) in ids.iter().zip(&values) {
+        assert_eq!(sequential.term_value(*id).unwrap(), *value);
+    }
+    sequential.evidence().with_requests(|requests| {
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.bytes() == 512)
+                .count(),
+            81,
+            "header plus one payload read per term, without distant search fences"
+        );
+    });
+
+    let routed = session(&certified, 1);
+    assert_eq!(routed.term_value(ids[79]).unwrap(), values[79]);
+    assert_eq!(routed.term_value(ids[0]).unwrap(), values[0]);
+    let before = routed.evidence();
+    assert_eq!(routed.term_value(ids[79]).unwrap(), values[79]);
+    let after = routed.evidence();
+    after.with_requests(|requests| {
+        assert_eq!(
+            requests[before.request_count()..]
+                .iter()
+                .filter(|request| request.bytes() == 512)
+                .count(),
+            1,
+            "an evicted payload needs one authenticated reload, not another fence search"
+        );
+    });
+    assert_eq!(after.evictions(), before.evictions() + 1);
+
+    for indices in [&[78, 79][..], &[77, 78, 79][..]] {
+        let hot = session(&certified, u32::try_from(indices.len()).unwrap());
+        let pins: Vec<_> = indices
+            .iter()
+            .map(|&index| hot.resolve(ids[index]).unwrap())
+            .collect();
+        drop(pins);
+        let before = hot.evidence();
+        for _ in 0..64 {
+            for &index in indices {
+                let guard = hot.resolve(ids[index]).unwrap();
+                assert_eq!(guard.term(), TermRef::Iri(values[index].as_iri().unwrap()));
+            }
+        }
+        let after = hot.evidence();
+        assert_eq!(
+            after.request_count(),
+            before.request_count(),
+            "cached variable-population terms must not reread search fences"
+        );
+        assert_eq!(after.evictions(), before.evictions());
+    }
 }
 
 fn a_single_oversized_encoded_term_refuses_without_a_sealed_image() {
