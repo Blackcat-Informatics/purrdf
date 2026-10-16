@@ -69,7 +69,10 @@ impl State {
         self.append_cache_links(key);
     }
 
-    /// Skip pinned owners in recency order; lookup and unlink are indexed.
+    /// Skip lexical pins in recency order; lookup and unlink are indexed.
+    /// Iterators can retain row bytes outside the cache: their original block
+    /// reservation stays live until the last owner releases it. Freeing their
+    /// cache slot lets nested scans proceed without reacquiring the outer block.
     pub(super) fn evict_one(&mut self) -> Result<bool, SegmentedError> {
         let mut next = self.oldest;
         while let Some(key) = next {
@@ -78,7 +81,7 @@ impl State {
                 .find(hash_of(&key), |entry| entry.key == key)
                 .expect("recency link names a retained block");
             next = entry.newer;
-            if Arc::strong_count(&entry.block) != 1 {
+            if Arc::strong_count(&entry.block) != 1 && entry.block.encoded[0] != format::QUADS {
                 continue;
             }
             let evictions = self

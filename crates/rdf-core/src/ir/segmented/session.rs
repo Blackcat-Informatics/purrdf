@@ -439,8 +439,9 @@ impl State {
     }
 }
 
-// Workspace growth and block loading evict through the same account. A pinned
-// block is never evicted, and checked addition is a bound rather than a heuristic.
+// Workspace growth and block loading evict through the same account. Lexical
+// pins prevent eviction; iterator-owned rows can leave the cache while their
+// original reservation stays live. Checked addition is a bound, not a heuristic.
 fn make_room(
     state: &mut State,
     budget: &Budget,
@@ -1509,7 +1510,7 @@ impl SegmentedSession {
             table,
             summaries: None,
             rows: None,
-            row: 0,
+            row: 0..0,
             pattern,
         }
     }
@@ -1626,34 +1627,21 @@ struct QuadIter<'a> {
     session: &'a SegmentedSession,
     table: usize,
     summaries: Option<core::ops::Range<u64>>,
-    // A yielded QuadIds is Copy and borrows no page. Keep only its certified
-    // address between yields so nested logical scans can evict the row block.
-    rows: Option<u64>,
-    row: usize,
+    // Keep the authenticated allocation and the validated byte range together,
+    // without a self-reference or repeated header/cache work between yields.
+    rows: Option<Arc<CachedBlock>>,
+    row: core::ops::Range<usize>,
     pattern: Pattern,
 }
 impl Iterator for QuadIter<'_> {
     type Item = QuadIds<GlobalTermId>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.session.ready().is_err() {
-            return None;
-        }
         loop {
-            if let Some(page) = self.rows {
-                let Ok(block) = self.session.block(page) else {
-                    return None;
-                };
-                let data = match fixed_records(&block.encoded, format::QUADS, 32) {
-                    Ok(data) => data,
-                    Err(error) => {
-                        let _ = self.session.fail::<()>(error);
-                        return None;
-                    }
-                };
-                while self.row < data.len() / 32 {
-                    let index = self.row;
-                    self.row += 1;
-                    let quad = match format::decode_quad(&data[index * 32..index * 32 + 32]) {
+            if let Some(block) = &self.rows {
+                while self.row.start < self.row.end {
+                    let index = self.row.start;
+                    self.row.start += 32;
+                    let quad = match format::decode_quad(&block.encoded[index..index + 32]) {
                         Ok(quad) => quad,
                         Err(error) => {
                             let _ = self.session.fail::<()>(error);
@@ -1669,7 +1657,12 @@ impl Iterator for QuadIter<'_> {
                         return Some(quad);
                     }
                 }
+                // Release before summary lookup or the next payload admission:
+                // a one-slot cache must not require two live row blocks.
                 self.rows = None;
+            }
+            if self.session.ready().is_err() {
+                return None;
             }
             if self.summaries.is_none() {
                 self.summaries = match self.session.summary_range(self.table, self.pattern.0) {
@@ -1700,8 +1693,19 @@ impl Iterator for QuadIter<'_> {
             }
             let page =
                 crate::bytes::read_u64_le(&summary, 0).expect("certified summary block position");
-            self.rows = Some(page);
-            self.row = 0;
+            let Ok(block) = self.session.block(page) else {
+                return None;
+            };
+            let data = match fixed_records(&block.encoded, format::QUADS, 32) {
+                Ok(data) => data,
+                Err(error) => {
+                    let _ = self.session.fail::<()>(error);
+                    return None;
+                }
+            };
+            let start = data.as_ptr().addr() - block.encoded.as_ptr().addr();
+            self.row = start..start + data.len();
+            self.rows = Some(block);
         }
     }
 }
