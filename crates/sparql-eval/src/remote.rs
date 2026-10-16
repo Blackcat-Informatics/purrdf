@@ -118,6 +118,20 @@ pub struct ResolvedBindings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RemoteError {
+    /// A forwarded native evaluation failed before producing an answer. Its
+    /// original diagnostic, fields and admitted owners remain intact.
+    Evaluation(Box<EvalError>),
+    /// An original diagnostic supplied by a resident forwarded evaluation.
+    Diagnostic(Box<purrdf_core::RdfDiagnostic>),
+    /// An original forwarded diagnostic together with its admitted owner.
+    RetainedDiagnostic(crate::RetainedDiagnostic),
+    /// This engine has no source to which it can send a SERVICE request.
+    NoSource,
+    /// Physical allocation of a forwarded native cause failed.
+    AllocationFailed {
+        /// The concrete allocation that could not be constructed.
+        construct: &'static str,
+    },
     /// The endpoint was unreachable / the request failed at the transport layer.
     Transport(String),
     /// The endpoint responded, but the body could not be decoded into bindings.
@@ -128,8 +142,8 @@ pub enum RemoteError {
     /// nowhere to send the request — e.g. a host that answers some endpoints in process
     /// and supplied no handler for the rest. Carries the host's explanation.
     ///
-    /// Without `SILENT` this is [`EvalError::ServiceUnconfigured`], the same error as
-    /// evaluating a `SERVICE` with no source at all.
+    /// Without `SILENT` this retains the unconfigured classification, endpoint
+    /// and original host message in [`RetainedServiceFailure`].
     Unconfigured(String),
     /// A [`ServiceResolver`] refused the service because its per-service policy withheld
     /// a capability — see [`crate::service`].
@@ -212,6 +226,11 @@ pub enum RemoteError {
 
 impl purrdf_hash::error::StructuredError for RemoteError {
     purrdf_hash::error_visit! {
+        Evaluation(error) => "service-evaluation" { "cause" => Cause(&**error) },
+        Diagnostic(error) => "service-diagnostic" { "cause" => Cause(&**error) },
+        RetainedDiagnostic(error) => "service-retained-diagnostic" { "cause" => Cause(error) },
+        NoSource => "service-no-source" {},
+        AllocationFailed { construct } => "service-allocation-failed" { "construct" => Text(construct) },
         Transport(message) => "service-transport" { "message" => Message(message) },
         Decode(message) => "service-decode" { "message" => Message(message) },
         Disabled => "service-disabled" {},
@@ -238,6 +257,15 @@ impl purrdf_hash::error::StructuredError for RemoteError {
 impl core::fmt::Display for RemoteError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::RetainedDiagnostic(error) => {
+                write!(f, "decode: {}", error.diagnostic().message)
+            }
+            Self::Evaluation(error) => write!(f, "decode: {error}"),
+            Self::Diagnostic(error) => write!(f, "decode: {error}"),
+            Self::NoSource => f.write_str("no remote query source configured"),
+            Self::AllocationFailed { construct } => {
+                EvalError::AllocationFailed { construct }.fmt(f)
+            }
             Self::Transport(m) => write!(f, "transport: {m}"),
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
@@ -269,7 +297,17 @@ impl core::fmt::Display for RemoteError {
     }
 }
 
-impl std::error::Error for RemoteError {}
+impl std::error::Error for RemoteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Evaluation(error) => Some(&**error),
+            Self::Diagnostic(error) => Some(&**error),
+            Self::RetainedDiagnostic(error) => Some(error),
+            Self::Denied(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 purrdf_lex::variant_from!(RemoteError { Denied(ServiceDenial) });
 
@@ -654,20 +692,18 @@ impl RetainedServiceFailure {
         if self.error.payload.storage.is_bounded() || self.error.payload.control.is_bounded() {
             return EvalError::RetainedServiceFailure(self);
         }
-        let endpoint = self.endpoint.as_str();
-        match self.error.error().clone() {
-            RemoteError::Denied(denial) => EvalError::ServiceDenied(denial),
-            RemoteError::HostDenied { endpoint, message } => {
-                EvalError::ServiceHostDenied { endpoint, message }
-            }
-            RemoteError::HostFault { endpoint, message } => {
-                EvalError::ServiceHostFault { endpoint, message }
-            }
-            RemoteError::SourceRead(message) => EvalError::SourceRead(message),
-            RemoteError::Unconfigured(message) => {
-                EvalError::ServiceUnconfigured(format!("SERVICE <{endpoint}>: {message}"))
-            }
-            other => EvalError::remote(format!("SERVICE <{endpoint}>: {other}")),
+        match self.error.error() {
+            RemoteError::Denied(denial) => EvalError::ServiceDenied(denial.clone()),
+            RemoteError::HostDenied { endpoint, message } => EvalError::ServiceHostDenied {
+                endpoint: endpoint.clone(),
+                message: message.clone(),
+            },
+            RemoteError::HostFault { endpoint, message } => EvalError::ServiceHostFault {
+                endpoint: endpoint.clone(),
+                message: message.clone(),
+            },
+            RemoteError::SourceRead(message) => EvalError::SourceRead(message.clone()),
+            _ => EvalError::RetainedServiceFailure(self),
         }
     }
     /// Borrow the original invocation error without detaching its owner.
@@ -692,9 +728,14 @@ impl RetainedServiceFailure {
     }
     fn silenced_kind(&self) -> purrdf_core::SilencedKind {
         match self.error.error() {
-            RemoteError::Decode(_) => purrdf_core::SilencedKind::Decode,
+            RemoteError::Decode(_)
+            | RemoteError::Evaluation(_)
+            | RemoteError::Diagnostic(_)
+            | RemoteError::RetainedDiagnostic(_) => purrdf_core::SilencedKind::Decode,
             RemoteError::Disabled => purrdf_core::SilencedKind::Disabled,
-            RemoteError::Unconfigured(_) => purrdf_core::SilencedKind::Unconfigured,
+            RemoteError::Unconfigured(_) | RemoteError::NoSource => {
+                purrdf_core::SilencedKind::Unconfigured
+            }
             RemoteError::Denied(_) => purrdf_core::SilencedKind::Denied,
             RemoteError::HostDenied { .. } => purrdf_core::SilencedKind::HostDenied,
             RemoteError::HostFault { .. } => purrdf_core::SilencedKind::Fault,
@@ -705,6 +746,11 @@ impl RetainedServiceFailure {
 impl fmt::Display for RetainedServiceFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.error.error() {
+            RemoteError::NoSource => write!(
+                f,
+                "SERVICE federation error: no remote query source configured for SERVICE <{}>",
+                self.endpoint.as_str()
+            ),
             RemoteError::Denied(denial) => write!(f, "SERVICE federation denied: {denial}"),
             RemoteError::HostDenied { endpoint, message } => write!(
                 f,
@@ -1666,10 +1712,9 @@ pub(crate) fn failed_invocation<I: ViewTermId>(
 ///
 /// # Errors
 ///
-/// Without `SILENT`, [`EvalError::ServiceUnconfigured`] when no source reaches the
-/// endpoint, [`EvalError::ServiceDenied`] / [`EvalError::ServiceHostDenied`] when the
-/// request is refused, and [`EvalError::Remote`] when the endpoint fails; with or
-/// without it, the typed stack refusals.
+/// Without `SILENT`, preserves unconfigured, denial and endpoint-failure
+/// classifications with their original typed causes. With or without it,
+/// operational allocation, admission and stack refusals remain fatal.
 pub(crate) fn invoke_service<D: DatasetView + Sync>(
     endpoint: &str,
     inner: &GraphPattern,
@@ -1679,16 +1724,11 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     use purrdf_core::SilencedKind;
     let workspace = ctx.growth.clone();
     let Some(source) = ctx.remote else {
-        let message = format_args!("no remote query source configured for SERVICE <{endpoint}>");
-        let error = if workspace.is_bounded() {
-            EvalError::RetainedDiagnostic(crate::RetainedDiagnostic::render(
-                EvalError::SERVICE_UNCONFIGURED_CODE,
-                &format_args!("SERVICE federation error: {message}"),
-                &workspace,
-            )?)
-        } else {
-            EvalError::ServiceUnconfigured(message.to_string())
-        };
+        let error = AdmittedRemoteError::native(
+            RemoteError::NoSource,
+            crate::workspace::LexicalFrame::new(&workspace),
+        )?;
+        let error = RetainedServiceFailure::new(endpoint, error, &workspace)?.into_eval_error();
         return failed_invocation(
             endpoint,
             SilencedKind::Unconfigured,
@@ -1830,6 +1870,9 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
             return Err(EvalError::HostStackExhausted { construct });
         }
         RemoteError::WorkspaceStopped => return Err(EvalError::WorkspaceStopped),
+        RemoteError::AllocationFailed { construct } => {
+            return Err(EvalError::AllocationFailed { construct });
+        }
         RemoteError::ExchangeIdExhausted => return Err(EvalError::ExchangeIdExhausted),
         RemoteError::SourceRead(_) => {
             return Err(RetainedServiceFailure::new(endpoint, error, &workspace)?.into_eval_error());
@@ -2011,11 +2054,16 @@ fn remote_error_for(error: EvalError) -> RemoteError {
         }
         EvalError::SourceRead(message) => RemoteError::SourceRead(message),
         EvalError::WorkspaceStopped => RemoteError::WorkspaceStopped,
+        EvalError::AllocationFailed { construct } => RemoteError::AllocationFailed { construct },
         EvalError::ExchangeIdExhausted => RemoteError::ExchangeIdExhausted,
         EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
         EvalError::HostStackExhausted { construct } => RemoteError::HostStackExhausted(construct),
-        EvalError::RetainedServiceFailure(error) => RemoteError::Decode(error.to_string()),
-        other => RemoteError::Decode(other.to_string()),
+        other => match purrdf_core::small::try_boxed(other) {
+            Ok(error) => RemoteError::Evaluation(error),
+            Err(_) => RemoteError::AllocationFailed {
+                construct: "forwarded evaluation cause",
+            },
+        },
     }
 }
 
@@ -2116,29 +2164,25 @@ fn service_evaluation_error(
             ServiceResolutionError::Operational(error)
         }
         other => {
-            let result = match other {
+            let mut frame = crate::workspace::LexicalFrame::new(workspace);
+            let error = match other {
                 crate::engine::EvaluationFailure::Diagnostic(error) => {
-                    AdmittedRemoteError::message(
-                        purrdf_core::SilencedKind::Decode,
-                        error,
-                        workspace,
-                    )
+                    purrdf_lex::allocation::Memory::new(&mut frame)
+                        .boxed(error)
+                        .map(RemoteError::Diagnostic)
                 }
                 crate::engine::EvaluationFailure::RetainedDiagnostic(error) => {
-                    AdmittedRemoteError::message(
-                        purrdf_core::SilencedKind::Decode,
-                        &error.diagnostic().message,
-                        workspace,
-                    )
+                    Ok(RemoteError::RetainedDiagnostic(error))
                 }
                 crate::engine::EvaluationFailure::Evaluation(error) => {
-                    AdmittedRemoteError::message(
-                        purrdf_core::SilencedKind::Decode,
-                        error,
-                        workspace,
-                    )
+                    purrdf_lex::allocation::Memory::new(&mut frame)
+                        .boxed(error)
+                        .map(RemoteError::Evaluation)
                 }
             };
+            let result = error
+                .map_err(|error| frame.storage_error(error, "forwarded evaluation cause"))
+                .and_then(|error| AdmittedRemoteError::native(error, frame));
             match result {
                 Ok(error) => ServiceResolutionError::Invocation(error),
                 Err(error) => ServiceResolutionError::Operational(error),
@@ -2809,9 +2853,17 @@ mod tests {
         );
         // The neighbour: the same clause without SILENT is the unconfigured error.
         let (result, silenced) = run_recorded(&local(), None, &query.replace("SILENT ", ""));
-        assert!(
-            matches!(result, Err(EvalError::ServiceUnconfigured(_))),
-            "{result:?}"
+        let error = result.expect_err("missing source refuses the invocation");
+        assert_eq!(error.code(), Some(EvalError::SERVICE_UNCONFIGURED_CODE));
+        let capture = purrdf_testkit::error_capture::Capture::read(&error);
+        let invocation = capture.child("cause");
+        assert!(matches!(
+            invocation.field("endpoint"),
+            purrdf_hash::error::ErrorValue::Iri("http://example.org/ep")
+        ));
+        assert_eq!(
+            invocation.child("cause").child("cause").code,
+            "service-no-source"
         );
         assert_eq!(kinds(&silenced), Vec::<(String, &str)>::new());
         // And with a source that reaches the endpoint the same SILENT clause answers.
@@ -2886,6 +2938,9 @@ mod tests {
                 "decode" => RemoteError::Decode("not a results document".to_owned()),
                 "source-read" => RemoteError::SourceRead("snapshot block unavailable".to_owned()),
                 "exchange-id-exhausted" => RemoteError::ExchangeIdExhausted,
+                "allocation-failed" => RemoteError::AllocationFailed {
+                    construct: "forwarded evaluation cause",
+                },
                 "disabled" => RemoteError::Disabled,
                 "unconfigured" => RemoteError::Unconfigured("no handler".to_owned()),
                 "denied" => RemoteError::Denied(ServiceDenial::new(
@@ -3000,9 +3055,11 @@ mod tests {
             let error = result.expect_err(name);
             match name {
                 "unconfigured" => {
-                    assert!(
-                        matches!(error, EvalError::ServiceUnconfigured(_)),
-                        "{error:?}"
+                    assert_eq!(error.code(), Some(EvalError::SERVICE_UNCONFIGURED_CODE));
+                    let capture = purrdf_testkit::error_capture::Capture::read(&error);
+                    assert_eq!(
+                        capture.child("cause").child("cause").child("cause").code,
+                        "service-unconfigured"
                     );
                 }
                 "denied" => assert!(matches!(error, EvalError::ServiceDenied(_)), "{error:?}"),
@@ -3012,7 +3069,23 @@ mod tests {
                         "{error:?}"
                     );
                 }
-                _ => assert!(matches!(error, EvalError::Remote(_)), "{error:?}"),
+                _ => {
+                    assert_eq!(
+                        crate::protocol::FailureCode::from(&error),
+                        crate::protocol::FailureCode::ServiceFailed
+                    );
+                    let capture = purrdf_testkit::error_capture::Capture::read(&error);
+                    let expected = match name {
+                        "transport" => "service-transport",
+                        "decode" => "service-decode",
+                        "disabled" => "service-disabled",
+                        _ => unreachable!("the other classified kinds were handled above"),
+                    };
+                    assert_eq!(
+                        capture.child("cause").child("cause").child("cause").code,
+                        expected
+                    );
+                }
             }
             assert_eq!(
                 kinds(&silenced),
@@ -3029,6 +3102,140 @@ mod tests {
             matches!(result, Err(EvalError::Unsupported { .. })),
             "{result:?}"
         );
+    }
+
+    #[test]
+    fn forwarded_cause_allocation_failure_is_never_silenced() {
+        assert!(matches!(
+            remote_error_for(EvalError::AllocationFailed {
+                construct: "forwarded evaluation cause"
+            }),
+            RemoteError::AllocationFailed {
+                construct: "forwarded evaluation cause"
+            }
+        ));
+        for silent in ["", "SILENT "] {
+            let query = format!(
+                "SELECT ?n WHERE {{ SERVICE {silent}<http://example.org/allocation-failed> {{ ?a ?b ?n }} }}"
+            );
+            let (result, silenced) = run_recorded(&local(), Some(&FailingKinds), &query);
+            assert!(matches!(
+                result,
+                Err(EvalError::AllocationFailed {
+                    construct: "forwarded evaluation cause"
+                })
+            ));
+            assert!(silenced.is_empty());
+        }
+    }
+
+    #[test]
+    fn forwarded_native_cause_refuses_insufficient_admission() {
+        use crate::workspace::owned_row_regressions::{Refusal, account};
+        use std::sync::atomic::Ordering;
+        let base = crate::workspace::QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let (workspace, ledger, _) = account(base + 1);
+        let cause = EvalError::FunctionAdmission(crate::UserFunctionRefusal::new(
+            purrdf_testkit::error_capture::CallerRefusal { limit: u128::MAX },
+        ));
+        let error = service_evaluation_error(
+            crate::engine::EvaluationFailure::Evaluation(cause),
+            &workspace.capability(),
+        );
+        assert!(matches!(
+            error,
+            ServiceResolutionError::Operational(EvalError::WorkspaceStopped)
+        ));
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+    }
+
+    #[test]
+    fn native_forwarded_causes_are_not_rendered_during_resident_conversion() {
+        use purrdf_testkit::error_capture::{CallerRefusal, Capture};
+        let original = crate::UserFunctionRefusal::new(CallerRefusal { limit: u128::MAX });
+        let error = remote_error_for(EvalError::FunctionAdmission(original.clone()));
+        let capture = Capture::read(&error);
+        assert_eq!(capture.code, "service-evaluation");
+        let caller = capture.child("cause").child("cause").child("cause");
+        assert_eq!(caller.code, "caller-refused");
+        assert!(matches!(
+            caller.field("limit"),
+            purrdf_hash::error::ErrorValue::Unsigned(u128::MAX)
+        ));
+        let RemoteError::Evaluation(error) = error else {
+            panic!("original native shape")
+        };
+        let EvalError::FunctionAdmission(retained) = *error else {
+            panic!("original native shape")
+        };
+        assert_eq!(original, retained);
+        let (workspace, ledger, base) = crate::workspace::owned_row_regressions::account(65_536);
+        let forwarded = service_evaluation_error(
+            crate::engine::EvaluationFailure::Evaluation(EvalError::FunctionAdmission(retained)),
+            &workspace.capability(),
+        );
+        let ServiceResolutionError::Invocation(forwarded) = forwarded else {
+            panic!("original invocation cause")
+        };
+        let clone = forwarded.clone();
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert!(live > base);
+        drop(forwarded);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        assert_eq!(
+            Capture::read(&clone)
+                .child("cause")
+                .child("cause")
+                .child("cause")
+                .child("cause")
+                .code,
+            "caller-refused"
+        );
+        drop(clone);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn forwarded_retained_diagnostics_keep_their_original_fields_and_last_owner() {
+        use purrdf_testkit::error_capture::Capture;
+        use std::sync::atomic::Ordering;
+        let (workspace, ledger, base) = crate::workspace::owned_row_regressions::account(65_536);
+        let capability = workspace.capability();
+        let original = crate::RetainedDiagnostic::render(
+            "original-native-code",
+            &"original native message",
+            &capability,
+        )
+        .unwrap();
+        let pointer = core::ptr::from_ref(original.diagnostic());
+        let error = service_evaluation_error(
+            crate::engine::EvaluationFailure::RetainedDiagnostic(original.clone()),
+            &capability,
+        );
+        let ServiceResolutionError::Invocation(error) = error else {
+            panic!("invocation classification")
+        };
+        let clone = error.clone();
+        let live = ledger.live.load(Ordering::Relaxed);
+        drop(error);
+        drop(original);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        let capture = Capture::read(&clone);
+        let diagnostic = capture.child("cause").child("cause").child("cause");
+        assert_eq!(diagnostic.code, "rdf-diagnostic");
+        assert!(matches!(
+            diagnostic.field("code"),
+            purrdf_hash::error::ErrorValue::Code("original-native-code")
+        ));
+        let RemoteError::RetainedDiagnostic(retained) = clone.error() else {
+            panic!("original retained diagnostic")
+        };
+        assert!(core::ptr::eq(pointer, retained.diagnostic()));
+        assert_eq!(clone.to_string(), "decode: original native message");
+        drop(clone);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
     }
 
     // ── custom-aggregate / custom-function SERVICE forwarding refusals ────────
@@ -3124,7 +3331,7 @@ mod tests {
             let (result, _) =
                 run_recorded(&local(), Some(&rejecting), &silent.replace("SILENT ", ""));
             assert!(
-                matches!(result, Err(EvalError::Remote(_))),
+                matches!(&result, Err(error) if error.code() == Some(crate::protocol::FailureCode::ServiceFailed.code())),
                 "{body}: {result:?}"
             );
         }
@@ -3252,7 +3459,10 @@ mod tests {
             );
             let (result, _) =
                 run_recorded(&local(), Some(&rejecting), &silent.replace("SILENT ", ""));
-            assert!(matches!(result, Err(EvalError::Remote(_))), "{result:?}");
+            assert!(
+                matches!(&result, Err(error) if error.code() == Some(crate::protocol::FailureCode::ServiceFailed.code())),
+                "{result:?}"
+            );
         }
     }
 
@@ -3292,7 +3502,10 @@ mod tests {
              SERVICE <http://example.org/missing> { ?o <http://example.org/name> ?n } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Remote(_)), "got {err:?}");
+        assert_eq!(
+            err.code(),
+            Some(crate::protocol::FailureCode::ServiceFailed.code())
+        );
     }
 
     // ── LATERAL variable-endpoint SERVICE forwarding counts ───────────────────

@@ -1311,12 +1311,16 @@ impl From<&RemoteError> for FailureCode {
     fn from(error: &RemoteError) -> Self {
         match error {
             RemoteError::SourceRead(_)
+            | RemoteError::AllocationFailed { .. }
             | RemoteError::WorkspaceStopped
             | RemoteError::ExchangeIdExhausted => Self::Evaluation,
-            RemoteError::Transport(_) | RemoteError::Decode(_) | RemoteError::Disabled => {
-                Self::ServiceFailed
-            }
-            RemoteError::Unconfigured(_) => Self::ServiceUnconfigured,
+            RemoteError::Transport(_)
+            | RemoteError::Decode(_)
+            | RemoteError::Disabled
+            | RemoteError::Evaluation(_)
+            | RemoteError::Diagnostic(_)
+            | RemoteError::RetainedDiagnostic(_) => Self::ServiceFailed,
+            RemoteError::Unconfigured(_) | RemoteError::NoSource => Self::ServiceUnconfigured,
             RemoteError::Denied(_) => Self::ServiceDenied,
             RemoteError::HostDenied { .. } => Self::ServiceHostDenied,
             RemoteError::HostFault { .. } => Self::HostFault,

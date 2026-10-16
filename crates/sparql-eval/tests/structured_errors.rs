@@ -229,6 +229,44 @@ fn actual_service_builder_preserves_original_failure_under_its_admission() {
     );
 }
 
+fn admitted_service_native_causes_survive_without_rendering_or_inspection_allocation() {
+    let workspace = WorkspaceCapability::resident();
+    let failure = AdmittedResolvedBindings::try_build(&workspace, |memory| {
+        let cause = EvalError::FunctionAdmission(UserFunctionRefusal::new(CallerRefusal {
+            limit: u128::MAX,
+        }));
+        Err(ServiceBuildError::Remote(RemoteError::Evaluation(
+            memory.boxed(cause)?,
+        )))
+    })
+    .unwrap_err();
+    let events = Vec::with_capacity(2);
+    let window = CurrentThreadWindow::open();
+    let capture = Capture::read_with_buffer(&failure, events);
+    assert_eq!(window.close().allocations, 0);
+    let cause = capture
+        .child("cause")
+        .child("cause")
+        .child("cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(cause.code, "caller-refused");
+    assert!(matches!(
+        cause.field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+    assert!(
+        std::error::Error::source(&failure)
+            .unwrap()
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<EvalError>()
+            .is_some()
+    );
+}
+
 purrdf_testkit::harness_main!(
     erased_function_causes_keep_original_fields_and_identity_without_rendering,
     parsed_errors_and_optional_classifications_keep_their_native_shapes,
@@ -236,4 +274,5 @@ purrdf_testkit::harness_main!(
     xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts,
     admitted_diagnostics_borrow_original_text_and_clone_the_same_owner,
     actual_service_builder_preserves_original_failure_under_its_admission,
+    admitted_service_native_causes_survive_without_rendering_or_inspection_allocation,
 );

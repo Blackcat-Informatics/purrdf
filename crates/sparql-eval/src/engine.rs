@@ -5009,6 +5009,14 @@ pub enum EvaluationFailure {
     Evaluation(crate::EvalError),
 }
 
+impl purrdf_hash::error::StructuredError for EvaluationFailure {
+    purrdf_hash::error_visit! {
+        Diagnostic(error) => "sparql-failure-diagnostic" { "cause" => Cause(error) },
+        RetainedDiagnostic(error) => "sparql-failure-retained-diagnostic" { "cause" => Cause(error) },
+        Evaluation(error) => "sparql-failure-evaluation" { "cause" => Cause(error) },
+    }
+}
+
 impl std::fmt::Display for EvaluationFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -5021,7 +5029,8 @@ impl std::fmt::Display for EvaluationFailure {
 impl std::error::Error for EvaluationFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Diagnostic(_) | Self::RetainedDiagnostic(_) => None,
+            Self::Diagnostic(error) => Some(error),
+            Self::RetainedDiagnostic(error) => Some(error),
             Self::Evaluation(error) => Some(error),
         }
     }
