@@ -22,6 +22,7 @@
 //! How deeply a request nests is never a reason: the parser holds what encloses the
 //! cursor on heap-allocated stacks, so nesting is bounded by memory alone.
 
+use crate::algebra::AggregateExpressionError;
 use crate::lexer::LexReason;
 use core::fmt;
 use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
@@ -109,6 +110,13 @@ pub enum ParseError {
         /// Byte offset of the offending token (best-effort).
         at: usize,
     },
+    /// A checked aggregate constructor refused the original native arguments.
+    Aggregate {
+        /// Original construction refusal and its owned fields.
+        cause: AggregateExpressionError,
+        /// Byte offset of the aggregate call (best-effort).
+        at: usize,
+    },
     /// Well-formed SPARQL that uses a construct outside this crate's in-scope
     /// subset. Carries the name of the unsupported feature.
     Unsupported(String),
@@ -151,6 +159,9 @@ impl purrdf_hash::error::StructuredError for ParseError {
         },
         Syntax { reason, at } => "sparql-parse-syntax" {
             "reason" => Text(reason), "at" => ByteCount(*at as u128),
+        },
+        Aggregate { cause, at } => "sparql-parse-aggregate" {
+            "cause" => Cause(cause), "at" => ByteCount(*at as u128),
         },
         Unsupported(feature) => "sparql-parse-unsupported" { "feature" => Text(feature) },
         Iri { lexical, reason } => "sparql-parse-iri" {
@@ -283,6 +294,25 @@ impl ParseError {
                     memory.collect(native_values)
                 }?,
             ),
+            Self::Aggregate { cause, at } => (
+                "sparql-parse-syntax",
+                "SPARQL syntax error at byte {at}: {reason}",
+                {
+                    let native_values = [
+                        DiagnosticParameter::try_new_with_memory(
+                            "at",
+                            Unsigned(*at as u64),
+                            memory,
+                        )?,
+                        DiagnosticParameter::try_new_with_memory(
+                            "reason",
+                            Text(memory.format(cause)?),
+                            memory,
+                        )?,
+                    ];
+                    memory.collect(native_values)
+                }?,
+            ),
             Self::Unsupported(feature) => (
                 "sparql-parse-unsupported",
                 "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 \
@@ -375,6 +405,7 @@ impl ParseError {
                     .map_or(0, purrdf_iri::IriError::owned_text_bytes),
             ),
             Self::CdtArity { iri, .. } => Some(iri.capacity()),
+            Self::Aggregate { cause, .. } => Some(cause.owned_text_bytes()),
         }
     }
 
@@ -385,7 +416,10 @@ impl ParseError {
     #[must_use]
     pub fn byte_offset(&self) -> Option<usize> {
         match self {
-            Self::Lex { at, .. } | Self::Syntax { at, .. } | Self::CdtArity { at, .. } => Some(*at),
+            Self::Lex { at, .. }
+            | Self::Syntax { at, .. }
+            | Self::CdtArity { at, .. }
+            | Self::Aggregate { at, .. } => Some(*at),
             Self::Unsupported(_) | Self::Iri { .. } | Self::Storage(_) => None,
         }
     }
@@ -446,6 +480,7 @@ impl fmt::Display for ParseError {
             Self::Storage(error) => write!(f, "SPARQL storage error: {error}"),
             Self::Lex { reason, at } => write!(f, "SPARQL lex error at byte {at}: {reason}"),
             Self::Syntax { reason, at } => write!(f, "SPARQL syntax error at byte {at}: {reason}"),
+            Self::Aggregate { cause, at } => write!(f, "SPARQL syntax error at byte {at}: {cause}"),
             Self::Unsupported(feature) => write!(
                 f,
                 "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 query language this processor implements"
@@ -482,6 +517,7 @@ impl std::error::Error for ParseError {
             Self::Storage(error) => Some(error),
             Self::Lex { reason, at: _ } => Some(reason),
             Self::Iri { reason, lexical: _ } => Some(reason),
+            Self::Aggregate { cause, at: _ } => Some(cause),
             Self::Syntax { reason: _, at: _ }
             | Self::Unsupported(_)
             | Self::CdtArity {

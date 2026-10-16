@@ -7,6 +7,10 @@ use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_hash::error::ErrorValue;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use purrdf_sparql_algebra::SparqlParser;
+use purrdf_sparql_algebra::algebra::{
+    AggregateExpression, AggregateFunction, Expression, OrderExpression,
+};
+use purrdf_sparql_algebra::ast::{Literal, NamedNode};
 use purrdf_sparql_algebra::error::ParseError;
 use purrdf_sparql_algebra::lexer::{LexerOptions, tokenize, tokenize_with_memory};
 use purrdf_testkit::error_capture::Capture;
@@ -385,6 +389,107 @@ fn cdt_refusals_retain_the_native_signature_and_full_width_counts() {
     }
 }
 
+fn aggregate_refusals_move_the_original_key_without_allocating() {
+    let mut key = String::with_capacity(4096);
+    key.push_str("first rejected key");
+    let original = key.as_ptr();
+    let capacity = key.capacity();
+    let args = vec![Expression::Literal(Literal::new_simple("value"))];
+    let scalarvals = vec![
+        (key, Literal::new_simple("first")),
+        (
+            String::from("second rejected key"),
+            Literal::new_simple("second"),
+        ),
+    ];
+    let events = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let cause =
+        AggregateExpression::new(AggregateFunction::Sum, args, scalarvals, Vec::new(), false)
+            .unwrap_err();
+    let capture = Capture::read_with_buffer(&cause, events);
+    let inspected = window.close();
+    assert_eq!(inspected.allocations, 0);
+    let fields = capture.child("cause");
+    assert!(matches!(fields.field("key"), ErrorValue::Text(text)
+        if text == "first rejected key" && text.as_ptr() == original));
+    assert_eq!(cause.owned_text_bytes(), capacity);
+    assert_eq!(fields.child("function").code, "sparql-aggregate-sum");
+
+    let error = ParseError::Aggregate {
+        cause,
+        at: usize::MAX,
+    };
+    assert_eq!(error.owned_text_bytes(), Some(capacity));
+    assert_eq!(error.byte_offset(), Some(usize::MAX));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .source()
+            .is_some()
+    );
+    assert_eq!(error.presentation().message_id(), "sparql-parse-syntax");
+    assert_eq!(error.presentation().english(), error.to_string());
+    let parsed = Capture::read(&error);
+    assert!(matches!(parsed.field("at"), ErrorValue::ByteCount(at) if at == usize::MAX as u128));
+    assert_eq!(parsed.child("cause").code, "sparql-aggregate-scalarval");
+}
+
+fn aggregate_errors_expose_all_functions_and_private_fields() {
+    for (function, code) in [
+        (AggregateFunction::Count, "sparql-aggregate-count"),
+        (AggregateFunction::Sum, "sparql-aggregate-sum"),
+        (AggregateFunction::Avg, "sparql-aggregate-avg"),
+        (AggregateFunction::Min, "sparql-aggregate-min"),
+        (AggregateFunction::Max, "sparql-aggregate-max"),
+        (AggregateFunction::Sample, "sparql-aggregate-sample"),
+        (
+            AggregateFunction::GroupConcat,
+            "sparql-aggregate-group-concat",
+        ),
+        (AggregateFunction::Fold, "sparql-aggregate-fold"),
+        (
+            AggregateFunction::Custom(NamedNode::new_unchecked("https://example.org/aggregate")),
+            "sparql-aggregate-custom",
+        ),
+    ] {
+        let args = if function == AggregateFunction::Count {
+            vec![Expression::Literal(Literal::new_simple("a")); 2]
+        } else {
+            Vec::new()
+        };
+        let supplied = args.len();
+        let error =
+            AggregateExpression::new(function, args, Vec::new(), Vec::new(), false).unwrap_err();
+        let fields = Capture::read(&error).child("cause");
+        assert!(
+            matches!(fields.field("supplied"), ErrorValue::Unsigned(n) if n == supplied as u128)
+        );
+        let function = fields.child("function");
+        assert_eq!(function.code, code);
+        if code == "sparql-aggregate-custom" {
+            assert!(matches!(function.field("iri"), ErrorValue::Iri(iri)
+                if iri == "https://example.org/aggregate"));
+        }
+        assert_eq!(error.owned_text_bytes(), 0);
+    }
+    let expression = Expression::Literal(Literal::new_simple("value"));
+    let error = AggregateExpression::new(
+        AggregateFunction::Sum,
+        vec![expression.clone()],
+        Vec::new(),
+        vec![OrderExpression::Asc(expression)],
+        false,
+    )
+    .unwrap_err();
+    let capture = Capture::read(&error);
+    assert_eq!(capture.code, "sparql-aggregate-order-by");
+    assert_eq!(
+        capture.child("cause").child("function").code,
+        "sparql-aggregate-sum"
+    );
+}
+
 purrdf_testkit::harness_main!(
     escaped_tokens_keep_exact_original_storage_and_scanner_values,
     first_token_capacity_refuses_before_allocating,
@@ -394,4 +499,6 @@ purrdf_testkit::harness_main!(
     lexical_failure_preserves_the_callers_original_owner,
     native_refusals_need_no_message_allocation_and_caller_text_stays_message_data,
     cdt_refusals_retain_the_native_signature_and_full_width_counts,
+    aggregate_refusals_move_the_original_key_without_allocating,
+    aggregate_errors_expose_all_functions_and_private_fields,
 );

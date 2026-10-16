@@ -1462,7 +1462,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             fold.order_by,
             fold.distinct,
         )
-        .map_err(|error| super::native_syntax(&error, self.span(), self.memory))?;
+        .map_err(|cause| ParseError::Aggregate {
+            cause,
+            at: self.span(),
+        })?;
         self.finish_aggregate(agg)
     }
 
