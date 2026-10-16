@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T19:18:56-06:00\n"
+"POT-Creation-Date: 2026-10-15T19:27:31-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -5248,7 +5248,11 @@ msgstr ""
 "![带共享资源的普通 RDF 图](../assets/visualization/purrdf-viz2-ordinary-"
 "shared-compact.svg)"
 
-#: src/concepts/visualization.md:32
+#: src/concepts/visualization.md:32 src/concepts/visualization.md:68
+msgid "Exact statement incidence view"
+msgstr "精确陈述关联视图"
+
+#: src/concepts/visualization.md:36
 msgid ""
 "[Open exact SVG](../assets/visualization/purrdf-viz2-ordinary-shared-"
 "incidence.svg)"
@@ -5256,7 +5260,7 @@ msgstr ""
 "[打开精确视图 SVG](../assets/visualization/purrdf-viz2-ordinary-shared-"
 "incidence.svg)"
 
-#: src/concepts/visualization.md:34
+#: src/concepts/visualization.md:38
 msgid ""
 "![Ordinary RDF exact statement incidence graph](../assets/visualization/"
 "purrdf-viz2-ordinary-shared-incidence.svg)"
@@ -5264,7 +5268,11 @@ msgstr ""
 "![普通 RDF 的精确陈述关联图](../assets/visualization/purrdf-viz2-ordinary-"
 "shared-incidence.svg)"
 
-#: src/concepts/visualization.md:41
+#: src/concepts/visualization.md:45 src/concepts/visualization.md:81
+msgid "Statement table"
+msgstr "陈述表"
+
+#: src/concepts/visualization.md:49
 msgid ""
 "[Open table SVG](../assets/visualization/purrdf-viz2-ordinary-shared-"
 "table.svg)"
@@ -5272,7 +5280,7 @@ msgstr ""
 "[打开表格视图 SVG](../assets/visualization/purrdf-viz2-ordinary-shared-"
 "table.svg)"
 
-#: src/concepts/visualization.md:43
+#: src/concepts/visualization.md:51
 msgid ""
 "![Ordinary RDF statement table](../assets/visualization/purrdf-viz2-ordinary-"
 "shared-table.svg)"
@@ -5280,11 +5288,11 @@ msgstr ""
 "![普通 RDF 陈述表](../assets/visualization/purrdf-viz2-ordinary-shared-"
 "table.svg)"
 
-#: src/concepts/visualization.md:47
+#: src/concepts/visualization.md:55
 msgid "Asserted, reified, and annotated statements"
 msgstr "已断言、已具体化与带注解的陈述"
 
-#: src/concepts/visualization.md:49
+#: src/concepts/visualization.md:57
 msgid ""
 "Solid arrows remain assertions. Addressable statement anchors connect those "
 "assertions to reifier resources, whose ordinary RDF properties carry "
@@ -5293,7 +5301,7 @@ msgstr ""
 "实线箭头仍表示断言。可寻址的陈述锚点把这些断言连接到具体化节点资源，而这些资"
 "源的普通 RDF 属性承载溯源、置信度、时间戳以及带方向的语言字面量。"
 
-#: src/concepts/visualization.md:53
+#: src/concepts/visualization.md:61
 msgid ""
 "[Open compact SVG](../assets/visualization/purrdf-viz2-asserted-reified-"
 "compact.svg)"
@@ -5301,7 +5309,7 @@ msgstr ""
 "[打开紧凑视图 SVG](../assets/visualization/purrdf-viz2-asserted-reified-"
 "compact.svg)"
 
-#: src/concepts/visualization.md:55
+#: src/concepts/visualization.md:63
 msgid ""
 "![Asserted RDF statements with reifiers and annotations](../assets/"
 "visualization/purrdf-viz2-asserted-reified-compact.svg)"
@@ -5309,7 +5317,7 @@ msgstr ""
 "![带具体化节点与注解的已断言 RDF 陈述](../assets/visualization/purrdf-viz2-"
 "asserted-reified-compact.svg)"
 
-#: src/concepts/visualization.md:60
+#: src/concepts/visualization.md:72
 msgid ""
 "[Open exact SVG](../assets/visualization/purrdf-viz2-asserted-reified-"
 "incidence.svg)"
@@ -5317,7 +5325,7 @@ msgstr ""
 "[打开精确视图 SVG](../assets/visualization/purrdf-viz2-asserted-reified-"
 "incidence.svg)"
 
-#: src/concepts/visualization.md:62
+#: src/concepts/visualization.md:74
 msgid ""
 "![Exact incidence graph for asserted and reified statements](../assets/"
 "visualization/purrdf-viz2-asserted-reified-incidence.svg)"
@@ -5325,7 +5333,7 @@ msgstr ""
 "![已断言与已具体化陈述的精确关联图](../assets/visualization/purrdf-viz2-"
 "asserted-reified-incidence.svg)"
 
-#: src/concepts/visualization.md:69
+#: src/concepts/visualization.md:85
 msgid ""
 "[Open table SVG](../assets/visualization/purrdf-viz2-asserted-reified-"
 "table.svg)"
@@ -5333,7 +5341,7 @@ msgstr ""
 "[打开表格视图 SVG](../assets/visualization/purrdf-viz2-asserted-reified-"
 "table.svg)"
 
-#: src/concepts/visualization.md:71
+#: src/concepts/visualization.md:87
 msgid ""
 "![Statement table for asserted and reified RDF](../assets/visualization/"
 "purrdf-viz2-asserted-reified-table.svg)"
@@ -5341,11 +5349,11 @@ msgstr ""
 "![已断言与已具体化 RDF 的陈述表](../assets/visualization/purrdf-viz2-"
 "asserted-reified-table.svg)"
 
-#: src/concepts/visualization.md:75
+#: src/concepts/visualization.md:91
 msgid "Quoted-only and nested triple terms"
 msgstr "仅被引用的三元组项与嵌套三元组项"
 
-#: src/concepts/visualization.md:77
+#: src/concepts/visualization.md:93
 msgid ""
 "A quoted-only triple is a bounded statement glyph, never a solid assertion "
 "arrow. Reifier resources stay distinct from the structural statement they "
@@ -5354,7 +5362,7 @@ msgstr ""
 "仅被引用（未被断言）的三元组是一个带边框的陈述图元（glyph），绝不是实线断言箭"
 "头。具体化节点资源与其所具体化的结构性陈述保持区分。"
 
-#: src/concepts/visualization.md:81
+#: src/concepts/visualization.md:97
 msgid ""
 "[Open quoted-only compact SVG](../assets/visualization/purrdf-viz2-quoted-"
 "only-compact.svg)"
@@ -5362,7 +5370,7 @@ msgstr ""
 "[打开仅引用紧凑视图 SVG](../assets/visualization/purrdf-viz2-quoted-only-"
 "compact.svg)"
 
-#: src/concepts/visualization.md:83
+#: src/concepts/visualization.md:99
 msgid ""
 "![Quoted-only RDF triple terms and their reifiers](../assets/visualization/"
 "purrdf-viz2-quoted-only-compact.svg)"
@@ -5370,7 +5378,11 @@ msgstr ""
 "![仅被引用的 RDF 三元组项及其具体化节点](../assets/visualization/purrdf-viz2-"
 "quoted-only-compact.svg)"
 
-#: src/concepts/visualization.md:88
+#: src/concepts/visualization.md:104
+msgid "Quoted-only exact view and table"
+msgstr "仅引用情形的精确视图与表格"
+
+#: src/concepts/visualization.md:108
 msgid ""
 "[Open exact SVG](../assets/visualization/purrdf-viz2-quoted-only-"
 "incidence.svg) · [Open table SVG](../assets/visualization/purrdf-viz2-quoted-"
@@ -5380,7 +5392,7 @@ msgstr ""
 "incidence.svg) · [打开表格视图 SVG](../assets/visualization/purrdf-viz2-"
 "quoted-only-table.svg)"
 
-#: src/concepts/visualization.md:91
+#: src/concepts/visualization.md:111
 msgid ""
 "![Quoted-only exact incidence graph](../assets/visualization/purrdf-viz2-"
 "quoted-only-incidence.svg)"
@@ -5388,7 +5400,7 @@ msgstr ""
 "![仅引用情形的精确关联图](../assets/visualization/purrdf-viz2-quoted-only-"
 "incidence.svg)"
 
-#: src/concepts/visualization.md:93
+#: src/concepts/visualization.md:113
 msgid ""
 "![Quoted-only statement table](../assets/visualization/purrdf-viz2-quoted-"
 "only-table.svg)"
@@ -5396,7 +5408,7 @@ msgstr ""
 "![仅引用情形的陈述表](../assets/visualization/purrdf-viz2-quoted-only-"
 "table.svg)"
 
-#: src/concepts/visualization.md:97
+#: src/concepts/visualization.md:117
 msgid ""
 "Nested triple terms retain recursive statement identity. Dialect badges make "
 "symmetric or generalized RDF positions explicit rather than silently "
@@ -5405,7 +5417,7 @@ msgstr ""
 "嵌套三元组项保留递归的陈述标识。方言徽标把对称或广义 RDF 位置显式标出，而不是"
 "静默地把它们渲染为普通的 RDF 1.2。"
 
-#: src/concepts/visualization.md:101
+#: src/concepts/visualization.md:121
 msgid ""
 "[Open nested compact SVG](../assets/visualization/purrdf-viz2-nested-dialect-"
 "compact.svg)"
@@ -5413,7 +5425,7 @@ msgstr ""
 "[打开嵌套紧凑视图 SVG](../assets/visualization/purrdf-viz2-nested-dialect-"
 "compact.svg)"
 
-#: src/concepts/visualization.md:103
+#: src/concepts/visualization.md:123
 msgid ""
 "![Nested triple terms with RDF dialect diagnostics](../assets/visualization/"
 "purrdf-viz2-nested-dialect-compact.svg)"
@@ -5421,7 +5433,11 @@ msgstr ""
 "![带 RDF 方言诊断的嵌套三元组项](../assets/visualization/purrdf-viz2-nested-"
 "dialect-compact.svg)"
 
-#: src/concepts/visualization.md:108
+#: src/concepts/visualization.md:128
+msgid "Nested exact view and table"
+msgstr "嵌套情形的精确视图与表格"
+
+#: src/concepts/visualization.md:132
 msgid ""
 "[Open exact SVG](../assets/visualization/purrdf-viz2-nested-dialect-"
 "incidence.svg) · [Open table SVG](../assets/visualization/purrdf-viz2-nested-"
@@ -5431,7 +5447,7 @@ msgstr ""
 "incidence.svg) · [打开表格视图 SVG](../assets/visualization/purrdf-viz2-"
 "nested-dialect-table.svg)"
 
-#: src/concepts/visualization.md:111
+#: src/concepts/visualization.md:135
 msgid ""
 "![Nested exact statement incidence graph](../assets/visualization/purrdf-"
 "viz2-nested-dialect-incidence.svg)"
@@ -5439,7 +5455,7 @@ msgstr ""
 "![嵌套情形的精确陈述关联图](../assets/visualization/purrdf-viz2-nested-"
 "dialect-incidence.svg)"
 
-#: src/concepts/visualization.md:113
+#: src/concepts/visualization.md:137
 msgid ""
 "![Nested statement table](../assets/visualization/purrdf-viz2-nested-dialect-"
 "table.svg)"
@@ -5447,11 +5463,11 @@ msgstr ""
 "![嵌套情形的陈述表](../assets/visualization/purrdf-viz2-nested-dialect-"
 "table.svg)"
 
-#: src/concepts/visualization.md:117
+#: src/concepts/visualization.md:141
 msgid "Dense connected data"
 msgstr "密集连接的数据"
 
-#: src/concepts/visualization.md:119
+#: src/concepts/visualization.md:143
 msgid ""
 "The exact view uses separated vertical channels and rounded orthogonal turns "
 "so individual subject, predicate, object, reification, and annotation routes "
@@ -5460,7 +5476,7 @@ msgstr ""
 "精确视图使用相互分隔的垂直通道与圆角直角转弯，使单个主语、谓词、宾语、具体化"
 "与注解连线在密集连接的数据集中仍可追踪。"
 
-#: src/concepts/visualization.md:123
+#: src/concepts/visualization.md:147
 msgid ""
 "[Open dense exact SVG](../assets/visualization/purrdf-viz2-dense-connected-"
 "incidence.svg)"
@@ -5468,7 +5484,7 @@ msgstr ""
 "[打开密集精确视图 SVG](../assets/visualization/purrdf-viz2-dense-connected-"
 "incidence.svg)"
 
-#: src/concepts/visualization.md:125
+#: src/concepts/visualization.md:149
 msgid ""
 "![Dense RDF exact statement incidence graph](../assets/visualization/purrdf-"
 "viz2-dense-connected-incidence.svg)"
@@ -5476,7 +5492,11 @@ msgstr ""
 "![密集 RDF 的精确陈述关联图](../assets/visualization/purrdf-viz2-dense-"
 "connected-incidence.svg)"
 
-#: src/concepts/visualization.md:130
+#: src/concepts/visualization.md:154
+msgid "Dense compact view and table"
+msgstr "密集情形的紧凑视图与表格"
+
+#: src/concepts/visualization.md:158
 msgid ""
 "[Open compact SVG](../assets/visualization/purrdf-viz2-dense-connected-"
 "compact.svg) · [Open table SVG](../assets/visualization/purrdf-viz2-dense-"
@@ -5486,7 +5506,7 @@ msgstr ""
 "compact.svg) · [打开表格视图 SVG](../assets/visualization/purrdf-viz2-dense-"
 "connected-table.svg)"
 
-#: src/concepts/visualization.md:133
+#: src/concepts/visualization.md:161
 msgid ""
 "![Dense compact RDF resource graph](../assets/visualization/purrdf-viz2-"
 "dense-connected-compact.svg)"
@@ -5494,7 +5514,7 @@ msgstr ""
 "![密集情形的紧凑 RDF 资源图](../assets/visualization/purrdf-viz2-dense-"
 "connected-compact.svg)"
 
-#: src/concepts/visualization.md:135
+#: src/concepts/visualization.md:163
 msgid ""
 "![Dense RDF statement table](../assets/visualization/purrdf-viz2-dense-"
 "connected-table.svg)"
@@ -5502,17 +5522,17 @@ msgstr ""
 "![密集 RDF 的陈述表](../assets/visualization/purrdf-viz2-dense-connected-"
 "table.svg)"
 
-#: src/concepts/visualization.md:139
+#: src/concepts/visualization.md:167
 msgid "Regenerating the samples"
 msgstr "重新生成示例"
 
-#: src/concepts/visualization.md:141
+#: src/concepts/visualization.md:169
 msgid ""
 "The committed SVGs are projections of the Rust fixtures, not hand-edited "
 "book artwork:"
 msgstr "已提交的 SVG 是 Rust 测试夹具的投影，而不是手工编辑的书籍插图："
 
-#: src/concepts/visualization.md:149
+#: src/concepts/visualization.md:177
 msgid ""
 "`make check` regenerates the same artifacts in a temporary directory and "
 "rejects any drift between the renderer and the book."
@@ -8416,7 +8436,8 @@ msgstr ""
 
 #: src/concepts/canonicalization.md:52
 msgid "b\"<https://example.org/alice> <https://example.org/knows> _:friend .\""
-msgstr "b\"<https://example.org/alice> <https://example.org/knows> _:friend .\""
+msgstr ""
+"b\"<https://example.org/alice> <https://example.org/knows> _:friend .\""
 
 #: src/concepts/canonicalization.md:53
 msgid "\"source IRI not interned\""
@@ -8523,11 +8544,11 @@ msgid ""
 "PurRDF's own conformance harnesses use RDFC-1.0 isomorphism to compare, for "
 "example, SHACL Rules output graphs against expected inferred graphs."
 msgstr ""
-"`datasets_isomorphic(a, b)` 判定两个冻结的数据集是否在 RDF 结构上同构：即在"
-"同一个空节点双射下具有相同的四元组、具体化节点绑定与注解。规范化给出等价的裁决——两个数据集同构，当且仅"
-"当它们的规范化结果相等——但直接检查是测试与测试框架中更方便的形式。例如，"
-"PurRDF 自己的一致性测试框架使用 RDFC-1.0 同构来比较 SHACL Rules 的输出图与预"
-"期的推理图。"
+"`datasets_isomorphic(a, b)` 判定两个冻结的数据集是否在 RDF 结构上同构：即在同"
+"一个空节点双射下具有相同的四元组、具体化节点绑定与注解。规范化给出等价的裁决"
+"——两个数据集同构，当且仅当它们的规范化结果相等——但直接检查是测试与测试框架中"
+"更方便的形式。例如，PurRDF 自己的一致性测试框架使用 RDFC-1.0 同构来比较 "
+"SHACL Rules 的输出图与预期的推理图。"
 
 #: src/concepts/canonicalization.md:111
 msgid "Diff"
