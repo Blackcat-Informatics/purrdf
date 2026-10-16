@@ -406,6 +406,75 @@ fn data_scoring_refusals_keep_original_ordinal_and_field_facts() {
     assert!(matches!(cause.field("total"), ErrorValue::Unsigned(2)));
 }
 
+fn source_read_failure_retains_the_actual_backend_error_through_conversion_and_clone() {
+    use purrdf_core::{TermValue, TripleDatasetBuilder, TripleReadError};
+    use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig};
+    let dataset = TripleDatasetBuilder::default().freeze().unwrap();
+    let read = dataset.read().unwrap();
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri("https://example.org/p")],
+        GraphSelector::Named(TermValue::iri("https://example.org/g")),
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    let error = TextIndex::from_dataset(&read, &config).unwrap_err();
+    assert!(matches!(&error, TextError::SourceRead(_)));
+    assert_eq!(
+        error.to_string(),
+        "text-index source read error: the triple-only carrier does not support named graphs"
+    );
+    let error: EvalError = error.into();
+    assert!(error.is_native_storage_failure());
+    assert_eq!(error.code(), Some("native-sparql-source-read"));
+    let clone = error.clone();
+    let source = std::error::Error::source(&error).unwrap().source().unwrap();
+    let cloned_source = std::error::Error::source(&clone).unwrap().source().unwrap();
+    assert!(matches!(
+        source.downcast_ref::<TripleReadError>(),
+        Some(TripleReadError::NamedGraphsUnsupported)
+    ));
+    assert!(core::ptr::eq(source, cloned_source));
+    drop(error);
+    let cause = Capture::read(&clone).child("cause").child("cause");
+    assert_eq!(cause.code, "triple-read-named-graphs-unsupported");
+}
+
+fn ledger_source_errors_preserve_nested_node_keys_and_native_reason_refusals() {
+    use purrdf_core::TermValue;
+    use purrdf_core::evidence::{
+        Information, LedgerError, LedgerNodeKey, LedgerReadError, ReasonDescription, StandpointKey,
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::{Memory, Resident};
+    // A constructed missing-node control exercises the complete retained key.
+    let error = LedgerReadError::Declaration(LedgerError::MissingNode(LedgerNodeKey::Information(
+        StandpointKey::Declared(Digest32::new([7; 32])),
+        Information::Both,
+    )));
+    let key = Capture::read(&error).child("cause").child("key");
+    assert_eq!(key.code, "ledger-node-information");
+    assert!(
+        matches!(key.child("standpoint").field("identity"), ErrorValue::Bytes(bytes) if bytes == [7; 32])
+    );
+    assert_eq!(key.child("information").code, "evidence-information-both");
+    // The reason refusal itself is produced by native identity admission.
+    let iri = TermValue::iri("https://example.org/cause");
+    let description = ReasonDescription {
+        cause: &iri,
+        concern: &iri,
+        constraint: None,
+        vault: None,
+        watermark: None,
+    };
+    let mut resident = Resident;
+    let refusal = description
+        .identity(&mut Memory::new(&mut resident))
+        .unwrap_err();
+    let error = LedgerError::Reason(refusal);
+    let cause = Capture::read(&error).child("cause");
+    assert_eq!(cause.code, "evidence-reason-concern-must-be-triple");
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
@@ -419,4 +488,6 @@ purrdf_testkit::harness_main!(
     data_corpus_refusal_preserves_full_width_totals_and_population,
     data_query_refusals_keep_original_order_and_exact_frequency_totals,
     data_scoring_refusals_keep_original_ordinal_and_field_facts,
+    source_read_failure_retains_the_actual_backend_error_through_conversion_and_clone,
+    ledger_source_errors_preserve_nested_node_keys_and_native_reason_refusals,
 );

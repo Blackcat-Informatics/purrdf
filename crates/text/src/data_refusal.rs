@@ -7,6 +7,7 @@ use crate::{fixed::Scaled, query_workspace::QueryString};
 
 #[derive(Debug)]
 pub(crate) enum DataRefusal {
+    ForeignTermId,
     ExplicitPopulations {
         fields: usize,
     },
@@ -86,6 +87,7 @@ pub(crate) enum DataRefusal {
 
 impl purrdf_hash::error::StructuredError for DataRefusal {
     purrdf_hash::error_visit! {
+        ForeignTermId => "text-data-foreign-term-id" {},
         ExplicitPopulations { fields } => "text-data-explicit-populations" { "fields" => Unsigned(*fields as u128) },
         PopulationMode { enabled, fields, populations } => "text-data-population-mode" {
             "enabled" => Boolean(*enabled), "fields" => Unsigned(*fields as u128), "populations" => Unsigned(*populations as u128),
@@ -121,6 +123,12 @@ impl purrdf_hash::error::StructuredError for DataRefusal {
 impl core::fmt::Display for DataRefusal {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
+            Self::ForeignTermId => {
+                return core::fmt::Display::fmt(
+                    &purrdf_core::TermLookupError::<core::convert::Infallible>::ForeignId,
+                    f,
+                );
+            }
             Self::ExplicitPopulations { .. } => {
                 "this ranking profile requires explicit field populations"
             }

@@ -21,6 +21,17 @@ const REASON_DOMAIN: Domain = Domain::new(b"purrdf-core/evidence-reason/v1");
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReasonId(Digest32);
 
+impl purrdf_hash::error::StructuredError for ReasonId {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        let Self(id) = self;
+        visitor.variant("evidence-reason-id");
+        visitor.value(
+            Some("digest"),
+            purrdf_hash::error::ErrorValue::Bytes(id.as_bytes()),
+        );
+    }
+}
+
 impl ReasonId {
     /// The shared digest value, rendered by the original base16 home.
     #[must_use]
@@ -38,6 +49,14 @@ pub enum ReasonError {
     CauseMustBeIri,
     /// Native admission, layout or allocation refusal.
     Storage(StorageError),
+}
+
+impl purrdf_hash::error::StructuredError for ReasonError {
+    purrdf_hash::error_visit! {
+        ConcernMustBeTriple => "evidence-reason-concern-must-be-triple" {},
+        CauseMustBeIri => "evidence-reason-cause-must-be-iri" {},
+        Storage(cause) => "evidence-reason-storage" { "cause" => Cause(cause) },
+    }
 }
 
 purrdf_lex::variant_from!(ReasonError { Storage(StorageError) });

@@ -54,7 +54,7 @@ pub enum TextError {
     /// [`TextIndex::from_dataset`](crate::TextIndex::from_dataset).
     Data(purrdf_sparql_eval::NativeDiagnostic),
     /// The input source refused a term or iterator read. No partial index is published.
-    SourceRead(String),
+    SourceRead(purrdf_sparql_eval::NativeDiagnostic),
 
     /// A fixed-point operation overflowed. The arithmetic is exact by
     /// construction, so an intermediate that does not fit is reported rather
@@ -66,14 +66,6 @@ pub enum TextError {
     /// non-positive value, or a division whose divisor is zero. There is no
     /// value to return, so none is invented.
     Domain(purrdf_sparql_eval::NativeDiagnostic),
-}
-
-purrdf_lex::constructors! {
-    impl TextError {
-        /// Construct a fatal operational source refusal.
-        pub fn source_read(what) -> Self::SourceRead;
-
-    }
 }
 
 impl core::fmt::Display for TextError {
@@ -90,7 +82,9 @@ impl core::fmt::Display for TextError {
                 diagnostic.message()
             ),
             Self::Data(diagnostic) => write!(f, "text-index input error: {}", diagnostic.message()),
-            Self::SourceRead(msg) => write!(f, "text-index source read error: {msg}"),
+            Self::SourceRead(diagnostic) => {
+                write!(f, "text-index source read error: {}", diagnostic.message())
+            }
             Self::Overflow(diagnostic) | Self::Domain(diagnostic) => {
                 f.write_str(diagnostic.message())
             }
@@ -105,6 +99,7 @@ impl std::error::Error for TextError {
             Self::Diagnostic(error)
             | Self::Config(error)
             | Self::Data(error)
+            | Self::SourceRead(error)
             | Self::Overflow(error)
             | Self::Domain(error) => Some(error),
             Self::Substring(error) => Some(error),
@@ -123,7 +118,7 @@ impl purrdf_hash::error::StructuredError for TextError {
         Config(reason) => "text-config" { "reason" => Cause(reason) },
         Html(diagnostics) => "text-html" { "diagnostics" => List(diagnostics.iter().map(|diagnostic| purrdf_hash::error::ErrorValue::Record(diagnostic))) },
         Data(reason) => "text-data" { "reason" => Cause(reason) },
-        SourceRead(message) => "text-source-read" { "message" => Message(message) },
+        SourceRead(cause) => "text-source-read" { "cause" => Cause(cause) },
         Overflow(reason) => "text-overflow" { "reason" => Cause(reason) },
         Domain(reason) => "text-domain" { "reason" => Cause(reason) },
     }
@@ -135,6 +130,27 @@ purrdf_lex::variant_from!(TextError {
 });
 
 impl TextError {
+    /// Preserve a caller-supplied operational source message.
+    pub fn source_read(what: impl core::fmt::Display) -> Self {
+        crate::query_workspace::query_error(
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            purrdf_sparql_eval::NativeDiagnosticKind::SourceRead,
+            what,
+        )
+        .unwrap_or_else(|failure| failure)
+    }
+
+    pub(crate) fn source_cause<E: purrdf_hash::error::NativeError + 'static>(cause: E) -> Self {
+        match crate::query_workspace::admitted(purrdf_sparql_eval::NativeDiagnostic::render_cause(
+            purrdf_sparql_eval::NativeDiagnosticKind::SourceRead,
+            cause,
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )) {
+            Ok(diagnostic) => Self::SourceRead(diagnostic),
+            Err(error) => error,
+        }
+    }
+
     /// Preserve a caller-supplied configuration message. Native validation
     /// retains its original values through the same diagnostic owner.
     pub fn config(what: impl core::fmt::Display) -> Self {
@@ -222,9 +238,9 @@ impl TextError {
             Self::Diagnostic(diagnostic)
             | Self::Config(diagnostic)
             | Self::Data(diagnostic)
+            | Self::SourceRead(diagnostic)
             | Self::Overflow(diagnostic)
             | Self::Domain(diagnostic) => return EvalError::NativeDiagnostic(diagnostic),
-            Self::SourceRead(message) => return EvalError::SourceRead(message),
             Self::Substring(_) | Self::Phonetic(_) | Self::Html(_) => NativeDiagnosticKind::Data,
         };
         match NativeDiagnostic::render_cause(kind, self, workspace) {
@@ -282,8 +298,8 @@ mod tests {
                 | TextError::Diagnostic(_) => {
                     unreachable!("test uses string diagnostic variants")
                 }
-                TextError::SourceRead(m) => m.as_str(),
-                TextError::Config(diagnostic)
+                TextError::SourceRead(diagnostic)
+                | TextError::Config(diagnostic)
                 | TextError::Data(diagnostic)
                 | TextError::Overflow(diagnostic)
                 | TextError::Domain(diagnostic) => diagnostic.message(),
@@ -313,8 +329,10 @@ mod tests {
     #[test]
     fn source_read_failure_remains_fatal_and_preserves_its_detail() {
         let converted: EvalError = TextError::source_read("storage checksum mismatch").into();
+        assert!(converted.is_native_storage_failure());
+        assert_eq!(converted.code(), Some("native-sparql-source-read"));
         assert!(
-            matches!(&converted, EvalError::SourceRead(message) if message == "storage checksum mismatch")
+            matches!(&converted, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == purrdf_sparql_eval::NativeDiagnosticKind::SourceRead && diagnostic.message() == "storage checksum mismatch")
         );
     }
 

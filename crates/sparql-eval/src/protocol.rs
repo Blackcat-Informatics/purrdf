@@ -1583,6 +1583,7 @@ impl From<&LoadError> for FailureCode {
 impl From<&RemoteError> for FailureCode {
     fn from(error: &RemoteError) -> Self {
         match error {
+            RemoteError::Evaluation(inner) if inner.is_native_storage_failure() => Self::Evaluation,
             RemoteError::SourceRead(_)
             | RemoteError::AllocationFailed { .. }
             | RemoteError::WorkspaceStopped

@@ -157,6 +157,9 @@ pub(crate) fn query_error(
         match kind {
             purrdf_sparql_eval::NativeDiagnosticKind::Data => TextError::Data(diagnostic),
             purrdf_sparql_eval::NativeDiagnosticKind::Config => TextError::Config(diagnostic),
+            purrdf_sparql_eval::NativeDiagnosticKind::SourceRead => {
+                TextError::SourceRead(diagnostic)
+            }
             _ => TextError::Diagnostic(diagnostic),
         }
     })

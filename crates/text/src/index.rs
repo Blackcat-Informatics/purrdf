@@ -676,10 +676,15 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// intended data asks [`verify_binding`](crate::verify_binding), which checks
     /// both the digest of the rows walked and that shortfall against the dataset in
     /// hand.
+    /// The source's read error participates in structured inspection so its
+    /// original native cause can be retained through indexing failures.
     pub fn from_dataset<D: DatasetView>(
         dataset: &D,
         config: &TextIndexConfig<P>,
-    ) -> Result<Self, TextError> {
+    ) -> Result<Self, TextError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+    {
         let (rows, coverage) = collect_rows(dataset, config)?;
         let source_fingerprint = digest_rows(&rows);
         let (documents, dictionary) = analyze_rows(&rows, config)?;
@@ -702,7 +707,10 @@ impl<P: CorpusProfile> TextIndex<P> {
         dataset: &D,
         config: &TextIndexConfig<P>,
         profile: RankingProfile,
-    ) -> Result<Self, TextError> {
+    ) -> Result<Self, TextError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+    {
         for predicate in config.predicates() {
             profile.field_for(predicate)?;
         }
@@ -1810,14 +1818,17 @@ struct AnalyzedDocument<P: CorpusProfile = GraphLanguage> {
 fn collect_rows<D: DatasetView, P: CorpusProfile>(
     dataset: &D,
     config: &TextIndexConfig<P>,
-) -> Result<(Vec<SourceRow<P>>, SourceCoverage), TextError> {
+) -> Result<(Vec<SourceRow<P>>, SourceCoverage), TextError>
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+{
     if P::GRAPH_FREE && dataset.supports_named_graphs() {
         return Err(crate::configuration::ConfigurationRefusal::GraphFreeSource.into_error());
     }
     dataset
         .checked_read(|dataset| {
-            let Some(graph) = P::resolve(config.graph(), dataset)
-                .map_err(|error| TextError::source_read(error.to_string()))?
+            let Some(graph) =
+                P::resolve(config.graph(), dataset).map_err(TextError::source_cause)?
             else {
                 return Ok((
                     Vec::new(),
@@ -1829,7 +1840,7 @@ fn collect_rows<D: DatasetView, P: CorpusProfile>(
             for (ordinal, predicate) in config.predicates().iter().enumerate() {
                 if let Some(id) = dataset
                     .term_id_by_value(predicate)
-                    .map_err(|error| TextError::source_read(error.to_string()))?
+                    .map_err(TextError::source_cause)?
                 {
                     predicate_ids.push((id, predicate, ordinal));
                 }
@@ -1874,7 +1885,7 @@ fn collect_rows<D: DatasetView, P: CorpusProfile>(
             let coverage = SourceCoverage::of_walk(dataset, config, &represented);
             Ok((rows, coverage))
         })
-        .map_err(|error| TextError::source_read(error.to_string()))?
+        .map_err(TextError::source_cause)?
 }
 
 impl SourceCoverage {
@@ -1945,7 +1956,10 @@ fn push_row<D: DatasetView, P: CorpusProfile>(
     subject: D::Id,
     predicate: &TermValue,
     object: D::Id,
-) -> Result<(), TextError> {
+) -> Result<(), TextError>
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+{
     // A predicate may legitimately carry literals in one statement and an IRI in
     // the next; that is data, not a fault, so a non-literal object contributes
     // no text and raises nothing.
@@ -1982,10 +1996,15 @@ fn push_row<D: DatasetView, P: CorpusProfile>(
 ///
 /// [`TextError`] naming the inconsistency when the view hands back an id that is not
 /// its own — a literal whose datatype does not resolve to an IRI.
-fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, TextError> {
+fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, TextError>
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+{
     dataset.term_value(id).map_err(|error| match error {
-        foreign @ purrdf_core::TermLookupError::ForeignId => TextError::data(foreign.to_string()),
-        purrdf_core::TermLookupError::Read(error) => TextError::source_read(error.to_string()),
+        purrdf_core::TermLookupError::ForeignId => {
+            data_error(crate::data_refusal::DataRefusal::ForeignTermId, None)
+        }
+        purrdf_core::TermLookupError::Read(error) => TextError::source_cause(error),
     })
 }
 
@@ -2284,7 +2303,10 @@ fn build_terms<P: CorpusProfile>(
 pub(crate) fn source_digest<D: DatasetView, P: CorpusProfile>(
     dataset: &D,
     config: &TextIndexConfig<P>,
-) -> Result<([u8; FINGERPRINT_BYTES], SourceCoverage), TextError> {
+) -> Result<([u8; FINGERPRINT_BYTES], SourceCoverage), TextError>
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+{
     let (rows, coverage) = collect_rows(dataset, config)?;
     Ok((digest_rows(&rows), coverage))
 }

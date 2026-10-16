@@ -2446,7 +2446,10 @@ pub fn verify_binding<D: DatasetView, P: CorpusProfile>(
     index: &TextIndex<P>,
     dataset: &D,
     config: &TextIndexConfig<P>,
-) -> Result<(), TextError> {
+) -> Result<(), TextError>
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+{
     if config != index.config() {
         return Err(TextError::config(
             "the configuration supplied to verify_binding is not the one this index was built \

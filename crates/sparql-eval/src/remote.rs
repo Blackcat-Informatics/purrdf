@@ -260,6 +260,7 @@ impl core::fmt::Display for RemoteError {
             Self::RetainedDiagnostic(error) => {
                 write!(f, "decode: {}", error.diagnostic().message)
             }
+            Self::Evaluation(error) if error.is_native_storage_failure() => error.fmt(f),
             Self::Evaluation(error) => write!(f, "decode: {error}"),
             Self::Diagnostic(error) => write!(f, "decode: {error}"),
             Self::NoSource => f.write_str("no remote query source configured"),
@@ -703,6 +704,9 @@ impl RetainedServiceFailure {
                 message: message.clone(),
             },
             RemoteError::SourceRead(message) => EvalError::SourceRead(message.clone()),
+            RemoteError::Evaluation(error) if error.is_native_storage_failure() => {
+                error.native_storage_root().clone()
+            }
             _ => EvalError::RetainedServiceFailure(self),
         }
     }
@@ -723,6 +727,10 @@ impl RetainedServiceFailure {
             RemoteError::SourceRead(_) | RemoteError::WorkspaceStopped => {
                 "native-sparql-source-read"
             }
+            RemoteError::Evaluation(error) if error.is_native_storage_failure() => error
+                .native_storage_root()
+                .diagnostic_code()
+                .unwrap_or_else(|| self.failure_code().code()),
             _ => self.failure_code().code(),
         }
     }
@@ -766,6 +774,9 @@ impl fmt::Display for RetainedServiceFailure {
                 self.endpoint.as_str()
             ),
             RemoteError::SourceRead(message) => write!(f, "dataset read failed: {message}"),
+            RemoteError::Evaluation(error) if error.is_native_storage_failure() => {
+                fmt::Display::fmt(error, f)
+            }
             other => write!(
                 f,
                 "SERVICE federation error: SERVICE <{}>: {other}",
@@ -1877,6 +1888,9 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
         RemoteError::SourceRead(_) => {
             return Err(RetainedServiceFailure::new(endpoint, error, &workspace)?.into_eval_error());
         }
+        RemoteError::Evaluation(inner) if inner.is_native_storage_failure() => {
+            return Err(RetainedServiceFailure::new(endpoint, error, &workspace)?.into_eval_error());
+        }
         _ => {}
     }
     if silent && let Some(tripped) = post_return_trip {
@@ -2937,6 +2951,14 @@ mod tests {
                 "transport" => RemoteError::Transport("connection refused".to_owned()),
                 "decode" => RemoteError::Decode("not a results document".to_owned()),
                 "source-read" => RemoteError::SourceRead("snapshot block unavailable".to_owned()),
+                "native-source-read" => remote_error_for(EvalError::NativeDiagnostic(
+                    crate::NativeDiagnostic::render(
+                        crate::NativeDiagnosticKind::SourceRead,
+                        "snapshot block unavailable",
+                        &crate::WorkspaceCapability::resident(),
+                    )
+                    .unwrap(),
+                )),
                 "exchange-id-exhausted" => RemoteError::ExchangeIdExhausted,
                 "allocation-failed" => RemoteError::AllocationFailed {
                     construct: "forwarded evaluation cause",
@@ -2974,16 +2996,85 @@ mod tests {
             "snapshot block unavailable".to_owned(),
         ));
         assert!(matches!(mapped, RemoteError::SourceRead(_)));
-        for silent in ["", "SILENT "] {
+        let native = FailingKinds
+            .resolve(ServiceRequest::new(
+                "http://example.org/native-source-read",
+                "",
+            ))
+            .unwrap_err();
+        assert_eq!(
+            crate::protocol::FailureCode::from(&native),
+            crate::protocol::FailureCode::Evaluation
+        );
+        assert_eq!(
+            native.to_string(),
+            "dataset read failed: snapshot block unavailable"
+        );
+        for (endpoint, silent) in [
+            ("source-read", ""),
+            ("source-read", "SILENT "),
+            ("native-source-read", ""),
+            ("native-source-read", "SILENT "),
+        ] {
             let query = format!(
-                "SELECT ?n WHERE {{ SERVICE {silent}<http://example.org/source-read> {{ ?a ?b ?n }} }}"
+                "SELECT ?n WHERE {{ SERVICE {silent}<http://example.org/{endpoint}> {{ ?a ?b ?n }} }}"
             );
             let (result, silenced) = run_recorded(&local(), Some(&FailingKinds), &query);
-            assert!(
-                matches!(result, Err(EvalError::SourceRead(message)) if message == "snapshot block unavailable")
+            let error = result.unwrap_err();
+            assert!(error.is_native_storage_failure());
+            assert_eq!(error.code(), Some("native-sparql-source-read"));
+            assert_eq!(
+                error.to_string(),
+                "dataset read failed: snapshot block unavailable"
             );
             assert_eq!(silenced.len(), 0);
         }
+    }
+
+    #[test]
+    fn retained_native_source_read_keeps_operational_identity_and_original_grants() {
+        let (workspace, ledger, _) = crate::workspace::owned_row_regressions::account(65_536);
+        let capability = workspace.capability();
+        let diagnostic = crate::NativeDiagnostic::render(
+            crate::NativeDiagnosticKind::SourceRead,
+            "snapshot block unavailable",
+            &capability,
+        )
+        .unwrap();
+        let remote = remote_error_for(EvalError::NativeDiagnostic(diagnostic));
+        let ServiceResolutionError::Invocation(admitted) =
+            invocation_error(remote, &capability).unwrap()
+        else {
+            panic!("original invocation wrapper")
+        };
+        let error =
+            RetainedServiceFailure::new("http://example.org/source-read", admitted, &capability)
+                .unwrap()
+                .into_eval_error();
+        assert!(matches!(&error, EvalError::RetainedServiceFailure(_)));
+        let EvalError::RetainedServiceFailure(failure) = &error else {
+            unreachable!()
+        };
+        assert_eq!(
+            failure.failure_code(),
+            crate::protocol::FailureCode::Evaluation
+        );
+        assert!(error.is_native_storage_failure());
+        assert_eq!(error.code(), Some("native-sparql-source-read"));
+        assert_eq!(error.diagnostic_code(), Some("native-sparql-source-read"));
+        assert_eq!(
+            error.to_string(),
+            "dataset read failed: snapshot block unavailable"
+        );
+        let clone = error.clone();
+        let live = ledger.live.load(Ordering::Relaxed);
+        drop(error);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        assert!(clone.is_native_storage_failure());
+        drop(clone);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
 
     #[test]

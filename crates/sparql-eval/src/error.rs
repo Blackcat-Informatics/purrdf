@@ -785,9 +785,10 @@ impl EvalError {
     /// A native storage/source refusal invalidates every producer sharing the
     /// execution. An invocation's data or function failure remains that
     /// invocation's refusal at a composition boundary.
-    pub const fn is_native_storage_failure(&self) -> bool {
+    pub fn is_native_storage_failure(&self) -> bool {
+        let error = self.native_storage_root();
         matches!(
-            self,
+            error,
             Self::AllocationFailed { .. }
                 | Self::WorkspaceStopped
                 | Self::WorkspaceUnpriced(_)
@@ -795,7 +796,19 @@ impl EvalError {
                 | Self::SourceRead(_)
                 | Self::UnstableNativeDiagnostic
                 | Self::ExchangeIdExhausted
-        )
+        ) || matches!(error, Self::NativeDiagnostic(diagnostic) if matches!(diagnostic.kind(), NativeDiagnosticKind::SourceRead))
+            || matches!(error, Self::RetainedServiceFailure(failure) if matches!(failure.remote_error().error(), crate::remote::RemoteError::SourceRead(_) | crate::remote::RemoteError::WorkspaceStopped | crate::remote::RemoteError::AllocationFailed { .. } | crate::remote::RemoteError::ExchangeIdExhausted))
+    }
+
+    /// Follow owned forwarded errors without recursing through nested services.
+    pub(crate) fn native_storage_root(&self) -> &Self {
+        let mut error = self;
+        while let Self::RetainedServiceFailure(failure) = error
+            && let crate::remote::RemoteError::Evaluation(inner) = failure.remote_error().error()
+        {
+            error = inner;
+        }
+        error
     }
 
     /// A caller-returned `Function` contains no typed request classification.
@@ -867,16 +880,15 @@ impl EvalError {
     pub fn diagnostic_code(&self) -> Option<&'static str> {
         match self {
             Self::RetainedDiagnostic(_) => None,
-            Self::RetainedServiceFailure(error) => {
-                if matches!(
-                    error.remote_error().error(),
-                    crate::remote::RemoteError::SourceRead(_)
-                ) {
-                    Some("native-sparql-source-read")
-                } else {
-                    None
+            Self::RetainedServiceFailure(error) => match error.remote_error().error() {
+                crate::remote::RemoteError::SourceRead(_) => Some("native-sparql-source-read"),
+                crate::remote::RemoteError::Evaluation(inner)
+                    if inner.is_native_storage_failure() =>
+                {
+                    inner.native_storage_root().diagnostic_code()
                 }
-            }
+                _ => None,
+            },
             Self::NativeDiagnostic(message) => match message.kind() {
                 NativeDiagnosticKind::SourceRead => Some("native-sparql-source-read"),
                 NativeDiagnosticKind::Internal => Some(Self::INTERNAL_CODE),
