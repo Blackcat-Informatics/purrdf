@@ -22,6 +22,7 @@
 //! How deeply a request nests is never a reason: the parser holds what encloses the
 //! cursor on heap-allocated stacks, so nesting is bounded by memory alone.
 
+use crate::lexer::LexReason;
 use core::fmt;
 use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
 
@@ -95,8 +96,8 @@ pub enum ParseError {
     /// Tokenization failed. Carries a human reason and the byte offset at which
     /// the lexer gave up.
     Lex {
-        /// Human-readable description of why tokenization failed.
-        reason: String,
+        /// Original native refusal, or a caller-supplied message.
+        reason: LexReason,
         /// Byte offset into the query string at which the lexer gave up.
         at: usize,
     },
@@ -133,9 +134,8 @@ pub enum ParseError {
     CdtArity {
         /// The function IRI the call named.
         iri: String,
-        /// The signature the function admits, spelled for a human
-        /// (`"an even number of arguments"`, `"2 or 3 arguments"`, …).
-        expected: String,
+        /// The original signature from the closed CDT function registry.
+        expected: purrdf_cdt::CdtArity,
         /// The number of arguments the call actually supplied.
         found: usize,
         /// Byte offset of the offending call (best-effort).
@@ -147,7 +147,7 @@ impl purrdf_hash::error::StructuredError for ParseError {
     purrdf_hash::error_visit! {
         Storage(error) => "sparql-parse-storage" { "cause" => Cause(error) },
         Lex { reason, at } => "sparql-parse-lex" {
-            "reason" => Text(reason), "at" => ByteCount(*at as u128),
+            "reason" => Cause(reason), "at" => ByteCount(*at as u128),
         },
         Syntax { reason, at } => "sparql-parse-syntax" {
             "reason" => Text(reason), "at" => ByteCount(*at as u128),
@@ -157,7 +157,7 @@ impl purrdf_hash::error::StructuredError for ParseError {
             "lexical" => Iri(lexical), "reason" => Cause(reason),
         },
         CdtArity { iri, expected, found, at } => "sparql-parse-cdt-arity" {
-            "iri" => Iri(iri), "expected" => Text(expected),
+            "iri" => Iri(iri), "expected" => Record(expected),
             "found" => Unsigned(*found as u128), "at" => ByteCount(*at as u128),
         },
     }
@@ -171,7 +171,8 @@ purrdf_lex::constructors! {
         /// Construct a [`ParseError::Syntax`] at a byte offset.
         pub fn syntax(reason, at: usize) -> Self::Syntax { .. };
 
-        /// Construct a [`ParseError::Lex`] at a byte offset.
+        /// Construct a caller-message [`ParseError::Lex`] at a byte offset.
+        /// The native lexer retains typed [`LexReason`] values directly.
         pub fn lex(reason, at: usize) -> Self::Lex { .. };
     }
 }
@@ -256,7 +257,7 @@ impl ParseError {
                         )?,
                         DiagnosticParameter::try_new_with_memory(
                             "reason",
-                            Text(memory.string(reason)?),
+                            Text(memory.format(reason)?),
                             memory,
                         )?,
                     ];
@@ -336,7 +337,7 @@ impl ParseError {
                         )?,
                         DiagnosticParameter::try_new_with_memory(
                             "expected",
-                            Text(memory.string(expected)?),
+                            Text(memory.format(expected)?),
                             memory,
                         )?,
                         DiagnosticParameter::try_new_with_memory(
@@ -366,15 +367,14 @@ impl ParseError {
     pub fn owned_text_bytes(&self) -> Option<usize> {
         match self {
             Self::Storage(_) => Some(0),
-            Self::Lex { reason, .. } | Self::Syntax { reason, .. } | Self::Unsupported(reason) => {
-                Some(reason.capacity())
-            }
+            Self::Lex { reason, .. } => Some(reason.owned_text_bytes()),
+            Self::Syntax { reason, .. } | Self::Unsupported(reason) => Some(reason.capacity()),
             Self::Iri { lexical, reason } => lexical.capacity().checked_add(
                 reason
                     .validation_error()
                     .map_or(0, purrdf_iri::IriError::owned_text_bytes),
             ),
-            Self::CdtArity { iri, expected, .. } => iri.capacity().checked_add(expected.capacity()),
+            Self::CdtArity { iri, .. } => Some(iri.capacity()),
         }
     }
 
@@ -480,9 +480,9 @@ impl std::error::Error for ParseError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Storage(error) => Some(error),
+            Self::Lex { reason, at: _ } => Some(reason),
             Self::Iri { reason, lexical: _ } => Some(reason),
-            Self::Lex { reason: _, at: _ }
-            | Self::Syntax { reason: _, at: _ }
+            Self::Syntax { reason: _, at: _ }
             | Self::Unsupported(_)
             | Self::CdtArity {
                 iri: _,
@@ -530,12 +530,12 @@ mod tests {
             (
                 ParseError::CdtArity {
                     iri: "http://example.org/function".into(),
-                    expected: "2 arguments".into(),
+                    expected: purrdf_cdt::CdtArity::Fixed(2),
                     found: 1,
                     at: 7,
                 },
                 "sparql-parse-cdt-arity",
-                "SPARQL syntax error at byte 7: <http://example.org/function> takes 2 arguments, not 1",
+                "SPARQL syntax error at byte 7: <http://example.org/function> takes exactly 2 arguments, not 1",
             ),
         ];
         for (error, identity, english) in errors {
@@ -596,7 +596,10 @@ mod tests {
             },
             ParseError::CdtArity {
                 iri: hostile.into(),
-                expected: hostile.into(),
+                expected: purrdf_cdt::CdtArity::Range {
+                    min: 0,
+                    max: usize::MAX,
+                },
                 found: usize::MAX,
                 at: usize::MAX,
             },
@@ -613,7 +616,7 @@ mod tests {
                 purrdf_iri::IriError::BadScheme(hostile.into())
             ),
             format!(
-                "SPARQL syntax error at byte {max}: <{hostile}> takes {hostile}, not {max}",
+                "SPARQL syntax error at byte {max}: <{hostile}> takes 0 to {max} arguments, not {max}",
                 max = usize::MAX
             ),
         ];
