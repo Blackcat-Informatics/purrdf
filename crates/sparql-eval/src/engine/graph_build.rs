@@ -67,6 +67,16 @@ impl std::fmt::Display for GraphBuildError {
 
 impl std::error::Error for GraphBuildError {}
 
+impl purrdf_hash::error::StructuredError for GraphBuildError {
+    purrdf_hash::error_visit! {
+        Query(diagnostic) => "sparql-graph-build-query" { "cause" => Cause(diagnostic) },
+        Evaluation(error) => "sparql-graph-build-evaluation" { "cause" => Cause(error) },
+        BudgetExhausted { tripped, evidence } => "sparql-graph-build-budget" {
+            "tripped" => Record(tripped), "evidence" => Record(evidence),
+        },
+    }
+}
+
 purrdf_lex::variant_from!(GraphBuildError {
     Query(RdfDiagnostic),
 });

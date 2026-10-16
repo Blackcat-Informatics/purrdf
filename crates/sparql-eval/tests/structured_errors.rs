@@ -446,7 +446,162 @@ fn native_protocol_resource_refusals_remain_allocation_free() {
     }
 }
 
+fn graph_publication_refusals_expose_original_causes_and_governor_evidence() {
+    use purrdf_core::RdfDatasetBuilder;
+    use purrdf_sparql_eval::{
+        CancellationFlag, GovernorState, GraphBuildError, NativeSparqlEngine, QueryGovernors,
+        QueryOptions,
+    };
+    use std::sync::Arc;
+    let data = RdfDatasetBuilder::new().freeze().unwrap();
+    let engine = NativeSparqlEngine::new();
+    let select = engine.prepare_query("SELECT * WHERE {}", None).unwrap();
+    let mut target = RdfDatasetBuilder::new();
+    let query = engine
+        .construct_prepared_into_view(
+            data.as_ref(),
+            &select,
+            &[],
+            QueryOptions::EMPTY,
+            &mut target,
+        )
+        .unwrap_err();
+    assert_eq!(Capture::read(&query).code, "sparql-graph-build-evaluation");
+    assert!(matches!(
+        Capture::read(&query)
+            .child("cause")
+            .child("cause")
+            .child("cause")
+            .field("code"),
+        ErrorValue::Code("native-sparql-construct")
+    ));
+    let diagnostic = GraphBuildError::Query(purrdf_core::RdfDiagnostic::error(
+        "original-query-code",
+        "original query message",
+    ));
+    assert_eq!(Capture::read(&diagnostic).code, "sparql-graph-build-query");
+    assert!(matches!(
+        Capture::read(&diagnostic).child("cause").field("code"),
+        ErrorValue::Code("original-query-code")
+    ));
+
+    let construct = engine.prepare_query("CONSTRUCT { <https://example.org/s> <https://example.org/p> <https://example.org/o> } WHERE {}", None).unwrap();
+    let flag = Arc::new(CancellationFlag::new());
+    flag.cancel();
+    let state = Arc::new(GovernorState::new(
+        &QueryGovernors::UNBOUNDED.with_stop_signal(flag),
+    ));
+    let error = engine
+        .construct_prepared_in_operation_into_view(
+            data.as_ref(),
+            &construct,
+            &[],
+            QueryOptions::EMPTY,
+            &state,
+            &mut target,
+        )
+        .unwrap_err();
+    let events = Vec::with_capacity(2);
+    let window = CurrentThreadWindow::open();
+    let capture = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(capture.code, "sparql-graph-build-budget");
+    assert_eq!(capture.child("tripped").code, "governor-stopped");
+    let evidence = capture.child("evidence");
+    assert_eq!(evidence.code, "governor-evidence");
+    assert_eq!(
+        evidence.child("tripped").child("cause").code,
+        "stop-cancelled"
+    );
+    assert!(
+        matches!(evidence.child("limits").field("fuel"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    assert_eq!(target.freeze().unwrap().quad_count(), 0);
+
+    let error = GraphBuildError::Evaluation(EvalError::AllocationFailed {
+        construct: "original graph allocation",
+    });
+    assert!(matches!(
+        Capture::read(&error).child("cause").field("construct"),
+        ErrorValue::Text("original graph allocation")
+    ));
+}
+
+fn governor_receipt_inspection_preserves_full_counters_lists_and_original_messages() {
+    use purrdf_core::{
+        GovernorEvidence, ResourceVector, SilencedEvidenceBuilder, SilencedInvocation,
+        SilencedKind, SilencedTarget,
+    };
+    use purrdf_sparql_eval::GovernedEvidence;
+    use purrdf_testkit::error_capture::Event;
+    let mut ledger = SilencedEvidenceBuilder::new();
+    for target in [
+        SilencedTarget::Service {
+            endpoint: "original non-IRI endpoint".into(),
+        },
+        SilencedTarget::Load {
+            iri: "https://example.org/load".into(),
+        },
+    ] {
+        ledger
+            .insert_resident(SilencedInvocation::new(
+                target,
+                SilencedKind::HostDenied,
+                "original host text".into(),
+            ))
+            .unwrap();
+    }
+    let mut evidence = GovernorEvidence::new(ResourceVector::UNBOUNDED);
+    evidence.consumed = ResourceVector::UNBOUNDED;
+    evidence.silenced = ledger.snapshot();
+    evidence
+        .expression_errors
+        .push((purrdf_xsd::ErrorCode::Foar0001, u64::MAX));
+    let events = Vec::with_capacity(16);
+    let window = CurrentThreadWindow::open();
+    let capture = Capture::read_with_buffer(&evidence, events);
+    assert_eq!(window.close().allocations, 0);
+    for dimension in ResourceDimension::ALL {
+        assert!(
+            matches!(capture.child("consumed").field(dimension.label()), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+    }
+    assert!(matches!(capture.field("tripped"), ErrorValue::Absent));
+    let mut targets = Vec::new();
+    for event in &capture.events {
+        if let Event::Value(None, ErrorValue::Record(record)) = event {
+            let invocation = Capture::read(*record);
+            assert_eq!(invocation.child("kind").code, "silenced-host-denied");
+            assert!(matches!(
+                invocation.field("message"),
+                ErrorValue::Message("original host text")
+            ));
+            targets.push(invocation.child("target").code);
+        }
+    }
+    assert_eq!(targets, ["silenced-service", "silenced-load"]);
+    assert!(
+        capture
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Value(None, ErrorValue::Code("err:FOAR0001"))))
+    );
+    assert!(capture.events.iter().any(|event| matches!(event, Event::Value(None, ErrorValue::Unsigned(value)) if *value == u128::from(u64::MAX))));
+    let wrapped = GovernedEvidence {
+        view: CallerRefusal { limit: u128::MAX },
+        governors: evidence,
+    };
+    let capture = Capture::read(&wrapped);
+    assert!(matches!(
+        capture.child("view").field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+    assert_eq!(capture.child("governors").code, "governor-evidence");
+}
+
 purrdf_testkit::harness_main!(
+    graph_publication_refusals_expose_original_causes_and_governor_evidence,
+    governor_receipt_inspection_preserves_full_counters_lists_and_original_messages,
     erased_function_causes_keep_original_fields_and_identity_without_rendering,
     parsed_errors_and_optional_classifications_keep_their_native_shapes,
     service_categories_preserve_external_messages_and_governor_quantities,

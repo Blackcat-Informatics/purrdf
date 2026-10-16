@@ -685,6 +685,16 @@ pub struct GovernedEvidence<Evidence> {
     pub governors: GovernorEvidence,
 }
 
+impl<Evidence: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for GovernedEvidence<Evidence>
+{
+    purrdf_hash::error_visit! {
+        @record self { view, governors } => "sparql-governed-evidence" {
+            "view" => Record(&self.view), "governors" => Record(&self.governors),
+        }
+    }
+}
+
 impl<Evidence> GovernedEvidence<Evidence> {
     /// Pair a view's operational `view` evidence with this execution's `governors`
     /// accounting.

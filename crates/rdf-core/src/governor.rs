@@ -200,6 +200,19 @@ impl std::fmt::Display for ResourceDimension {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceVector([u64; ResourceDimension::COUNT]);
 
+impl purrdf_hash::error::StructuredError for ResourceVector {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        let Self(values) = self;
+        visitor.variant("governor-resources");
+        for dimension in ResourceDimension::ALL {
+            visitor.value(
+                Some(dimension.label()),
+                purrdf_hash::error::ErrorValue::Unsigned(u128::from(values[dimension.index()])),
+            );
+        }
+    }
+}
+
 impl ResourceVector {
     /// Zero on every dimension. As a consumption vector this is "nothing spent yet"; as
     /// a ceiling vector it is a valid hard limit that admits no charged work at all.
@@ -494,6 +507,13 @@ pub enum SilencedTarget {
     },
 }
 
+impl purrdf_hash::error::StructuredError for SilencedTarget {
+    purrdf_hash::error_visit! {
+        Service { endpoint } => "silenced-service" { "endpoint" => Text(endpoint) },
+        Load { iri } => "silenced-load" { "iri" => Iri(iri) },
+    }
+}
+
 impl SilencedTarget {
     /// The endpoint or source IRI the target names.
     #[must_use]
@@ -540,6 +560,19 @@ pub enum SilencedKind {
     Fault,
 }
 
+impl purrdf_hash::error::StructuredError for SilencedKind {
+    purrdf_hash::error_visit! {
+        Transport => "silenced-transport" {},
+        Decode => "silenced-decode" {},
+        Disabled => "silenced-disabled" {},
+        Unconfigured => "silenced-unconfigured" {},
+        Denied => "silenced-denied" {},
+        HostDenied => "silenced-host-denied" {},
+        NotAnIri => "silenced-not-an-iri" {},
+        Fault => "silenced-fault" {},
+    }
+}
+
 impl SilencedKind {
     /// A stable kebab-case label for rendering and bindings.
     #[must_use]
@@ -572,6 +605,16 @@ pub struct SilencedInvocation {
     pub kind: SilencedKind,
     /// The failure's own message, as the error would have rendered without `SILENT`.
     pub message: String,
+}
+
+impl purrdf_hash::error::StructuredError for SilencedInvocation {
+    purrdf_hash::error_visit! {
+        @record self { target, kind, message } => "silenced-invocation" {
+            "target" => Record(&self.target),
+            "kind" => Record(&self.kind),
+            "message" => Message(&self.message),
+        }
+    }
 }
 
 impl SilencedInvocation {
@@ -875,6 +918,41 @@ pub struct GovernorEvidence {
     /// cast of `NaN` to a decimal `err:FOCA0002`. A code that never occurred is
     /// absent, so the complete path of an error-free query reports an empty list.
     pub expression_errors: ExpressionErrorEvidence,
+}
+
+impl purrdf_hash::error::StructuredError for GovernorEvidence {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        let Self {
+            consumed,
+            limits,
+            tripped,
+            silenced,
+            expression_errors,
+        } = self;
+        visitor.variant("governor-evidence");
+        visitor.value(Some("consumed"), ErrorValue::Record(consumed));
+        visitor.value(Some("limits"), ErrorValue::Record(limits));
+        visitor.value(
+            Some("tripped"),
+            tripped
+                .as_ref()
+                .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+        );
+        visit_list(
+            visitor,
+            Some("silenced"),
+            silenced.iter().map(|value| ErrorValue::Record(value)),
+        );
+        visitor.begin_list(Some("expression_errors"), expression_errors.len());
+        for (code, count) in expression_errors {
+            visitor.begin_list(None, 2);
+            visitor.value(None, ErrorValue::Code(code.qname()));
+            visitor.value(None, ErrorValue::Unsigned(u128::from(*count)));
+            visitor.end_list();
+        }
+        visitor.end_list();
+    }
 }
 
 impl GovernorEvidence {
