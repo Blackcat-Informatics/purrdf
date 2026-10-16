@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T19:49:42-06:00\n"
+"POT-Creation-Date: 2026-10-15T20:44:06-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -37,7 +37,7 @@ msgstr "入门"
 #: src/sparql/querying.md:2236 src/validation/shacl.md:302
 #: src/validation/shacl.md:406 src/validation/shacl.md:441
 #: src/validation/shacl.md:1190 src/validation/shacl.md:1464
-#: src/validation/shex.md:74 src/entailment.md:56 src/entailment.md:101
+#: src/validation/shex.md:78 src/entailment.md:56 src/entailment.md:101
 msgid "Rust"
 msgstr "Rust"
 
@@ -46,7 +46,7 @@ msgstr "Rust"
 #: src/sparql/querying.md:2238 src/validation/shacl.md:304
 #: src/validation/shacl.md:403 src/validation/shacl.md:438
 #: src/validation/shacl.md:1360 src/validation/shacl.md:1466
-#: src/validation/shex.md:76 src/entailment.md:58 src/entailment.md:103
+#: src/validation/shex.md:80 src/entailment.md:58 src/entailment.md:103
 msgid "Python"
 msgstr "Python"
 
@@ -765,8 +765,8 @@ msgstr "// 在驻留的 TermId 空间中构建数据集。\n"
 #: src/reference/python-api.md:49 src/reference/python-api.md:51
 #: src/reference/python-api.md:89 src/reference/python-api.md:529
 #: src/concepts/canonicalization.md:53 src/concepts/canonicalization.md:57
-#: src/sparql/results.md:21 src/sparql/results.md:30 src/validation/shex.md:60
-#: src/validation/shex.md:80 src/gts.md:51
+#: src/sparql/results.md:21 src/sparql/results.md:30 src/validation/shex.md:64
+#: src/validation/shex.md:84 src/gts.md:51
 msgid "\"https://example.org/alice\""
 msgstr "\"https://example.org/alice\""
 
@@ -985,12 +985,12 @@ msgstr ""
 msgid "\"conforms\""
 msgstr "\"conforms\""
 
-#: src/getting-started/python.md:40 src/validation/shex.md:60
-#: src/validation/shex.md:80
+#: src/getting-started/python.md:40 src/validation/shex.md:64
+#: src/validation/shex.md:84
 msgid "\"https://example.org/PersonShape\""
 msgstr "\"https://example.org/PersonShape\""
 
-#: src/getting-started/python.md:41 src/validation/shex.md:61
+#: src/getting-started/python.md:41 src/validation/shex.md:65
 msgid "\"conformant\""
 msgstr "\"conformant\""
 
@@ -6626,7 +6626,7 @@ msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 #: src/concepts/projections.md:449 src/sparql/querying.md:2234
 #: src/validation/shacl.md:300 src/validation/shacl.md:400
 #: src/validation/shacl.md:435 src/validation/shacl.md:1357
-#: src/validation/shacl.md:1462 src/validation/shex.md:72 src/entailment.md:54
+#: src/validation/shacl.md:1462 src/validation/shex.md:76 src/entailment.md:54
 #: src/entailment.md:99
 msgid "Host"
 msgstr "宿主"
@@ -6667,7 +6667,7 @@ msgstr "`lift_archive`"
 #: src/sparql/querying.md:2237 src/validation/shacl.md:303
 #: src/validation/shacl.md:402 src/validation/shacl.md:437
 #: src/validation/shacl.md:1190 src/validation/shacl.md:1359
-#: src/validation/shacl.md:1465 src/validation/shex.md:75 src/entailment.md:57
+#: src/validation/shacl.md:1465 src/validation/shex.md:79 src/entailment.md:57
 #: src/entailment.md:102
 msgid "CLI"
 msgstr "CLI"
@@ -7349,7 +7349,7 @@ msgstr ""
 
 #: src/concepts/codecs.md:197 src/concepts/base-iris.md:263
 #: src/sparql/querying.md:2263 src/validation/shacl.md:1590
-#: src/validation/shex.md:98 src/entailment.md:372
+#: src/validation/shex.md:102 src/entailment.md:372
 msgid "Conformance"
 msgstr "一致性"
 
@@ -13549,7 +13549,7 @@ msgstr ""
 "好通过这种嵌套子查询形态到达统计集。"
 
 #: src/sparql/querying.md:2211 src/validation/shacl.md:1446
-#: src/validation/shex.md:64
+#: src/validation/shex.md:68
 msgid "Dated XPath regex laws"
 msgstr "带日期的 XPath 正则法则"
 
@@ -13621,7 +13621,7 @@ msgstr "每个宿主都以自己的写法选择法则："
 
 #: src/sparql/querying.md:2234 src/validation/shacl.md:400
 #: src/validation/shacl.md:435 src/validation/shacl.md:1462
-#: src/validation/shex.md:72
+#: src/validation/shex.md:76
 msgid "Spelling"
 msgstr "写法"
 
@@ -18278,7 +18278,7 @@ msgstr ""
 "`purrdf_shacl_apply_rules_xpath_regex` 与 "
 "`purrdf_shacl_eval_node_expr_xpath_regex` 上的 `regex_profile`"
 
-#: src/validation/shacl.md:1474 src/validation/shex.md:81
+#: src/validation/shacl.md:1474 src/validation/shex.md:85
 msgid "\"xpath-3.1-2017-03-21\""
 msgstr "\"xpath-3.1-2017-03-21\""
 
@@ -20828,23 +20828,25 @@ msgstr ""
 "     PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\\n\\\n"
 "     ex:S { ex:p xsd:integer? }\""
 
-#: src/validation/shex.md:36
+#: src/validation/shex.md:35 src/validation/shex.md:36
+#: src/validation/shex.md:38 src/validation/shex.md:39
 msgid "\"well-formed\""
 msgstr "\"well-formed\""
 
-#: src/validation/shex.md:40
-msgid ""
-"Hard-fail discipline: every malformed schema is a typed `ShexError` — no "
-"lenient mode, no panics on any input."
-msgstr ""
-"硬失败纪律：每个格式错误的模式都是一个带类型的 `ShexError`——没有宽松模式，任"
-"何输入都不会引发 panic。"
-
 #: src/validation/shex.md:43
+msgid ""
+"Schema parsing reports malformed syntax through a typed `ShexError`; "
+"`check_structure` reports a list of `StructureError` violations. There is no "
+"lenient mode that accepts a malformed schema."
+msgstr ""
+"模式解析通过带类型的 `ShexError` 报告语法错误；`check_structure` 则报告 "
+"`StructureError` 违规项列表。不存在接受格式错误模式的宽松模式。"
+
+#: src/validation/shex.md:47
 msgid "Validation with shape maps"
 msgstr "使用形状映射进行验证"
 
-#: src/validation/shex.md:45
+#: src/validation/shex.md:49
 msgid ""
 "Validation (spec §5.2–§5.5) is **fixed shape-map** validation over the "
 "frozen `purrdf-core` dataset IR, in interned `TermId` space: you supply "
@@ -20862,11 +20864,11 @@ msgstr ""
 "与分组基数的 `EXTRA`/`CLOSED` 三元组表达式匹配、逆向约束、基于类型指派的递"
 "归，以及一个 `EXTERNAL` 解析器钩子。"
 
-#: src/validation/shex.md:54
+#: src/validation/shex.md:58
 msgid "From Python:"
 msgstr "从 Python 调用："
 
-#: src/validation/shex.md:66
+#: src/validation/shex.md:70
 msgid ""
 "String-facet `PATTERN`s run on the compatibility regular expressions unless "
 "the caller selects a dated native XPath law by name: `xpath-2.0-2010-12-14` "
@@ -20879,7 +20881,7 @@ msgstr ""
 "Functions and Operators 2.0，第二版）或 `xpath-3.1-2017-03-21`（Functions "
 "and Operators 3.1）。两者都接受反向引用；只有 3.1 接受非捕获组和 `q` 标志。"
 
-#: src/validation/shex.md:74
+#: src/validation/shex.md:78
 msgid ""
 "`validate_with_xpath` and `validate_shape_map_with_xpath`, with `Profile` "
 "and `Limits` from `purrdf_core::xsd_regex::xpath`; an "
@@ -20889,15 +20891,15 @@ msgstr ""
 "`Limits` 来自 `purrdf_core::xsd_regex::xpath`；"
 "`XPathValidator::new(&schema)` 用于对同一固定映射的重复验证"
 
-#: src/validation/shex.md:75
+#: src/validation/shex.md:79
 msgid "`--xpath-regex <NAME>` on `shex`"
 msgstr "`shex` 上的 `--xpath-regex <NAME>`"
 
-#: src/validation/shex.md:76
+#: src/validation/shex.md:80
 msgid "`xpath_regex=` on `shex.validate`"
 msgstr "`shex.validate` 上的 `xpath_regex=`"
 
-#: src/validation/shex.md:84
+#: src/validation/shex.md:88
 msgid ""
 "Names match exactly, so `xpath-3.1` is refused with a list of the accepted "
 "names. With no selection, `validate`, `validate_with` and "
@@ -20911,7 +20913,7 @@ msgstr ""
 "ShExJ 按原样传递模式与标志文本。ShExC 保留其自身的具体语法转义文法，其中没有 "
 "`\\1`，因此反向引用要用 ShExJ 书写。"
 
-#: src/validation/shex.md:90
+#: src/validation/shex.md:94
 msgid ""
 "A pattern or flag the selected law does not define fails its facet, as any "
 "invalid pattern does. A selected law also runs under finite resource bounds, "
@@ -20927,7 +20929,7 @@ msgstr ""
 "表达式purrdf-core)中止整个形状映射。否定、备选分支以及先前已判定的条目都无法"
 "把该拒绝变成不符合的条目或部分结果映射。"
 
-#: src/validation/shex.md:100
+#: src/validation/shex.md:104
 msgid ""
 "The engine is gated against the vendored official [shexTest](https://"
 "github.com/shexSpec/shexTest) suite, pinned at tag `v2.1.0` (`vectors/"
@@ -20947,7 +20949,7 @@ msgstr ""
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/"
 "CONFORMANCE.md)。"
 
-#: src/validation/shex.md:110
+#: src/validation/shex.md:114
 msgid ""
 "Reported conformance is logic-level (pass/fail parity), per suite "
 "convention; result-structure conformance is upstream-experimental."
@@ -20955,11 +20957,11 @@ msgstr ""
 "按套件惯例，所报告的一致性是逻辑层面的（通过/失败对等）；结果结构的一致性在上"
 "游仍属实验性。"
 
-#: src/validation/shex.md:113
+#: src/validation/shex.md:117
 msgid "SHACL or ShEx?"
 msgstr "SHACL 还是 ShEx？"
 
-#: src/validation/shex.md:115
+#: src/validation/shex.md:119
 msgid ""
 "PurRDF implements both natively over the same IR, so the choice is yours, "
 "not the toolkit's: SHACL suits constraint reporting (violations with "
