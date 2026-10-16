@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T20:44:06-06:00\n"
+"POT-Creation-Date: 2026-10-15T21:17:15-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -105,7 +105,7 @@ msgstr "JSON-LD 上下文与压缩"
 msgid "Canonicalization & Diff"
 msgstr "规范化与差异比较"
 
-#: src/SUMMARY.md:30 src/concepts/rdf12.md:70 src/interop/rdfjs.md:60
+#: src/SUMMARY.md:30 src/concepts/rdf12.md:70 src/interop/rdfjs.md:63
 msgid "SPARQL"
 msgstr "SPARQL"
 
@@ -3619,7 +3619,7 @@ msgstr ""
 "化："
 
 #: src/getting-started/javascript.md:29 src/validation/shapes-products.md:869
-#: src/interop/rdfjs.md:23 src/interop/rdfjs.md:67
+#: src/interop/rdfjs.md:23 src/interop/rdfjs.md:48 src/interop/rdfjs.md:70
 msgid "\"@blackcatinformatics/purrdf\""
 msgstr "\"@blackcatinformatics/purrdf\""
 
@@ -7368,7 +7368,7 @@ msgstr ""
 
 #: src/concepts/codecs.md:204 src/sparql/results.md:119
 #: src/validation/shapes-products.md:952 src/gts.md:136 src/slices.md:95
-#: src/interop/rdflib.md:81 src/interop/rdfjs.md:116
+#: src/interop/rdflib.md:81 src/interop/rdfjs.md:119
 msgid "Related"
 msgstr "相关内容"
 
@@ -23902,13 +23902,12 @@ msgstr "数据工厂"
 msgid ""
 "`DataFactory` covers the standard RDF/JS term constructors — `namedNode`, "
 "`blankNode`, `literal(value, languageOrDatatype?)`, `variable`, "
-"`defaultGraph`, `quad`, `fromTerm`, `fromQuad` — plus the deliberate RDF 1.2 "
-"extensions no incumbent RDF/JS library carries:"
+"`defaultGraph`, `quad`, `fromTerm`, `fromQuad` — plus explicit RDF 1.2 "
+"extensions:"
 msgstr ""
 "`DataFactory` 涵盖标准的 RDF/JS 项构造函数——`namedNode`、`blankNode`、"
 "`literal(value, languageOrDatatype?)`、`variable`、`defaultGraph`、`quad`、"
-"`fromTerm`、`fromQuad`——外加现有 RDF/JS 库都不具备的、有意为之的 RDF 1.2 扩"
-"展："
+"`fromTerm`、`fromQuad`——外加显式的 RDF 1.2 扩展："
 
 #: src/interop/rdfjs.md:26
 msgid "// RDF/JS standard surface.\n"
@@ -23938,34 +23937,36 @@ msgstr ""
 "`size` 与迭代（`for (const quad of dataset)`），外加经由原生编解码器的解析与"
 "序列化："
 
-#: src/interop/rdfjs.md:48
+#: src/interop/rdfjs.md:50
 msgid "\"<https://ex/s> <https://ex/p> <https://ex/o> .\""
 msgstr "\"<https://ex/s> <https://ex/p> <https://ex/o> .\""
 
-#: src/interop/rdfjs.md:48
+#: src/interop/rdfjs.md:50
 msgid "\"ntriples\""
 msgstr "\"ntriples\""
 
-#: src/interop/rdfjs.md:49
+#: src/interop/rdfjs.md:51
 msgid "\"https://ex/p\""
 msgstr "\"https://ex/p\""
 
-#: src/interop/rdfjs.md:52
+#: src/interop/rdfjs.md:54
 msgid "\"trig\""
 msgstr "\"trig\""
 
-#: src/interop/rdfjs.md:55
+#: src/interop/rdfjs.md:57
 msgid ""
-"Accepted format names: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml`, or "
-"their media types. Because these are the native codecs, output is byte-"
-"deterministic and identical to what the Rust, Python, and C surfaces emit "
-"([Codecs & Determinism](../concepts/codecs.md))."
+"Accepted format names: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml`, "
+"`trix`, `hextuples`, `jsonld`, `yamlld`, or their media types. Because these "
+"are the native codecs, output is byte-deterministic and identical to what "
+"the Rust, Python, and C surfaces emit ([Codecs & Determinism](../concepts/"
+"codecs.md))."
 msgstr ""
-"可接受的格式名：`turtle`、`ntriples`、`nquads`、`trig`、`rdfxml`，或其媒体类"
-"型。由于这些就是原生编解码器，输出是逐字节确定的，并与 Rust、Python 和 C 接口"
-"所输出的完全相同（[编解码器与确定性](../concepts/codecs.md)）。"
+"可接受的格式名：`turtle`、`ntriples`、`nquads`、`trig`、`rdfxml`、`trix`、"
+"`hextuples`、`jsonld`、`yamlld`，或其媒体类型。由于这些就是原生编解码器，输出"
+"是逐字节确定的，并与 Rust、Python 和 C 接口所输出的完全相同（[编解码器与确定"
+"性](../concepts/codecs.md)）。"
 
-#: src/interop/rdfjs.md:62
+#: src/interop/rdfjs.md:65
 msgid ""
 "Use `QueryEngine` when running more than one query or when the caller wants "
 "typed results instead of raw strings. The engine owns the native SPARQL plan "
@@ -23974,11 +23975,11 @@ msgstr ""
 "运行不止一条查询，或调用方需要带类型的结果而非原始字符串时，使用 "
 "`QueryEngine`。该引擎持有原生 SPARQL 计划缓存，并返回包根级别的项与数据集："
 
-#: src/interop/rdfjs.md:72
+#: src/interop/rdfjs.md:75
 msgid "\"PREFIX ex: <https://ex/> SELECT ?o WHERE { ex:s ex:p ?o }\""
 msgstr "\"PREFIX ex: <https://ex/> SELECT ?o WHERE { ex:s ex:p ?o }\""
 
-#: src/interop/rdfjs.md:78
+#: src/interop/rdfjs.md:81
 msgid ""
 "\"PREFIX ex: <https://ex/> CONSTRUCT { ex:copy ex:p ?o } WHERE { ex:s ex:p ?"
 "o }\""
@@ -23986,7 +23987,7 @@ msgstr ""
 "\"PREFIX ex: <https://ex/> CONSTRUCT { ex:copy ex:p ?o } WHERE { ex:s ex:p ?"
 "o }\""
 
-#: src/interop/rdfjs.md:82
+#: src/interop/rdfjs.md:85
 msgid ""
 "SELECT rows are single-owner and lazy across the wasm boundary. Iterate "
 "`result.rows`, call `result.rows.take(index)` for indexed consumption, or "
@@ -23999,7 +24000,7 @@ msgstr ""
 "剩余的行。一行只能被消费一次；在耗尽之前放弃某个结果时，应调用 "
 "`result.free()`。"
 
-#: src/interop/rdfjs.md:87
+#: src/interop/rdfjs.md:90
 msgid ""
 "`QueryEngine.queryRaw(...)` serializes SELECT/ASK results as SPARQL Results "
 "JSON/XML/CSV/TSV and graph results through the same graph formats accepted "
@@ -24011,18 +24012,18 @@ msgstr ""
 "`QueryEngine.update(...)` 以原子方式应用 SPARQL UPDATE：只有在整个更新成功之"
 "后，数据集才会改变。"
 
-#: src/interop/rdfjs.md:92
+#: src/interop/rdfjs.md:95
 msgid "Streams and sinks"
 msgstr "流与接收器"
 
-#: src/interop/rdfjs.md:94
+#: src/interop/rdfjs.md:97
 msgid ""
 "The package speaks the async RDF/JS Stream/Sink protocol over the `purrdf-"
 "events` ingestion seam:"
 msgstr ""
 "本包在 `purrdf-events` 摄取扩展点之上使用异步的 RDF/JS Stream/Sink 协议："
 
-#: src/interop/rdfjs.md:97
+#: src/interop/rdfjs.md:100
 msgid ""
 "**`Sink`** — a streaming consumer: `push(quad)` per quad, `finish()` returns "
 "the accumulated `Dataset`."
@@ -24030,7 +24031,7 @@ msgstr ""
 "**`Sink`**——流式消费者：每个四元组调用一次 `push(quad)`，`finish()` 返回累积"
 "的 `Dataset`。"
 
-#: src/interop/rdfjs.md:99
+#: src/interop/rdfjs.md:102
 msgid ""
 "**`datasetToStream(dataset)`** / **`streamToDataset(stream)`** — bridge "
 "between a `Dataset` and RDF/JS streams, for piping into or out of other RDF/"
@@ -24039,27 +24040,26 @@ msgstr ""
 "**`datasetToStream(dataset)`** / **`streamToDataset(stream)`**——在 `Dataset` "
 "与 RDF/JS 流之间架桥，用于与其他 RDF/JS 工具之间的管道输入或输出。"
 
-#: src/interop/rdfjs.md:103
+#: src/interop/rdfjs.md:106
 msgid "Scope notes"
 msgstr "范围说明"
 
-#: src/interop/rdfjs.md:105
+#: src/interop/rdfjs.md:108
 msgid ""
-"The engine is **in-memory**; there is no persistent store in the wasm build. "
-"SPARQL runs over the in-memory dataset. The synchronous methods install no "
-"`SERVICE` or `LOAD` source, so there a remote `SERVICE` or `LOAD` fails "
-"explicitly unless written `SILENT`; the asynchronous twins reach remote "
-"endpoints only through the handlers the host passes them (see [Asynchronous "
-"queries and federation](../getting-started/javascript.md#asynchronous-"
-"queries-and-federation))."
+"The package's `Dataset` **holds data in memory**; these SPARQL methods query "
+"that resident dataset. The synchronous methods install no `SERVICE` or "
+"`LOAD` source, so there a remote `SERVICE` or `LOAD` fails explicitly unless "
+"written `SILENT`; the asynchronous twins reach remote endpoints only through "
+"the handlers the host passes them (see [Asynchronous queries and federation]"
+"(../getting-started/javascript.md#asynchronous-queries-and-federation))."
 msgstr ""
-"引擎**完全在内存中运行**；wasm 构建中没有持久化存储。SPARQL 在内存数据集上运"
-"行。同步方法不安装任何 `SERVICE` 或 `LOAD` 来源，因此在那里，远程 `SERVICE` "
+"本包的 `Dataset` **将数据保存在内存中**；这里的 SPARQL 方法查询这一驻留数据"
+"集。同步方法不安装任何 `SERVICE` 或 `LOAD` 来源，因此在那里，远程 `SERVICE` "
 "或 `LOAD` 会显式失败，除非写了 `SILENT`；异步孪生方法只能经由宿主传入的处理函"
 "数到达远程端点（见[异步查询与联邦查询](../getting-started/"
 "javascript.md#asynchronous-queries-and-federation)）。"
 
-#: src/interop/rdfjs.md:111
+#: src/interop/rdfjs.md:114
 msgid ""
 "A quoted-triple term as a quad **object** round-trips through Turtle, N-"
 "Triples, N-Quads, TriG, RDF/XML and JSON-LD / YAML-LD; TriX and HexTuples "
@@ -24072,16 +24072,16 @@ msgstr ""
 "元组项的数据集序列化到二者之一会抛出异常（见[范围与当前限制](../getting-"
 "started/javascript.md#scope-and-current-limitations)）。"
 
-#: src/interop/rdfjs.md:118
+#: src/interop/rdfjs.md:121
 msgid ""
 "[Getting Started: JavaScript / WebAssembly](../getting-started/javascript.md)"
 msgstr "[入门：JavaScript / WebAssembly](../getting-started/javascript.md)"
 
-#: src/interop/rdfjs.md:119
+#: src/interop/rdfjs.md:122
 msgid "[RDF 1.2 Features](../concepts/rdf12.md) — what the extensions mean."
 msgstr "[RDF 1.2 特性](../concepts/rdf12.md)——这些扩展的含义。"
 
-#: src/interop/rdfjs.md:120
+#: src/interop/rdfjs.md:123
 msgid ""
 "[`crates/rdf-wasm`](https://github.com/Blackcat-Informatics/purrdf/tree/main/"
 "crates/rdf-wasm) — the Rust cdylib behind the package."
