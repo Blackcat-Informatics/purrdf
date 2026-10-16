@@ -899,6 +899,14 @@ fn explaining_an_unknown_document_is_a_data_error() {
             .expect("valid text analysis"),
     )
     .expect_err("there is no document 999");
+    let cause = purrdf_testkit::error_capture::Capture::read(&error)
+        .child("reason")
+        .child("cause");
+    assert_eq!(cause.code, "text-data-explain-document");
+    assert!(matches!(
+        cause.field("document"),
+        purrdf_hash::error::ErrorValue::Unsigned(999)
+    ));
     assert!(matches!(error, TextError::Data(_)), "got {error:?}");
 
     // One past the end is the boundary that matters, and 999 is nowhere near

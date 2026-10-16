@@ -249,8 +249,9 @@ impl SurfaceIndex {
     ) -> Result<SubstringReport<'_>, TextError> {
         let terms = self.analyzer.substring_terms(fragment)?;
         let [needle] = terms.as_slice() else {
-            return Err(TextError::data(
-                "substring query must normalize to one nonempty span",
+            return Err(crate::query_workspace::data_error(
+                crate::data_refusal::DataRefusal::SubstringTerms { count: terms.len() },
+                None,
             ));
         };
         let mut budget = Budget {

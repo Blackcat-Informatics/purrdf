@@ -98,10 +98,8 @@
 //! predicate IRI is a [`TextError::Config`], and a needle asking about a document
 //! that does not exist is a [`TextError::Data`].
 
-use crate::query_workspace::{admitted, overflow, query_error};
-use purrdf_sparql_eval::{
-    AdmittedVec, NativeDiagnosticKind, WorkspaceAllocation, WorkspaceCapability,
-};
+use crate::query_workspace::{admitted, data_error, overflow};
+use purrdf_sparql_eval::{AdmittedVec, WorkspaceAllocation, WorkspaceCapability};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
@@ -651,9 +649,10 @@ pub fn explain<P: CorpusProfile>(
 ) -> Result<Vec<TermContribution>, TextError> {
     let terms = distinct_terms(needle);
     let Some(partition) = index.partition_key_of(document) else {
-        return Err(TextError::data(format!(
-            "document {document} is not in this index, so there is nothing to explain"
-        )));
+        return Err(data_error(
+            crate::data_refusal::DataRefusal::ExplainDocument { document },
+            None,
+        ));
     };
     let corpus = index.prepared_corpus(partition)?;
     let query = prepare_terms(index, partition, &corpus, &terms)?;
@@ -807,14 +806,10 @@ fn rank_terms_owned<E: crate::query_workspace::TextErrorTarget, P: CorpusProfile
             .map_err(convert)?;
         let partition_rank = u32::try_from(rank)
             .map_err(|_| {
-                query_error(
-                workspace,
-                NativeDiagnosticKind::Function,
-                format_args!(
-                    "fixed-point overflow: a partition holds more ranked rows than a u32 can number"
-                ),
-            )
-            .unwrap_or_else(|failure| failure)
+                crate::query_workspace::arithmetic_error(
+                    crate::arithmetic::ArithmeticRefusal::PartitionRank { rank },
+                    Some(workspace),
+                )
             })
             .map_err(convert)?;
         admitted(rows.push(Scored {
@@ -1050,11 +1045,10 @@ pub(crate) fn score_located_owned<P: CorpusProfile>(
     workspace: &WorkspaceCapability,
 ) -> Result<(BoundedScore, usize), TextError> {
     let Some(partition) = index.partition_key_of(document) else {
-        return Err(query_error(
-            workspace,
-            NativeDiagnosticKind::Data,
-            format_args!("document {document} is not in this index, so there is nothing to score"),
-        )?);
+        return Err(data_error(
+            crate::data_refusal::DataRefusal::ScoreDocument { document },
+            Some(workspace),
+        ));
     };
     let corpus = index.prepared_corpus_owned(partition, workspace)?;
     let query = prepare_terms_owned(index, partition, &corpus, terms, workspace)?;

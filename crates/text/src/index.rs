@@ -70,10 +70,9 @@
 //! their labels. The crate's test suite pins this with an adversarial test
 //! rather than leaving it implied.
 
-use crate::query_workspace::{data_error, query_error};
+use crate::query_workspace::data_error;
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
-use purrdf_sparql_eval::NativeDiagnosticKind;
 use std::cmp::Ordering;
 
 use crate::SurfaceIndex;
@@ -502,6 +501,33 @@ impl PartitionKey<GraphFree> {
 }
 
 impl<P: CorpusProfile> PartitionKey<P> {
+    fn missing_error(
+        &self,
+        workspace: Option<&purrdf_sparql_eval::WorkspaceCapability>,
+    ) -> TextError {
+        use crate::data_refusal::DataRefusal;
+        use crate::query_workspace::{QueryString, admitted};
+        let resident = purrdf_sparql_eval::WorkspaceCapability::resident();
+        let owner = workspace.unwrap_or(&resident);
+        let capture = || -> Result<_, TextError> {
+            Ok(DataRefusal::MissingPartition {
+                profile: P::ID,
+                graph: self
+                    .graph_coordinate()
+                    .map(|graph| admitted(owner.clone_term(graph)))
+                    .transpose()?,
+                language: self
+                    .language()
+                    .map(|language| QueryString::copy(language, owner))
+                    .transpose()?,
+            })
+        };
+        match capture() {
+            Ok(cause) => data_error(cause, workspace),
+            Err(error) => error,
+        }
+    }
+
     /// The graph name, or `None` for the default graph.
     pub(crate) fn graph_coordinate(&self) -> Option<&TermValue> {
         P::graph(&self.graph)
@@ -908,8 +934,7 @@ impl<P: CorpusProfile> TextIndex<P> {
     ) -> Result<PreparedCorpus<'_>, TextError> {
         let at = self
             .partition_index(partition)
-            .ok_or_else(|| TextError::data("ranking partition is absent"))?
-            as usize;
+            .ok_or_else(|| partition.missing_error(None))? as usize;
         let documents = self.partitions[at].1.document_count;
         let totals = &self.field_totals[at];
         if self.ranking.uses_field_populations() {
@@ -931,14 +956,7 @@ impl<P: CorpusProfile> TextIndex<P> {
     ) -> Result<PreparedCorpus<'_>, TextError> {
         let partition =
             crate::query_workspace::admitted(self.partition_key_owned(partition, workspace))?
-                .ok_or_else(|| {
-                    query_error(
-                        workspace,
-                        NativeDiagnosticKind::Data,
-                        "ranking partition is absent",
-                    )
-                    .unwrap_or_else(|failure| failure)
-                })?;
+                .ok_or_else(|| partition.missing_error(Some(workspace)))?;
         let at = self
             .local_partition_ordinal(partition)
             .expect("resolved index-owned partition");
@@ -1015,7 +1033,10 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// Fill an inline field buffer, spilling for the profile's actual field count.
     pub(crate) fn field_inputs(&self, document: u32, term: &str) -> Result<FieldInputs, TextError> {
         if self.document(document).is_none() {
-            return Err(TextError::data("field input names an absent document"));
+            return Err(data_error(
+                crate::data_refusal::DataRefusal::MissingDocument { document },
+                None,
+            ));
         }
         let frequencies = self.posted_frequencies(document, term).unwrap_or(&[]);
         self.field_inputs_from_counts(document, frequencies)
@@ -1584,11 +1605,12 @@ impl<P: CorpusProfile> TextIndex<P> {
         ranking: RankingProfile,
     ) -> Result<Self, TextError> {
         if u32::try_from(documents.len()).is_err() {
-            return Err(TextError::data(format!(
-                "the dataset yields {} documents, which exceeds the u32 document-id space this \
-                 index addresses",
-                documents.len()
-            )));
+            return Err(data_error(
+                crate::data_refusal::DataRefusal::DocumentCount {
+                    count: documents.len(),
+                },
+                None,
+            ));
         }
 
         let (partitions, partition_of) = build_partitions(&documents)?;
@@ -2173,7 +2195,12 @@ fn analyze_rows<P: CorpusProfile>(
                     Some(&ordinal) => ordinal,
                     None => {
                         let ordinal = u32::try_from(dictionary.len()).map_err(|_| {
-                            TextError::data("term dictionary exceeds the u32 ordinal space")
+                            data_error(
+                                crate::data_refusal::DataRefusal::DictionaryOrdinal {
+                                    ordinal: dictionary.len(),
+                                },
+                                None,
+                            )
                         })?;
                         dictionary.push(projection.text.clone());
                         ordinals.insert(projection.text.clone(), ordinal);
@@ -2190,7 +2217,12 @@ fn analyze_rows<P: CorpusProfile>(
                     }
                 }
                 position = position.checked_add(1).ok_or_else(|| {
-                    TextError::data("document exceeds the u32 token position space")
+                    data_error(
+                        crate::data_refusal::DataRefusal::DocumentPositions {
+                            count: u128::from(position) + 1,
+                        },
+                        None,
+                    )
                 })?;
             }
             // The native token walk has consumed the lexical view. Han replay
@@ -2623,5 +2655,20 @@ mod tests {
             Some(&TermValue::iri("https://example.org/g"))
         );
         assert_eq!(named.language(), Some("en"));
+        let error = named.missing_error(None);
+        let cause = purrdf_testkit::error_capture::Capture::read(&error)
+            .child("reason")
+            .child("cause");
+        assert_eq!(cause.code, "text-data-missing-partition");
+        assert!(matches!(
+            cause.field("language"),
+            purrdf_hash::error::ErrorValue::Text("en")
+        ));
+        let graph = cause.child("graph");
+        assert_eq!(graph.code, "rdf-term-iri");
+        assert!(matches!(
+            graph.field("iri"),
+            purrdf_hash::error::ErrorValue::Iri("https://example.org/g")
+        ));
     }
 }

@@ -5,6 +5,8 @@
 //! Scalar grams and phonetic codes have no lexical BM25 counts or positions.
 
 use crate::analysis::{AlignedText, Analysis, Projection};
+use crate::data_refusal::DataRefusal;
+use crate::query_workspace::data_error;
 use crate::{
     Analyzer, TextError,
     phonetic::{self, DoubleMetaphone, PhoneticCodes, PhoneticRefusal, PreparedDistance},
@@ -175,8 +177,12 @@ impl SurfaceIndex {
         rows.sort_by_key(|(document, identity, _)| (*document, *identity));
         for pair in rows.windows(2) {
             if pair[0].0 == pair[1].0 && pair[0].1 == pair[1].1 && pair[0].2 != pair[1].2 {
-                return Err(TextError::data(
-                    "one source identity names conflicting analyses",
+                return Err(data_error(
+                    DataRefusal::ConflictingAnalysis {
+                        document: pair[0].0,
+                        identity: pair[0].1,
+                    },
+                    None,
                 ));
             }
         }
@@ -219,14 +225,32 @@ impl SurfaceIndex {
         spans: Vec<SurfaceTerm>,
         sources: Vec<Source>,
     ) -> Result<Self, TextError> {
-        if words.iter().chain(&spans).any(|term| term.text.is_empty()) {
-            return Err(TextError::data(
-                "surface indexes cannot contain empty terms",
+        if let Some((ordinal, _)) = words
+            .iter()
+            .chain(&spans)
+            .enumerate()
+            .find(|(_, term)| term.text.is_empty())
+        {
+            let (projection, ordinal) = if ordinal < words.len() {
+                ("surface-word", ordinal)
+            } else {
+                ("substring-span", ordinal - words.len())
+            };
+            return Err(data_error(
+                DataRefusal::EmptySurfaceTerm {
+                    projection,
+                    ordinal,
+                },
+                None,
             ));
         }
         if u32::try_from(words.len()).is_err() || u32::try_from(spans.len()).is_err() {
-            return Err(TextError::data(
-                "surface index exceeds u32 distinct-term identifiers",
+            return Err(data_error(
+                DataRefusal::SurfaceTerms {
+                    words: words.len(),
+                    spans: spans.len(),
+                },
+                None,
             ));
         }
         let (grams, shapes) = postings::build_grams(&spans);
@@ -458,13 +482,29 @@ fn add_projection(
     normalized: &AlignedText,
 ) -> Result<(), TextError> {
     let Some(origin) = normalized.text.get(projection.range.clone()) else {
-        return Err(TextError::data(
-            "surface projection has an invalid normalized range",
+        return Err(data_error(
+            DataRefusal::ProjectionRange {
+                document,
+                source,
+                start: projection.range.start,
+                end: projection.range.end,
+                bytes: normalized.text.len(),
+            },
+            None,
         ));
     };
     if projection.text.is_empty() || !projection.coarse && origin != projection.text {
-        return Err(TextError::data(
-            "surface projection spelling disagrees with its normalized range",
+        return Err(data_error(
+            DataRefusal::ProjectionSpelling {
+                document,
+                source,
+                start: projection.range.start,
+                end: projection.range.end,
+                expected: origin.to_owned(),
+                actual: projection.text,
+                coarse: projection.coarse,
+            },
+            None,
         ));
     }
     let entry = terms.entry(projection.text).or_default();
@@ -529,18 +569,38 @@ mod tests {
 
     #[test]
     fn conflicting_source_identity_and_invalid_projection_are_rejected() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
         let analyzer = Analyzer::empty_lexicon();
         let first = analyzer.projections("abc").unwrap();
         let second = analyzer.projections("different").unwrap();
-        assert!(
-            SurfaceIndex::from_analyses(
-                analyzer.clone(),
-                [(0, [1; 32], first), (0, [1; 32], second)]
-            )
-            .is_err()
-        );
+        let error = SurfaceIndex::from_analyses(
+            analyzer.clone(),
+            [(0, [1; 32], first), (0, [1; 32], second)],
+        )
+        .unwrap_err();
+        let cause = Capture::read(&error).child("reason").child("cause");
+        assert_eq!(cause.code, "text-data-conflicting-analysis");
+        assert!(matches!(cause.field("document"), ErrorValue::Unsigned(0)));
+        assert!(matches!(cause.field("identity"), ErrorValue::Bytes(value) if value == [1; 32]));
         let mut analysis = analyzer.projections("abc").unwrap();
         analysis.spans[0].range = 0..99;
-        assert!(SurfaceIndex::from_analyses(analyzer, [(0, [2; 32], analysis)]).is_err());
+        let error =
+            SurfaceIndex::from_analyses(analyzer.clone(), [(0, [2; 32], analysis)]).unwrap_err();
+        let cause = Capture::read(&error).child("reason").child("cause");
+        assert_eq!(cause.code, "text-data-projection-range");
+        assert!(matches!(cause.field("end"), ErrorValue::ByteCount(99)));
+        assert!(matches!(
+            cause.field("normalized_bytes"),
+            ErrorValue::ByteCount(3)
+        ));
+        let mut analysis = analyzer.projections("abc").unwrap();
+        analysis.spans[0].text = "xyz".to_owned();
+        let error = SurfaceIndex::from_analyses(analyzer, [(7, [3; 32], analysis)]).unwrap_err();
+        let cause = Capture::read(&error).child("reason").child("cause");
+        assert_eq!(cause.code, "text-data-projection-spelling");
+        assert!(matches!(cause.field("document"), ErrorValue::Unsigned(7)));
+        assert!(matches!(cause.field("expected"), ErrorValue::Text("abc")));
+        assert!(matches!(cause.field("actual"), ErrorValue::Text("xyz")));
     }
 }

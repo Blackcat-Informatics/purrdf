@@ -823,7 +823,12 @@ fn read_scalars(input: &str, target: &mut Vec<char>) -> Result<(), TextError> {
     target.clear();
     target.extend(input.chars().take(MAX_INPUT_SCALARS + 1));
     if target.len() > MAX_INPUT_SCALARS {
-        Err(TextError::data("edit-distance input exceeds 2048 scalars"))
+        Err(crate::query_workspace::data_error(
+            crate::data_refusal::DataRefusal::EditInput {
+                observed: target.len(),
+            },
+            None,
+        ))
     } else {
         Ok(())
     }

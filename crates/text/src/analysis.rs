@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! One fallible, source-aligned analysis law for documents and queries.
-use crate::query_workspace::{QueryString, admitted, overflow, query_error};
+use crate::data_refusal::DataRefusal;
+use crate::query_workspace::{QueryString, admitted, data_error, overflow};
 use crate::segment::{Dictionary, SegmentationScratch};
 use crate::{AccentFold, AnalyzerProfile, InputMode, Segmentation, Stemming, TextError, unicode};
 use purrdf_hash::{Domain, frame::frame_le};
@@ -288,8 +289,14 @@ impl Analyzer {
                 } else {
                     Cow::Owned(term.text)
                 },
-                position: u32::try_from(position)
-                    .map_err(|_| TextError::data("token positions exceed u32"))?,
+                position: u32::try_from(position).map_err(|_| {
+                    data_error(
+                        DataRefusal::TokenPositions {
+                            count: position as u128 + 1,
+                        },
+                        None,
+                    )
+                })?,
             });
         }
         Ok(())
@@ -405,11 +412,12 @@ impl Analyzer {
             &mut scratch.segmentation,
         );
         if scratch.ranges.len() > u32::MAX as usize {
-            return Err(query_error(
-                &scratch.normalization.workspace,
-                NativeDiagnosticKind::Data,
-                "token positions exceed u32",
-            )?);
+            return Err(data_error(
+                DataRefusal::TokenPositions {
+                    count: scratch.ranges.len() as u128,
+                },
+                Some(&scratch.normalization.workspace),
+            ));
         }
         for (position, range) in scratch.ranges.iter().cloned().enumerate() {
             let word = &normalized[range];
@@ -580,7 +588,12 @@ impl Analyzer {
             }
         }
         if lexical.len() > u32::MAX as usize {
-            return Err(TextError::data("token positions exceed u32"));
+            return Err(data_error(
+                DataRefusal::TokenPositions {
+                    count: lexical.len() as u128,
+                },
+                None,
+            ));
         }
         Ok(Analysis {
             normalized,
@@ -1219,15 +1232,14 @@ fn normalize_run_owned<M: Copy>(
 
 fn admit_source_size_owned(
     bytes: usize,
-    kind: &str,
+    kind: &'static str,
     workspace: &WorkspaceCapability,
 ) -> Result<(), TextError> {
     if bytes > u32::MAX as usize {
-        return Err(query_error(
-            workspace,
-            NativeDiagnosticKind::Data,
-            format_args!("{kind} exceeds source record space"),
-        )?);
+        return Err(data_error(
+            DataRefusal::SourceSize { kind, bytes },
+            Some(workspace),
+        ));
     }
     Ok(())
 }
@@ -1353,4 +1365,30 @@ fn dictionary_key<'a>(
         .output
         .retain(|c| !unicode::is_word_internal_control(c));
     Ok(&scratch.output)
+}
+
+#[cfg(test)]
+mod native_refusal_tests {
+    #[test]
+    fn source_size_preserves_the_rejected_byte_count_without_allocating_input() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_sparql_eval::WorkspaceCapability;
+        use purrdf_testkit::error_capture::Capture;
+        let workspace = WorkspaceCapability::resident();
+        let limit = u32::MAX as usize;
+        super::admit_source_size_owned(limit, "analysis input", &workspace).unwrap();
+        if let Some(bytes) = limit.checked_add(1) {
+            let error =
+                super::admit_source_size_owned(bytes, "decoded input", &workspace).unwrap_err();
+            let cause = Capture::read(&error).child("reason").child("cause");
+            assert_eq!(cause.code, "text-data-source-size");
+            assert!(
+                matches!(cause.field("bytes"), ErrorValue::ByteCount(value) if value == bytes as u128)
+            );
+            assert!(matches!(
+                cause.field("kind"),
+                ErrorValue::Code("decoded input")
+            ));
+        }
+    }
 }

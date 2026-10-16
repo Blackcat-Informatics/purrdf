@@ -191,6 +191,10 @@ pub(crate) fn arithmetic_error(
     workspace: Option<&WorkspaceCapability>,
 ) -> TextError {
     let domain = cause.is_domain();
+    let diagnostic_only = matches!(
+        cause,
+        crate::arithmetic::ArithmeticRefusal::PartitionRank { .. }
+    );
     let resident = WorkspaceCapability::resident();
     match admitted(purrdf_sparql_eval::NativeDiagnostic::render_cause(
         purrdf_sparql_eval::NativeDiagnosticKind::Function,
@@ -198,7 +202,7 @@ pub(crate) fn arithmetic_error(
         workspace.unwrap_or(&resident),
     )) {
         Ok(diagnostic) => {
-            if workspace.is_some_and(WorkspaceCapability::is_bounded) {
+            if diagnostic_only || workspace.is_some_and(WorkspaceCapability::is_bounded) {
                 TextError::Diagnostic(diagnostic)
             } else if domain {
                 TextError::Domain(diagnostic)

@@ -67,6 +67,9 @@ pub(crate) enum ArithmeticRefusal {
     PredicateOrdinal {
         ordinal: usize,
     },
+    PartitionRank {
+        rank: usize,
+    },
     Exact(purrdf_xsd::exact::ExactError),
 }
 
@@ -88,7 +91,8 @@ impl ArithmeticRefusal {
             | Self::Narrow { .. }
             | Self::FieldFrequency { .. }
             | Self::FieldLength { .. }
-            | Self::PredicateOrdinal { .. } => false,
+            | Self::PredicateOrdinal { .. }
+            | Self::PartitionRank { .. } => false,
         }
     }
 }
@@ -117,6 +121,7 @@ impl purrdf_hash::error::StructuredError for ArithmeticRefusal {
         },
         FieldLength { field, current, added } => "text-field-length-overflow" { "field" => Unsigned(*field as u128), "current" => Unsigned(u128::from(*current)), "added" => Unsigned(u128::from(*added)) },
         PredicateOrdinal { ordinal } => "text-field-predicate-ordinal-overflow" { "ordinal" => Unsigned(*ordinal as u128) },
+        PartitionRank { rank } => "text-partition-rank-overflow" { "rank" => Unsigned(*rank as u128), "limit" => Unsigned(u128::from(u32::MAX)) },
         Exact(error) => "text-fixed-exact-domain" { "cause" => Cause(error) },
     }
 }
@@ -158,6 +163,9 @@ impl core::fmt::Display for ArithmeticRefusal {
             Self::FieldLength { .. } => f.write_str("merged field length exceeds u64"),
             Self::PredicateOrdinal { .. } => {
                 f.write_str("field scope predicate ordinal exceeds index representation")
+            }
+            Self::PartitionRank { .. } => {
+                f.write_str("a partition holds more ranked rows than a u32 can number")
             }
             Self::Exact(error) => error.fmt(f),
         }

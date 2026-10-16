@@ -612,6 +612,34 @@ fn binding_configuration_failure_retains_both_semantic_configurations() {
     );
 }
 
+fn search_input_refusals_keep_actual_cardinality_and_observed_scalar_limit() {
+    use purrdf_text::phonetic::{MAX_INPUT_SCALARS, bounded_edit_distance};
+    let input = "東".repeat(MAX_INPUT_SCALARS + 20);
+    let error: EvalError = bounded_edit_distance(&input, "valid", 1)
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-data-edit-input");
+    assert!(
+        matches!(cause.field("observed"), ErrorValue::Unsigned(value) if value == (MAX_INPUT_SCALARS + 1) as u128)
+    );
+    assert!(matches!(
+        cause.field("complete_count"),
+        ErrorValue::Boolean(false)
+    ));
+    assert!(
+        matches!(cause.field("limit"), ErrorValue::Unsigned(value) if value == MAX_INPUT_SCALARS as u128)
+    );
+    let index = SurfaceIndex::from_texts(Analyzer::empty_lexicon(), [(0, "healthy")]).unwrap();
+    for (input, count) in [("", 0), ("two words", 2)] {
+        let error: EvalError = index.substring(input).unwrap_err().into();
+        let cause = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(cause.code, "text-data-substring-terms");
+        assert!(matches!(cause.field("count"), ErrorValue::Unsigned(value) if value == count));
+    }
+    assert!(index.substring_exhaustive("healthy").is_ok());
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
@@ -631,4 +659,5 @@ purrdf_testkit::harness_main!(
     dictionary_configuration_keeps_conflicting_costs_and_emoji_byte_range,
     dictionary_artifact_refusals_keep_original_identity_header_and_utf8_values,
     binding_configuration_failure_retains_both_semantic_configurations,
+    search_input_refusals_keep_actual_cardinality_and_observed_scalar_limit,
 );
