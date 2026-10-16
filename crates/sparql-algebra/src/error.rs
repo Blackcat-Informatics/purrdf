@@ -25,6 +25,67 @@
 use core::fmt;
 use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
 
+/// The original reason an IRI cannot occupy a SPARQL term position.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IriTermReason {
+    /// An original IRI validator refusal, without a rendered copy.
+    Validation {
+        /// The exact native failure and its original owned payload.
+        cause: purrdf_iri::IriError,
+        /// Whether the existing human spelling leads with the native code.
+        include_code: bool,
+    },
+    /// The reference is valid but has no scheme in an absolute term position.
+    Relative,
+}
+
+impl IriTermReason {
+    /// The original validator failure, absent for a valid relative reference.
+    #[must_use]
+    pub const fn validation_error(&self) -> Option<&purrdf_iri::IriError> {
+        match self {
+            Self::Validation {
+                cause,
+                include_code: _,
+            } => Some(cause),
+            Self::Relative => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for IriTermReason {
+    purrdf_hash::error_visit! {
+        Validation { cause, include_code } => "sparql-iri-validation" {
+            "cause" => Cause(cause), "include_code" => Boolean(*include_code),
+        },
+        Relative => "sparql-iri-relative-term" {},
+    }
+}
+
+impl fmt::Display for IriTermReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Validation {
+                cause,
+                include_code,
+            } => {
+                if *include_code {
+                    write!(f, "{}: ", cause.diagnostic_code())?;
+                }
+                fmt::Display::fmt(cause, f)
+            }
+            Self::Relative => f.write_str("relative IRI reference in term position (no scheme)"),
+        }
+    }
+}
+
+impl std::error::Error for IriTermReason {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.validation_error().map(|cause| cause as _)
+    }
+}
+
 /// Why a SPARQL query string failed to parse into the algebra.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -56,7 +117,7 @@ pub enum ParseError {
         /// The rejected lexical form.
         lexical: String,
         /// The underlying validation failure reported by `purrdf-iri`.
-        reason: String,
+        reason: IriTermReason,
     },
     /// A SEP-0009 composite-datatype function (`cdt:List`, `cdt:subseq`, …) was
     /// called with an argument count its signature does not admit.
@@ -82,6 +143,26 @@ pub enum ParseError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for ParseError {
+    purrdf_hash::error_visit! {
+        Storage(error) => "sparql-parse-storage" { "cause" => Cause(error) },
+        Lex { reason, at } => "sparql-parse-lex" {
+            "reason" => Text(reason), "at" => ByteCount(*at as u128),
+        },
+        Syntax { reason, at } => "sparql-parse-syntax" {
+            "reason" => Text(reason), "at" => ByteCount(*at as u128),
+        },
+        Unsupported(feature) => "sparql-parse-unsupported" { "feature" => Text(feature) },
+        Iri { lexical, reason } => "sparql-parse-iri" {
+            "lexical" => Iri(lexical), "reason" => Cause(reason),
+        },
+        CdtArity { iri, expected, found, at } => "sparql-parse-cdt-arity" {
+            "iri" => Iri(iri), "expected" => Text(expected),
+            "found" => Unsigned(*found as u128), "at" => ByteCount(*at as u128),
+        },
+    }
+}
+
 purrdf_lex::constructors! {
     impl ParseError {
         /// Construct a [`ParseError::Unsupported`] from any displayable feature name.
@@ -104,26 +185,14 @@ impl ParseError {
     /// own typed presentation as [`detail`](DiagnosticPresentation::detail) (for
     /// example `iri-bad-percent-encoding` with its unsigned byte `offset`, or
     /// `iri-relative-no-base`), so a host reads the IRI condition without parsing
-    /// `reason`. The cause is recovered from `lexical` by the same context-free
-    /// `purrdf-iri` checks the parser ran, and attached only when it renders
-    /// `reason` exactly; a reason no such check produced (a scheme-less term-position
-    /// IRI, or a hand-built value) carries no detail. The English never includes the
-    /// detail: it is exactly this error's `Display`.
+    /// `reason`. Detail uses the original validator failure directly, without
+    /// reparsing the lexical form or matching human messages. A valid relative
+    /// reference has its own typed reason and no validator detail.
     #[must_use]
     pub fn presentation(&self) -> DiagnosticPresentation {
-        let presentation = self.own_presentation();
-        let Self::Iri { lexical, reason } = self else {
-            return presentation;
-        };
-        match iri_cause(lexical, reason) {
-            // `with_detail` refuses only a detail that itself has detail, and an
-            // `IriError` presentation never does; keep the parse condition alone
-            // rather than panic if that ever changed.
-            Some(cause) => presentation
-                .with_detail(cause.presentation())
-                .unwrap_or_else(|_| self.own_presentation()),
-            None => presentation,
-        }
+        let mut resident = purrdf_lex::allocation::Resident;
+        self.presentation_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
+            .expect("resident parse presentation allocation")
     }
 
     /// Preserve exact typed parse and IRI conditions using original native storage.
@@ -137,69 +206,23 @@ impl ParseError {
         if let Self::Storage(error) = self {
             return Err(*error);
         }
-        let presentation = self.own_presentation_with_memory(memory)?;
-        let Self::Iri { lexical, reason } = self else {
-            return Ok(presentation);
-        };
-        for mode in 0..3 {
-            let cause = match mode {
-                0 => match purrdf_iri::parse_with_memory(lexical, memory) {
-                    Ok(value) => {
-                        memory.release_string(value.into_text())?;
-                        None
-                    }
-                    Err(purrdf_iri::IriReadError::Lexical(error)) => Some(error),
-                    Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
-                },
-                1 => match purrdf_iri::BaseIri::parse_with_memory(lexical, memory) {
-                    Ok(value) => {
-                        memory.release_string(value.into_iri().into_text())?;
-                        None
-                    }
-                    Err(purrdf_iri::IriReadError::Lexical(error)) => Some(error),
-                    Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
-                },
-                _ => match purrdf_iri::BaseScope::empty().resolve_with_memory(lexical, memory) {
-                    Ok(value) => {
-                        memory.release_string(value.into_text())?;
-                        None
-                    }
-                    Err(purrdf_iri::IriReadError::Lexical(error)) => Some(error),
-                    Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
-                },
-            };
-            if let Some(cause) = cause {
-                let rendered = memory.format(&cause)?;
-                let matches = reason == &rendered
-                    || reason
-                        .strip_prefix(cause.diagnostic_code())
-                        .and_then(|rest| rest.strip_prefix(": "))
-                        .is_some_and(|rest| rest == rendered);
-                memory.release_string(rendered)?;
-                let bytes = cause.owned_text_bytes();
-                let detail = if matches {
-                    Some(cause.try_presentation_with_memory(memory)?)
-                } else {
-                    None
-                };
-                drop(cause);
-                memory.release_bytes(bytes)?;
-                if let Some(detail) = detail {
-                    return presentation
-                        .try_with_detail_with_memory(detail, memory)
-                        .map_err(|error| error.fixed_template_storage());
-                }
-            }
-        }
-        Ok(presentation)
+        self.presentation_with_memory(memory)
     }
 
-    /// The parse condition's own presentation, without secondary detail: what
-    /// `Display` renders.
-    fn own_presentation(&self) -> DiagnosticPresentation {
-        let mut resident = purrdf_lex::allocation::Resident;
-        self.own_presentation_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
-            .expect("resident parse presentation allocation")
+    fn presentation_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> core::result::Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+        let presentation = self.own_presentation_with_memory(memory)?;
+        let Self::Iri { lexical: _, reason } = self else {
+            return Ok(presentation);
+        };
+        match reason.validation_error() {
+            Some(cause) => presentation
+                .try_with_detail_with_memory(cause.try_presentation_with_memory(memory)?, memory)
+                .map_err(|error| error.fixed_template_storage()),
+            None => Ok(presentation),
+        }
     }
 
     #[expect(
@@ -284,7 +307,7 @@ impl ParseError {
                         )?,
                         DiagnosticParameter::try_new_with_memory(
                             "reason",
-                            Text(memory.string(reason)?),
+                            Text(memory.format(reason)?),
                             memory,
                         )?,
                     ];
@@ -346,7 +369,11 @@ impl ParseError {
             Self::Lex { reason, .. } | Self::Syntax { reason, .. } | Self::Unsupported(reason) => {
                 Some(reason.capacity())
             }
-            Self::Iri { lexical, reason } => lexical.capacity().checked_add(reason.capacity()),
+            Self::Iri { lexical, reason } => lexical.capacity().checked_add(
+                reason
+                    .validation_error()
+                    .map_or(0, purrdf_iri::IriError::owned_text_bytes),
+            ),
             Self::CdtArity { iri, expected, .. } => iri.capacity().checked_add(expected.capacity()),
         }
     }
@@ -376,37 +403,6 @@ impl ParseError {
         self.byte_offset()
             .map(|at| purrdf_iri::LineIndex::new(src).locate(src, at))
     }
-}
-
-/// The typed `purrdf-iri` refusal behind an [`ParseError::Iri`], when one renders
-/// `reason` exactly.
-///
-/// The parser builds `reason` from an [`purrdf_iri::IriError`] in one of two
-/// spellings: `"{diagnostic_code}: {error}"` when resolving or rebinding a base,
-/// and `"{error}"` when [`crate::NamedNode::new`] validates an IRI. Every error
-/// those paths raise is a function of `lexical` alone: the IRI grammar
-/// ([`purrdf_iri::parse`]), the base grammar ([`purrdf_iri::BaseIri::parse`]), and
-/// reference classification, whose only scope-dependent outcome is a relative
-/// reference with no base ([`purrdf_iri::BaseScope::resolve`] on an empty scope).
-/// A candidate is accepted only if it reproduces `reason` byte for byte, so a
-/// cause is never guessed: no match, no cause.
-fn iri_cause(lexical: &str, reason: &str) -> Option<purrdf_iri::IriError> {
-    let renders = |error: &purrdf_iri::IriError| {
-        let display = error.to_string();
-        reason == display
-            || reason
-                .strip_prefix(error.diagnostic_code())
-                .and_then(|rest| rest.strip_prefix(": "))
-                .is_some_and(|rest| rest == display)
-    };
-    [
-        purrdf_iri::parse(lexical).err(),
-        purrdf_iri::BaseIri::parse(lexical).err(),
-        purrdf_iri::BaseScope::empty().resolve(lexical).err(),
-    ]
-    .into_iter()
-    .flatten()
-    .find(renders)
 }
 
 /// Borrowed term-position IRI diagnostic fields, without lexical or reason copies.
@@ -480,7 +476,23 @@ impl fmt::Debug for ParseError {
     }
 }
 
-impl std::error::Error for ParseError {}
+impl std::error::Error for ParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            Self::Iri { reason, lexical: _ } => Some(reason),
+            Self::Lex { reason: _, at: _ }
+            | Self::Syntax { reason: _, at: _ }
+            | Self::Unsupported(_)
+            | Self::CdtArity {
+                iri: _,
+                expected: _,
+                found: _,
+                at: _,
+            } => None,
+        }
+    }
+}
 
 /// Convenience alias for fallible SPARQL parse operations.
 pub type Result<T> = core::result::Result<T, ParseError>;
@@ -510,10 +522,10 @@ mod tests {
             (
                 ParseError::Iri {
                     lexical: "quoted\"\\漢".into(),
-                    reason: "invalid".into(),
+                    reason: IriTermReason::Relative,
                 },
                 "sparql-parse-iri",
-                "invalid IRI \"quoted\\\"\\\\漢\" in term position: invalid",
+                "invalid IRI \"quoted\\\"\\\\漢\" in term position: relative IRI reference in term position (no scheme)",
             ),
             (
                 ParseError::CdtArity {
@@ -577,7 +589,10 @@ mod tests {
             ParseError::unsupported(hostile),
             ParseError::Iri {
                 lexical: hostile.into(),
-                reason: hostile.into(),
+                reason: IriTermReason::Validation {
+                    cause: purrdf_iri::IriError::BadScheme(hostile.into()),
+                    include_code: false,
+                },
             },
             ParseError::CdtArity {
                 iri: hostile.into(),
@@ -593,7 +608,10 @@ mod tests {
                 "unsupported SPARQL construct: {hostile} is outside the SPARQL 1.2 \
                  query language this processor implements"
             ),
-            format!("invalid IRI {hostile:?} in term position: {hostile}"),
+            format!(
+                "invalid IRI {hostile:?} in term position: {}",
+                purrdf_iri::IriError::BadScheme(hostile.into())
+            ),
             format!(
                 "SPARQL syntax error at byte {max}: <{hostile}> takes {hostile}, not {max}",
                 max = usize::MAX
@@ -657,7 +675,7 @@ mod tests {
             assert_eq!(presentation.english(), error.to_string());
             let detail = presentation.detail().expect("typed IRI cause");
             assert_eq!(detail.message_id(), identity, "{error}");
-            assert!(reason.contains(detail.english()), "{reason}");
+            assert!(reason.to_string().contains(detail.english()), "{reason}");
             if let Some((name, value)) = parameter {
                 let found = detail
                     .parameters()
@@ -674,17 +692,16 @@ mod tests {
                 Some(identity)
             );
         }
-        // A refusal no `purrdf-iri` check produced carries no cause, and neither does
-        // a hand-built reason that no check renders.
-        for error in [
-            NamedNode::new("relative").unwrap_err(),
-            ParseError::Iri {
-                lexical: "http://example.org/%zz".into(),
-                reason: "not what purrdf-iri says".into(),
-            },
-        ] {
-            assert!(error.presentation().detail().is_none(), "{error}");
-        }
+        // A valid relative reference is refused by the term-position rule,
+        // rather than by the IRI validator.
+        let relative = NamedNode::new("relative").unwrap_err();
+        assert!(relative.presentation().detail().is_none());
+        assert_eq!(
+            purrdf_testkit::error_capture::Capture::read(&relative)
+                .child("reason")
+                .code,
+            "sparql-iri-relative-term"
+        );
     }
 
     #[test]
@@ -695,7 +712,7 @@ mod tests {
         assert_eq!(
             ParseError::Iri {
                 lexical: "::".into(),
-                reason: "bad".into()
+                reason: IriTermReason::Relative,
             }
             .byte_offset(),
             None

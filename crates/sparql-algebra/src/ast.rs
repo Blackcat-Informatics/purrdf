@@ -70,12 +70,15 @@ impl NamedNode {
         let iri = iri.into();
         let parsed = purrdf_iri::parse(&iri).map_err(|e| ParseError::Iri {
             lexical: iri.clone(),
-            reason: e.to_string(),
+            reason: crate::IriTermReason::Validation {
+                cause: e,
+                include_code: false,
+            },
         })?;
         if !parsed.has_scheme() {
             return Err(ParseError::Iri {
                 lexical: iri,
-                reason: "relative IRI reference in term position (no scheme)".to_owned(),
+                reason: crate::IriTermReason::Relative,
             });
         }
         Ok(Self { iri: iri.into() })

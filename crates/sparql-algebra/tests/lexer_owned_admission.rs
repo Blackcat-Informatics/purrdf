@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Original scanner bytes, physical before-growth refusal, and retained token storage.
+//! Original scanner/parser bytes, before-growth refusal and retained typed failures.
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_hash::error::ErrorValue;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
+use purrdf_sparql_algebra::SparqlParser;
 use purrdf_sparql_algebra::error::ParseError;
 use purrdf_sparql_algebra::lexer::{LexerOptions, tokenize, tokenize_with_memory};
+use purrdf_testkit::error_capture::Capture;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -31,7 +34,6 @@ impl Admission for Account {
     }
 }
 
-#[test]
 fn escaped_tokens_keep_exact_original_storage_and_scanner_values() {
     let input = format!(
         "SELECT ?x {{ {} }}",
@@ -56,7 +58,6 @@ fn escaped_tokens_keep_exact_original_storage_and_scanner_values() {
     assert_eq!(account.live, 0);
 }
 
-#[test]
 fn first_token_capacity_refuses_before_allocating() {
     let mut account = Account {
         window: CurrentThreadWindow::open(),
@@ -73,7 +74,6 @@ fn first_token_capacity_refuses_before_allocating() {
     assert_eq!(measured.retained_bytes, 0);
 }
 
-#[test]
 fn lexical_failure_releases_token_and_decoding_scratch_before_publication() {
     let input = format!("{} \"bad\\z\"", "?x ".repeat(1024));
     let expected = tokenize(&input).unwrap_err();
@@ -98,3 +98,72 @@ fn lexical_failure_releases_token_and_decoding_scratch_before_publication() {
     assert_eq!(measured.retained_bytes, 0);
     assert_eq!(account.live, 0);
 }
+
+fn original_iri_cause_is_borrowed_without_rendering_or_reparsing() {
+    use std::error::Error;
+
+    let mut error = SparqlParser::new()
+        .parse_query("SELECT * WHERE { <http://example.org/%zz> ?p ?o }")
+        .unwrap_err();
+    let mut buffer = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let parent = Capture::read_with_buffer(&error, buffer);
+    assert_eq!(parent.code, "sparql-parse-iri");
+    let ErrorValue::Cause(reason) = parent.field("reason") else {
+        panic!("typed IRI reason")
+    };
+    buffer = parent.events;
+    let reason = Capture::read_with_buffer(reason, buffer);
+    assert_eq!(reason.code, "sparql-iri-validation");
+    assert!(matches!(
+        reason.field("include_code"),
+        ErrorValue::Boolean(true)
+    ));
+    let ErrorValue::Cause(cause) = reason.field("cause") else {
+        panic!("original native cause")
+    };
+    buffer = reason.events;
+    let cause = Capture::read_with_buffer(cause, buffer);
+    assert_eq!(cause.code, "iri-bad-percent-encoding");
+    assert!(matches!(cause.field("offset"), ErrorValue::ByteCount(19)));
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    drop(cause);
+
+    // Changing presentation context must not replace or guess a native cause.
+    let ParseError::Iri { lexical, reason } = &mut error else {
+        unreachable!()
+    };
+    *lexical = "http://example.org/valid".into();
+    let original = reason.validation_error().unwrap();
+    assert!(matches!(
+        original,
+        purrdf_iri::IriError::BadPercentEncoding(19)
+    ));
+    let detail = error.presentation();
+    assert_eq!(
+        detail.detail().unwrap().message_id(),
+        "iri-bad-percent-encoding"
+    );
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<purrdf_iri::IriError>()
+    );
+    let clone = error.clone();
+    drop(error);
+    assert_eq!(
+        Capture::read(&clone).child("reason").child("cause").code,
+        "iri-bad-percent-encoding"
+    );
+}
+
+purrdf_testkit::harness_main!(
+    escaped_tokens_keep_exact_original_storage_and_scanner_values,
+    first_token_capacity_refuses_before_allocating,
+    lexical_failure_releases_token_and_decoding_scratch_before_publication,
+    original_iri_cause_is_borrowed_without_rendering_or_reparsing,
+);
