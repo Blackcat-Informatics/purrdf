@@ -1233,7 +1233,7 @@ impl SegmentedSession {
         // The count cap gives a lower bound, never an exact block address. Probe
         // it first so existing full-population images still need one block read.
         // Variable populations then use authenticated ID fences in a bounded
-        // binary search, retaining no directory and releasing every probe pin.
+        // binary search, learning bounds lazily and releasing every probe pin.
         let mut lo = local / u64::from(self.header.records_per_block);
         let mut hi = self.header.dictionary.blocks;
         let bucket = id.index() / u64::from(format::MAX_RECORDS_PER_BLOCK);
@@ -1251,7 +1251,7 @@ impl SegmentedSession {
                     let mid = position.key.slot - self.header.dictionary.first;
                     // Dense IDs and nonempty pages bound the distance to an
                     // unknown page. Use nearby authenticated ranges without
-                    // scanning the cache or retaining a historical directory.
+                    // scanning the cache or eagerly reading a directory.
                     if id.index() < position.first {
                         let distance = position.first - id.index();
                         lo = lo.max(mid.saturating_sub(distance));
