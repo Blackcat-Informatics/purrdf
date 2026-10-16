@@ -21,6 +21,7 @@ use super::{
     SegmentedStackSnapshot,
 };
 
+mod statistics;
 mod view;
 pub use view::SegmentedStackTermGuard;
 

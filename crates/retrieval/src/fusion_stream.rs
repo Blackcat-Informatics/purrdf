@@ -5183,7 +5183,7 @@ mod tests {
     /// pends: an assertion that the fixture streams are synchronous, not an executor.
     fn poll_once_expect_ready<F: Future>(future: F) -> F::Output {
         let mut context = Context::from_waker(Waker::noop());
-        let mut future = Box::pin(future);
+        let mut future = std::pin::pin!(future);
         match future.as_mut().poll(&mut context) {
             Poll::Ready(output) => output,
             Poll::Pending => panic!("the fixture streams are synchronous and never pend"),

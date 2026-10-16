@@ -224,6 +224,11 @@ impl DatasetView for Source {
     type ReadError = RefusedRead;
     type TermGuard<'a> = <RdfDataset as DatasetView>::TermGuard<'a>;
     type ProbePlan = ();
+
+    fn statistics(&self) -> Option<&dyn purrdf_core::SnapshotStatistics<TermId>> {
+        self.read_error().is_none().then_some(())?;
+        self.resident.statistics()
+    }
     /// Enables bounded admission without letting capacity mask the scripted refusal.
     fn storage_live_budget(&self) -> Option<u64> {
         matches!(
@@ -1671,6 +1676,10 @@ impl DatasetView for ExplainProjection<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
+
+    fn statistics(&self) -> Option<&dyn purrdf_core::SnapshotStatistics<TermId>> {
+        self.source.statistics()
+    }
 
     fn read_error(&self) -> Option<Self::ReadError> {
         assert!(self.source.read_error().is_none());

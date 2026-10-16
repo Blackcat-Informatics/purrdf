@@ -90,6 +90,110 @@ impl TripleDataset {
     }
 }
 
+impl crate::SnapshotStatistics<TermId> for TripleRead<'_> {
+    fn source(&self) -> &str {
+        crate::SnapshotStatistics::source(&self.dataset.statistics)
+    }
+
+    fn fingerprint(&self) -> u64 {
+        crate::SnapshotStatistics::fingerprint(&self.dataset.statistics)
+    }
+
+    fn pattern(&self, pattern: crate::ProbePattern) -> Option<crate::StatisticCount> {
+        self.graph(pattern.g).ok()?;
+        crate::SnapshotStatistics::pattern(&self.dataset.statistics, pattern)
+    }
+
+    fn predicate(
+        &self,
+        predicate: TermId,
+        graph: GraphMatch,
+        stream: crate::StatisticsStream,
+    ) -> Option<crate::PredicateStatistics> {
+        self.graph(graph).ok()?;
+        crate::SnapshotStatistics::predicate(&self.dataset.statistics, predicate, graph, stream)
+    }
+
+    fn predicate_object(
+        &self,
+        predicate: TermId,
+        object: TermId,
+        graph: GraphMatch,
+        stream: crate::StatisticsStream,
+    ) -> Option<crate::StatisticCount> {
+        self.graph(graph).ok()?;
+        crate::SnapshotStatistics::predicate_object(
+            &self.dataset.statistics,
+            predicate,
+            object,
+            graph,
+            stream,
+        )
+    }
+
+    fn predicate_object_kind(
+        &self,
+        predicate: TermId,
+        kind: crate::RdfTermKind,
+        datatype: Option<TermId>,
+        graph: GraphMatch,
+        stream: crate::StatisticsStream,
+    ) -> Option<crate::StatisticCount> {
+        self.graph(graph).ok()?;
+        crate::SnapshotStatistics::predicate_object_kind(
+            &self.dataset.statistics,
+            predicate,
+            kind,
+            datatype,
+            graph,
+            stream,
+        )
+    }
+
+    fn reifier_target_predicate(
+        &self,
+        predicate: TermId,
+        graph: GraphMatch,
+    ) -> Option<crate::PredicateStatistics> {
+        self.graph(graph).ok()?;
+        crate::SnapshotStatistics::reifier_target_predicate(
+            &self.dataset.statistics,
+            predicate,
+            graph,
+        )
+    }
+
+    fn stream_rows(
+        &self,
+        graph: GraphMatch,
+        stream: crate::StatisticsStream,
+    ) -> Option<crate::StatisticCount> {
+        self.graph(graph).ok()?;
+        crate::SnapshotStatistics::stream_rows(&self.dataset.statistics, graph, stream)
+    }
+
+    fn visit_distinct(
+        &self,
+        predicate: TermId,
+        graph: GraphMatch,
+        stream: crate::StatisticsStream,
+        position: crate::StatisticsPosition,
+        visit: &mut dyn FnMut(TermId) -> std::ops::ControlFlow<()>,
+    ) -> Result<bool, super::super::pack::bits::PackBitsError> {
+        if self.graph(graph).is_err() {
+            return Ok(false);
+        }
+        crate::SnapshotStatistics::visit_distinct(
+            &self.dataset.statistics,
+            predicate,
+            graph,
+            stream,
+            position,
+            visit,
+        )
+    }
+}
+
 impl TripleRead<'_> {
     fn latch(&self, error: TripleReadError) -> TripleReadError {
         let mut failure = self
@@ -345,6 +449,12 @@ impl DatasetView for TripleRead<'_> {
 
     fn statement_indexes(&self) -> crate::StatementIndexSupport {
         crate::StatementIndexSupport::INDEXED
+    }
+
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<TermId>> {
+        self.ready()
+            .ok()
+            .map(|()| self as &dyn crate::SnapshotStatistics<TermId>)
     }
 
     fn statement_cardinality_estimate(

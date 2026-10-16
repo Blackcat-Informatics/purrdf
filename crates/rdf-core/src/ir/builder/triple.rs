@@ -308,8 +308,35 @@ impl TripleDatasetBuilder {
         memory.release_vec(used_scopes)?;
         memory.release_vec(scope_journal)?;
         let dictionary = interner.freeze_with_memory(derivation_predicate, memory)?;
+        let statistics = super::super::statistics::LocalStatistics::build(
+            &dictionary,
+            (self.triples.rows.len(), |index| {
+                let row = self.triples.rows[index];
+                super::super::dataset::QuadIds {
+                    s: row.s,
+                    p: row.p,
+                    o: row.o,
+                    g: None,
+                }
+            }),
+            &(self.reifiers.rows.len(), |index| {
+                let (s, o) = self.reifiers.rows[index];
+                (s, o, None)
+            }),
+            (self.annotations.rows.len(), |index| {
+                let row = self.annotations.rows[index];
+                super::super::dataset::QuadIds {
+                    s: row.s,
+                    p: row.p,
+                    o: row.o,
+                    g: None,
+                }
+            }),
+            memory,
+        )?;
         Ok(TripleDataset {
             dictionary,
+            statistics,
             triples: TripleTable::new(self.triples.freeze(memory)?),
             reifiers: self.reifiers.freeze(memory)?,
             reifier_targets: std::sync::OnceLock::new(),

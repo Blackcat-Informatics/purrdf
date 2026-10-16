@@ -1749,7 +1749,7 @@ def write_doc(doc: str, cells: dict) -> str:
         row = _cells(line)
         rid = _plain(row[idx])
         for name in CONFIG_NAMES:
-            row[header.index(name)] = cells.get((rid, name), "—")
+            row[header.index(name)] = cells.get((rid, name), row[header.index(name)])
         newline = "\n" if line.endswith("\n") else ""
         out_lines.append("| " + " | ".join(row) + " |" + newline)
     return doc[:lo] + "".join(out_lines) + doc[hi:]
@@ -1771,8 +1771,6 @@ def run(args: argparse.Namespace) -> int:
     if problems:
         raise GateError("\n".join(problems))
     wanted = tuple(c for c in CONFIGS if not args.config or c.name in args.config)
-    if args.write_doc and wanted != CONFIGS:
-        raise GateError("--write-doc requires all seven configurations")
     if args.report and args.probe:
         raise GateError("a probe is not gate evidence and cannot write a report")
     identity = runtime.report_identity(sys.modules[__name__]) if not args.probe else None
@@ -2357,6 +2355,8 @@ def self_test() -> int:
     expect(not fresh, f"the fully mapped fixture must pass: {fresh}")
     expect(any("measured" in p for p in doc_checks(_fixture_doc("v9·f0·r0"), manifest, cells, _FIXTURE_WORLD)), "a stale count must fail parity")
     expect(write_doc(_fixture_doc("v9·f0·r0"), cells) == _fixture_doc(), "--write-doc regenerates the stale cells exactly")
+    scoped = write_doc(_fixture_doc(), {("demo.dot", CONFIG_NAMES[0]): "v9·f0·r0"})
+    expect(scoped == _fixture_doc().replace("v0·f0·r0", "v9·f0·r0", 1), "a scoped write preserves every unmeasured column")
     no_entry = load_manifest({"build": {"packages": ["demo"]}, "site": []})
     expect(any("has no manifest entry" in p for p in doc_checks(_fixture_doc(), no_entry, {}, _FIXTURE_WORLD)), "a leave row naming a function without an entry must fail")
     orphan = load_manifest({"build": {"packages": ["demo"]}, "site": [_manifest_dict()["site"][0], {**_manifest_dict()["site"][0], "id": "demo.orphan"}]})
