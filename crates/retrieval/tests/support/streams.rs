@@ -29,7 +29,7 @@ use purrdf_retrieval::{
 /// When the future pends: the fixture streams are synchronous and never do.
 pub fn ready<F: Future>(future: F) -> F::Output {
     let mut context = Context::from_waker(Waker::noop());
-    let mut future = Box::pin(future);
+    let mut future = std::pin::pin!(future);
     match future.as_mut().poll(&mut context) {
         Poll::Ready(output) => output,
         Poll::Pending => panic!("the fixture streams are synchronous and never pend"),
