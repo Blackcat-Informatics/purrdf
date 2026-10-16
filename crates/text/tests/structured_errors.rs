@@ -475,6 +475,96 @@ fn ledger_source_errors_preserve_nested_node_keys_and_native_reason_refusals() {
     assert_eq!(cause.code, "evidence-reason-concern-must-be-triple");
 }
 
+fn baseline_configuration_keeps_artifact_counts_hashes_and_missing_flags() {
+    let error: EvalError = Analyzer::resolve(AnalyzerProfile::empty_lexicon(), &[b"unwanted"])
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-config-empty-lexicon-artifacts");
+    assert!(matches!(cause.field("count"), ErrorValue::Unsigned(1)));
+    let bytes = b"unknown artifact";
+    let identity = *purrdf_hash::blake3::hash(bytes).as_bytes();
+    let error: EvalError = Analyzer::resolve(AnalyzerProfile::standard(), &[bytes])
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-config-unexpected-baseline");
+    assert!(matches!(cause.field("identity"), ErrorValue::Bytes(value) if value == identity));
+    let error: EvalError = Analyzer::resolve(AnalyzerProfile::standard(), &[])
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-config-missing-baselines");
+    assert_eq!(
+        cause
+            .events
+            .iter()
+            .filter(|event| matches!(event, Event::Value(None, ErrorValue::Boolean(false))))
+            .count(),
+        5
+    );
+}
+
+fn dictionary_configuration_keeps_conflicting_costs_and_emoji_byte_range() {
+    use purrdf_text::segment::Dictionary;
+    let error: EvalError =
+        Dictionary::with_costs([("river".to_owned(), 17), ("river".to_owned(), 3)])
+            .unwrap_err()
+            .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-dictionary-conflicting-costs");
+    assert!(matches!(cause.field("word"), ErrorValue::Text("river")));
+    assert!(matches!(cause.field("first"), ErrorValue::Unsigned(3)));
+    assert!(matches!(cause.field("second"), ErrorValue::Unsigned(17)));
+    let error: EvalError = Dictionary::canonical_key("a😀b").unwrap_err().into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-dictionary-protected-emoji");
+    assert!(matches!(cause.field("start"), ErrorValue::Unsigned(1)));
+    assert!(matches!(cause.field("end"), ErrorValue::Unsigned(5)));
+}
+
+fn dictionary_artifact_refusals_keep_original_identity_header_and_utf8_values() {
+    use purrdf_text::segment::Dictionary;
+    for (bytes, code, field, value) in [
+        (vec![0x85], "text-dictionary-artifact-arity", "items", 5),
+        (
+            vec![0x98, 6],
+            "text-dictionary-artifact-head-canonical",
+            "bytes",
+            2,
+        ),
+        (
+            vec![0x86, 0x62, b'x'],
+            "text-dictionary-artifact-text-truncated",
+            "requested",
+            2,
+        ),
+        (
+            vec![0x86, 0x61, 0xff],
+            "text-dictionary-artifact-utf8",
+            "valid_up_to",
+            0,
+        ),
+    ] {
+        let identity = *purrdf_hash::blake3::hash(&bytes).as_bytes();
+        let error: EvalError = Dictionary::from_artifact(identity, &bytes)
+            .unwrap_err()
+            .into();
+        let cause = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(cause.code, code);
+        assert!(matches!(cause.field(field), ErrorValue::Unsigned(actual) if actual == value));
+    }
+    let bytes = b"artifact";
+    let actual = *purrdf_hash::blake3::hash(bytes).as_bytes();
+    let error: EvalError = Dictionary::from_artifact([0; 32], bytes)
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-dictionary-artifact-identity");
+    assert!(matches!(cause.field("expected"), ErrorValue::Bytes(value) if value == [0; 32]));
+    assert!(matches!(cause.field("actual"), ErrorValue::Bytes(value) if value == actual));
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
@@ -490,4 +580,7 @@ purrdf_testkit::harness_main!(
     data_scoring_refusals_keep_original_ordinal_and_field_facts,
     source_read_failure_retains_the_actual_backend_error_through_conversion_and_clone,
     ledger_source_errors_preserve_nested_node_keys_and_native_reason_refusals,
+    baseline_configuration_keeps_artifact_counts_hashes_and_missing_flags,
+    dictionary_configuration_keeps_conflicting_costs_and_emoji_byte_range,
+    dictionary_artifact_refusals_keep_original_identity_header_and_utf8_values,
 );

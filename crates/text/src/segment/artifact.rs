@@ -3,7 +3,8 @@
 
 //! Bounded canonical CBOR artifacts over the shared native head codec.
 
-use super::{Dictionary, MAX_ARENA_BYTES, MAX_ARTIFACT_BYTES, MAX_ENTRIES, PROFILE_ID, invalid};
+use super::{Dictionary, MAX_ARENA_BYTES, MAX_ARTIFACT_BYTES, MAX_ENTRIES, PROFILE_ID};
+use crate::configuration::ConfigurationRefusal;
 use crate::{TextError, unicode};
 use purrdf_hash::blake3;
 use purrdf_lex::cbor::head;
@@ -40,23 +41,35 @@ impl Dictionary {
     /// # Errors
     /// Any identity mismatch, malformed/noncanonical payload, or resource limit.
     pub fn from_artifact(expected: [u8; 32], bytes: &[u8]) -> Result<Self, TextError> {
-        if bytes.len() > MAX_ARTIFACT_BYTES || *blake3::hash(bytes).as_bytes() != expected {
-            return Err(invalid(
-                "dictionary artifact size or physical identity mismatch",
-            ));
+        if bytes.len() > MAX_ARTIFACT_BYTES {
+            return Err(ConfigurationRefusal::ArtifactSize { bytes: bytes.len() }.into_error());
+        }
+        let actual = *blake3::hash(bytes).as_bytes();
+        if actual != expected {
+            return Err(ConfigurationRefusal::ArtifactPhysical { expected, actual }.into_error());
         }
         let mut rest = bytes;
-        if read_number(&mut rest, head::ARRAY)? != 6
-            || read_text(&mut rest)? != PROFILE_ID
-            || read_bytes(&mut rest)? != <[u8; 3]>::from(unicode::UNICODE_VERSION)
-        {
-            return Err(invalid(
-                "dictionary artifact format or Unicode edition mismatch",
-            ));
+        let items = read_number(&mut rest, head::ARRAY)?;
+        if items != 6 {
+            return Err(ConfigurationRefusal::ArtifactArity { items }.into_error());
+        }
+        let profile = read_text(&mut rest)?;
+        if profile != PROFILE_ID {
+            return Err(ConfigurationRefusal::ArtifactProfile {
+                actual: profile.to_owned(),
+            }
+            .into_error());
+        }
+        let version = read_bytes(&mut rest)?;
+        if version != <[u8; 3]>::from(unicode::UNICODE_VERSION) {
+            return Err(ConfigurationRefusal::ArtifactUnicode {
+                actual: version.to_vec(),
+            }
+            .into_error());
         }
         let arena = read_text(&mut rest)?;
         if arena.len() > MAX_ARENA_BYTES {
-            return Err(invalid("dictionary arena exceeds its byte bound"));
+            return Err(ConfigurationRefusal::DictionaryArena { bytes: arena.len() }.into_error());
         }
         let offsets = read_array(&mut rest, MAX_ENTRIES + 1)?;
         let costs = read_array(&mut rest, MAX_ENTRIES)?;
@@ -66,66 +79,137 @@ impl Dictionary {
             || offsets.first() != Some(&0)
             || offsets.last().copied().map(|n| n as usize) != Some(arena.len())
         {
-            return Err(invalid("dictionary artifact structure mismatch"));
+            return Err(ConfigurationRefusal::ArtifactLayout {
+                remaining: rest.len(),
+                offsets: offsets.len(),
+                costs: costs.len(),
+                first: offsets.first().copied(),
+                last: offsets.last().copied(),
+                arena_bytes: arena.len(),
+            }
+            .into_error());
         }
         let mut previous = "";
         for range in offsets.windows(2) {
             let word = arena
                 .get(range[0] as usize..range[1] as usize)
-                .ok_or_else(|| invalid("dictionary offsets are not UTF-8 boundaries"))?;
-            if word <= previous || Self::canonical_key(word)? != word {
-                return Err(invalid(
-                    "dictionary entries are not sorted canonical unique keys",
-                ));
+                .ok_or_else(|| {
+                    ConfigurationRefusal::ArtifactOffset {
+                        start: range[0],
+                        end: range[1],
+                        arena_bytes: arena.len(),
+                    }
+                    .into_error()
+                })?;
+            if word <= previous {
+                return Err(ConfigurationRefusal::ArtifactKeyOrder {
+                    previous: previous.to_owned(),
+                    word: word.to_owned(),
+                }
+                .into_error());
+            }
+            let canonical = Self::canonical_key(word)?;
+            if canonical != word {
+                return Err(ConfigurationRefusal::ArtifactKeyCanonical {
+                    word: word.to_owned(),
+                    canonical,
+                }
+                .into_error());
             }
             previous = word;
         }
         let dictionary = Self::assemble(arena.to_owned(), offsets, costs);
-        if semantic != dictionary.fingerprint || dictionary.artifact_bytes() != bytes {
-            return Err(invalid(
-                "dictionary semantic identity or canonical encoding mismatch",
-            ));
+        if semantic != dictionary.fingerprint {
+            return Err(ConfigurationRefusal::ArtifactSemantic {
+                expected: semantic.to_vec(),
+                computed: dictionary.fingerprint,
+                canonical: None,
+            }
+            .into_error());
+        }
+        if dictionary.artifact_bytes() != bytes {
+            return Err(ConfigurationRefusal::ArtifactSemantic {
+                expected: semantic.to_vec(),
+                computed: dictionary.fingerprint,
+                canonical: Some(false),
+            }
+            .into_error());
         }
         Ok(dictionary)
     }
 }
 fn read_number(input: &mut &[u8], major: u8) -> Result<u64, TextError> {
     let before = input.len();
-    let value =
-        head::read_argument(input, major).ok_or_else(|| invalid("invalid dictionary CBOR head"))?;
-    if before - input.len() != head::head_len(value) {
-        return Err(invalid("noncanonical dictionary CBOR head"));
+    let value = head::read_argument(input, major).ok_or_else(|| {
+        ConfigurationRefusal::ArtifactHead {
+            major,
+            // The shared reader advances only on success; read the refused
+            // byte in this cold branch rather than on every decoded head.
+            first: input.first().copied(),
+            before,
+            after: input.len(),
+        }
+        .into_error()
+    })?;
+    let bytes = before - input.len();
+    let expected = head::head_len(value);
+    if bytes != expected {
+        return Err(ConfigurationRefusal::ArtifactHeadCanonical {
+            major,
+            value,
+            bytes,
+            expected,
+        }
+        .into_error());
     }
     Ok(value)
 }
 fn read_text<'a>(input: &mut &'a [u8]) -> Result<&'a str, TextError> {
-    let length = usize::try_from(read_number(input, head::TEXT)?)
-        .map_err(|_| invalid("dictionary text size overflow"))?;
-    let (value, rest) = input
-        .split_at_checked(length)
-        .ok_or_else(|| invalid("truncated dictionary text"))?;
+    let count = read_number(input, head::TEXT)?;
+    let length = usize::try_from(count)
+        .map_err(|_| ConfigurationRefusal::ArtifactTextSize { length: count }.into_error())?;
+    let (value, rest) = input.split_at_checked(length).ok_or_else(|| {
+        ConfigurationRefusal::ArtifactTextTruncated {
+            requested: length,
+            remaining: input.len(),
+        }
+        .into_error()
+    })?;
     *input = rest;
-    core::str::from_utf8(value).map_err(|_| invalid("dictionary text is not UTF-8"))
+    core::str::from_utf8(value)
+        .map_err(|cause| ConfigurationRefusal::ArtifactUtf8 { cause }.into_error())
 }
 fn read_bytes<'a>(input: &mut &'a [u8]) -> Result<&'a [u8], TextError> {
-    let length = usize::try_from(read_number(input, head::BYTES)?)
-        .map_err(|_| invalid("dictionary byte size overflow"))?;
-    let (value, rest) = input
-        .split_at_checked(length)
-        .ok_or_else(|| invalid("truncated dictionary bytes"))?;
+    let count = read_number(input, head::BYTES)?;
+    let length = usize::try_from(count)
+        .map_err(|_| ConfigurationRefusal::ArtifactByteSize { length: count }.into_error())?;
+    let (value, rest) = input.split_at_checked(length).ok_or_else(|| {
+        ConfigurationRefusal::ArtifactBytesTruncated {
+            requested: length,
+            remaining: input.len(),
+        }
+        .into_error()
+    })?;
     *input = rest;
     Ok(value)
 }
 fn read_array(input: &mut &[u8], maximum: usize) -> Result<Vec<u32>, TextError> {
-    let count = usize::try_from(read_number(input, head::ARRAY)?)
-        .map_err(|_| invalid("dictionary array size overflow"))?;
+    let value = read_number(input, head::ARRAY)?;
+    let count = usize::try_from(value)
+        .map_err(|_| ConfigurationRefusal::ArtifactArraySize { length: value }.into_error())?;
     if count > maximum || count > input.len() {
-        return Err(invalid("dictionary array exceeds its bound"));
+        return Err(ConfigurationRefusal::ArtifactArrayLimit {
+            count,
+            maximum,
+            remaining: input.len(),
+        }
+        .into_error());
     }
     (0..count)
         .map(|_| {
-            u32::try_from(read_number(input, head::UNSIGNED)?)
-                .map_err(|_| invalid("dictionary integer exceeds u32"))
+            let value = read_number(input, head::UNSIGNED)?;
+            u32::try_from(value)
+                .map_err(|_| ConfigurationRefusal::ArtifactInteger { value }.into_error())
         })
         .collect()
 }
