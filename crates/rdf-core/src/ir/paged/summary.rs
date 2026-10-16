@@ -56,42 +56,158 @@ pub(crate) enum PageStream {
     Annotation,
 }
 
-/// Why a page could not be summarized: it named something its own frozen tables do
-/// not contain, so no honest set of counts exists for it.
-///
-/// Sealing runs on provider-supplied content — including, in
-/// [`PagedDataset::verify_parts`](super::PagedDataset::verify_parts), content whose
-/// whole purpose is to be certified BEFORE it is trusted — so this is a typed
-/// refusal, never a panic. Every caller maps it onto the typed error of its own
-/// surface (`PagedFreezeError::SummaryDrift`, `PageFault::invalid_data`, or
-/// `PagedQueryError::InvalidData`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SummaryDefect {
-    /// The diagnostic sentence, already naming the offending row.
-    message: String,
+/// One field of the certified page summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageSummaryField {
+    /// Named graph identities.
+    Graphs,
+    /// Subject occurrence counts.
+    Subject,
+    /// Predicate occurrence counts.
+    Predicate,
+    /// Object occurrence counts.
+    Object,
+    /// Reifier occurrence counts.
+    Reifier,
+    /// Annotation occurrence counts.
+    Annotation,
+    /// Base rows per named graph.
+    GraphBaseRows,
+    /// Reifier rows per named graph.
+    GraphReifierRows,
+    /// Annotation rows per named graph.
+    GraphAnnotationRows,
+    /// Base rows in the default graph.
+    DefaultBaseRows,
+    /// Reifier rows in the default graph.
+    DefaultReifierRows,
+    /// Annotation rows in the default graph.
+    DefaultAnnotationRows,
+    /// Exact joint statistics.
+    Statistics,
 }
 
-impl purrdf_hash::error::StructuredError for SummaryDefect {
+impl PageSummaryField {
+    /// Stable field identity used by inspection and diagnostics.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Graphs => "graphs",
+            Self::Subject => "subject",
+            Self::Predicate => "predicate",
+            Self::Object => "object",
+            Self::Reifier => "reifier",
+            Self::Annotation => "annotation",
+            Self::GraphBaseRows => "graph_base_rows",
+            Self::GraphReifierRows => "graph_reifier_rows",
+            Self::GraphAnnotationRows => "graph_annotation_rows",
+            Self::DefaultBaseRows => "default_base_rows",
+            Self::DefaultReifierRows => "default_reifier_rows",
+            Self::DefaultAnnotationRows => "default_annotation_rows",
+            Self::Statistics => "statistics",
+        }
+    }
+}
+
+/// The exact record position that named an invalid page-local term.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageSummaryPosition {
+    /// The base-quad subject.
+    Subject,
+    /// The base-quad predicate.
+    Predicate,
+    /// The base-quad object.
+    Object,
+    /// The reifier-table reifier.
+    Reifier,
+    /// The annotation-table reifier.
+    Annotation,
+}
+
+impl PageSummaryPosition {
+    /// Stable position identity used by inspection and diagnostics.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Subject => "base-quad subject",
+            Self::Predicate => "base-quad predicate",
+            Self::Object => "base-quad object",
+            Self::Reifier => "reifier-table reifier",
+            Self::Annotation => "annotation-table reifier",
+        }
+    }
+}
+
+/// Native reason that a page cannot have an honest summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PageSummaryError {
+    /// A row references a local term outside its own dictionary.
+    TermOutside {
+        /// Record position containing the invalid identifier.
+        position: PageSummaryPosition,
+        /// Original local identifier.
+        term: TermId,
+        /// Actual dictionary population.
+        terms: usize,
+    },
+    /// A row names a graph absent from the page's graph declarations.
+    GraphAbsent {
+        /// Original local graph identifier.
+        graph: TermId,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for PageSummaryError {
     purrdf_hash::error_visit! {
-        @record self { message } => "page-summary-defect" { "message" => Text(&self.message) }
+        TermOutside { position, term, terms } => "page-summary-term-outside" {
+            "position" => Code(position.label()),
+            "term" => Unsigned(term.index() as u128),
+            "terms" => Unsigned(*terms as u128),
+        },
+        GraphAbsent { graph } => "page-summary-graph-absent" {
+            "graph" => Unsigned(graph.index() as u128),
+        },
     }
 }
 
-impl fmt::Display for SummaryDefect {
-    /// Writes the diagnostic sentence [`SummaryDefect::message`] already carries,
-    /// verbatim — the type never needs formatting beyond that one prepared string.
+impl fmt::Display for PageSummaryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        match self {
+            Self::TermOutside {
+                position,
+                term,
+                terms,
+            } => write!(
+                f,
+                "page_summary: a {} names local term index {}, which is outside the page's own term table of {terms} terms",
+                position.label(),
+                term.index()
+            ),
+            Self::GraphAbsent { graph } => write!(
+                f,
+                "page_summary: quad graph {graph:?} is not in the page's own RdfDataset::named_graphs() list — a frozen dataset's graph slots must all be known graphs"
+            ),
+        }
     }
 }
+
+impl std::error::Error for PageSummaryError {}
 
 /// Physical storage refusal is distinct from invalid page contents.
 #[derive(Debug)]
 pub(crate) enum SummarySealError {
-    Contents(SummaryDefect),
+    Contents(PageSummaryError),
     Storage(StorageError),
 }
-purrdf_lex::variant_from!(SummarySealError { Contents(SummaryDefect), Storage(StorageError) });
+impl purrdf_hash::error::StructuredError for SummarySealError {
+    purrdf_hash::error_visit! {
+        Contents(cause) => "page-summary-contents" { "cause" => Cause(cause) },
+        Storage(cause) => "page-summary-storage" { "cause" => Cause(cause) },
+    }
+}
+purrdf_lex::error_source!(SummarySealError { Contents, Storage });
+purrdf_lex::variant_from!(SummarySealError { Contents(PageSummaryError), Storage(StorageError) });
 
 impl fmt::Display for SummarySealError {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -223,10 +339,10 @@ impl PageCounts {
     /// `page.annotation_quads()`, plus `page.named_graphs()`.
     ///
     /// Every lookup into a scratch array is CHECKED and refuses with a
-    /// [`SummaryDefect`] rather than panicking: `page` arrives from a
+    /// [`PageSummaryError`] rather than panicking: `page` arrives from a
     /// [`PageProvider`](super::PageProvider), and the one entry point whose whole
     /// purpose is certifying content it does not trust must return a typed refusal.
-    fn accumulate(page: &RdfDataset) -> Result<Self, SummaryDefect> {
+    fn accumulate(page: &RdfDataset) -> Result<Self, PageSummaryError> {
         let term_count = page.term_count();
         let graphs: Box<[TermId]> = page.named_graphs().collect();
 
@@ -249,9 +365,9 @@ impl PageCounts {
         let mut annotation_row_total = 0u64;
 
         for q in page.quads() {
-            bump_term(&mut counts.subject, q.s, "base-quad subject")?;
-            bump_term(&mut counts.predicate, q.p, "base-quad predicate")?;
-            bump_term(&mut counts.object, q.o, "base-quad object")?;
+            bump_term(&mut counts.subject, q.s, PageSummaryPosition::Subject)?;
+            bump_term(&mut counts.predicate, q.p, PageSummaryPosition::Predicate)?;
+            bump_term(&mut counts.object, q.o, PageSummaryPosition::Object)?;
             match q.g {
                 None => counts.default_base_rows += 1,
                 Some(g) => {
@@ -263,7 +379,7 @@ impl PageCounts {
 
         for q in page.reifier_quads() {
             reifier_row_total += 1;
-            bump_term(&mut counts.reifier, q.s, "reifier-table reifier")?;
+            bump_term(&mut counts.reifier, q.s, PageSummaryPosition::Reifier)?;
             match q.g {
                 None => counts.default_reifier_rows += 1,
                 Some(g) => {
@@ -275,7 +391,7 @@ impl PageCounts {
 
         for q in page.annotation_quads() {
             annotation_row_total += 1;
-            bump_term(&mut counts.annotation, q.s, "annotation-table reifier")?;
+            bump_term(&mut counts.annotation, q.s, PageSummaryPosition::Annotation)?;
             match q.g {
                 None => counts.default_annotation_rows += 1,
                 Some(g) => {
@@ -389,20 +505,22 @@ impl PageCounts {
     }
 }
 
-/// Increment `scratch[term.index()]`, refusing with a [`SummaryDefect`] when the row
+/// Increment `scratch[term.index()]`, refusing with a [`PageSummaryError`] when the row
 /// names a term outside the page's own dense term table. Structurally unreachable for
 /// a builder-frozen [`RdfDataset`]; typed rather than panicking because the input is
 /// provider-supplied.
 #[inline]
-fn bump_term(scratch: &mut [u64], term: TermId, position: &str) -> Result<(), SummaryDefect> {
+fn bump_term(
+    scratch: &mut [u64],
+    term: TermId,
+    position: PageSummaryPosition,
+) -> Result<(), PageSummaryError> {
     let index = term.index();
     let Some(slot) = scratch.get_mut(index) else {
-        return Err(SummaryDefect {
-            message: format!(
-                "page_summary: a {position} names local term index {index}, which is outside the \
-                 page's own term table of {} terms",
-                scratch.len()
-            ),
+        return Err(PageSummaryError::TermOutside {
+            position,
+            term,
+            terms: scratch.len(),
         });
     };
     *slot += 1;
@@ -410,7 +528,7 @@ fn bump_term(scratch: &mut [u64], term: TermId, position: &str) -> Result<(), Su
 }
 
 /// Locate `g` in the page's own ascending named-graph list, refusing with a
-/// [`SummaryDefect`] when it is absent.
+/// [`PageSummaryError`] when it is absent.
 ///
 /// Structurally unreachable for a builder-frozen [`RdfDataset`] — a frozen dataset's
 /// graph slots are all declared graphs — but this runs on provider-supplied content
@@ -418,14 +536,10 @@ fn bump_term(scratch: &mut [u64], term: TermId, position: &str) -> Result<(), Su
 /// entry point whose purpose is certifying input it does not trust, so it refuses with
 /// a typed error instead of aborting the process.
 #[inline]
-fn graph_index(graphs: &[TermId], g: TermId) -> Result<usize, SummaryDefect> {
-    graphs.binary_search(&g).map_err(|_| SummaryDefect {
-        message: format!(
-            "page_summary: quad graph {g:?} is not in the page's own \
-             RdfDataset::named_graphs() list — a frozen dataset's graph slots must all be known \
-             graphs"
-        ),
-    })
+fn graph_index(graphs: &[TermId], g: TermId) -> Result<usize, PageSummaryError> {
+    graphs
+        .binary_search(&g)
+        .map_err(|_| PageSummaryError::GraphAbsent { graph: g })
 }
 
 /// A frozen page's exact base-quad, reifier-row, and annotation-row occurrence
@@ -512,7 +626,7 @@ impl PageSummary {
     ///
     /// # Errors
     ///
-    /// [`SummaryDefect`] if a row names a term or a named graph the page's own frozen
+    /// [`PageSummaryError`] if a row names a term or a named graph the page's own frozen
     /// tables do not contain, or a storage refusal while copying sealed metadata.
     ///
     /// # Panics
@@ -558,8 +672,8 @@ impl PageSummary {
     ///
     /// # Errors
     ///
-    /// [`SummaryDefect`], exactly as [`seal`](Self::seal).
-    pub(crate) fn digest_of(page: &RdfDataset) -> Result<u64, SummaryDefect> {
+    /// [`PageSummaryError`], exactly as [`seal`](Self::seal).
+    pub(crate) fn digest_of(page: &RdfDataset) -> Result<u64, PageSummaryError> {
         Ok(PageCounts::accumulate(page)?.digest(page.predicate_statistics()))
     }
 
@@ -580,39 +694,48 @@ impl PageSummary {
     /// has already re-derived the whole summary and can afford the field-by-field
     /// walk.
     #[must_use]
-    pub(crate) fn first_disagreeing_field(&self, other: &Self) -> Option<&'static str> {
-        let checks: [(&'static str, bool); 13] = [
-            ("graphs", self.graphs == other.graphs),
-            ("subject", self.subject == other.subject),
-            ("predicate", self.predicate == other.predicate),
-            ("object", self.object == other.object),
-            ("reifier", self.reifier == other.reifier),
-            ("annotation", self.annotation == other.annotation),
+    pub(crate) fn first_disagreeing_field(&self, other: &Self) -> Option<PageSummaryField> {
+        let checks: [(PageSummaryField, bool); 13] = [
+            (PageSummaryField::Graphs, self.graphs == other.graphs),
+            (PageSummaryField::Subject, self.subject == other.subject),
             (
-                "graph_base_rows",
+                PageSummaryField::Predicate,
+                self.predicate == other.predicate,
+            ),
+            (PageSummaryField::Object, self.object == other.object),
+            (PageSummaryField::Reifier, self.reifier == other.reifier),
+            (
+                PageSummaryField::Annotation,
+                self.annotation == other.annotation,
+            ),
+            (
+                PageSummaryField::GraphBaseRows,
                 self.graph_base_rows == other.graph_base_rows,
             ),
             (
-                "graph_reifier_rows",
+                PageSummaryField::GraphReifierRows,
                 self.graph_reifier_rows == other.graph_reifier_rows,
             ),
             (
-                "graph_annotation_rows",
+                PageSummaryField::GraphAnnotationRows,
                 self.graph_annotation_rows == other.graph_annotation_rows,
             ),
             (
-                "default_base_rows",
+                PageSummaryField::DefaultBaseRows,
                 self.default_base_rows == other.default_base_rows,
             ),
             (
-                "default_reifier_rows",
+                PageSummaryField::DefaultReifierRows,
                 self.default_reifier_rows == other.default_reifier_rows,
             ),
             (
-                "default_annotation_rows",
+                PageSummaryField::DefaultAnnotationRows,
                 self.default_annotation_rows == other.default_annotation_rows,
             ),
-            ("statistics", self.statistics == other.statistics),
+            (
+                PageSummaryField::Statistics,
+                self.statistics == other.statistics,
+            ),
         ];
         checks
             .into_iter()
@@ -709,8 +832,42 @@ impl PageSummary {
 mod tests {
     use std::sync::Arc;
 
-    use super::{PageCounts, PageStream, PageSummary};
+    use super::{PageCounts, PageStream, PageSummary, PageSummaryField};
     use crate::ir::{RdfDataset, RdfDatasetBuilder, TermId};
+
+    #[test]
+    fn invalid_local_references_keep_the_original_typed_fields() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let term = TermId::from_index(17).unwrap();
+        let error = super::bump_term(&mut [0; 2], term, super::PageSummaryPosition::Subject)
+            .expect_err("out-of-range provider term must refuse");
+        let record = Capture::read(&error);
+        assert_eq!(record.code, "page-summary-term-outside");
+        assert!(matches!(
+            record.field("position"),
+            ErrorValue::Code("base-quad subject")
+        ));
+        assert!(matches!(record.field("term"), ErrorValue::Unsigned(17)));
+        assert!(matches!(record.field("terms"), ErrorValue::Unsigned(2)));
+        assert_eq!(
+            error.to_string(),
+            "page_summary: a base-quad subject names local term index 17, which is outside the page's own term table of 2 terms"
+        );
+        let error = super::graph_index(&[], term).expect_err("undeclared graph must refuse");
+        let record = Capture::read(&error);
+        assert_eq!(record.code, "page-summary-graph-absent");
+        assert!(matches!(record.field("graph"), ErrorValue::Unsigned(17)));
+        let mut counts = [0; 2];
+        super::bump_term(
+            &mut counts,
+            TermId::from_index(1).unwrap(),
+            super::PageSummaryPosition::Subject,
+        )
+        .unwrap();
+        assert_eq!(counts, [0, 1]);
+        assert_eq!(super::graph_index(&[term], term).unwrap(), 0);
+    }
 
     /// Build ONE fixture exercising every shape `PageSummary::seal` must handle, then
     /// assert every accessor against an INDEPENDENTLY hand-computed expected value
@@ -895,7 +1052,7 @@ mod tests {
         );
         assert_eq!(
             honest.first_disagreeing_field(&drifted),
-            Some("graph_base_rows"),
+            Some(PageSummaryField::GraphBaseRows),
             "and the paid pass names the field that moved"
         );
     }
@@ -927,7 +1084,10 @@ mod tests {
         let changed = build(true);
         let sealed = PageSummary::seal(&original).unwrap();
         let drifted = PageSummary::seal(&changed).unwrap();
-        assert_eq!(sealed.first_disagreeing_field(&drifted), Some("statistics"));
+        assert_eq!(
+            sealed.first_disagreeing_field(&drifted),
+            Some(PageSummaryField::Statistics)
+        );
         assert_ne!(sealed.digest(), drifted.digest());
         assert_eq!(sealed.digest(), PageSummary::digest_of(&original).unwrap());
         assert_eq!(drifted.digest(), PageSummary::digest_of(&changed).unwrap());

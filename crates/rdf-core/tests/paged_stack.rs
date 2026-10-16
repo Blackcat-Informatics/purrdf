@@ -378,6 +378,34 @@ fn typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold() {
         );
         let status = view.operation_status();
         assert!(matches!(status, ViewOperationStatus::Failed { .. }));
+        if mode == 1 {
+            let ViewOperationStatus::Failed { error, .. } = &status else {
+                unreachable!()
+            };
+            let record = purrdf_testkit::error_capture::Capture::read(error);
+            assert_eq!(record.code, "paged-query-provider");
+            let source = record.child("cause");
+            assert_eq!(source.code, "page-source-failure");
+            assert!(matches!(
+                source.field("source"),
+                purrdf_hash::error::ErrorValue::Unsigned(0)
+            ));
+            assert!(matches!(
+                source.field("requested"),
+                purrdf_hash::error::ErrorValue::Unsigned(0)
+            ));
+            let original = source.child("cause");
+            assert_eq!(original.code, "page-fault");
+            assert_eq!(original.child("kind").code, "page-fault-provider");
+            assert!(matches!(
+                original.field("page"),
+                purrdf_hash::error::ErrorValue::Unsigned(0)
+            ));
+            assert!(matches!(
+                original.child("cause").field("message"),
+                purrdf_hash::error::ErrorValue::Text("provider refusal")
+            ));
+        }
         assert_eq!(view.annotation_quads().count(), 0);
         assert_eq!(view.reifier_quads().count(), 0);
         assert_eq!(view.named_graphs().count(), 0);
@@ -887,7 +915,7 @@ fn summary_drift_is_refused_even_with_equal_local_values_counts_and_charges() {
     let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
     assert_eq!(view.quads().count(), 0);
     assert!(
-        matches!(view.operation_status(), ViewOperationStatus::Failed { error: PagedQueryError::InvalidData { message, .. }, .. } if message.contains("summary"))
+        matches!(view.operation_status(), ViewOperationStatus::Failed { error: PagedQueryError::InvalidData { message, .. }, .. } if message.to_string().contains("summary"))
     );
 }
 

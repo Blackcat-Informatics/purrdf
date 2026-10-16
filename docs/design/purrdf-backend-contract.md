@@ -332,6 +332,16 @@ or byte charges change. It must also be `Send + Sync`, so the paged layer can be
 shared across operations. Determinism at this seam is what makes query evidence,
 egress order, and serialization reproducible.
 
+`PageFault.message` and the paged query/freeze diagnostic fields retain a
+`PageDataError`, rather than a rendered string. Native causes preserve the exact
+sealed/materialized counts, local/global term identities, summary digests and
+changed field. Only `PageDataError::Message` contains provider text as data.
+String callers can use `.into()` or the existing fault constructors; presentation
+still uses `Display`. The structured visitor exposes nested causes without
+formatting them. Stack and subset routing preserve the original provider fault
+and its original page identity as well as the caller-visible page. Additional
+generation-fault details survive query conversion and request qualification.
+
 ### G5 — the shipped `PageProvider` is in-memory; durable tiers are external
 
 The reference `PageProvider` shipped in `purrdf-core` is **in-memory**. A durable

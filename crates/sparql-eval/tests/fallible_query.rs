@@ -151,7 +151,7 @@ fn query_time_failure_cannot_masquerade_as_an_empty_result() {
                 PagedQueryError::Stopped {
                     page: PageId(0),
                     cause: StopCause::Cancelled,
-                    message: "cancelled by host".to_owned(),
+                    message: "cancelled by host".into(),
                 }
             );
             assert_eq!(evidence.requested_pages, vec![PageId(0)]);
@@ -339,7 +339,7 @@ fn fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure()
         error,
         &PagedQueryError::Provider {
             page: PageId(1),
-            message: "object read failed".to_owned(),
+            message: "object read failed".into(),
         }
     );
     assert_eq!(evidence.requested_pages, vec![PageId(0), PageId(1)]);

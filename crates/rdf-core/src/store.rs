@@ -24,6 +24,21 @@ pub struct RdfStoreCapabilities {
     pub lookaside: bool,
 }
 
+impl purrdf_hash::error::StructuredError for RdfStoreCapabilities {
+    purrdf_hash::error_visit! {
+        @record self { named_graphs, quoted_triples, reifiers, annotations,
+            source_locations, loss_records, lookaside } => "rdf-store-capabilities" {
+            "named_graphs" => Boolean(self.named_graphs),
+            "quoted_triples" => Boolean(self.quoted_triples),
+            "reifiers" => Boolean(self.reifiers),
+            "annotations" => Boolean(self.annotations),
+            "source_locations" => Boolean(self.source_locations),
+            "loss_records" => Boolean(self.loss_records),
+            "lookaside" => Boolean(self.lookaside),
+        }
+    }
+}
+
 /// Declare a dataset view's fixed capability getter from its enabled flags.
 ///
 /// Invoke inside a `DatasetView` implementation with the enabled field names,

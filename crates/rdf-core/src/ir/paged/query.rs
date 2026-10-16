@@ -19,8 +19,8 @@ use crate::ir::{GlobalTermId, QuadIds, RdfDataset, TermId, TermValue};
 use super::admission::{self, PageAdmission};
 use super::summary::{PageStream, PageSummary};
 use super::{
-    PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagedDataset,
-    summary_drift_message,
+    PageDataError, PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization,
+    PagedDataset, summary_drift_error,
 };
 
 /// Exact resource ceilings for one [`PagedQueryView`].
@@ -134,7 +134,7 @@ pub enum PagedQueryError {
         /// The requested page.
         page: PageId,
         /// Provider diagnostic detail.
-        message: String,
+        message: PageDataError,
     },
     /// A page or the provider belongs to a different immutable snapshot.
     StaleGeneration {
@@ -145,6 +145,8 @@ pub enum PagedQueryError {
         expected: PageGeneration,
         /// The provider/materialization generation observed.
         actual: PageGeneration,
+        /// Additional original provider data, absent for a plain generation check.
+        detail: Option<Box<PageDataError>>,
     },
     /// Admitting another distinct page would exceed the page ceiling.
     PageBudgetExceeded {
@@ -182,14 +184,14 @@ pub enum PagedQueryError {
         /// Which stop signal the host reported.
         cause: StopCause,
         /// Provider diagnostic detail.
-        message: String,
+        message: PageDataError,
     },
     /// Materialized data or metadata violated the sealed page contract.
     InvalidData {
         /// The requested page.
         page: PageId,
         /// Validation diagnostic detail.
-        message: String,
+        message: PageDataError,
     },
 }
 
@@ -205,13 +207,15 @@ impl purrdf_hash::error::StructuredError for PagedQueryError {
         },
         Provider { page, message } => "paged-query-provider" {
             "page" => Unsigned(u128::from(page.0)),
-            "message" => Text(message),
+            "cause" => Cause(message),
         },
-        StaleGeneration { page, expected, actual } => "paged-query-stale-generation" {
+        StaleGeneration { page, expected, actual, detail } => "paged-query-stale-generation" {
             "page" => Value(page.map_or(purrdf_hash::error::ErrorValue::Absent,
                 |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value.0)))),
             "expected" => Unsigned(u128::from(expected.0)),
             "actual" => Unsigned(u128::from(actual.0)),
+            "detail" => Value(detail.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
         },
         PageBudgetExceeded { page, limit, consumed } => "paged-query-page-budget" {
             "page" => Unsigned(u128::from(page.0)),
@@ -227,11 +231,11 @@ impl purrdf_hash::error::StructuredError for PagedQueryError {
         Stopped { page, cause, message } => "paged-query-stopped" {
             "page" => Unsigned(u128::from(page.0)),
             "cause" => Record(cause),
-            "message" => Text(message),
+            "detail" => Cause(message),
         },
         InvalidData { page, message } => "paged-query-invalid-data" {
             "page" => Unsigned(u128::from(page.0)),
-            "message" => Text(message),
+            "cause" => Cause(message),
         },
     }
 }
@@ -243,11 +247,21 @@ impl From<PageFault> for PagedQueryError {
                 page: fault.page,
                 message: fault.message,
             },
-            PageFaultKind::StaleGeneration { expected, actual } => Self::StaleGeneration {
-                page: Some(fault.page),
-                expected,
-                actual,
-            },
+            PageFaultKind::StaleGeneration { expected, actual } => {
+                let detail = match fault.message {
+                    PageDataError::GenerationChanged {
+                        expected: sealed,
+                        actual: observed,
+                    } if sealed == expected && observed == actual => None,
+                    original => Some(Box::new(original)),
+                };
+                Self::StaleGeneration {
+                    page: Some(fault.page),
+                    expected,
+                    actual,
+                    detail,
+                }
+            }
             PageFaultKind::Stopped(cause) => Self::Stopped {
                 page: fault.page,
                 cause,
@@ -280,6 +294,7 @@ impl std::fmt::Display for PagedQueryError {
                 page,
                 expected,
                 actual,
+                detail: _,
             } => match page {
                 Some(page) => write!(
                     f,
@@ -335,6 +350,13 @@ impl std::error::Error for PagedQueryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::SourceSnapshot { error, .. } => Some(error.as_ref()),
+            Self::StaleGeneration {
+                detail: Some(error),
+                ..
+            } => Some(error.as_ref()),
+            Self::Provider { message, .. }
+            | Self::Stopped { message, .. }
+            | Self::InvalidData { message, .. } => Some(message),
             _ => None,
         }
     }
@@ -673,45 +695,11 @@ impl<'dataset> PagedQueryView<'dataset> {
                 page: Some(id),
                 expected: self.dataset.generation,
                 actual: materialization.generation,
+                detail: None,
             });
         }
-        if materialization.byte_len != slot.byte_len {
-            return Err(PagedQueryError::InvalidData {
-                page: id,
-                message: format!(
-                    "byte charge changed from sealed {} to materialized {}",
-                    slot.byte_len, materialization.byte_len
-                ),
-            });
-        }
-        if materialization.dataset.as_ref().term_count() != slot.translation.term_count() {
-            return Err(PagedQueryError::InvalidData {
-                page: id,
-                message: format!(
-                    "term count changed from sealed {} to materialized {}",
-                    slot.translation.term_count(),
-                    materialization.dataset.as_ref().term_count()
-                ),
-            });
-        }
-        if u64::try_from(materialization.dataset.quad_count()).expect("bounded page count fits u64")
-            != slot.quad_count
-        {
-            return Err(PagedQueryError::InvalidData {
-                page: id,
-                message: format!(
-                    "quad count changed from sealed {} to materialized {}",
-                    slot.quad_count,
-                    materialization.dataset.quad_count()
-                ),
-            });
-        }
-        if materialization.dataset.capabilities() != slot.caps {
-            return Err(PagedQueryError::InvalidData {
-                page: id,
-                message: "page capabilities changed after sealing".to_owned(),
-            });
-        }
+        slot.validate_metadata(materialization)
+            .map_err(|message| PagedQueryError::InvalidData { page: id, message })?;
         // The translation is built over the page-local term table. Equal counts are
         // insufficient: reordered or corrupted values would silently remap quads to
         // the wrong global ids. Compare each value before admitting any row.
@@ -725,7 +713,7 @@ impl<'dataset> PagedQueryView<'dataset> {
             {
                 return Err(PagedQueryError::InvalidData {
                     page: id,
-                    message: format!("term value changed at local index {local_index}"),
+                    message: PageDataError::TermValueChanged { local, global },
                 });
             }
         }
@@ -746,14 +734,14 @@ impl<'dataset> PagedQueryView<'dataset> {
         let digest = PageSummary::digest_of(&materialization.dataset).map_err(|defect| {
             PagedQueryError::InvalidData {
                 page: id,
-                message: defect.to_string(),
+                message: PageDataError::Summary(defect),
             }
         })?;
         let sealed = slot.translation.summary();
         if digest != sealed.digest() {
             return Err(PagedQueryError::InvalidData {
                 page: id,
-                message: summary_drift_message(sealed, digest, &materialization.dataset),
+                message: summary_drift_error(sealed, digest, &materialization.dataset),
             });
         }
         Ok(())
@@ -811,11 +799,15 @@ fn fail<T>(state: &mut QueryState, error: PagedQueryError) -> Result<T, PagedQue
 fn request_error(error: PagedQueryError, id: PageId) -> PagedQueryError {
     match error {
         PagedQueryError::StaleGeneration {
-            expected, actual, ..
+            expected,
+            actual,
+            detail,
+            ..
         } => PagedQueryError::StaleGeneration {
             page: Some(id),
             expected,
             actual,
+            detail,
         },
         other => other,
     }

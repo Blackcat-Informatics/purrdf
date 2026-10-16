@@ -20,14 +20,14 @@
 //! automatically. It is NEVER a numeric offset remap — a page's local id space is
 //! meaningless outside that page (C0.8).
 
-use super::summary::{PageSummary, SummaryDefect, SummarySealError};
+use super::summary::{PageSummary, PageSummaryError, SummarySealError};
 use crate::ir::{GlobalDictionary, GlobalTermId, RdfDataset, TermId};
 use purrdf_lex::allocation::StorageError;
 use std::sync::Arc;
 
 pub(crate) enum TranslationError {
     Storage(StorageError),
-    Summary(SummaryDefect),
+    Summary(PageSummaryError),
 }
 
 impl purrdf_hash::error::StructuredError for TranslationError {
@@ -36,7 +36,7 @@ impl purrdf_hash::error::StructuredError for TranslationError {
         Summary(cause) => "page-translation-summary" { "cause" => Cause(cause) },
     }
 }
-purrdf_lex::variant_from!(TranslationError { Storage(StorageError), Summary(SummaryDefect) });
+purrdf_lex::variant_from!(TranslationError { Storage(StorageError), Summary(PageSummaryError) });
 
 impl From<SummarySealError> for TranslationError {
     fn from(error: SummarySealError) -> Self {
@@ -108,7 +108,7 @@ impl PageTranslation {
     ///
     /// # Errors
     ///
-    /// [`SummaryDefect`] if the page cannot be summarized honestly.
+    /// [`PageSummaryError`] if the page cannot be summarized honestly.
     pub(crate) fn try_build(
         page: &RdfDataset,
         dict: &mut GlobalDictionary,

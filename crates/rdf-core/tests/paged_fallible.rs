@@ -3,6 +3,9 @@
 
 //! Operation-boundary tests for fallible paged reads.
 
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
 #[path = "support/paged.rs"]
 mod paged;
 use paged::{page, ready_evidence};
@@ -27,7 +30,6 @@ fn failed_status(
     }
 }
 
-#[test]
 fn inclusive_limits_and_cache_accounting_are_exact() {
     let generation = PageGeneration(5);
     let pages = [page("s0", "o0"), page("s1", "o1")];
@@ -114,7 +116,6 @@ fn inclusive_limits_and_cache_accounting_are_exact() {
 /// very first request, and the budget is already exhausted), while a budget of
 /// EXACTLY ONE completes it on a fresh view — the inclusive ceiling admitting the
 /// one page the query genuinely needs.
-#[test]
 fn page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it() {
     let pages = vec![page_in_named_graph("s", "o", "g")];
     let provider = Arc::new(InMemoryPageProvider::new(pages));
@@ -157,7 +158,6 @@ fn page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it() {
 /// byte charge: a budget ONE BYTE below that charge refuses the one-graph query,
 /// while a budget EXACTLY EQUAL to it completes the query — the inclusive ceiling
 /// documented on [`PagedQueryLimits`].
-#[test]
 fn byte_budget_below_the_owning_page_charge_refuses_and_exact_equality_admits() {
     const CHARGE: u64 = 42;
     let page = page_in_named_graph("s", "o", "g");
@@ -238,7 +238,6 @@ impl PageProvider for FailAfterSealProvider {
     }
 }
 
-#[test]
 fn provider_failure_after_seal_is_sticky_and_never_panics() {
     let provider = Arc::new(FailAfterSealProvider {
         page: page("s", "o"),
@@ -273,9 +272,16 @@ fn provider_failure_after_seal_is_sticky_and_never_panics() {
         PagedQueryError::Stopped {
             page: PageId(0),
             cause: StopCause::Cancelled,
-            message: "cancel token set".to_owned(),
+            message: "cancel token set".into(),
         }
     );
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "paged-query-stopped");
+    assert_eq!(record.child("cause").code, "stop-cancelled");
+    assert!(matches!(
+        record.child("detail").field("message"),
+        purrdf_hash::error::ErrorValue::Text("cancel token set")
+    ));
     assert_eq!(evidence.requested_pages, vec![PageId(0)]);
     assert_eq!(evidence.consumed_pages, 0);
     assert_eq!(evidence.consumed_bytes, 0);
@@ -322,7 +328,6 @@ impl PageProvider for MutableGenerationProvider {
     }
 }
 
-#[test]
 fn generation_drift_is_refused_before_materialization() {
     const EXPECTED: u64 = (1_u64 << 54) + 11;
     const ACTUAL: u64 = EXPECTED + 1;
@@ -351,6 +356,7 @@ fn generation_drift_is_refused_before_materialization() {
             page: Some(PageId(0)),
             expected: PageGeneration(EXPECTED),
             actual: PageGeneration(ACTUAL),
+            detail: None,
         }
     );
     assert_eq!(evidence.requested_pages, vec![PageId(0)]);
@@ -361,7 +367,6 @@ fn generation_drift_is_refused_before_materialization() {
     );
 }
 
-#[test]
 fn status_checkpoint_detects_drift_without_a_page_read() {
     let provider = Arc::new(MutableGenerationProvider {
         page: page("s", "o"),
@@ -379,6 +384,7 @@ fn status_checkpoint_detects_drift_without_a_page_read() {
             page: None,
             expected: PageGeneration(14),
             actual: PageGeneration(15),
+            detail: None,
         }
     );
     assert_eq!(evidence.requested_pages, [] as [_; 0]);
@@ -394,6 +400,7 @@ fn status_checkpoint_detects_drift_without_a_page_read() {
 struct ChangingMetadataProvider {
     page: Arc<RdfDataset>,
     calls: AtomicUsize,
+    byte_base: u64,
 }
 
 impl PageProvider for ChangingMetadataProvider {
@@ -407,7 +414,7 @@ impl PageProvider for ChangingMetadataProvider {
 
     fn materialize(&self, _page: PageId) -> Result<PageMaterialization, PageFault> {
         let call = self.calls.fetch_add(1, Ordering::Relaxed);
-        let bytes = if call == 0 { 40 } else { 41 };
+        let bytes = self.byte_base + u64::from(call != 0);
         Ok(PageMaterialization::new(
             self.page.clone(),
             self.generation(),
@@ -416,26 +423,65 @@ impl PageProvider for ChangingMetadataProvider {
     }
 }
 
-#[test]
 fn changed_materialization_metadata_is_invalid_data() {
-    let provider = Arc::new(ChangingMetadataProvider {
-        page: page("s", "o"),
-        calls: AtomicUsize::new(0),
-    });
-    let paged = PagedDataset::from_provider(provider).expect("seal byte charge 40");
-    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    assert!(size_of::<purrdf_core::PageDataError>() <= 32);
+    assert!(size_of::<PageFault>() <= 64);
+    assert!(size_of::<PagedQueryError>() <= 64);
+    for byte_base in [40, (1_u64 << 54) + 40] {
+        let provider = Arc::new(ChangingMetadataProvider {
+            page: page("s", "o"),
+            calls: AtomicUsize::new(0),
+            byte_base,
+        });
+        let paged = PagedDataset::from_provider(provider).expect("seal byte charge 40");
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
 
-    assert_eq!(view.quads().count(), 0);
-    let (error, evidence) = failed_status(view.operation_status());
-    assert!(matches!(
-        error,
-        PagedQueryError::InvalidData {
-            page: PageId(0),
-            ref message
-        } if message.contains("40") && message.contains("41")
-    ));
-    assert_eq!(evidence.requested_pages, vec![PageId(0)]);
-    assert_eq!(evidence.consumed_pages, 0);
+        assert_eq!(view.quads().count(), 0);
+        let (error, evidence) = failed_status(view.operation_status());
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "invalid data materializing page 0: byte charge changed from sealed {byte_base} to materialized {}",
+                byte_base + 1
+            )
+        );
+        let outer_buffer = Vec::with_capacity(8);
+        let inner_buffer = Vec::with_capacity(8);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let record = purrdf_testkit::error_capture::Capture::read_with_buffer(&error, outer_buffer);
+        let purrdf_hash::error::ErrorValue::Cause(native) = record.field("cause") else {
+            panic!("the native validation cause must remain typed")
+        };
+        let cause = purrdf_testkit::error_capture::Capture::read_with_buffer(native, inner_buffer);
+        let measured = window.close();
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(record.code, "paged-query-invalid-data");
+        assert_eq!(cause.code, "page-counter-changed");
+        assert!(matches!(
+            cause.field("counter"),
+            purrdf_hash::error::ErrorValue::Code("byte charge")
+        ));
+        assert!(
+            matches!(cause.field("expected"), purrdf_hash::error::ErrorValue::ByteCount(value) if value == u128::from(byte_base))
+        );
+        assert!(
+            matches!(cause.field("actual"), purrdf_hash::error::ErrorValue::ByteCount(value) if value == u128::from(byte_base + 1))
+        );
+        assert!(matches!(
+            error,
+            PagedQueryError::InvalidData {
+                page: PageId(0),
+                ref message
+            } if message == &purrdf_core::PageDataError::CounterChanged {
+                counter: purrdf_core::PageCounter::Bytes,
+                expected: byte_base,
+                actual: byte_base + 1,
+            }
+        ));
+        assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+        assert_eq!(evidence.consumed_pages, 0);
+        assert_eq!(evidence.consumed_bytes, 0);
+    }
 }
 
 fn page_with_side_tables() -> Arc<RdfDataset> {
@@ -459,7 +505,6 @@ fn page_with_side_tables() -> Arc<RdfDataset> {
     builder.freeze().expect("valid RDF 1.2 side tables")
 }
 
-#[test]
 fn every_read_path_shares_one_operation_cache_and_evidence() {
     let generation = PageGeneration(29);
     let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
@@ -579,7 +624,6 @@ impl PageProvider for SucceedsThenFaultsSecondPageProvider {
 /// the SECOND checkpoint observes the fault, so the refusal carries
 /// `DrainCheckpoint::After` with the view's own typed error and evidence — never a
 /// `Canonicalized` escaping a partial read.
-#[test]
 fn flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_not_ready_after() {
     let provider = Arc::new(SucceedsThenFaultsSecondPageProvider {
         first: page("s0", "o0"),
@@ -612,7 +656,7 @@ fn flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_n
                 error,
                 PagedQueryError::Provider {
                     page: PageId(1),
-                    message: "page 1 always fails after seal".to_owned(),
+                    message: "page 1 always fails after seal".into(),
                 }
             );
             assert_eq!(
@@ -634,7 +678,6 @@ fn flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_n
 /// it, the refusal carries `DrainCheckpoint::Before`, and — because the fault is
 /// caught before the drain ever starts — no page materialization is attempted at
 /// all beyond the one-time seal.
-#[test]
 fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_work() {
     let provider = Arc::new(MutableGenerationProvider {
         page: page("s", "o"),
@@ -659,6 +702,7 @@ fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_wor
                     page: None,
                     expected: PageGeneration(23),
                     actual: PageGeneration(24),
+                    detail: None,
                 }
             );
             assert_eq!(evidence.requested_pages, [] as [_; 0]);
@@ -701,7 +745,6 @@ fn page_in_named_graph(subject: &str, object: &str, graph: &str) -> Arc<RdfDatas
 /// neighbouring positive case proves the gate is not simply starving every view: a
 /// HEALTHY view at the identical resource limits still yields the full named-graph
 /// set.
-#[test]
 fn named_graphs_is_empty_after_a_sticky_failure() {
     let generation = PageGeneration(9);
     let pages = vec![page_in_named_graph("s0", "o0", "gA")];
@@ -804,7 +847,6 @@ fn page_with_annotation_in_own_graph(i: usize) -> Arc<RdfDataset> {
 /// page/byte budget charging still apply. The neighbouring must-succeed case: the
 /// SAME shape of view under `GraphMatch::Any` still consumes every page and yields
 /// every row — narrowing by graph is not narrowing by accident.
-#[test]
 fn annotation_quads_in_graph_named_consumes_only_the_owning_page() {
     let pages: Vec<Arc<RdfDataset>> = (0..4).map(page_with_annotation_in_own_graph).collect();
     let provider = Arc::new(InMemoryPageProvider::new(pages));
@@ -847,3 +889,18 @@ fn annotation_quads_in_graph_named_consumes_only_the_owning_page() {
     );
     assert_eq!(any_evidence.consumed_pages, 4);
 }
+
+purrdf_testkit::harness_main!(
+    inclusive_limits_and_cache_accounting_are_exact,
+    page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it,
+    byte_budget_below_the_owning_page_charge_refuses_and_exact_equality_admits,
+    provider_failure_after_seal_is_sticky_and_never_panics,
+    generation_drift_is_refused_before_materialization,
+    status_checkpoint_detects_drift_without_a_page_read,
+    changed_materialization_metadata_is_invalid_data,
+    every_read_path_shares_one_operation_cache_and_evidence,
+    flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_not_ready_after,
+    flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_work,
+    named_graphs_is_empty_after_a_sticky_failure,
+    annotation_quads_in_graph_named_consumes_only_the_owning_page,
+);

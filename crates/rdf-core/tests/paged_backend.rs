@@ -1098,6 +1098,14 @@ fn verify_parts_rejects_a_summary_that_disagrees_with_page_content() {
     let error = warm
         .verify_parts()
         .expect_err("drifted content must not certify");
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "paged-freeze-summary-drift");
+    let cause = record.child("cause");
+    assert_eq!(cause.code, "page-summary-mismatch");
+    assert!(matches!(
+        cause.field("field"),
+        purrdf_hash::error::ErrorValue::Code("graph_base_rows")
+    ));
     match error {
         PagedFreezeError::SummaryDrift {
             page: PageId(0), ..
@@ -1216,12 +1224,24 @@ fn a_query_over_a_drifted_warm_restart_refuses_with_typed_sticky_invalid_data() 
         }
         ViewOperationStatus::Failed { error, evidence } => (error, evidence),
     };
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "paged-query-invalid-data");
+    let cause = record.child("cause");
+    assert_eq!(cause.code, "page-summary-mismatch");
+    assert!(matches!((cause.field("sealed"), cause.field("observed")),
+        (purrdf_hash::error::ErrorValue::Unsigned(sealed), purrdf_hash::error::ErrorValue::Unsigned(observed)) if sealed != observed));
+    assert!(matches!(
+        cause.field("field"),
+        purrdf_hash::error::ErrorValue::Code("graph_base_rows")
+    ));
     match &error {
         PagedQueryError::InvalidData {
             page: PageId(0),
             message,
         } => assert!(
-            message.contains("no longer matches the summary it was sealed with"),
+            message
+                .to_string()
+                .contains("no longer matches the summary it was sealed with"),
             "the refusal must say what drifted, got: {message}"
         ),
         other => panic!("expected a typed invalid-data refusal naming page 0, got: {other}"),
@@ -1457,6 +1477,8 @@ fn snapshot_and_byte_metadata_survive_selection_and_compaction() {
 
 #[test]
 fn provider_fault_categories_remain_distinct() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
     let page = PageId(4);
     let expected = PageGeneration(1);
     let actual = PageGeneration(2);
@@ -1479,6 +1501,42 @@ fn provider_fault_categories_remain_distinct() {
     assert_eq!(
         PageFault::invalid_data(page, "corrupt payload").kind,
         PageFaultKind::InvalidData
+    );
+    let query = PagedQueryError::from(PageFault {
+        page,
+        kind: PageFaultKind::StaleGeneration { expected, actual },
+        message: "original provider detail".into(),
+    });
+    let record = Capture::read(&query);
+    assert_eq!(record.code, "paged-query-stale-generation");
+    assert!(matches!(
+        record.child("detail").field("message"),
+        ErrorValue::Text("original provider detail")
+    ));
+    assert!(std::error::Error::source(&query).is_some());
+
+    let subset = purrdf_core::SubsetPageProvider::new(
+        Arc::new(InMemoryPageProvider::new(vec![])),
+        vec![PageId(17)],
+    );
+    let error = subset
+        .materialize(PageId(0))
+        .expect_err("mapped source page is absent");
+    let record = Capture::read(&error);
+    assert!(matches!(record.field("page"), ErrorValue::Unsigned(0)));
+    let mapped = record.child("cause");
+    assert_eq!(mapped.code, "page-remapped-failure");
+    let original = mapped.child("cause");
+    assert!(matches!(original.field("page"), ErrorValue::Unsigned(17)));
+    let cause = original.child("cause");
+    assert_eq!(cause.code, "page-index-out-of-range");
+    assert!(matches!(cause.field("index"), ErrorValue::Unsigned(17)));
+    assert!(matches!(cause.field("pages"), ErrorValue::Unsigned(0)));
+    assert!(matches!(cause.field("subset"), ErrorValue::Boolean(false)));
+    assert_eq!(error, error.clone());
+    assert_eq!(
+        error.to_string(),
+        "provider failure materializing page 0: page index 17 out of range 0..0"
     );
 }
 

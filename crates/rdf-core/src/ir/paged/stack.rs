@@ -74,6 +74,8 @@ pub enum PagedStackError {
     Storage(purrdf_lex::allocation::StorageError),
     /// Invalid RDF row or head declaration.
     Invalid(RdfDiagnostic),
+    /// Original lexical or storage refusal while constructing the mutable head.
+    Head(purrdf_iri::IriReadError),
     /// Sealed metadata construction failed.
     Freeze(PagedFreezeError),
     /// Effective membership could not be established.
@@ -92,6 +94,7 @@ impl purrdf_hash::error::StructuredError for PagedStackError {
     purrdf_hash::error_visit! {
         Storage(cause) => "paged-stack-storage" { "cause" => Cause(cause) },
         Invalid(cause) => "paged-stack-invalid" { "cause" => Cause(cause) },
+        Head(cause) => "paged-stack-head" { "cause" => Cause(cause) },
         Freeze(cause) => "paged-stack-freeze" { "cause" => Cause(cause) },
         Read(cause) => "paged-stack-read" { "cause" => Cause(cause) },
         Seal(cause) => "paged-stack-seal" { "cause" => Cause(cause) },
@@ -104,6 +107,10 @@ impl std::fmt::Display for PagedStackError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Storage(error) => error.fmt(f),
+            Self::Head(error) => write!(
+                f,
+                "stack membership: invalid data materializing page 0: {error}"
+            ),
             Self::Invalid(e) => write!(f, "invalid stack head: {e}"),
             Self::Freeze(e) => write!(f, "stack metadata construction: {e}"),
             Self::Read(e) => write!(f, "stack membership: {e}"),
@@ -118,6 +125,7 @@ impl std::error::Error for PagedStackError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Storage(error) => Some(error),
+            Self::Head(error) => Some(error),
             Self::Invalid(error) => Some(error),
             Self::Freeze(error) => Some(error),
             Self::Read(error) => Some(error),
@@ -327,12 +335,9 @@ impl PagedStack {
                 .map_err(PagedStackError::Invalid)?,
         );
         for row in &self.head {
-            mutation.insert(row.clone()).map_err(|e| {
-                PagedStackError::Read(PagedQueryError::InvalidData {
-                    page: PageId(0),
-                    message: e.to_string(),
-                })
-            })?;
+            mutation
+                .insert(row.clone())
+                .map_err(PagedStackError::Head)?;
         }
         let head = mutation.freeze().map_err(PagedStackError::Invalid)?;
         if self.graphs.is_empty() {
@@ -639,20 +644,25 @@ impl PageProvider for StackProvider {
         let origin = self
             .origins
             .get(page.0 as usize)
-            .ok_or_else(|| PageFault::invalid_data(page, "unknown stack page"))?;
+            .ok_or_else(|| PageFault::invalid_data(page, super::PageDataError::UnknownStackPage))?;
         let (layer, original) = match *origin {
             StackPageOrigin::Sealed { layer, page } => (layer as usize, page),
             StackPageOrigin::Head => (self.sources.len() - 1, PageId(0)),
         };
         let source = &self.sources[layer];
-        let mut materialization = source.provider.materialize(original).map_err(|mut fault| {
-            fault.message = format!(
-                "source {layer}, original page {}: {}",
-                original.0, fault.message
-            );
-            fault.page = page;
-            fault
-        })?;
+        let mut materialization =
+            source
+                .provider
+                .materialize(original)
+                .map_err(|fault| PageFault {
+                    page,
+                    kind: fault.kind,
+                    message: super::PageDataError::Source {
+                        source: layer as u64,
+                        requested: original,
+                        original: Box::new(fault),
+                    },
+                })?;
         if materialization.generation != source.generation() {
             return Err(PageFault::stale_generation(
                 page,

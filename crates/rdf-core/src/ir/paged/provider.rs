@@ -17,6 +17,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use super::PageDataError;
 use crate::governor::StopCause;
 use crate::ir::{RdfDataset, TermId, TermRef};
 
@@ -101,7 +102,7 @@ pub struct PageFault {
     /// The typed failure category.
     pub kind: PageFaultKind,
     /// Provider-supplied or contract-supplied diagnostic detail.
-    pub message: String,
+    pub message: PageDataError,
 }
 
 impl purrdf_hash::error::StructuredError for PageFault {
@@ -109,14 +110,14 @@ impl purrdf_hash::error::StructuredError for PageFault {
         @record self { page, kind, message } => "page-fault" {
             "page" => Unsigned(u128::from(self.page.0)),
             "kind" => Record(&self.kind),
-            "message" => Text(&self.message),
+            "cause" => Cause(&self.message),
         }
     }
 }
 
 impl PageFault {
     /// Construct a provider/materialization failure.
-    pub fn provider(page: PageId, message: impl Into<String>) -> Self {
+    pub fn provider(page: PageId, message: impl Into<PageDataError>) -> Self {
         Self {
             page,
             kind: PageFaultKind::Provider,
@@ -134,14 +135,12 @@ impl PageFault {
         Self {
             page,
             kind: PageFaultKind::StaleGeneration { expected, actual },
-            message: format!(
-                "page belongs to generation {actual}, but generation {expected} was requested"
-            ),
+            message: PageDataError::GenerationChanged { expected, actual },
         }
     }
 
     /// Construct a host-reported cancellation.
-    pub fn cancelled(page: PageId, message: impl Into<String>) -> Self {
+    pub fn cancelled(page: PageId, message: impl Into<PageDataError>) -> Self {
         Self {
             page,
             kind: PageFaultKind::Stopped(StopCause::Cancelled),
@@ -150,7 +149,7 @@ impl PageFault {
     }
 
     /// Construct a host-reported deadline failure.
-    pub fn deadline_exceeded(page: PageId, message: impl Into<String>) -> Self {
+    pub fn deadline_exceeded(page: PageId, message: impl Into<PageDataError>) -> Self {
         Self {
             page,
             kind: PageFaultKind::Stopped(StopCause::Deadline),
@@ -159,7 +158,7 @@ impl PageFault {
     }
 
     /// Construct an invalid/corrupt page-data failure.
-    pub fn invalid_data(page: PageId, message: impl Into<String>) -> Self {
+    pub fn invalid_data(page: PageId, message: impl Into<PageDataError>) -> Self {
         Self {
             page,
             kind: PageFaultKind::InvalidData,
@@ -180,7 +179,11 @@ impl std::fmt::Display for PageFault {
     }
 }
 
-impl std::error::Error for PageFault {}
+impl std::error::Error for PageFault {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.message)
+    }
+}
 
 /// One atomic page-materialization result.
 ///
@@ -260,6 +263,7 @@ pub trait PageProvider: Send + Sync {
                 page: None,
                 expected,
                 actual,
+                detail: None,
             });
         }
         let actual = self.page_count();
@@ -331,13 +335,16 @@ impl PageProvider for InMemoryPageProvider {
     }
 
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
-        let index = usize::try_from(page.0).map_err(|_| {
-            PageFault::invalid_data(page, "page does not address a local provider buffer")
-        })?;
+        let index = usize::try_from(page.0)
+            .map_err(|_| PageFault::invalid_data(page, PageDataError::UnknownPage))?;
         self.pages.get(index).cloned().ok_or_else(|| {
             PageFault::provider(
                 page,
-                format!("page index {index} out of range 0..{}", self.pages.len()),
+                PageDataError::OutOfRange {
+                    index: page.0,
+                    pages: self.pages.len() as u64,
+                    subset: false,
+                },
             )
         })
     }
@@ -378,23 +385,30 @@ impl PageProvider for SubsetPageProvider {
     }
 
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
-        let index = usize::try_from(page.0).map_err(|_| {
-            PageFault::invalid_data(page, "page does not address a local provider buffer")
-        })?;
+        let index = usize::try_from(page.0)
+            .map_err(|_| PageFault::invalid_data(page, PageDataError::UnknownPage))?;
         let Some(&original) = self.indices.get(index) else {
             return Err(PageFault::provider(
                 page,
-                format!(
-                    "subset page index {index} out of range 0..{}",
-                    u64::try_from(self.indices.len()).expect("resident page count fits u64")
-                ),
+                PageDataError::OutOfRange {
+                    index: page.0,
+                    pages: self.indices.len() as u64,
+                    subset: true,
+                },
             ));
         };
-        self.inner.materialize(original).map_err(|mut fault| {
+        self.inner.materialize(original).map_err(|fault| {
             // The composed dataset exposes dense subset ids, so diagnostics must name
             // the page requested by its caller rather than leak the backing ordinal.
-            fault.page = page;
-            fault
+            if fault.page == page {
+                fault
+            } else {
+                PageFault {
+                    page,
+                    kind: fault.kind,
+                    message: PageDataError::Remapped(Box::new(fault)),
+                }
+            }
         })
     }
 }
@@ -455,13 +469,16 @@ impl PageProvider for CountingDemandProvider {
     }
 
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
-        let index = usize::try_from(page.0).map_err(|_| {
-            PageFault::invalid_data(page, "page does not address a local provider buffer")
-        })?;
+        let index = usize::try_from(page.0)
+            .map_err(|_| PageFault::invalid_data(page, PageDataError::UnknownPage))?;
         let thunk = self.thunks.get(index).ok_or_else(|| {
             PageFault::provider(
                 page,
-                format!("page index {index} out of range 0..{}", self.thunks.len()),
+                PageDataError::OutOfRange {
+                    index: page.0,
+                    pages: self.thunks.len() as u64,
+                    subset: false,
+                },
             )
         })?;
         self.hits.fetch_add(1, Ordering::Relaxed);

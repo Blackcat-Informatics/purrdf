@@ -193,6 +193,7 @@ fn describe_query_error(error: &PagedQueryError) -> String {
             page,
             expected,
             actual,
+            ..
         } => format!("stale-generation: page {page:?}, expected {expected}, actual {actual}"),
         PagedQueryError::PageBudgetExceeded {
             page,

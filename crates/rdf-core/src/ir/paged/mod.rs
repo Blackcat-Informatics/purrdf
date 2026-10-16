@@ -82,6 +82,7 @@
 //! recorded request sequence — is a function of the snapshot and the pattern alone.
 
 pub(crate) mod admission;
+mod data_error;
 pub(crate) mod graph_index;
 pub mod provider;
 pub mod query;
@@ -100,6 +101,9 @@ use admission::PageAdmission;
 use graph_index::GraphPageIndex;
 use purrdf_lex::allocation::{Memory, Resident};
 use summary::{PageStream, PageSummary};
+
+pub use data_error::{PageCounter, PageDataError};
+pub use summary::{PageSummaryError, PageSummaryField, PageSummaryPosition};
 
 pub use provider::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
@@ -188,7 +192,7 @@ pub enum PagedFreezeError {
         /// The page whose materialized content no longer matches its sealed summary.
         page: PageId,
         /// Diagnostic detail describing the disagreement.
-        message: String,
+        message: PageDataError,
     },
 }
 
@@ -208,7 +212,7 @@ impl purrdf_hash::error::StructuredError for PagedFreezeError {
         QuadOverlap(quad) => "paged-freeze-quad-overlap" { "quad" => Record(quad.as_ref()) },
         SummaryDrift { page, message } => "paged-freeze-summary-drift" {
             "page" => Unsigned(u128::from(page.0)),
-            "message" => Text(message),
+            "cause" => Cause(message),
         },
     }
 }
@@ -294,9 +298,10 @@ impl From<StatisticsMergeError> for PagedFreezeError {
     fn from(error: StatisticsMergeError) -> Self {
         match error {
             StatisticsMergeError::Storage(error) => Self::Storage(error),
-            StatisticsMergeError::Encoding(error) => {
-                Self::Page(PageFault::invalid_data(PageId(0), error.to_string()))
-            }
+            StatisticsMergeError::Encoding(error) => Self::Page(PageFault::invalid_data(
+                PageId(0),
+                PageDataError::Statistics(error),
+            )),
         }
     }
 }
@@ -330,11 +335,29 @@ impl std::fmt::Display for PagedFreezeError {
                 o.object,
                 o.graph
             ),
-            Self::SummaryDrift { page, message } => write!(
-                f,
-                "page {}'s materialized content disagrees with its sealed summary: {message}",
-                page.0
-            ),
+            Self::SummaryDrift { page, message } => {
+                write!(
+                    f,
+                    "page {}'s materialized content disagrees with its sealed summary: ",
+                    page.0
+                )?;
+                if let PageDataError::SummaryMismatch {
+                    field: Some(field), ..
+                } = message
+                {
+                    write!(
+                        f,
+                        "page {}: the summary sealed at construction time does not match the \
+                         summary re-derived from the page's current materialized content — the \
+                         fields disagree first at `{}`, and a pruning decision trusting the \
+                         sealed summary could skip or misroute rows this page actually holds",
+                        page.0,
+                        field.label()
+                    )
+                } else {
+                    message.fmt(f)
+                }
+            }
         }
     }
 }
@@ -344,11 +367,11 @@ impl std::error::Error for PagedFreezeError {
         match self {
             Self::Storage(error) => Some(error),
             Self::Page(fault) => Some(fault),
+            Self::SummaryDrift { message, .. } => Some(message),
             Self::LogicalCountExhausted
             | Self::GenerationMismatch { .. }
             | Self::PageCountMismatch { .. }
-            | Self::QuadOverlap(_)
-            | Self::SummaryDrift { .. } => None,
+            | Self::QuadOverlap(_) => None,
         }
     }
 }
@@ -507,7 +530,7 @@ impl PagedDataset {
             Vec::with_capacity(usize::try_from(page_count).map_err(|_| {
                 PagedFreezeError::Page(PageFault::invalid_data(
                     PageId(0),
-                    "page metadata does not fit a local allocation",
+                    PageDataError::MetadataCapacity { pages: page_count },
                 ))
             })?);
         // G3 refusal ledgers: the first page on which each global quad was seen, kept
@@ -553,7 +576,7 @@ impl PagedDataset {
                     translation::TranslationError::Summary(defect) => {
                         PagedFreezeError::SummaryDrift {
                             page: id,
-                            message: defect.to_string(),
+                            message: PageDataError::Summary(defect),
                         }
                     }
                 },
@@ -1113,43 +1136,8 @@ impl PagedDataset {
                 materialization.generation,
             ));
         }
-        if materialization.byte_len != slot.byte_len {
-            return Err(PageFault::invalid_data(
-                id,
-                format!(
-                    "byte charge changed from sealed {} to materialized {}",
-                    slot.byte_len, materialization.byte_len
-                ),
-            ));
-        }
-        if materialization.dataset.as_ref().term_count() != slot.translation.term_count() {
-            return Err(PageFault::invalid_data(
-                id,
-                format!(
-                    "term count changed from sealed {} to materialized {}",
-                    slot.translation.term_count(),
-                    materialization.dataset.as_ref().term_count()
-                ),
-            ));
-        }
-        if u64::try_from(materialization.dataset.quad_count()).expect("bounded page count fits u64")
-            != slot.quad_count
-        {
-            return Err(PageFault::invalid_data(
-                id,
-                format!(
-                    "quad count changed from sealed {} to materialized {}",
-                    slot.quad_count,
-                    materialization.dataset.quad_count()
-                ),
-            ));
-        }
-        if materialization.dataset.capabilities() != slot.caps {
-            return Err(PageFault::invalid_data(
-                id,
-                "page capabilities changed after sealing",
-            ));
-        }
+        slot.validate_metadata(&materialization)
+            .map_err(|error| PageFault::invalid_data(id, error))?;
         // UNCONDITIONAL certification, in every build profile: recompute the page's
         // O(1) summary digest from the freshly materialized content and compare it to
         // the digest sealed for this slot. The checks above compare only totals, so
@@ -1167,11 +1155,11 @@ impl PagedDataset {
         // assertion — the content is provider-supplied, exactly like the four checks
         // above.
         let digest = PageSummary::digest_of(&materialization.dataset)
-            .map_err(|defect| PageFault::invalid_data(id, defect.to_string()))?;
+            .map_err(|defect| PageFault::invalid_data(id, PageDataError::Summary(defect)))?;
         if digest != slot.translation.summary().digest() {
             return Err(PageFault::invalid_data(
                 id,
-                summary_drift_message(slot.translation.summary(), digest, &materialization.dataset),
+                summary_drift_error(slot.translation.summary(), digest, &materialization.dataset),
             ));
         }
         let _ = slot.resident.set(materialization.dataset);
@@ -1226,7 +1214,7 @@ impl PagedDataset {
                 PageSummary::seal(&materialization.dataset).map_err(|error| match error {
                     summary::SummarySealError::Contents(defect) => PagedFreezeError::SummaryDrift {
                         page: slot.id,
-                        message: defect.to_string(),
+                        message: PageDataError::Summary(defect),
                     },
                     summary::SummarySealError::Storage(error) => PagedFreezeError::Storage(error),
                 })?;
@@ -1234,13 +1222,11 @@ impl PagedDataset {
             if let Some(field) = sealed.first_disagreeing_field(&fresh) {
                 return Err(PagedFreezeError::SummaryDrift {
                     page: slot.id,
-                    message: format!(
-                        "page {}: the summary sealed at construction time does not match the \
-                         summary re-derived from the page's current materialized content — the \
-                         fields disagree first at `{field}`, and a pruning decision trusting the \
-                         sealed summary could skip or misroute rows this page actually holds",
-                        slot.id.0
-                    ),
+                    message: PageDataError::SummaryMismatch {
+                        sealed: sealed.digest(),
+                        observed: fresh.digest(),
+                        field: Some(field),
+                    },
                 });
             }
         }
@@ -1255,22 +1241,16 @@ impl PagedDataset {
 /// Both halves are shared verbatim by the two admission surfaces
 /// ([`PagedDataset::page`] and [`PagedQueryView`]'s materialization validator) so the
 /// same drift reads the same way whichever one catches it.
-pub(crate) fn summary_drift_message(
+pub(crate) fn summary_drift_error(
     sealed: &PageSummary,
     observed: u64,
     page: &RdfDataset,
-) -> String {
-    let mut message = format!(
-        "materialized content no longer matches the summary it was sealed with: the sealed \
-         summary digests to {:#018x}, the materialized page to {observed:#018x}",
-        sealed.digest()
-    );
-    if let Some(field) = disagreeing_field(sealed, page) {
-        message.push_str(" (the summaries disagree first at `");
-        message.push_str(field);
-        message.push_str("`)");
+) -> PageDataError {
+    PageDataError::SummaryMismatch {
+        sealed: sealed.digest(),
+        observed,
+        field: disagreeing_field(sealed, page),
     }
-    message
 }
 
 /// Name the first summary field the materialized `page` disagrees with `sealed` on.
@@ -1285,7 +1265,7 @@ pub(crate) fn summary_drift_message(
 /// Gated with `cfg!`, not `#[cfg]`: the body is then type-checked in every profile,
 /// so a release build cannot break on code a debug build never compiled, and the
 /// constant-false branch folds away at opt-level 3 exactly as an attribute would.
-fn disagreeing_field(sealed: &PageSummary, page: &RdfDataset) -> Option<&'static str> {
+fn disagreeing_field(sealed: &PageSummary, page: &RdfDataset) -> Option<PageSummaryField> {
     if !cfg!(debug_assertions) {
         return None;
     }

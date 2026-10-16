@@ -107,6 +107,10 @@ name = "segmented"
 harness = false
 
 [[test]]
+name = "paged_fallible"
+harness = false
+
+[[test]]
 name = "model_traits"
 harness = false
 
