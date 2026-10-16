@@ -249,12 +249,17 @@ fn run_text_focus(wide: bool) {
         let initial = image
             .open_session(SegmentedReadLimits::new(CEILING, 2, 16_384, 20_000_000, 8))
             .unwrap();
-        let ceiling = initial.evidence().live_bytes();
+        // Opening can need transient storage beyond its retained layout.
+        let ceiling = initial.evidence().peak_bytes();
         drop(initial);
         for route in 0..4 {
             let source = image
                 .open_session(SegmentedReadLimits::new(ceiling, 2, 16_384, 20_000_000, 8))
                 .unwrap();
+            let _zero_headroom = source
+                .reserve_workspace(ceiling - source.evidence().live_bytes())
+                .unwrap();
+            assert_eq!(source.evidence().live_bytes(), ceiling);
             let baseline = non_cache_live(&source);
             let engine = NativeSparqlEngine::new();
             let prepared = engine

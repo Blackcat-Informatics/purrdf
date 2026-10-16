@@ -36,6 +36,7 @@
 use std::fmt;
 
 use purrdf_hash::mix::{GOLDEN_GAMMA, splitmix64_finalize};
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 use crate::ir::pack::bits::IntVector;
 
@@ -81,6 +82,23 @@ impl fmt::Display for SummaryDefect {
     /// verbatim — the type never needs formatting beyond that one prepared string.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
+    }
+}
+
+/// Physical storage refusal is distinct from invalid page contents.
+#[derive(Debug)]
+pub(crate) enum SummarySealError {
+    Contents(SummaryDefect),
+    Storage(StorageError),
+}
+purrdf_lex::variant_from!(SummarySealError { Contents(SummaryDefect), Storage(StorageError) });
+
+impl fmt::Display for SummarySealError {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Contents(error) => error.fmt(output),
+            Self::Storage(error) => error.fmt(output),
+        }
     }
 }
 
@@ -159,6 +177,8 @@ mod tag {
     pub(super) const GRAPH_ANNOTATION: u64 = 0x09;
     /// The three default-graph row scalars.
     pub(super) const DEFAULT_ROWS: u64 = 0x0a;
+    /// Exact predicate, domain and joint metadata sealed with the page.
+    pub(super) const STATISTICS: u64 = 0x0b;
 }
 
 /// The raw counts one pass over a page produces, before they are bit-packed into a
@@ -340,7 +360,7 @@ impl PageCounts {
     /// mixer is injective, so the finished digest changes with it. That is what makes
     /// the `O(1)` digest comparison on the admission path a real certification of the
     /// direction (under-reporting) that authorizes skipping rows.
-    fn digest(&self) -> u64 {
+    fn digest(&self, statistics: &super::super::statistics::LocalStatistics) -> u64 {
         let mut digest = Digest::new();
         digest.write(tag::GRAPHS);
         digest.write(self.graphs.len() as u64);
@@ -363,6 +383,8 @@ impl PageCounts {
                 self.default_annotation_rows,
             ],
         );
+        digest.write(tag::STATISTICS);
+        statistics.visit_words(|word| digest.write(word));
         digest.finish()
     }
 }
@@ -425,6 +447,8 @@ fn graph_index(graphs: &[TermId], g: TermId) -> Result<usize, SummaryDefect> {
 /// silent bug.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PageSummary {
+    /// Complete immutable statistics in the page's original local dictionary.
+    pub(super) statistics: super::super::statistics::LocalStatistics,
     /// The page's named graphs, ascending — exactly `RdfDataset::named_graphs()`
     /// (already sorted and deduplicated; includes declared-empty graphs and graphs
     /// mentioned only by a side table). Parallel-indexed by `graph_base_rows`,
@@ -481,25 +505,31 @@ impl PageSummary {
     /// a `PageSummary`.
     ///
     /// One pass each over `page.quads()`, `page.reifier_quads()`,
-    /// `page.annotation_quads()`, plus `page.named_graphs()`, then the `O(1)`
-    /// [`digest`](Self::digest) over everything accumulated. Every count is
+    /// `page.annotation_quads()`, plus `page.named_graphs()`, then a deterministic
+    /// digest fold over the counts and sealed statistical metadata. Every count is
     /// self-reconciled against an independently-computed total (see
     /// [`PageCounts::accumulate`]).
     ///
     /// # Errors
     ///
     /// [`SummaryDefect`] if a row names a term or a named graph the page's own frozen
-    /// tables do not contain.
+    /// tables do not contain, or a storage refusal while copying sealed metadata.
     ///
     /// # Panics
     ///
     /// Panics (via `assert_eq!`) if the accumulated per-term or per-graph counts do
     /// not reconcile against `page`'s own totals — a broken-invariant bug in this
     /// crate's accumulation loop, unreachable for a validly frozen `page`.
-    pub(crate) fn seal(page: &RdfDataset) -> Result<Self, SummaryDefect> {
+    pub(crate) fn seal(page: &RdfDataset) -> Result<Self, SummarySealError> {
         let counts = PageCounts::accumulate(page)?;
-        let digest = counts.digest();
+        let source = page.predicate_statistics();
+        let digest = counts.digest(source);
+        // This is the resident page-header constructor, independent of the
+        // materialization's owner. Keep a fallible metadata copy, never its rows.
+        let mut admission = Resident;
+        let statistics = source.clone_admitted(&mut Memory::new(&mut admission))?;
         Ok(Self {
+            statistics,
             subject: IntVector::from_values(&counts.subject),
             predicate: IntVector::from_values(&counts.predicate),
             object: IntVector::from_values(&counts.object),
@@ -530,7 +560,7 @@ impl PageSummary {
     ///
     /// [`SummaryDefect`], exactly as [`seal`](Self::seal).
     pub(crate) fn digest_of(page: &RdfDataset) -> Result<u64, SummaryDefect> {
-        Ok(PageCounts::accumulate(page)?.digest())
+        Ok(PageCounts::accumulate(page)?.digest(page.predicate_statistics()))
     }
 
     /// This summary's sealed digest. Comparing two of these is `O(1)` and is a
@@ -551,7 +581,7 @@ impl PageSummary {
     /// walk.
     #[must_use]
     pub(crate) fn first_disagreeing_field(&self, other: &Self) -> Option<&'static str> {
-        let checks: [(&'static str, bool); 12] = [
+        let checks: [(&'static str, bool); 13] = [
             ("graphs", self.graphs == other.graphs),
             ("subject", self.subject == other.subject),
             ("predicate", self.predicate == other.predicate),
@@ -582,6 +612,7 @@ impl PageSummary {
                 "default_annotation_rows",
                 self.default_annotation_rows == other.default_annotation_rows,
             ),
+            ("statistics", self.statistics == other.statistics),
         ];
         checks
             .into_iter()
@@ -869,6 +900,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn changed_joint_statistics_are_certified_even_when_all_marginals_match() {
+        let build = |swap| {
+            let mut builder = RdfDatasetBuilder::new();
+            let ids: Vec<_> = ["a", "b", "p", "q", "x", "y"]
+                .into_iter()
+                .map(|name| {
+                    builder
+                        .intern_iri(&format!("http://example.org/{name}"))
+                        .unwrap()
+                })
+                .collect();
+            let [a, b, p, q, x, y] = ids[..] else {
+                unreachable!()
+            };
+            builder
+                .push_quad(a, p, if swap { y } else { x }, None)
+                .unwrap();
+            builder
+                .push_quad(b, q, if swap { x } else { y }, None)
+                .unwrap();
+            builder.freeze().unwrap()
+        };
+        let original = build(false);
+        let changed = build(true);
+        let sealed = PageSummary::seal(&original).unwrap();
+        let drifted = PageSummary::seal(&changed).unwrap();
+        assert_eq!(sealed.first_disagreeing_field(&drifted), Some("statistics"));
+        assert_ne!(sealed.digest(), drifted.digest());
+        assert_eq!(sealed.digest(), PageSummary::digest_of(&original).unwrap());
+        assert_eq!(drifted.digest(), PageSummary::digest_of(&changed).unwrap());
+    }
+
     /// Every UNDER-count the summary can express — one fewer row attributed to a term
     /// in any of the five per-term columns, to a named graph in any of the three
     /// per-graph columns, or to the default graph in any of the three scalars — must
@@ -905,7 +969,7 @@ mod tests {
         let page = b.freeze().expect("fixture freezes");
 
         let fresh = || PageCounts::accumulate(&page).expect("fixture accumulates");
-        let sealed = fresh().digest();
+        let sealed = fresh().digest(page.predicate_statistics());
 
         // The fixture really does hold a count of two everywhere a mutation below
         // decrements, so none of them silently wraps a zero into `u64::MAX` and
@@ -930,7 +994,7 @@ mod tests {
             let mut counts = fresh();
             mutate(&mut counts);
             assert_ne!(
-                counts.digest(),
+                counts.digest(page.predicate_statistics()),
                 sealed,
                 "under-reporting {field} must change the digest"
             );

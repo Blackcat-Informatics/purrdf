@@ -92,11 +92,13 @@ pub mod translation;
 use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
 
+use super::statistics::{LocalStatistics, StatisticsMergeError};
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, RdfDataset, TermValue};
 use crate::{FastHasher, FastMap, RdfStoreCapabilities};
 use admission::PageAdmission;
 use graph_index::GraphPageIndex;
+use purrdf_lex::allocation::{Memory, Resident};
 use summary::{PageStream, PageSummary};
 
 pub use provider::{
@@ -288,6 +290,17 @@ impl From<PageFault> for PagedFreezeError {
     }
 }
 
+impl From<StatisticsMergeError> for PagedFreezeError {
+    fn from(error: StatisticsMergeError) -> Self {
+        match error {
+            StatisticsMergeError::Storage(error) => Self::Storage(error),
+            StatisticsMergeError::Encoding(error) => {
+                Self::Page(PageFault::invalid_data(PageId(0), error.to_string()))
+            }
+        }
+    }
+}
+
 impl std::fmt::Display for PagedFreezeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -374,6 +387,9 @@ pub struct PagePart {
 /// boundary. See the [module docs](self) for the id-composition, seal-then-lazy, and
 /// completeness contracts.
 pub struct PagedDataset {
+    /// Exact translated statistics, shared with the certified parts for a warm
+    /// metadata-only reopen. Its ownership never includes materialized pages.
+    statistics: Arc<PagedStatistics>,
     /// The shared value-interner: the single global id space over all pages. Its own
     /// reverse value index answers [`term_id_by_value`](DatasetView::term_id_by_value)
     /// and [`resolve`](DatasetView::resolve) WITHOUT materializing any page.
@@ -397,6 +413,46 @@ pub struct PagedDataset {
     /// the page-admission candidate selection (`admission::candidate_pages`) in
     /// both `quads_for_pattern` and `cardinality_estimate` below.
     graph_index: GraphPageIndex,
+}
+
+#[derive(Debug)]
+pub(super) struct PagedStatistics {
+    identities: Box<[Arc<()>]>,
+    values: LocalStatistics<GlobalTermId>,
+}
+
+/// One metadata merge home for every constructor. Certified unchanged parts
+/// reuse their immutable bundle in O(page count), without rewalking domains.
+fn seal_statistics(pages: &mut [PageSlot]) -> Result<Arc<PagedStatistics>, StatisticsMergeError> {
+    if let Some(cached) = pages
+        .first()
+        .and_then(|slot| slot.translation.statistics_bundle.as_ref())
+        && cached.identities.len() == pages.len()
+        && cached
+            .identities
+            .iter()
+            .zip(pages.iter())
+            .all(|(identity, slot)| Arc::ptr_eq(identity, &slot.translation.identity))
+    {
+        return Ok(cached.clone());
+    }
+    let mut admission = Resident;
+    let mut memory = Memory::new(&mut admission);
+    let values = LocalStatistics::merge_translated(
+        pages.iter(),
+        |slot| &slot.translation.summary().statistics,
+        |slot, id| slot.translation.to_global(id),
+        &mut memory,
+    )?;
+    let identities = memory.collect(pages.iter().map(|slot| slot.translation.identity.clone()))?;
+    let statistics = Arc::new(PagedStatistics {
+        identities: memory.boxed_slice(identities)?,
+        values,
+    });
+    for slot in pages {
+        slot.translation.statistics_bundle = Some(statistics.clone());
+    }
+    Ok(statistics)
 }
 
 impl std::fmt::Debug for PagedDataset {
@@ -572,12 +628,14 @@ impl PagedDataset {
                 provider: current_page_count,
             });
         }
-        let pages = pages.into_boxed_slice();
+        let mut pages = pages.into_boxed_slice();
         // Derived from the FINAL, densely-numbered `pages` slice, after every page id
         // is assigned — the sole producer, per page-set, of the dataset-level graph
         // index.
         let graph_index = GraphPageIndex::derive(&pages);
+        let statistics = seal_statistics(&mut pages)?;
         Ok(Self {
+            statistics,
             dictionary,
             pages,
             provider,
@@ -674,12 +732,14 @@ impl PagedDataset {
                 byte_len: part.byte_len,
             });
         }
-        let pages = pages.into_boxed_slice();
+        let mut pages = pages.into_boxed_slice();
         // Derived from `slot.translation.summary()` alone (already carried by each
         // `PagePart`), so this reads no page — the warm-restart cost stays
         // O(page count), never O(page count × page size).
         let graph_index = GraphPageIndex::derive(&pages);
+        let statistics = seal_statistics(&mut pages)?;
         Ok(Self {
+            statistics,
             dictionary,
             pages,
             provider,
@@ -752,14 +812,20 @@ impl PagedDataset {
             });
         }
         let indices: Vec<PageId> = keep.to_vec();
-        let pages = pages.into_boxed_slice();
+        let mut pages = pages.into_boxed_slice();
         // Each retained page's PageSummary is keyed in that page's own LOCAL TermId
         // space, which subsetting never touches, so it carries over unchanged inside
         // `slot.translation` above. The graph INDEX, however, is keyed by GLOBAL id
         // and by PageId — and page ids are renumbered densely here — so it must be
         // rebuilt from the final `pages` slice rather than carried over.
         let graph_index = GraphPageIndex::derive(&pages);
+        // This existing resident factory is infallible, including its cloned
+        // dictionary/maps. Sealed subset metadata cannot add a logical ID; an
+        // allocation failure remains an actionable hard failure, as before.
+        let statistics =
+            seal_statistics(&mut pages).expect("resident subset statistics allocation");
         Self {
+            statistics,
             dictionary,
             pages,
             provider: Arc::new(SubsetPageProvider::new(self.provider.clone(), indices)),
@@ -855,14 +921,19 @@ impl PagedDataset {
                 byte_len: slot.byte_len,
             })
             .collect();
-        let pages = pages.into_boxed_slice();
+        let mut pages = pages.into_boxed_slice();
         // Each page's PageSummary is keyed in that page's own LOCAL TermId space,
         // which compaction never touches (only the global side moves — see
         // `PageTranslation::remap`), so it carries over unchanged. The graph INDEX is
         // keyed by GLOBAL id, which compaction DOES renumber, so it must be rebuilt
         // from the completed `pages` slice rather than remapped in place.
         let graph_index = GraphPageIndex::derive(&pages);
+        let statistics = seal_statistics(&mut pages).map_err(|error| match error {
+            StatisticsMergeError::Storage(error) => error,
+            StatisticsMergeError::Encoding(error) => panic!("sealed compacted statistics: {error}"),
+        })?;
         Ok(Self {
+            statistics,
             dictionary,
             pages,
             provider: self.provider.clone(),
@@ -1151,12 +1222,14 @@ impl PagedDataset {
                     actual: materialization.generation,
                 });
             }
-            let fresh = PageSummary::seal(&materialization.dataset).map_err(|defect| {
-                PagedFreezeError::SummaryDrift {
-                    page: slot.id,
-                    message: defect.to_string(),
-                }
-            })?;
+            let fresh =
+                PageSummary::seal(&materialization.dataset).map_err(|error| match error {
+                    summary::SummarySealError::Contents(defect) => PagedFreezeError::SummaryDrift {
+                        page: slot.id,
+                        message: defect.to_string(),
+                    },
+                    summary::SummarySealError::Storage(error) => PagedFreezeError::Storage(error),
+                })?;
             let sealed = slot.translation.summary();
             if let Some(field) = sealed.first_disagreeing_field(&fresh) {
                 return Err(PagedFreezeError::SummaryDrift {
@@ -1368,6 +1441,10 @@ impl DatasetView for PagedDataset {
             self.total_quads,
             u64::try_from(self.dictionary.len()).expect("resident dictionary count fits u64"),
         )
+    }
+
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<GlobalTermId>> {
+        Some(&self.statistics.values)
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {

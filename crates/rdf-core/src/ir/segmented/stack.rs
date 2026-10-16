@@ -3,6 +3,7 @@
 
 //! Immutable chronological descriptors and sealed, source-local metadata owners.
 
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use purrdf_lex::allocation::{Memory, Resident};
@@ -20,6 +21,7 @@ pub struct SegmentedLayerMetadata {
     removals: Option<Arc<RdfDataset>>,
     declarations: Option<Arc<RdfDataset>>,
     max_owned_term_bytes: u64,
+    pub(super) statistics_revision: u64,
 }
 
 impl SegmentedLayerMetadata {
@@ -48,6 +50,16 @@ impl SegmentedLayerMetadata {
                     super::build::resident_owned_term_bound(dataset).map(|bound| widest.max(bound))
                 })?;
         Ok(Self {
+            statistics_revision: purrdf_hash::fixed::hash_one(&(
+                removals
+                    .as_ref()
+                    .map(|dataset| resident_statistics_revision(dataset))
+                    .transpose()?,
+                declarations
+                    .as_ref()
+                    .map(|dataset| resident_statistics_revision(dataset))
+                    .transpose()?,
+            )),
             removals,
             declarations,
             max_owned_term_bytes,
@@ -129,6 +141,7 @@ pub struct SegmentedResidentHead {
     pub(super) dataset: Arc<RdfDataset>,
     pub(super) metadata: SegmentedLayerMetadata,
     pub(super) max_owned_term_bytes: u64,
+    pub(super) statistics_revision: u64,
 }
 
 impl SegmentedResidentHead {
@@ -144,6 +157,10 @@ impl SegmentedResidentHead {
         let max_owned_term_bytes =
             super::build::resident_owned_term_bound(&dataset)?.max(metadata.max_owned_term_bytes());
         Ok(Self {
+            statistics_revision: purrdf_hash::fixed::hash_one(&(
+                resident_statistics_revision(&dataset)?,
+                metadata.statistics_revision,
+            )),
             dataset,
             metadata,
             max_owned_term_bytes,
@@ -161,6 +178,20 @@ impl SegmentedResidentHead {
     pub const fn metadata(&self) -> &SegmentedLayerMetadata {
         &self.metadata
     }
+}
+
+fn resident_statistics_revision(dataset: &RdfDataset) -> Result<u64, SegmentedError> {
+    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    for index in 0..dataset.term_count() {
+        let index = u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?;
+        let id =
+            crate::TermId::from_index(index).map_err(purrdf_lex::allocation::StorageError::from)?;
+        dataset.resolve(id).hash(&mut hash);
+    }
+    if let Some(statistics) = crate::DatasetView::statistics(dataset) {
+        statistics.fingerprint().hash(&mut hash);
+    }
+    Ok(hash.finish())
 }
 
 /// Consumer-owned chronological sealed descriptors and a replaceable resident

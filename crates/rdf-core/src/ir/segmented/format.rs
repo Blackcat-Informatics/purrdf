@@ -12,15 +12,37 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG1";
-pub(super) const HEADER_BYTES: usize = 216;
+pub(super) const MAGIC: &[u8; 8] = b"PURRSEG2";
+pub(super) const HEADER_BYTES: usize = 312;
 pub(super) const RECORD_HEADER: usize = 17;
 pub(super) const SUMMARY_BYTES: usize = 88;
+pub(super) const MAX_RECORDS_PER_BLOCK: u32 = 256;
 pub(super) const DICTIONARY: u8 = 1;
 pub(super) const REVERSE: u8 = 2;
 pub(super) const QUADS: u8 = 3;
 pub(super) const GRAPHS: u8 = 4;
 pub(super) const SUMMARIES: u8 = 5;
+
+pub(super) const fn statistics_kind(section: super::super::statistics::StatisticsSection) -> u8 {
+    6 + section.index() as u8
+}
+
+/// Binary search over a certified logical directory without materializing it.
+pub(super) fn partition_point<E>(
+    count: u64,
+    mut before: impl FnMut(u64) -> Result<bool, E>,
+) -> Result<u64, E> {
+    let (mut low, mut high) = (0, count);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if before(middle)? {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    Ok(low)
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Stream {
@@ -41,6 +63,7 @@ pub(super) struct Header {
     pub streams: [Stream; 3],
     pub graphs: Stream,
     pub summaries: Stream,
+    pub statistics: [Stream; 4],
     pub flags: u8,
 }
 
@@ -48,7 +71,7 @@ impl Header {
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&1_u32.to_le_bytes());
+        out.extend_from_slice(&2_u32.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -64,6 +87,10 @@ impl Header {
             self.streams[2],
             self.graphs,
             self.summaries,
+            self.statistics[0],
+            self.statistics[1],
+            self.statistics[2],
+            self.statistics[3],
         ] {
             for value in [stream.first, stream.blocks, stream.rows] {
                 out.extend_from_slice(&value.to_le_bytes());
@@ -73,7 +100,7 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(1) {
+        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(2) {
             return Err(SegmentedError::Corrupt(
                 "unsupported segmented format/profile",
             ));
@@ -86,7 +113,7 @@ impl Header {
             || flags > 7
             || !(512..=1_048_576).contains(&block_bytes)
             || records_per_block == 0
-            || records_per_block > 256
+            || records_per_block > MAX_RECORDS_PER_BLOCK
         {
             return Err(SegmentedError::Corrupt("invalid segmented header"));
         }
@@ -96,7 +123,7 @@ impl Header {
         first_term_index
             .checked_add(terms)
             .ok_or(SegmentedError::AddressExhausted)?;
-        let mut streams = [Stream::default(); 7];
+        let mut streams = [Stream::default(); 11];
         for stream in &mut streams {
             *stream = Stream {
                 first: input.u64()?,
@@ -116,19 +143,27 @@ impl Header {
             streams: [streams[2], streams[3], streams[4]],
             graphs: streams[5],
             summaries: streams[6],
+            statistics: [streams[7], streams[8], streams[9], streams[10]],
         };
-        if header.dictionary.rows != terms
-            || header.reverse.rows != terms
-            || header.dictionary.blocks != header.reverse.blocks
-        {
+        if header.dictionary.rows != terms || header.reverse.rows != terms {
             return Err(SegmentedError::Corrupt(
                 "dictionary/index cardinality mismatch",
             ));
         }
         let expected = terms / u64::from(records_per_block)
             + u64::from(terms % u64::from(records_per_block) != 0);
-        if header.dictionary.blocks != expected {
+        if [header.dictionary, header.reverse]
+            .iter()
+            .any(|stream| stream.blocks < expected || stream.blocks > terms)
+        {
             return Err(SegmentedError::Corrupt("dictionary block count mismatch"));
+        }
+        for section in super::super::statistics::StatisticsSection::ALL {
+            let stream = header.statistics[section.index()];
+            let per_block = (u64::from(block_bytes) - 9) / section.width() as u64;
+            if stream.blocks != stream.rows.div_ceil(per_block) {
+                return Err(SegmentedError::Corrupt("statistics block count mismatch"));
+            }
         }
         Ok(header)
     }
@@ -143,6 +178,10 @@ impl Header {
             self.streams[2],
             self.graphs,
             self.summaries,
+            self.statistics[0],
+            self.statistics[1],
+            self.statistics[2],
+            self.statistics[3],
         ] {
             if stream.first != next || (stream.blocks == 0) != (stream.rows == 0) {
                 return Err(SegmentedError::Corrupt("non-contiguous block directory"));
@@ -312,20 +351,26 @@ pub(super) fn record_block(
     kind: u8,
     records: &[(GlobalTermId, Vec<u8>)],
     block_bytes: usize,
-) -> Result<Vec<u8>, SegmentedError> {
-    let fence = records.first().map_or(&[][..], |(_, key)| key.as_slice());
-    let decoded = records.iter().try_fold(0_u32, |n, (_, key)| {
-        let bytes = u32::try_from(key.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-        n.checked_add(bytes).ok_or(SegmentedError::AddressExhausted)
-    })?;
+) -> Result<(Vec<u8>, usize), SegmentedError> {
+    let fence = records
+        .first()
+        .ok_or(SegmentedError::Corrupt("empty record block input"))?
+        .1
+        .as_slice();
+    // The first key is also the fence. Refuse it before copying either instance;
+    // all following records are admitted at this same encoder before appending.
+    let first_bytes = fence
+        .len()
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(RECORD_HEADER + 16))
+        .ok_or(SegmentedError::AddressExhausted)?;
+    if first_bytes > block_bytes {
+        return Err(SegmentedError::ConstructionLimit);
+    }
     let mut out = Vec::with_capacity(block_bytes);
     out.push(kind);
-    out.extend_from_slice(
-        &u32::try_from(records.len())
-            .map_err(|_| SegmentedError::AddressExhausted)?
-            .to_le_bytes(),
-    );
-    out.extend_from_slice(&decoded.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
     out.extend_from_slice(&0_u32.to_le_bytes());
     out.extend_from_slice(
         &u32::try_from(fence.len())
@@ -334,8 +379,21 @@ pub(super) fn record_block(
     );
     out.extend_from_slice(fence);
     let mut previous = &[][..];
+    let mut count = 0_usize;
+    let mut decoded = 0_u32;
     for (id, key) in records {
         let prefix = purrdf_deflate::common_prefix_len(previous, key);
+        let next = out
+            .len()
+            .checked_add(16)
+            .and_then(|bytes| bytes.checked_add(key.len() - prefix))
+            .ok_or(SegmentedError::AddressExhausted)?;
+        if next > block_bytes {
+            break;
+        }
+        decoded = decoded
+            .checked_add(u32::try_from(key.len()).map_err(|_| SegmentedError::AddressExhausted)?)
+            .ok_or(SegmentedError::AddressExhausted)?;
         out.extend_from_slice(
             &u32::try_from(prefix)
                 .map_err(|_| SegmentedError::AddressExhausted)?
@@ -349,15 +407,20 @@ pub(super) fn record_block(
         push_id(&mut out, *id);
         out.extend_from_slice(&key[prefix..]);
         previous = key;
+        count += 1;
     }
-    if out.len() > block_bytes {
-        return Err(SegmentedError::ConstructionLimit);
-    }
+    crate::bytes::put_u32_le(
+        &mut out,
+        1,
+        u32::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?,
+    )
+    .expect("record header is present");
+    crate::bytes::put_u32_le(&mut out, 5, decoded).expect("record header is present");
     let payload =
         u32::try_from(out.len() - RECORD_HEADER).map_err(|_| SegmentedError::AddressExhausted)?;
     crate::bytes::put_u32_le(&mut out, 9, payload).expect("record header is present");
     out.resize(block_bytes, 0);
-    Ok(out)
+    Ok((out, count))
 }
 
 #[derive(Debug)]
@@ -483,4 +546,45 @@ pub(super) fn snapshot_digest(root: &[u8; 32], block_bytes: u32, count: u64) -> 
     hash.update(&block_bytes.to_le_bytes());
     hash.update(&count.to_le_bytes());
     SegmentedSnapshot(*hash.finalize().as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_fit_includes_fence_framing_and_actual_front_coding() {
+        let mut second = vec![b'a'; 200];
+        second[199] = b'b';
+        let records = [
+            (GlobalTermId::from_index(12).unwrap(), vec![b'a'; 200]),
+            (GlobalTermId::from_index(13).unwrap(), second),
+            (GlobalTermId::from_index(14).unwrap(), vec![b'z'; 200]),
+        ];
+        // 17 header + 200 fence + 16 framing + 200 first key = 433.
+        // The next key shares 199 bytes, so adds exactly 17 bytes.
+        for (width, expected) in [(433, 1), (449, 1), (450, 2), (512, 2)] {
+            let (bytes, used) = record_block(DICTIONARY, &records, width).unwrap();
+            assert_eq!(bytes.len(), width);
+            assert_eq!(used, expected);
+            let decoded = DecodedRecords::decode(&bytes, DICTIONARY, 3, 600).unwrap();
+            assert_eq!(decoded.entries.len(), expected);
+            for (index, (id, key)) in records[..used].iter().enumerate() {
+                assert_eq!(decoded.entries[index].0, *id);
+                assert_eq!(decoded.key(index), key);
+            }
+        }
+        assert!(matches!(
+            record_block(DICTIONARY, &records, 432),
+            Err(SegmentedError::ConstructionLimit)
+        ));
+        let (bytes, used) = record_block(REVERSE, &records[..1], 512).unwrap();
+        assert_eq!(used, 1);
+        assert_eq!(
+            DecodedRecords::decode(&bytes, REVERSE, 1, 200)
+                .unwrap()
+                .key(0),
+            records[0].1
+        );
+    }
 }

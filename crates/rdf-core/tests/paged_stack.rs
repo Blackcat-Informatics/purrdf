@@ -3,6 +3,9 @@
 
 //! Public layered paging, chronology, RDF 1.2 classification, and fold laws.
 
+#[path = "support/statistics.rs"]
+mod statistics;
+
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -194,11 +197,22 @@ fn chronological_removal_reinsertion_same_head_and_snapshot_isolation() {
     let base = sealed(vec![page(std::slice::from_ref(&q))]);
     let mut stack = PagedStack::new(vec![Arc::clone(&base), base]).unwrap();
     let original = stack.snapshot().unwrap();
+    let original_statistics = {
+        let view = original.query_view(PagedQueryLimits::UNBOUNDED);
+        let predicate = view.term_id_by_value(&q.p).unwrap().unwrap();
+        statistics::assert_chronological_counts(&view, predicate, [1, 0, 0], true)
+    };
     assert!(!stack.insert(q.clone()).unwrap());
     assert!(stack.remove(&q).unwrap());
     assert!(!stack.remove(&q).unwrap());
     stack.seal_head(bound(2)).unwrap();
     let removed = stack.snapshot().unwrap();
+    let removed_statistics = {
+        let view = removed.query_view(PagedQueryLimits::UNBOUNDED);
+        let predicate = view.term_id_by_value(&q.p).unwrap().unwrap();
+        statistics::assert_chronological_counts(&view, predicate, [0, 0, 0], true)
+    };
+    assert_ne!(original_statistics, removed_statistics);
     assert_eq!(removed.sealed_depth(), 3);
     assert!(surface(&removed.query_view(PagedQueryLimits::UNBOUNDED)).is_empty());
     assert!(stack.insert(q.clone()).unwrap());
@@ -219,6 +233,30 @@ fn chronological_removal_reinsertion_same_head_and_snapshot_isolation() {
         evidence(&view).removals[2].as_ref(),
         std::slice::from_ref(&q)
     );
+}
+
+#[test]
+fn removal_only_head_statistics_are_bounds_without_a_head_page() {
+    let q = row("deleted", "value");
+    let mut stack = PagedStack::new(vec![sealed(vec![page(std::slice::from_ref(&q))])]).unwrap();
+    assert!(stack.remove(&q).unwrap());
+    let snapshot = stack.snapshot().unwrap();
+    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+    let predicate = view.term_id_by_value(&q.p).unwrap().unwrap();
+    statistics::assert_chronological_counts(&view, predicate, [0, 0, 0], true);
+    let count = view
+        .statistics()
+        .unwrap()
+        .predicate(
+            predicate,
+            GraphMatch::Any,
+            purrdf_core::StatisticsStream::Asserted,
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(count.value, 1);
+    assert_eq!(count.accuracy, purrdf_core::StatisticsAccuracy::UpperBound);
+    assert_eq!(evidence(&view).head_bytes, 0);
 }
 
 #[test]
@@ -445,6 +483,11 @@ fn annotation_only_pages_demote_only_after_last_original_reifier_in_the_graph() 
     .unwrap();
     let original = stack.snapshot().unwrap();
     let original_view = original.query_view(PagedQueryLimits::UNBOUNDED);
+    let predicate = original_view
+        .term_id_by_value(&annotation.p)
+        .unwrap()
+        .unwrap();
+    statistics::assert_chronological_counts(&original_view, predicate, [0, 2, 1], false);
     assert_eq!(original_view.annotation_quads().count(), 1);
     assert!(stack.remove(&first).unwrap());
     stack.seal_head(bound(1)).unwrap();
@@ -461,6 +504,7 @@ fn annotation_only_pages_demote_only_after_last_original_reifier_in_the_graph() 
     let r = view.term_id_by_value(&iri("r")).unwrap().unwrap();
     let p = view.term_id_by_value(&iri("p")).unwrap().unwrap();
     let g = view.term_id_by_value(&iri("g")).unwrap().unwrap();
+    statistics::assert_chronological_counts(&view, p, [1, 0, 0], true);
     assert_eq!(
         view.quads_for_pattern(Some(r), Some(p), None, GraphMatch::Named(g))
             .count(),
@@ -512,6 +556,8 @@ fn new_reifiers_preserve_older_primary_rows_in_every_graph() {
     stack.insert(first.clone()).unwrap();
     let snapshot = stack.snapshot().unwrap();
     let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+    let predicate = view.term_id_by_value(&annotation.p).unwrap().unwrap();
+    statistics::assert_chronological_counts(&view, predicate, [3, 1, 0], true);
     assert_eq!(view.quads().count(), 3);
     assert_eq!(view.annotation_quads().count(), 0);
     assert_eq!(
@@ -958,7 +1004,7 @@ fn orphan_annotation_association_uses_its_visible_introduction_prefix() {
 
 #[test]
 fn metadata_point_reads_detect_source_drift_without_an_earlier_status_checkpoint() {
-    for kind in 0..3 {
+    for kind in 0..4 {
         let provider = Arc::new(ProbeProvider::new(vec![], None));
         let mut stack = PagedStack::new(vec![Arc::new(
             PagedDataset::from_provider(provider.clone()).unwrap(),
@@ -980,7 +1026,8 @@ fn metadata_point_reads_detect_source_drift_without_an_earlier_status_checkpoint
         match kind {
             0 => assert!(view.term_id_by_value(&iri("head")).is_err()),
             1 => assert!(view.resolve(id).is_err()),
-            _ => assert!(!view.has_named_graph(graph)),
+            2 => assert!(!view.has_named_graph(graph)),
+            _ => assert!(view.statistics().is_none()),
         }
         assert_eq!(view.named_graphs().count(), 0);
         assert_eq!(view.quads().count(), 0);

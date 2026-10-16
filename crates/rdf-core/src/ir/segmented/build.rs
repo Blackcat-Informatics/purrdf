@@ -3,6 +3,8 @@
 
 //! Bounded resident fixture construction and complete untrusted-image validation.
 
+use super::super::statistics::{LocalStatistics, StatisticsMergeError, StatisticsSection};
+use purrdf_lex::allocation::{Memory, Resident};
 use std::sync::Arc;
 
 use crate::backend::TermFactory;
@@ -29,7 +31,7 @@ pub struct SegmentedBuildLimits {
     first_term_index: u64,
 }
 impl SegmentedBuildLimits {
-    /// Choose all resident capacities and the persisted block layout explicitly.
+    /// Choose resident construction limits and the persisted block layout explicitly.
     ///
     /// # Errors
     /// Refuses invalid block sizes or zero/oversized dictionary block counts.
@@ -43,7 +45,7 @@ impl SegmentedBuildLimits {
         if terms == u32::MAX
             || !(512..=1_048_576).contains(&block_bytes)
             || records_per_block == 0
-            || records_per_block > 256
+            || records_per_block > format::MAX_RECORDS_PER_BLOCK
         {
             return Err(SegmentedError::ConstructionLimit);
         }
@@ -70,7 +72,7 @@ impl SegmentedBuildLimits {
     }
 }
 
-/// Small resident construction path with pre-admitted term/string/row capacities.
+/// Resident construction with explicit limits and storage grown as input arrives.
 /// The ordinary validated IR builder owns RDF normalization and positional checks.
 /// This constructor's bounded IDs are translated arithmetically, without a global
 /// per-page translation vector.
@@ -83,16 +85,10 @@ pub struct SegmentedBuilder {
     admitted_rows: u64,
 }
 impl SegmentedBuilder {
-    /// Reserve the resident fixture capacities before accepting input.
+    /// Start an empty resident builder without allocating its declared ceilings.
     pub fn new(limits: SegmentedBuildLimits) -> Result<Self, SegmentedError> {
-        let mut builder = RdfDatasetBuilder::new();
-        builder.reserve_for_replay(
-            usize::try_from(limits.terms).expect("u32 capacity fits supported pointer widths"),
-            usize::try_from(limits.term_bytes).expect("u32 capacity fits supported pointer widths"),
-            usize::try_from(limits.rows).expect("u32 capacity fits supported pointer widths"),
-        )?;
         Ok(Self {
-            builder,
+            builder: RdfDatasetBuilder::new(),
             limits,
             admitted_terms: 0,
             admitted_bytes: 0,
@@ -128,7 +124,7 @@ impl SegmentedBuilder {
     ///
     /// # Errors
     /// Refuses before interning when conservative referenced-term/string bounds
-    /// would exceed the pre-reserved resident capacities.
+    /// would exceed the declared resident construction limits.
     pub fn intern_batch(
         &mut self,
         values: &[TermValue],
@@ -324,6 +320,13 @@ pub struct SegmentedImage {
     receipt: SegmentedReceipt,
 }
 impl SegmentedImage {
+    #[cfg(test)]
+    pub(in crate::ir) fn from_native_fixture(
+        dataset: &RdfDataset,
+        limits: SegmentedBuildLimits,
+    ) -> Result<Self, SegmentedError> {
+        encode_dataset(dataset, limits)
+    }
     /// Encoded bytes, suitable for a host-owned file/object/browser-storage writer.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
@@ -378,6 +381,10 @@ impl SegmentedImage {
             header.streams[2],
             header.graphs,
             header.summaries,
+            header.statistics[0],
+            header.statistics[1],
+            header.statistics[2],
+            header.statistics[3],
         ]
         .iter()
         .try_fold(1_u64, |n, stream| {
@@ -415,7 +422,7 @@ impl SegmentedImage {
         let root: [u8; 32] = tree[32..64]
             .try_into()
             .map_err(|_| SegmentedError::Corrupt("missing authenticated root"))?;
-        validate_content(&bytes, header)?;
+        validate_content(&bytes, &header)?;
         let snapshot = format::snapshot_digest(&root, header.block_bytes, count);
         Ok(Self {
             bytes: bytes.into(),
@@ -620,6 +627,7 @@ fn encode_dataset(
         format::SUMMARY_BYTES,
         block_bytes,
     )?;
+    let statistics = append_statistics(dataset, limits.first_term_index, &mut blocks, block_bytes)?;
     let caps = dataset.capabilities();
     let flags = u8::from(caps.quoted_triples)
         | (u8::from(caps.reifiers) << 1)
@@ -639,6 +647,7 @@ fn encode_dataset(
         streams,
         graphs,
         summaries,
+        statistics,
         flags,
     };
     let encoded = header.encode();
@@ -652,6 +661,62 @@ fn encode_dataset(
     SegmentedImage::certify(bytes)
 }
 
+fn translated_statistics(
+    dataset: &RdfDataset,
+    first: u64,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<LocalStatistics<GlobalTermId>, SegmentedError> {
+    LocalStatistics::merge_translated(
+        [dataset.predicate_statistics()],
+        |statistics| statistics,
+        |_, id| map_id(id, first),
+        memory,
+    )
+    .map_err(|error| match error {
+        StatisticsMergeError::Storage(error) => SegmentedError::Storage(error),
+        StatisticsMergeError::Encoding(error) => SegmentedError::Statistics(error),
+    })
+}
+
+fn append_statistics(
+    dataset: &RdfDataset,
+    first: u64,
+    blocks: &mut Vec<Vec<u8>>,
+    block_bytes: usize,
+) -> Result<[Stream; 4], SegmentedError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let statistics = translated_statistics(dataset, first, &mut memory)?;
+    let mut streams = [Stream::default(); 4];
+    for section in StatisticsSection::ALL {
+        let width = section.width();
+        let per_block = (block_bytes - 9) / width;
+        let rows = statistics.section_rows(section);
+        let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+        for begin in (0..rows).step_by(per_block) {
+            let count = (rows - begin).min(per_block);
+            let mut encoded = memory.collect(std::iter::repeat_n(0_u8, count * width))?;
+            statistics.encode_records(section, begin, &mut encoded)?;
+            append_fixed(
+                blocks,
+                std::iter::once(encoded.as_slice()),
+                count as u64,
+                format::statistics_kind(section),
+                width,
+                block_bytes,
+            )?;
+            memory.release_vec(encoded)?;
+        }
+        streams[section.index()] = Stream {
+            first,
+            blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?
+                - first,
+            rows: rows as u64,
+        };
+    }
+    Ok(streams)
+}
+
 fn append_records(
     blocks: &mut Vec<Vec<u8>>,
     records: &[(GlobalTermId, Vec<u8>)],
@@ -660,8 +725,12 @@ fn append_records(
     block_bytes: usize,
 ) -> Result<Stream, SegmentedError> {
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    for records in records.chunks(chunk) {
-        blocks.push(format::record_block(kind, records, block_bytes)?);
+    let mut remaining = records;
+    while !remaining.is_empty() {
+        let (block, used) =
+            format::record_block(kind, &remaining[..remaining.len().min(chunk)], block_bytes)?;
+        blocks.push(block);
+        remaining = &remaining[used..];
     }
     Ok(Stream {
         first,
@@ -669,9 +738,9 @@ fn append_records(
         rows: u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
     })
 }
-fn append_fixed(
+fn append_fixed<C: AsRef<[u8]>>(
     blocks: &mut Vec<Vec<u8>>,
-    chunks: impl Iterator<Item = Vec<u8>>,
+    chunks: impl Iterator<Item = C>,
     rows: u64,
     kind: u8,
     width: usize,
@@ -679,6 +748,7 @@ fn append_fixed(
 ) -> Result<Stream, SegmentedError> {
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
     for chunk in chunks {
+        let chunk = chunk.as_ref();
         let mut block = Vec::with_capacity(block_bytes);
         block.push(kind);
         block.extend_from_slice(
@@ -691,7 +761,7 @@ fn append_fixed(
                 .map_err(|_| SegmentedError::AddressExhausted)?
                 .to_le_bytes(),
         );
-        block.extend_from_slice(&chunk);
+        block.extend_from_slice(chunk);
         block.resize(block_bytes, 0);
         blocks.push(block);
     }
@@ -803,7 +873,7 @@ fn make_tree(
     Ok(tree)
 }
 
-fn block(bytes: &[u8], header: Header, slot: u64) -> Result<&[u8], SegmentedError> {
+fn block<'a>(bytes: &'a [u8], header: &Header, slot: u64) -> Result<&'a [u8], SegmentedError> {
     let start = slot
         .checked_mul(u64::from(header.block_bytes))
         .and_then(|v| usize::try_from(v).ok())
@@ -820,7 +890,7 @@ fn block(bytes: &[u8], header: Header, slot: u64) -> Result<&[u8], SegmentedErro
         )
         .ok_or(SegmentedError::Corrupt("missing data block"))
 }
-fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> {
+fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError> {
     let mut keys = Vec::with_capacity(
         usize::try_from(header.terms).map_err(|_| SegmentedError::AddressExhausted)?,
     );
@@ -831,10 +901,12 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
             header.records_per_block,
             u64::from(header.block_bytes) * u64::from(header.records_per_block),
         )?;
-        let remaining = header.terms
-            - u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+        let remaining = header
+            .terms
+            .checked_sub(u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?)
+            .ok_or(SegmentedError::Corrupt("dictionary cardinality is false"))?;
         if u64::try_from(records.entries.len()).map_err(|_| SegmentedError::AddressExhausted)?
-            != remaining.min(u64::from(header.records_per_block))
+            > remaining
         {
             return Err(SegmentedError::Corrupt(
                 "forward dictionary block packing is false",
@@ -1102,9 +1174,58 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
             "expanded term footprint claim is false",
         ));
     }
-    builder
+    let dataset = builder
         .freeze()
         .map_err(|error| SegmentedError::from_rdf(error, "RDF reference/role validation failed"))?;
+    validate_statistics(bytes, header, &dataset)?;
+    Ok(())
+}
+
+fn validate_statistics(
+    bytes: &[u8],
+    header: &Header,
+    dataset: &RdfDataset,
+) -> Result<(), SegmentedError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let statistics = translated_statistics(dataset, header.first_term_index, &mut memory)?;
+    for section in StatisticsSection::ALL {
+        let stream = header.statistics[section.index()];
+        if statistics.section_rows(section) as u64 != stream.rows {
+            return Err(SegmentedError::Corrupt(
+                "statistical section count disagrees with RDF rows",
+            ));
+        }
+        let width = section.width();
+        let per = (header.block_bytes as usize - 9) / width;
+        if stream.rows == 0 {
+            continue;
+        }
+        let size = statistics.section_rows(section).min(per) * width;
+        let mut expected = memory.collect(std::iter::repeat_n(0_u8, size))?;
+        let mut ordinal = 0_usize;
+        for slot in stream.first..stream.first + stream.blocks {
+            let records = fixed_records(
+                block(bytes, header, slot)?,
+                format::statistics_kind(section),
+                width,
+            )?;
+            let remaining = statistics.section_rows(section) - ordinal;
+            if records.len() / width != remaining.min(per) {
+                return Err(SegmentedError::Corrupt(
+                    "statistical block packing disagrees with RDF rows",
+                ));
+            }
+            statistics.encode_records(section, ordinal, &mut expected[..records.len()])?;
+            if records != &expected[..records.len()] {
+                return Err(SegmentedError::Corrupt(
+                    "statistical contents disagree with RDF rows",
+                ));
+            }
+            ordinal += records.len() / width;
+        }
+        memory.release_vec(expected)?;
+    }
     Ok(())
 }
 pub(super) fn fixed_records(bytes: &[u8], kind: u8, width: usize) -> Result<&[u8], SegmentedError> {
@@ -1293,10 +1414,19 @@ mod certification_tests {
     }
 
     fn image() -> SegmentedImage {
-        let limits = SegmentedBuildLimits::new(100, 20_000, 100, 1024, 4).unwrap();
+        let limits = SegmentedBuildLimits::new(100, 20_000, 100, 512, 4).unwrap();
         let mut builder = SegmentedBuilder::new(limits).unwrap();
         let values = (0..13)
-            .map(|n| TermValue::iri(format!("http://example.org/{n:02}")))
+            .map(|n| {
+                TermValue::iri(format!(
+                    "http://example.org/{}/{n:02}",
+                    if n % 2 == 0 {
+                        "a".repeat(180)
+                    } else {
+                        "z".repeat(180)
+                    }
+                ))
+            })
             .collect::<Vec<_>>();
         let mut ids = Vec::new();
         builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
@@ -1328,6 +1458,113 @@ mod certification_tests {
         )
         .unwrap();
         bytes[data_len..].copy_from_slice(&tree);
+    }
+
+    #[test]
+    fn statistical_counts_are_selective_and_preserve_original_read_refusal() {
+        use crate::{DatasetView, GraphMatch, SnapshotStatistics, StatisticsStream};
+        let image = image();
+        let header = Header::decode(image.bytes()).unwrap();
+        let limits = SegmentedReadLimits::new(8_000_000, 2, 10_000, 100_000_000, 8);
+        let source = image.open_session(limits).unwrap();
+        let opening = source.evidence().with_requests(<[_]>::len);
+        let predicate = source
+            .term_id_by_value(&TermValue::iri(format!(
+                "http://example.org/{}/00",
+                "a".repeat(180)
+            )))
+            .unwrap()
+            .unwrap();
+        let before = source.evidence().with_requests(<[_]>::len);
+        let count = source
+            .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
+            .unwrap();
+        assert_eq!(count.rows.value, 13);
+        assert_eq!(count.subjects.unwrap().value, 13);
+        assert_eq!(
+            source
+                .predicate_object(
+                    predicate,
+                    predicate,
+                    GraphMatch::Any,
+                    StatisticsStream::Asserted
+                )
+                .unwrap()
+                .value,
+            1
+        );
+        assert_eq!(
+            source
+                .predicate_object_kind(
+                    predicate,
+                    crate::RdfTermKind::Iri,
+                    None,
+                    GraphMatch::Any,
+                    StatisticsStream::Asserted
+                )
+                .unwrap()
+                .value,
+            13
+        );
+        let data_end = image.receipt().block_count * u64::from(header.block_bytes);
+        let first = header.statistics[0].first;
+        let domain = header.statistics[1];
+        source.evidence().with_requests(|requests| {
+            let mut reads = 0;
+            for request in &requests[before..] {
+                if request.position() >= data_end {
+                    continue;
+                }
+                let slot = request.position() / u64::from(header.block_bytes);
+                assert!(
+                    slot >= first,
+                    "metadata lookup read a dictionary or RDF row block"
+                );
+                assert!(
+                    !(domain.first..domain.first + domain.blocks).contains(&slot),
+                    "count lookup read distinct-ID payloads"
+                );
+                reads += 1;
+            }
+            assert!(reads > 0);
+        });
+        let refused = image
+            .open_session(SegmentedReadLimits::new(
+                8_000_000,
+                2,
+                u32::try_from(opening).unwrap(),
+                100_000_000,
+                8,
+            ))
+            .unwrap();
+        let predicate = refused.attach(source.handle(predicate).unwrap()).unwrap();
+        assert!(
+            refused
+                .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
+                .is_none()
+        );
+        assert_eq!(
+            refused.read_error(),
+            Some(SegmentedError::EvidenceExhausted)
+        );
+    }
+
+    #[test]
+    fn recomputed_hashes_cannot_certify_false_statistics() {
+        let image = image();
+        let header = Header::decode(image.bytes()).unwrap();
+        let mut bytes = image.bytes().to_vec();
+        let start =
+            usize::try_from(header.statistics[0].first).unwrap() * header.block_bytes as usize + 9;
+        let rows = crate::bytes::read_u64_le(&bytes, start + 4 * 8).unwrap();
+        crate::bytes::put_u64_le(&mut bytes, start + 4 * 8, rows + 1).unwrap();
+        rehash(&mut bytes, image.receipt());
+        assert!(matches!(
+            SegmentedImage::certify(bytes),
+            Err(SegmentedError::Corrupt(
+                "statistical contents disagree with RDF rows"
+            ))
+        ));
     }
 
     #[test]

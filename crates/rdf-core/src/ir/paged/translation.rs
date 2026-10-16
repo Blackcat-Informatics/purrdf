@@ -20,9 +20,10 @@
 //! automatically. It is NEVER a numeric offset remap — a page's local id space is
 //! meaningless outside that page (C0.8).
 
-use super::summary::{PageSummary, SummaryDefect};
+use super::summary::{PageSummary, SummaryDefect, SummarySealError};
 use crate::ir::{GlobalDictionary, GlobalTermId, RdfDataset, TermId};
 use purrdf_lex::allocation::StorageError;
+use std::sync::Arc;
 
 pub(crate) enum TranslationError {
     Storage(StorageError),
@@ -37,6 +38,15 @@ impl purrdf_hash::error::StructuredError for TranslationError {
 }
 purrdf_lex::variant_from!(TranslationError { Storage(StorageError), Summary(SummaryDefect) });
 
+impl From<SummarySealError> for TranslationError {
+    fn from(error: SummarySealError) -> Self {
+        match error {
+            SummarySealError::Contents(error) => Self::Summary(error),
+            SummarySealError::Storage(error) => Self::Storage(error),
+        }
+    }
+}
+
 /// The local↔global term-id map for a single page of a
 /// [`PagedDataset`](super::PagedDataset).
 ///
@@ -49,6 +59,11 @@ purrdf_lex::variant_from!(TranslationError { Storage(StorageError), Summary(Summ
 /// pages).
 #[derive(Debug, Clone)]
 pub struct PageTranslation {
+    /// Clone-stable metadata identity; remapping creates a fresh generation.
+    pub(super) identity: Arc<()>,
+    /// Shared exact merged counts retained by certified page parts. This has no
+    /// back-reference to a page or translation, so it cannot retain RDF rows.
+    pub(super) statistics_bundle: Option<Arc<super::PagedStatistics>>,
     /// `local_to_global[TermId::index()]` is the page-local term's shared
     /// [`GlobalTermId`]. Dense, indexed by the page's `0..term_count` term table.
     local_to_global: Box<[GlobalTermId]>,
@@ -59,7 +74,7 @@ pub struct PageTranslation {
     /// The page's exact per-term and per-graph row counts, in this page's own LOCAL
     /// `TermId` space (never renumbered by [`remap`](Self::remap) — see there).
     /// Built exactly once, by [`PageSummary::seal`], the sole producer.
-    summary: PageSummary,
+    summary: Arc<PageSummary>,
 }
 
 impl PageTranslation {
@@ -126,9 +141,11 @@ impl PageTranslation {
         // digest a page to compare against this one, then drop the result).
         let summary = PageSummary::seal(page)?;
         Ok(Self {
+            identity: Arc::new(()),
+            statistics_bundle: None,
             local_to_global: local_to_global.into_boxed_slice(),
             global_to_local: global_to_local.into_boxed_slice(),
-            summary,
+            summary: Arc::new(summary),
         })
     }
 
@@ -192,6 +209,8 @@ impl PageTranslation {
         // remap is a bijection over live ids, so keys stay unique.
         global_to_local.sort_unstable_by_key(|&(g, _)| g);
         Self {
+            identity: Arc::new(()),
+            statistics_bundle: None,
             local_to_global: local_to_global.into_boxed_slice(),
             global_to_local: global_to_local.into_boxed_slice(),
             // The summary is keyed entirely in this page's LOCAL TermId space, which

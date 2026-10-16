@@ -3078,7 +3078,7 @@ impl RdfDatasetBuilder {
             !locations.is_empty(),
         );
 
-        Ok(RdfDataset::from_parts(
+        RdfDataset::from_parts(
             interner.freeze_with_memory(derivation_predicate, memory)?,
             memory.boxed_slice(quads)?,
             memory.boxed_slice(reifiers)?,
@@ -3086,7 +3086,8 @@ impl RdfDatasetBuilder {
             memory.boxed_slice(locations)?,
             caps,
             memory.boxed_slice(named_graphs)?,
-        ))
+            memory,
+        )
     }
 }
 
@@ -5195,6 +5196,63 @@ mod native_graph_birth_tests {
         assert_eq!(builder.reifiers.len(), 1);
         assert_eq!(builder.term_count(), count + 1);
         assert_eq!(memory.admitted_bytes(), bytes);
+    }
+
+    #[test]
+    fn native_statistics_refusal_refunds_partial_buffers_and_uses_original_grant() {
+        let mut grant = GrowthGrant {
+            live: 0,
+            remaining: usize::MAX,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let mut builder = RdfDatasetBuilder::new();
+        let id = builder
+            .intern_iri_with_memory("urn:statistics:term", &mut memory)
+            .unwrap();
+        let dictionary = builder
+            .interner
+            .freeze_with_memory(None, &mut memory)
+            .unwrap();
+        let baseline = memory.admitted_bytes();
+        let row = |_| QuadIds {
+            s: id,
+            p: id,
+            o: id,
+            g: None,
+        };
+        let mut completed = false;
+        let mut failures = 0;
+        for remaining in 0..64 {
+            memory.admission_mut().remaining = remaining;
+            let result = crate::ir::statistics::LocalStatistics::build(
+                &dictionary,
+                (1, row),
+                &(0, |_| (id, id, None)),
+                (0, row),
+                &mut memory,
+            );
+            match result {
+                Err(error) => {
+                    assert_eq!(error, StorageError::AdmissionFailed);
+                    failures += 1;
+                }
+                Ok(statistics) => {
+                    let retained = memory.admitted_bytes() - baseline;
+                    assert_eq!(retained, statistics.retained_bytes().unwrap());
+                    drop(statistics);
+                    memory.release_bytes(retained).unwrap();
+                    completed = true;
+                }
+            }
+            assert_eq!(memory.admitted_bytes(), baseline);
+            if completed {
+                break;
+            }
+        }
+        assert!(completed && failures > 5);
+        drop(dictionary);
+        memory.release_bytes(baseline).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]

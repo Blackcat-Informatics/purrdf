@@ -150,6 +150,61 @@ unimplemented families as `scan-default`. Optional cheap statement cardinalities
 are planner estimates, not output bounds or memory certificates. Operational
 failures still latch the original session cause before guarded completion.
 
+`statistics()` exposes optional immutable `SnapshotStatistics` in the view's
+own identity space. Counts distinguish `Exact` from `UpperBound`; absent counts
+are unknown. Native and compact resident views seal predicate/class, selected
+predicate/object, object-category, reifier-target-predicate and distinct-domain
+metadata at freeze. A provider's source and revision participate in retained
+order-cache identity. The planner uses available predicate-specific domains for
+join selectivity and keeps the existing fallback where they are unknown.
+Paged views seal the same metadata into page headers independently of page
+materialization. They translate local identities into the common dictionary
+before sorting and unioning distinct domains; distinct counts are not summed.
+Selected frequencies retain the resident selection policy, including complete
+class frequencies. Queries read the sealed metadata without materializing pages
+or allocating domain unions. Reconstructing an unchanged page set from its parts
+shares the merged metadata; subsets and compaction rebuild it for their actual
+dictionary and page set. Metadata source and revision can therefore differ from
+a resident dataset containing the same statements, while counts and accuracy
+remain comparable.
+EXPLAIN's `statistics` section and `QueryExplanation::statistics()` record the
+provider, revision and statistical inputs for each BGP pattern and graph scope,
+including retained positive plans. Exact input counts do not make the joined
+output estimate exact or turn it into an allocation certificate. Domain sizes
+from overlapping streams are upper bounds unless their identities are unioned.
+
+Complete stream totals also cover an unbound predicate. Subject restrictions and
+object restrictions without a joint count retain an explicitly upper-bound
+marginal. Structural object patterns use triple-valued object counts and reifier
+target-predicate counts, including ordinary and annotation rows; tighter native
+component ranges can lower the estimate. An unavailable statistic stays unknown.
+These estimates do not authorize output allocation or certify an output bound.
+
+Chronological paged and segmented views expose their physical-source evidence
+through one shared combiner. A single uncut source retains its exact rows and
+positional domain sizes. Across sources or removals, the physical population
+bounds the effective set; duplicate suppression and tombstones are not guessed
+away by subtraction. Ordinary and annotation populations are combined before
+bounding either stream, since reifier changes can reclassify rows. A removal-only
+head still invalidates exactness even when it has no physical page. Complete
+pattern counts combine each physical stream once. Distinct domains in unrelated
+source dictionaries remain unknown until a common-identity union is available;
+their sizes are never added or presented as exact.
+
+Segmented planning translates only bound probe values through its existing lazy
+identity owner. Unbound stream counts read headers without minting terms. Native
+head/removal revisions are frozen at publication; query opening and historical
+snapshot copies do not traverse their dictionaries. Revisions include the pinned
+source order and immutable metadata and do not change as the read cache warms.
+Metadata point reads retain the source's original descriptor and failure checks.
+
+Native rule planning consumes the same provider through
+`purrdf_datalog::plan::Stratified::plan_with_statistics`. Its caller resolves
+authored atoms into probes in the provider's identity space. Statistical counts
+break ties after connectivity and binding preferences; the resulting executable
+retains native join identities and authored proof-source order. Programs without
+a provider retain the ordinary planning path.
+
 The graph slot is stored as `g: Option<TermId>` where `None` is the default
 graph. Because `Option<TermId>` alone cannot distinguish *any graph* from *the
 default graph*, the read view uses the dedicated three-way `GraphMatch` enum, which

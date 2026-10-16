@@ -3,7 +3,9 @@
 
 //! Source-qualified block lookup and recency links in the admitted cache table.
 
-use super::{Arc, CacheEntry, CacheKey, CachedBlock, SegmentedError, State};
+use super::{
+    Arc, CacheEntry, CacheKey, CachedBlock, DictionaryPosition, SegmentedError, State, format,
+};
 use crate::hash::hash_of;
 
 impl State {
@@ -20,8 +22,40 @@ impl State {
     }
 
     /// The caller has admitted table capacity before reading the new block.
-    pub(super) fn cache_insert(&mut self, key: CacheKey, block: Arc<CachedBlock>) {
+    pub(super) fn cache_insert(
+        &mut self,
+        key: CacheKey,
+        block: Arc<CachedBlock>,
+        retain_route: bool,
+    ) {
         debug_assert!(self.cache.len() < self.cache.capacity());
+        if retain_route && let Some((first, end)) = block.dictionary_range {
+            let width = u64::from(format::MAX_RECORDS_PER_BLOCK);
+            for bucket in first / width..=(end - 1) / width {
+                if self
+                    .dictionary_positions
+                    .find(hash_of(&(key.snapshot, bucket)), |position| {
+                        position.key == key && position.bucket == bucket
+                    })
+                    .is_some()
+                {
+                    continue;
+                }
+                debug_assert!(
+                    self.dictionary_positions.len() < self.dictionary_positions.capacity()
+                );
+                self.dictionary_positions.insert_unique(
+                    hash_of(&(key.snapshot, bucket)),
+                    DictionaryPosition {
+                        key,
+                        bucket,
+                        first,
+                        end,
+                    },
+                    |entry| hash_of(&(entry.key.snapshot, entry.bucket)),
+                );
+            }
+        }
         self.cache.insert_unique(
             hash_of(&key),
             CacheEntry {

@@ -319,6 +319,7 @@ pub struct QuadRef<'a, Id = TermId> {
 pub struct RdfDataset {
     /// Graph-independent lexical ownership shared by resident carriers.
     dictionary: super::frozen_terms::FrozenTerms,
+    statistics: super::statistics::LocalStatistics,
     /// Deduplicated quad rows in deterministic order (C0.5).
     quads: Box<[QuadRow]>,
     /// `(reifier, triple-term, graph)` bindings; many reifiers MAY bind one triple
@@ -409,6 +410,7 @@ impl std::fmt::Debug for RdfDataset {
             )
             .field("predecessor_index", &self.predecessor_index)
             .field("statement_graph_rows", &self.statement_graph_rows)
+            .field("statistics", &self.statistics)
             .finish()
     }
 }
@@ -445,6 +447,7 @@ impl TryFrom<RdfDataset> for super::triple::TripleDataset {
             }))?;
         Ok(Self {
             dictionary: dataset.dictionary,
+            statistics: dataset.statistics,
             triples: TripleTable::new(memory.boxed_slice(triples)?),
             reifiers: memory.boxed_slice(reifiers)?,
             reifier_targets: OnceLock::new(),
@@ -979,13 +982,17 @@ impl Iterator for QuadPatternCursor {
 impl std::iter::FusedIterator for QuadPatternCursor {}
 
 impl RdfDataset {
+    pub(crate) fn predicate_statistics(&self) -> &super::statistics::LocalStatistics {
+        &self.statistics
+    }
+
     /// Assemble a frozen dataset from already-validated, already-ordered parts.
     /// Crate-internal: only [`RdfDatasetBuilder::freeze`] calls this, after
     /// validation.
     ///
     /// [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_parts(
+    pub(crate) fn from_parts<S: purrdf_lex::allocation::Admission + ?Sized>(
         dictionary: super::frozen_terms::FrozenTerms,
         quads: Box<[QuadRow]>,
         reifiers: Box<[ReifierRow]>,
@@ -993,9 +1000,21 @@ impl RdfDataset {
         locations: Box<[(QuadHandle, RdfLocation)]>,
         caps: RdfStoreCapabilities,
         named_graphs: Box<[TermId]>,
-    ) -> Self {
-        Self {
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        let statistics = super::statistics::LocalStatistics::build(
+            &dictionary,
+            (quads.len(), |index| QuadIds::from(quads[index])),
+            &(reifiers.len(), |index| reifiers[index]),
+            (annotations.len(), |index| {
+                let (s, p, o, g) = annotations[index];
+                QuadIds { s, p, o, g }
+            }),
+            memory,
+        )?;
+        Ok(Self {
             dictionary,
+            statistics,
             quads,
             reifiers,
             reifier_targets: OnceLock::new(),
@@ -1008,7 +1027,7 @@ impl RdfDataset {
             named_graphs,
             predecessor_index: OnceLock::new(),
             statement_graph_rows: OnceLock::new(),
-        }
+        })
     }
 
     /// Every named graph known to this dataset (quad-bearing or explicitly
@@ -2216,6 +2235,7 @@ impl RdfDataset {
     fn clone_dataset(&self) -> Self {
         Self {
             dictionary: self.dictionary.clone(),
+            statistics: self.statistics.clone(),
             quads: self.quads.clone(),
             reifiers: self.reifiers.clone(),
             reifier_targets: OnceLock::new(),
@@ -2309,6 +2329,7 @@ impl RdfDataset {
             .checked_add(permutations)?
             .checked_add(reifier_orders)?
             .checked_add(annotation_orders)?
+            .checked_add(self.statistics.retained_bytes()?)?
             .checked_add(histogram)
     }
 

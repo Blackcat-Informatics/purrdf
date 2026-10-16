@@ -315,7 +315,7 @@ fn short_syllable(letters: &[Letter]) -> bool {
     let Some(end) = letters.last_chunk::<3>() else {
         return false;
     };
-    !end[0].vowel && end[1].vowel && !end[2].vowel && !matches!(end[2].value, 'w' | 'x' | 'y')
+    !end[0].vowel && end[1].vowel && !end[2].vowel && !matches!(end[2].value, 'w'..='y')
 }
 
 struct Rule {
