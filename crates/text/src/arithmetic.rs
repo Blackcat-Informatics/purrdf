@@ -109,7 +109,7 @@ impl purrdf_hash::error::StructuredError for ArithmeticRefusal {
         LogOverflow { raw, exponent, ln_mantissa } => "text-fixed-log-overflow" {
             "raw" => Signed(*raw), "exponent" => Signed(i128::from(*exponent)), "ln_mantissa" => Signed(*ln_mantissa),
         },
-        Narrow { value } => "text-fixed-narrow-overflow" { "value" => Record(value) },
+        Narrow { value } => "text-fixed-narrow-overflow" { "value" => Record(value), "scale_digits" => Unsigned(u128::from(crate::SCALE_DIGITS)) },
         ScoreOutsideBound { score, maximum } => "text-fixed-score-outside-bound" { "score_raw" => Signed(*score), "maximum_raw" => Signed(*maximum) },
         FieldNormalization { b, relative, normalized } => "text-fixed-field-normalization" { "b_raw" => Signed(*b), "relative_raw" => Signed(*relative), "normalized_raw" => Signed(*normalized) },
         FieldFrequency { document, predicate, current, added } => "text-field-frequency-overflow" {

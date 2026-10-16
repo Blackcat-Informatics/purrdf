@@ -148,34 +148,38 @@ pub(crate) fn query_error(
     kind: purrdf_sparql_eval::NativeDiagnosticKind,
     message: impl core::fmt::Display,
 ) -> Result<TextError, TextError> {
-    if !workspace.is_bounded() {
-        return Ok(match kind {
-            purrdf_sparql_eval::NativeDiagnosticKind::Data => TextError::data(message.to_string()),
-            purrdf_sparql_eval::NativeDiagnosticKind::Config => {
-                TextError::config(message.to_string())
-            }
-            _ => TextError::Diagnostic(admitted(purrdf_sparql_eval::NativeDiagnostic::render(
-                kind, message, workspace,
-            ))?),
-        });
-    }
-    Ok(TextError::Diagnostic(admitted(
-        purrdf_sparql_eval::NativeDiagnostic::render(kind, message, workspace),
-    )?))
+    let diagnostic = admitted(purrdf_sparql_eval::NativeDiagnostic::render(
+        kind, message, workspace,
+    ))?;
+    Ok(if workspace.is_bounded() {
+        TextError::Diagnostic(diagnostic)
+    } else {
+        match kind {
+            purrdf_sparql_eval::NativeDiagnosticKind::Data => TextError::Data(diagnostic),
+            purrdf_sparql_eval::NativeDiagnosticKind::Config => TextError::Config(diagnostic),
+            _ => TextError::Diagnostic(diagnostic),
+        }
+    })
 }
 
 pub(crate) fn data_error(
-    message: impl core::fmt::Display,
+    cause: crate::data_refusal::DataRefusal,
     workspace: Option<&WorkspaceCapability>,
 ) -> TextError {
-    match workspace {
-        Some(workspace) => query_error(
-            workspace,
-            purrdf_sparql_eval::NativeDiagnosticKind::Data,
-            message,
-        )
-        .unwrap_or_else(|failure| failure),
-        None => TextError::data(message.to_string()),
+    let resident = WorkspaceCapability::resident();
+    match admitted(purrdf_sparql_eval::NativeDiagnostic::render_cause(
+        purrdf_sparql_eval::NativeDiagnosticKind::Data,
+        cause,
+        workspace.unwrap_or(&resident),
+    )) {
+        Ok(diagnostic) => {
+            if workspace.is_some_and(WorkspaceCapability::is_bounded) {
+                TextError::Diagnostic(diagnostic)
+            } else {
+                TextError::Data(diagnostic)
+            }
+        }
+        Err(error) => error,
     }
 }
 
@@ -191,7 +195,9 @@ pub(crate) fn arithmetic_error(
         workspace.unwrap_or(&resident),
     )) {
         Ok(diagnostic) => {
-            if domain {
+            if workspace.is_some_and(WorkspaceCapability::is_bounded) {
+                TextError::Diagnostic(diagnostic)
+            } else if domain {
                 TextError::Domain(diagnostic)
             } else {
                 TextError::Overflow(diagnostic)

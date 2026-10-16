@@ -110,6 +110,7 @@ mod occurrence_dictionary;
 pub use dictionary_relation::PhraseOccurrenceRelation;
 mod arithmetic;
 mod configuration;
+mod data_refusal;
 mod error;
 mod query_workspace;
 pub use query_workspace::CapacityFailure;

@@ -962,10 +962,12 @@ impl<P: CorpusProfile> TextIndex<P> {
         frequencies: &[(u32, u64)],
         workspace: Option<&purrdf_sparql_eval::WorkspaceCapability>,
     ) -> Result<FieldInputs, TextError> {
-        let lengths = self
-            .field_lengths
-            .get(document as usize)
-            .ok_or_else(|| data_error("field input names an absent document", workspace))?;
+        let lengths = self.field_lengths.get(document as usize).ok_or_else(|| {
+            data_error(
+                crate::data_refusal::DataRefusal::MissingDocument { document },
+                workspace,
+            )
+        })?;
         let resident = purrdf_sparql_eval::WorkspaceCapability::default();
         let mut fields = FieldInputs::new(lengths.len(), workspace.unwrap_or(&resident))?;
         for (input, &length) in fields.iter_mut().zip(lengths) {

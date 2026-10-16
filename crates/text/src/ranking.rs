@@ -8,10 +8,10 @@
 //! single-field profile uses exactly the same operations. See `RANKING.md` for
 //! the arithmetic, bound proof, and independent conformance reference.
 
-use crate::query_workspace::{QueryString, admitted, arithmetic_error, data_error, query_error};
+use crate::query_workspace::{QueryString, admitted, arithmetic_error, data_error};
 use purrdf_core::{FastSet, SmallVec, TermValue};
 use purrdf_hash::frame::frame_le;
-use purrdf_sparql_eval::{AdmittedVec, NativeDiagnosticKind, WorkspaceCapability};
+use purrdf_sparql_eval::{AdmittedVec, WorkspaceCapability};
 
 use crate::fixed::{SCALE, Scaled};
 use crate::{B, FINGERPRINT_BYTES, Fixed, K1, SCALE_DIGITS, TextError};
@@ -406,8 +406,11 @@ impl<'p> PreparedCorpus<'p> {
         totals: &[u128],
     ) -> Result<Self, TextError> {
         if profile.uses_field_populations() {
-            return Err(TextError::data(
-                "this ranking profile requires explicit field populations",
+            return Err(data_error(
+                crate::data_refusal::DataRefusal::ExplicitPopulations {
+                    fields: profile.fields.len(),
+                },
+                None,
             ));
         }
         Self::validate(profile, documents, totals, &[])
@@ -430,8 +433,13 @@ impl<'p> PreparedCorpus<'p> {
         populations: &[u64],
     ) -> Result<Self, TextError> {
         if !profile.uses_field_populations() || populations.len() != profile.fields.len() {
-            return Err(TextError::data(
-                "field populations require their ranking mode and one count per field",
+            return Err(data_error(
+                crate::data_refusal::DataRefusal::PopulationMode {
+                    enabled: profile.uses_field_populations(),
+                    fields: profile.fields.len(),
+                    populations: populations.len(),
+                },
+                None,
             ));
         }
         Self::validate(profile, documents, totals, populations)
@@ -462,13 +470,14 @@ impl<'p> PreparedCorpus<'p> {
     ) -> Result<Self, TextError> {
         if profile.uses_field_populations() {
             if populations.len() != profile.fields.len() {
-                return Err(query_error(
-                    workspace,
-                    NativeDiagnosticKind::Data,
-                    format_args!(
-                        "field populations require their ranking mode and one count per field"
-                    ),
-                )?);
+                return Err(data_error(
+                    crate::data_refusal::DataRefusal::PopulationMode {
+                        enabled: true,
+                        fields: profile.fields.len(),
+                        populations: populations.len(),
+                    },
+                    Some(workspace),
+                ));
             }
             Self::validate_owned(profile, documents, totals, populations, workspace)
         } else {
@@ -484,20 +493,26 @@ impl<'p> PreparedCorpus<'p> {
         workspace: &WorkspaceCapability,
     ) -> Result<Self, TextError> {
         if totals.len() != profile.fields.len() {
-            return Err(query_error(
-                workspace,
-                NativeDiagnosticKind::Data,
-                format_args!("corpus population or field count exceeds the ranking profile"),
-            )?);
+            return Err(data_error(
+                crate::data_refusal::DataRefusal::CorpusFields {
+                    expected: profile.fields.len(),
+                    actual: totals.len(),
+                },
+                Some(workspace),
+            ));
         }
         for (at, &total) in totals.iter().enumerate() {
             let population = populations.get(at).copied().unwrap_or(documents);
             if population > documents || total > u128::from(population) * u128::from(u64::MAX) {
-                return Err(query_error(
-                    workspace,
-                    NativeDiagnosticKind::Data,
-                    format_args!("a field population or token total exceeds its corpus bound"),
-                )?);
+                return Err(data_error(
+                    crate::data_refusal::DataRefusal::CorpusBound {
+                        field: at,
+                        total,
+                        population,
+                        documents,
+                    },
+                    Some(workspace),
+                ));
             }
         }
         let mut owned_totals = admitted(AdmittedVec::with_capacity(totals.len(), workspace))?;
@@ -548,25 +563,27 @@ impl<'p> PreparedCorpus<'p> {
         let saturation_ceiling = K1.checked_add(Fixed::ONE)?;
         for &(term, frequency) in frequencies {
             if term.is_empty() || prior.is_some_and(|prior| prior >= term) {
-                return Err(query_error(
-                    workspace,
-                    NativeDiagnosticKind::Data,
-                    format_args!(
-                        "prepared query terms must be nonempty, distinct and strictly sorted"
-                    ),
-                )?);
+                return Err(data_error(
+                    crate::data_refusal::DataRefusal::QueryOrder {
+                        term: QueryString::copy(term, workspace)?,
+                        previous: prior
+                            .map(|value| QueryString::copy(value, workspace))
+                            .transpose()?,
+                    },
+                    Some(workspace),
+                ));
             }
             prior = Some(term);
             frequency_sum =
                 frequency_sum.add(&Scaled::from_count(u128::from(frequency)), native)?;
             if frequency_sum.greater_than(&total) {
-                return Err(query_error(
-                    workspace,
-                    NativeDiagnosticKind::Data,
-                    format_args!(
-                        "distinct query document frequencies exceed all tokens in their corpus"
-                    ),
-                )?);
+                return Err(data_error(
+                    crate::data_refusal::DataRefusal::QueryFrequencySum {
+                        sum: frequency_sum,
+                        total,
+                    },
+                    Some(workspace),
+                ));
             }
             let idf = inverse_document_frequency(self.documents, frequency, native)?;
             maximum = maximum
@@ -619,16 +636,25 @@ impl PreparedQuery<'_, '_> {
         let workspace = self.workspace.is_bounded().then_some(&self.workspace);
         if self.corpus.documents == 0 {
             return Err(data_error(
-                "an empty corpus contains no document to score",
+                crate::data_refusal::DataRefusal::EmptyCorpus,
                 workspace,
             ));
         }
-        let (df, idf) = self
-            .term_statistics(ordinal)
-            .ok_or_else(|| data_error("query term ordinal is absent", workspace))?;
+        let (df, idf) = self.term_statistics(ordinal).ok_or_else(|| {
+            data_error(
+                crate::data_refusal::DataRefusal::TermOrdinal {
+                    ordinal,
+                    terms: self.terms.len(),
+                },
+                workspace,
+            )
+        })?;
         if fields.len() != self.corpus.profile.fields.len() {
             return Err(data_error(
-                "document field count disagrees with its ranking profile",
+                crate::data_refusal::DataRefusal::DocumentFields {
+                    expected: self.corpus.profile.fields.len(),
+                    actual: fields.len(),
+                },
                 workspace,
             ));
         }
@@ -702,14 +728,20 @@ impl PreparedQuery<'_, '_> {
     /// Refuses a term count mismatch, invalid field input, or a score outside
     /// the exact profile bound.
     pub fn score(&self, terms: &[Vec<FieldInput>]) -> Result<BoundedScore, TextError> {
+        let workspace = self.workspace.is_bounded().then_some(&self.workspace);
         if self.corpus.documents == 0 {
-            return Err(TextError::data(
-                "an empty corpus contains no document to score",
+            return Err(data_error(
+                crate::data_refusal::DataRefusal::EmptyCorpus,
+                workspace,
             ));
         }
         if terms.len() != self.terms.len() {
-            return Err(TextError::data(
-                "document term count disagrees with its prepared query",
+            return Err(data_error(
+                crate::data_refusal::DataRefusal::DocumentTerms {
+                    expected: self.terms.len(),
+                    actual: terms.len(),
+                },
+                workspace,
             ));
         }
         let mut score = Fixed::ZERO;
@@ -721,20 +753,47 @@ impl PreparedQuery<'_, '_> {
                 .map(|field| field.length)
                 .ne(terms[0].iter().map(|field| field.length))
             {
-                return Err(TextError::data(
-                    "one document has inconsistent field lengths across query terms",
+                let field = (0..fields.len().max(terms[0].len()))
+                    .find(|&field| {
+                        fields.get(field).map(|value| value.length)
+                            != terms[0].get(field).map(|value| value.length)
+                    })
+                    .expect("the length iterators differ");
+                return Err(data_error(
+                    crate::data_refusal::DataRefusal::FieldLengths {
+                        term: ordinal,
+                        field,
+                        expected: terms[0].get(field).map(|value| value.length),
+                        actual: fields.get(field).map(|value| value.length),
+                    },
+                    workspace,
                 ));
             }
             let contribution = self.contribution(ordinal, fields)?;
-            for (sum, field) in frequencies.iter_mut().zip(fields) {
+            for (at, (sum, field)) in frequencies.iter_mut().zip(fields).enumerate() {
+                let current = *sum;
                 *sum = sum.checked_add(field.term_frequency).ok_or_else(|| {
-                    TextError::data(
-                        "distinct query term frequencies exceed the document field length",
+                    data_error(
+                        crate::data_refusal::DataRefusal::FrequencySum {
+                            term: ordinal,
+                            field: at,
+                            current,
+                            added: field.term_frequency,
+                            length: field.length,
+                        },
+                        workspace,
                     )
                 })?;
                 if *sum > field.length {
-                    return Err(TextError::data(
-                        "distinct query term frequencies exceed the document field length",
+                    return Err(data_error(
+                        crate::data_refusal::DataRefusal::FrequencySum {
+                            term: ordinal,
+                            field: at,
+                            current,
+                            added: field.term_frequency,
+                            length: field.length,
+                        },
+                        workspace,
                     ));
                 }
             }
@@ -758,19 +817,32 @@ fn validate_field(
 ) -> Result<(), TextError> {
     if input.term_frequency > input.length || u128::from(input.length) > total {
         return Err(data_error(
-            "field frequency, length, and corpus total are inconsistent",
+            crate::data_refusal::DataRefusal::FieldFacts {
+                frequency: input.term_frequency,
+                length: input.length,
+                total,
+            },
             workspace,
         ));
     }
     if total - u128::from(input.length) > u128::from(remaining) * u128::from(u64::MAX) {
         return Err(data_error(
-            "the remaining corpus cannot hold the declared field total",
+            crate::data_refusal::DataRefusal::RemainingTotal {
+                length: input.length,
+                total,
+                remaining,
+            },
             workspace,
         ));
     }
     if (documents == 0 && input.length != 0) || (df == 0 && input.term_frequency != 0) {
         return Err(data_error(
-            "a nonempty document or term cannot belong to an empty corpus or posting list",
+            crate::data_refusal::DataRefusal::EmptyPopulation {
+                frequency: input.term_frequency,
+                length: input.length,
+                documents,
+                df,
+            },
             workspace,
         ));
     }
@@ -786,7 +858,10 @@ fn inverse_document_frequency(
 ) -> Result<Fixed, TextError> {
     if frequency > documents {
         return Err(data_error(
-            "document frequency exceeds its corpus population",
+            crate::data_refusal::DataRefusal::DocumentFrequency {
+                documents,
+                frequency,
+            },
             workspace,
         ));
     }

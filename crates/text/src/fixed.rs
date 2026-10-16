@@ -433,7 +433,7 @@ pub(crate) struct Scaled {
 impl purrdf_hash::error::StructuredError for Scaled {
     purrdf_hash::error_visit! {
         @record self { value, _allocation } => "text-scaled-integer" {
-            "raw" => Record(&self.value), "scale_digits" => Unsigned(u128::from(SCALE_DIGITS)),
+            "raw" => Record(&self.value),
         }
     }
 }

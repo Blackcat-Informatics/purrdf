@@ -326,6 +326,86 @@ fn configuration_predicates_keep_terms_and_original_iri_causes() {
     assert!(matches!(cause.field("cause"), ErrorValue::Cause(_)));
 }
 
+fn data_corpus_refusal_preserves_full_width_totals_and_population() {
+    use purrdf_text::{PreparedCorpus, RankingProfile};
+    let profile = RankingProfile::single_field();
+    let error: EvalError = PreparedCorpus::new(&profile, u64::MAX, &[u128::MAX])
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-data-corpus-bound");
+    assert!(matches!(cause.field("field"), ErrorValue::Unsigned(0)));
+    assert!(matches!(
+        cause.field("total"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+    assert!(
+        matches!(cause.field("population"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    assert!(
+        matches!(cause.field("documents"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+}
+
+fn data_query_refusals_keep_original_order_and_exact_frequency_totals() {
+    use purrdf_text::{PreparedCorpus, RankingProfile};
+    let profile = RankingProfile::single_field();
+    let corpus = PreparedCorpus::new(&profile, 1, &[1]).unwrap();
+    let error: EvalError = corpus
+        .prepare_query(&[("b", 0), ("a", 0)])
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-data-query-order");
+    assert!(matches!(cause.field("term"), ErrorValue::Text("a")));
+    assert!(matches!(cause.field("previous"), ErrorValue::Text("b")));
+    let error: EvalError = corpus.prepare_query(&[("a", 2)]).unwrap_err().into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-data-query-frequency-sum");
+    assert!(matches!(
+        cause.child("sum").child("raw").field("value"),
+        ErrorValue::Signed(2)
+    ));
+    assert!(matches!(
+        cause.child("total").child("raw").field("value"),
+        ErrorValue::Signed(1)
+    ));
+    assert!(matches!(cause.field("unit"), ErrorValue::Code("tokens")));
+}
+
+fn data_scoring_refusals_keep_original_ordinal_and_field_facts() {
+    use purrdf_text::{FieldInput, PreparedCorpus, RankingProfile};
+    let profile = RankingProfile::single_field();
+    let corpus = PreparedCorpus::new(&profile, 1, &[2]).unwrap();
+    let query = corpus.prepare_query(&[("a", 1)]).unwrap();
+    let error: EvalError = query.contribution(usize::MAX, &[]).unwrap_err().into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-data-term-ordinal");
+    assert!(
+        matches!(cause.field("ordinal"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    assert!(matches!(cause.field("terms"), ErrorValue::Unsigned(1)));
+    let error = query
+        .contribution(
+            0,
+            &[FieldInput {
+                term_frequency: 3,
+                length: 2,
+            }],
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "text-index input error: field frequency, length, and corpus total are inconsistent"
+    );
+    let error: EvalError = error.into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-data-field-facts");
+    assert!(matches!(cause.field("frequency"), ErrorValue::Unsigned(3)));
+    assert!(matches!(cause.field("length"), ErrorValue::Unsigned(2)));
+    assert!(matches!(cause.field("total"), ErrorValue::Unsigned(2)));
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
@@ -336,4 +416,7 @@ purrdf_testkit::harness_main!(
     configuration_bounds_keep_the_requested_value_and_native_limit,
     configuration_ranking_keeps_signed_values_and_field_indices,
     configuration_predicates_keep_terms_and_original_iri_causes,
+    data_corpus_refusal_preserves_full_width_totals_and_population,
+    data_query_refusals_keep_original_order_and_exact_frequency_totals,
+    data_scoring_refusals_keep_original_ordinal_and_field_facts,
 );
