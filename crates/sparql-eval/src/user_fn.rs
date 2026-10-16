@@ -2750,6 +2750,7 @@ mod tests {
                                         page: None,
                                         expected: PageGeneration(8),
                                         actual: PageGeneration(9),
+                                        detail: None,
                                     },
                                     ..
                                 }
