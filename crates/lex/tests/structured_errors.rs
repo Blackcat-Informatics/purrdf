@@ -195,6 +195,7 @@ fn yaml_and_scalar_decoders_publish_native_positions_and_limits() {
 #[test]
 fn diagnostic_inspection_retains_typed_arguments_and_optional_detail() {
     use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
+    use purrdf_testkit::error_capture::{Capture, Event};
 
     let detail = DiagnosticPresentation::new("example-detail", "detail", vec![])
         .expect("a fixed template without arguments");
@@ -209,41 +210,31 @@ fn diagnostic_inspection_retains_typed_arguments_and_optional_detail() {
     .expect("the named counter exists")
     .with_detail(detail)
     .expect("one detail level is allowed");
-    let mut fields = Fields::default();
-    presentation.visit(&mut fields);
-    assert_eq!(fields.lists, [(Some("parameters"), 1)]);
-    assert_eq!(fields.list_ends, 1);
+    let fields = Capture::read(&presentation);
+    assert_eq!(fields.code, "diagnostic-presentation");
     assert!(matches!(
-        fields.entries[1],
-        ("message_id", ErrorValue::Code("example-count"))
+        fields.field("message_id"),
+        ErrorValue::Code("example-count")
     ));
-    let ErrorValue::Record(parameter) = fields.entries[2].1 else {
+    assert!(matches!(
+        fields.events[1],
+        Event::BeginList(Some("parameters"), 1)
+    ));
+    let Event::Value(None, ErrorValue::Record(parameter)) = fields.events[2] else {
         panic!("the list must retain structured parameters");
     };
-    let mut argument = Fields::default();
-    parameter.visit(&mut argument);
+    assert!(matches!(fields.events[3], Event::EndList));
+    let argument = Capture::read(parameter);
+    assert!(matches!(argument.field("name"), ErrorValue::Text("count")));
+    let counter = argument.child("value");
+    assert!(matches!(counter.field("value"), ErrorValue::Unsigned(n) if n == u128::from(u64::MAX)));
+    let secondary = fields.child("detail");
     assert!(matches!(
-        argument.entries[1],
-        ("name", ErrorValue::Text("count"))
+        secondary.events[1],
+        Event::BeginList(Some("parameters"), 0)
     ));
-    let ErrorValue::Record(value) = argument.entries[2].1 else {
-        panic!("the counter must not be replaced with rendered English");
-    };
-    let mut counter = Fields::default();
-    value.visit(&mut counter);
-    assert!(
-        matches!(counter.entries[1], ("value", ErrorValue::Unsigned(n)) if n == u128::from(u64::MAX))
-    );
-    let ErrorValue::Record(detail) = fields.entries[4].1 else {
-        panic!("the original secondary detail must remain structured");
-    };
-    let mut secondary = Fields::default();
-    detail.visit(&mut secondary);
-    assert_eq!(secondary.lists, [(Some("parameters"), 0)]);
-    assert!(matches!(
-        secondary.entries[3],
-        ("detail", ErrorValue::Absent)
-    ));
+    assert!(matches!(secondary.events[2], Event::EndList));
+    assert!(matches!(secondary.field("detail"), ErrorValue::Absent));
 }
 
 #[test]

@@ -687,6 +687,22 @@ pub enum XsdError {
     Storage(crate::bigint::LimbScratchError),
 }
 
+impl purrdf_hash::error::StructuredError for XsdError {
+    purrdf_hash::error_visit! {
+        InvalidLexical { datatype, lexical, reason } => "xsd-invalid-lexical" {
+            "datatype" => Iri(datatype.iri()), "lexical" => Text(lexical), "reason" => Text(reason),
+        },
+        OutOfRange { datatype, lexical, reason } => "xsd-out-of-range" {
+            "datatype" => Iri(datatype.iri()), "lexical" => Text(lexical), "reason" => Text(reason),
+        },
+        DivisionByZero { datatype } => "xsd-division-by-zero" { "datatype" => Iri(datatype.iri()) },
+        TypeMismatch { reason } => "xsd-type-mismatch" { "reason" => Text(reason) },
+        Indeterminate { reason } => "xsd-indeterminate" { "reason" => Text(reason) },
+        Exact(error) => "xsd-exact" { "cause" => Cause(error) },
+        Storage(error) => "xsd-storage" { "cause" => Cause(error) },
+    }
+}
+
 impl XsdError {
     /// [`XsdError::InvalidLexical`] for `lexical` read as `datatype`: the one
     /// constructor every lexical-space check reports its refusal through.

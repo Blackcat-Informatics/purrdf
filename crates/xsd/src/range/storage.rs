@@ -20,6 +20,13 @@ pub enum StorageError {
     Allocation,
 }
 
+impl purrdf_hash::error::StructuredError for StorageError {
+    purrdf_hash::error_visit! {
+        Refused => "range-storage-refused" {},
+        Allocation => "range-allocation-failed" {},
+    }
+}
+
 impl core::fmt::Display for StorageError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         out.write_str(match self {

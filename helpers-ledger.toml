@@ -1407,6 +1407,23 @@ fingerprints = []
 names = ['^(emit_structured_error_list|visit_structured_error_list)$']
 
 [[job]]
+id = "structured-error-capture"
+summary = "A generic test consumer retaining original error fields, unnamed entries and list boundaries without formatting or native enum mirrors"
+home = "purrdf_testkit::error_capture::Capture::read"
+entry_points = []
+spec = "purrdf_hash::error event protocol; one borrowed producer capture, with explicit variant identity and ordered typed/list events"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(capture_structured_error|record_structured_error)$']
+
+[[job]]
 id = "media-type-by-extension"
 summary = "The media type a file extension names: the GTS files profile (tar entries carry no media type), slice artifacts, the slice RDF loader and the SPARQL conformance data-file loaders"
 home = "purrdf_gts::files::media_type_for_extension"
