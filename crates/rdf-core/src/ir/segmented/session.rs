@@ -25,6 +25,7 @@ use super::{SegmentedError, SegmentedProvider, SegmentedReceipt, SegmentedSnapsh
 mod cache;
 #[cfg(test)]
 mod cache_control;
+mod statistics;
 
 // Both owners reserve through the same admission home after their own readiness
 // check; a session additionally verifies its provider's snapshot identity.
@@ -803,6 +804,7 @@ impl SegmentedOperation {
                 streams: [Stream::default(); 3],
                 graphs: Stream::default(),
                 summaries: Stream::default(),
+                statistics: [Stream::default(); 4],
                 flags: 0,
             },
             state: Arc::clone(&self.state),
@@ -1473,20 +1475,13 @@ impl SegmentedSession {
         let Some(subject) = subject else {
             return Ok(start..end);
         };
-        let mut lo = start;
-        let mut hi = end;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let summary = self.summary(mid)?;
+        let offset = format::partition_point(end - start, |mid| {
+            let summary = self.summary(start + mid)?;
             let max =
                 crate::bytes::read_u64_le(&summary, 32).expect("fixed summary subject maximum");
-            if max < subject.index() + 1 {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        Ok(lo..end)
+            Ok::<_, SegmentedError>(max < subject.index() + 1)
+        })?;
+        Ok(start + offset..end)
     }
     pub(super) const fn has_stream_rows(&self, table: usize) -> bool {
         self.header.streams[table].rows != 0
@@ -1731,6 +1726,9 @@ impl DatasetView for SegmentedSession {
     type ReadError = SegmentedError;
     type TermGuard<'a> = SegmentedTermGuard;
     type ProbePlan = ();
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        Some(self)
+    }
     fn read_error(&self) -> Option<Self::ReadError> {
         self.ready().err()
     }

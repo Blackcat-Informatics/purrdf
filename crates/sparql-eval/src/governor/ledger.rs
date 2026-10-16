@@ -419,6 +419,8 @@ pub struct QueryExplanation {
     shapes: AdmittedVec<crate::shapes::ShapeReport>,
     /// Available access in the exact view whose statement probes were executed.
     statement_indexes: purrdf_core::StatementIndexSupport,
+    /// Snapshot statistics with source, revision and exact/upper-bound inputs.
+    statistics: AdmittedRecords<String>,
     /// The whole execution's consumption and ceilings, so a reader can check the ledger's
     /// fuel column against the total it decomposes.
     evidence: purrdf_core::GovernorEvidence,
@@ -495,7 +497,11 @@ impl Clone for QueryExplanation {
             self.relations.to_vec(),
             self.aggregates.to_vec(),
             self.evidence.clone(),
-            (self.shapes.to_vec(), self.statement_indexes),
+            (
+                self.shapes.to_vec(),
+                self.statement_indexes,
+                self.statistics.to_vec(),
+            ),
         )
     }
 }
@@ -507,9 +513,10 @@ impl QueryExplanation {
         relations: Vec<PfDescriptor>,
         aggregates: Vec<AggDescriptor>,
         evidence: purrdf_core::GovernorEvidence,
-        (shapes, statement_indexes): (
+        (shapes, statement_indexes, statistics): (
             Vec<crate::shapes::ShapeReport>,
             purrdf_core::StatementIndexSupport,
+            Vec<String>,
         ),
     ) -> Self {
         Self {
@@ -520,6 +527,7 @@ impl QueryExplanation {
             aggregates: AdmittedRecords::resident(aggregates),
             shapes: AdmittedVec::from_parts(shapes, None, &crate::WorkspaceCapability::resident()),
             statement_indexes,
+            statistics: AdmittedRecords::resident(statistics),
             evidence,
             _profile_allocation: None,
         }
@@ -533,9 +541,10 @@ impl QueryExplanation {
         relations: AdmittedRecords<PfDescriptor>,
         aggregates: AdmittedRecords<AggDescriptor>,
         evidence: purrdf_core::GovernorEvidence,
-        (shapes, statement_indexes): (
+        (shapes, statement_indexes, statistics): (
             AdmittedVec<crate::shapes::ShapeReport>,
             purrdf_core::StatementIndexSupport,
+            AdmittedRecords<String>,
         ),
     ) -> Self {
         Self {
@@ -546,6 +555,7 @@ impl QueryExplanation {
             aggregates,
             shapes,
             statement_indexes,
+            statistics,
             evidence,
             _profile_allocation: Some(profile.1),
         }
@@ -618,13 +628,22 @@ impl QueryExplanation {
         &self.shapes
     }
 
+    /// Statistical inputs behind the BGP forecasts, with their provider source,
+    /// immutable revision and exactness. `None` fields are unknown, not zero.
+    /// These describe input counts; joined output estimates remain heuristic.
+    #[must_use]
+    pub fn statistics(&self) -> &[String] {
+        &self.statistics
+    }
+
     /// The stable text rendering: a profile header, the charge schedule, the per-node
     /// ledger, the injected relations, the injected custom aggregates, and the join
     /// orders.
     ///
     /// Byte-deterministic for a given query, dataset, and build — every number in it is a
-    /// counter and every string is either a pinned schedule label or an algebra variant
-    /// label. There is no clock, no address, and no iteration over a hash map.
+    /// counter or a snapshot statistic; labels come from the pinned schedule,
+    /// algebra, or caller's immutable provider. There is no clock, no address,
+    /// and no iteration over a hash map.
     #[must_use]
     pub fn render(&self) -> String {
         use std::fmt::Write as _;
@@ -707,6 +726,12 @@ impl QueryExplanation {
         let _ = writeln!(out, "join-orders");
         for pattern in self.join_orders.iter() {
             let _ = writeln!(out, "  {pattern}");
+        }
+        if !self.statistics.is_empty() {
+            let _ = writeln!(out, "statistics");
+            for statistic in self.statistics.iter() {
+                let _ = writeln!(out, "  {statistic}");
+            }
         }
         let _ = writeln!(out, "statement-indexes {}", self.statement_indexes);
         if !self.shapes.is_empty() {

@@ -1858,7 +1858,16 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// the same emitted candidates while reducing source rows visited. Statement
 /// estimates also participate in join planning. Consumers must remeasure fuel,
 /// scratch and intermediate cut points against their actual statement queries.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 19;
+///
+/// # v20
+///
+/// The point schedule stays unchanged. Snapshot-bound predicate/class counts,
+/// positional distinct domains and structural statement statistics guide both
+/// dynamic-programming and greedy join ordering. Chronological stores expose
+/// conservative physical bounds instead of claiming exact effective counts.
+/// Changed orders move candidate, intermediate and scratch charges; consumers
+/// must remeasure their query ceilings even when complete answers are unchanged.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 20;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2898,7 +2907,7 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 19);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 20);
         assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
         let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(

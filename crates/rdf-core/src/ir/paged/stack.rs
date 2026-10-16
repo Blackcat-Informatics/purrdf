@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// A pinned sealed source, in chronological order (oldest first).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StackSource {
     /// Its original provider generation, not a composed hash.
     pub generation: PageGeneration,
@@ -504,7 +504,8 @@ impl PagedStack {
         let physical =
             PagedDataset::from_parts(dictionary, provider, PageGeneration::INITIAL, parts)
                 .map_err(PagedStackError::Freeze)?;
-        let snapshot = PagedStackSnapshot {
+        let mut snapshot = PagedStackSnapshot {
+            statistics_revision: 0,
             physical,
             origins,
             removals,
@@ -525,6 +526,14 @@ impl PagedStack {
             graph_declarations,
             head_bytes,
         };
+        snapshot.statistics_revision = purrdf_hash::fixed::hash_one(&(
+            crate::SnapshotStatistics::fingerprint(&snapshot.physical.statistics.values),
+            &snapshot.sources,
+            &snapshot.head,
+            &snapshot.head_graphs,
+            &snapshot.removal_values,
+            &snapshot.graph_declarations,
+        ));
         self.check_sources()?;
         Ok(snapshot)
     }
@@ -646,6 +655,7 @@ impl PageProvider for StackProvider {
 /// Immutable metadata and copied head/removals, retained independently of its writer.
 #[derive(Debug)]
 pub struct PagedStackSnapshot {
+    statistics_revision: u64,
     physical: PagedDataset,
     origins: Vec<StackPageOrigin>,
     removals: Vec<FastSet<QuadIds<GlobalTermId>>>,
@@ -840,6 +850,9 @@ impl DatasetView for PagedStackQueryView<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        self.read_error().is_none().then_some(self as _)
+    }
     fn read_error(&self) -> Option<Self::ReadError> {
         self.physical.read_error()
     }
@@ -954,6 +967,30 @@ impl DatasetView for PagedStackQueryView<'_> {
             || self.reifier_quads_in_graph(g).next().is_some()
             || self.annotation_quads_in_graph(g).next().is_some();
         self.read_error().is_none() && found
+    }
+}
+
+impl crate::statistics::layered::LayeredStatistics for PagedStackQueryView<'_> {
+    fn statistics_source(&self) -> &'static str {
+        "paged-chronological-source-bounds-v1"
+    }
+
+    fn statistics_revision(&self) -> u64 {
+        self.snapshot.statistics_revision
+    }
+
+    fn physical_statistic(
+        &self,
+        request: crate::statistics::layered::Request,
+        pattern: crate::ProbePattern<GlobalTermId>,
+    ) -> Option<crate::PredicateStatistics> {
+        let layered = self.snapshot.sources.len() + usize::from(self.snapshot.head_bytes != 0) > 1
+            || self.snapshot.removals.iter().any(|rows| !rows.is_empty());
+        self.read_error().is_none().then_some(())?;
+        crate::statistics::layered::combine(
+            [request.read(self.physical.statistics()?, pattern, layered)],
+            layered,
+        )
     }
 }
 impl FallibleDatasetView for PagedStackQueryView<'_> {

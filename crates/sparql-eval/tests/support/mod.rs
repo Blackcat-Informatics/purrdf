@@ -15,9 +15,9 @@ pub mod governor_workloads;
 pub mod segmented;
 pub mod statement_claims;
 
-/// Scan-default adapters preserve every resident receipt byte except the
-/// deliberately different physical-access descriptor. Assert that descriptor
-/// rather than dropping it from the comparison.
+/// Scan-default adapters preserve resident receipts and statistical inputs.
+/// Physical-access descriptors and metadata provenance identify the actual
+/// provider; neither difference may hide a changed count or execution receipt.
 pub fn assert_scan_explanation_matches_resident(
     actual: &purrdf_sparql_eval::QueryExplanation,
     resident: &str,
@@ -28,10 +28,29 @@ pub fn assert_scan_explanation_matches_resident(
     let indexed_line = format!("statement-indexes {}\n", StatementIndexSupport::INDEXED);
     let scanning_line = format!("statement-indexes {scanning}\n");
     assert_eq!(resident.matches(&indexed_line).count(), 1);
-    assert_eq!(
-        actual.render(),
-        resident.replacen(&indexed_line, &scanning_line, 1)
-    );
+    let rendered = actual.render();
+    let expected = resident.replacen(&indexed_line, &scanning_line, 1);
+    assert_eq!(rendered.lines().count(), expected.lines().count());
+    for (observed, expected) in rendered.lines().zip(expected.lines()) {
+        if let Some((expected_prefix, expected_statistics)) = expected.split_once(" source=") {
+            let (observed_prefix, observed_statistics) = observed
+                .split_once(" source=")
+                .expect("the adapter retains statistical evidence");
+            assert_eq!(observed_prefix, expected_prefix);
+            let (provenance, observed_counts) = observed_statistics
+                .rsplit_once(" row-input=")
+                .expect("statistical input counts");
+            let (_, expected_counts) = expected_statistics
+                .rsplit_once(" row-input=")
+                .expect("resident statistical input counts");
+            let (source, revision) = provenance.rsplit_once(" revision=").unwrap();
+            assert!(source.starts_with('"') && source.ends_with('"') && source.len() > 2);
+            revision.parse::<u64>().expect("metadata revision");
+            assert_eq!(observed_counts, expected_counts);
+        } else {
+            assert_eq!(observed, expected);
+        }
+    }
 }
 
 use std::collections::BTreeMap;

@@ -3,7 +3,7 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 19
+**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 20
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Every value in this document is readable from the library rather than only from
@@ -532,7 +532,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `19` |
+| `GOVERNOR_PROFILE_VERSION` | `20` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -549,7 +549,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n19\n'
+{ printf 'purrdf-sparql-governors\n20\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -558,7 +558,7 @@ therefore recompute it from this document alone:
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work native-function-work
 } | sha256sum
-# 8f256fbd39c945b841ef6c2df028881c27fe5af0f5c84c22d4b60ba5d73ef342
+# 399bdeef5ecc7bc9fb7fc7a05b18a0b1692c7b60490390f6e8f24c1d53dbebef
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -702,6 +702,7 @@ increment it. That restraint is what makes the number worth pinning.
 | **17** | The schedule is unchanged. Default exact-branch division now keeps a terminating quotient at its full scale and otherwise rounds to eighteen fractional digits, half to even. Its tower work and AVG's final division can move fuel and scratch cut points even for operands that previously took the bounded numeric path. Remeasure numeric ceilings against the new default. |
 | **18** | The schedule is unchanged. Exact-only numeric values and exact temporal seconds flow through admitted evaluator arithmetic, comparison, timezone adjustment and rendering. Those operations now charge their arbitrary-precision work and retained scratch rather than the former bounded or zero-cost path. Remeasure fuel and scratch ceilings for numeric and temporal queries, including unchanged answers. |
 | **19** | The schedule is unchanged. Native structural reifier probes narrow bound triple components before emitting BGP candidates, removing unrelated candidate charges. Annotation predicate/object ranges reduce physical rows visited while preserving emitted candidates. Statement-row estimates participate in join planning. Remeasure fuel, scratch and intermediate cut points for statement queries; complete RDF answers retain their bag multiplicity. |
+| **20** | The schedule is unchanged. Snapshot-bound predicate/class counts, positional distinct domains and structural statement statistics guide dynamic-programming and greedy join ordering. Chronological stores distinguish conservative physical bounds from exact effective counts. Changed orders move candidate, intermediate and scratch charges; remeasure ceilings against representative queries even when complete answers are unchanged. |
 
 Version **15** keeps the charge schedule unchanged. Evidence-bearing
 `EXISTS`/`NOT EXISTS` evaluates the original body, retaining every alternative
@@ -719,7 +720,7 @@ ceilings and stop cut points.
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `19` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `20` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
@@ -757,7 +758,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `19` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `20` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

@@ -1020,8 +1020,12 @@ fn plan_or_cached_order<D: DatasetView>(
             workspace,
         );
     };
+    let snapshot = dataset.stats_fingerprint();
+    let snapshot = dataset.statistics().map_or(snapshot, |statistics| {
+        purrdf_hash::fixed::hash_one(&(snapshot, statistics.source(), statistics.fingerprint()))
+    });
     let key = (
-        dataset.stats_fingerprint(),
+        snapshot,
         bgp_shape_key_seeded_admitted(compiled, scope, initial, workspace)?,
     );
     use crate::plan_cache::OrderCacheRef;
@@ -1259,12 +1263,35 @@ fn cost_based_order_from_admitted<D: DatasetView>(
         return Ok(order);
     }
     let base = cost_base(compiled, dataset, scope, workspace)?;
+    let domains = pattern_domains(
+        compiled,
+        dataset,
+        scope,
+        base.iter().map(|cost| cost.rows),
+        workspace,
+    )?;
     let terms = dataset.term_count().max(1) as f64;
     let columns = cost_columns(compiled, workspace)?;
     if n <= COST_DP_MAX_PATTERNS {
-        cost_order_dp_costs_from(compiled, &base, terms, columns, initial, workspace)
+        cost_order_dp_costs_from(
+            compiled,
+            &base,
+            domains.as_deref(),
+            terms,
+            columns,
+            initial,
+            workspace,
+        )
     } else {
-        cost_order_greedy_costs_from(compiled, &base, terms, columns, initial, workspace)
+        cost_order_greedy_costs_from(
+            compiled,
+            &base,
+            domains.as_deref(),
+            terms,
+            columns,
+            initial,
+            workspace,
+        )
     }
 }
 
@@ -1307,10 +1334,183 @@ fn cost_bound_mask(
     workspace: &crate::WorkspaceCapability,
 ) -> Result<AdmittedVec<bool>, EvalError> {
     let mut bound = AdmittedVec::with_capacity(columns, workspace)?;
-    for column in 0..columns {
-        bound.push_reserved(initial.get(column).copied().unwrap_or(false));
+    for _ in 0..columns {
+        bound.push_reserved(false);
     }
+    reset_cost_bound_mask(bound.as_mut_slice(), initial);
     Ok(bound)
+}
+
+fn reset_cost_bound_mask(bound: &mut [bool], initial: &[bool]) {
+    for (column, value) in bound.iter_mut().enumerate() {
+        *value = initial.get(column).copied().unwrap_or(false);
+    }
+}
+
+type PatternDomains = [Option<purrdf_core::StatisticCount>; 3];
+
+fn predicate_domains<D: DatasetView>(
+    dataset: &D,
+    pattern: &CompiledPattern<D::Id>,
+    scope: &GraphScope<D::Id>,
+) -> PatternDomains {
+    use purrdf_core::{StatisticCount, StatisticsAccuracy, StatisticsStream};
+    let (Some(predicate), GraphScope::One(graph), Some(statistics)) =
+        (constant_of(&pattern.p), scope, dataset.statistics())
+    else {
+        return [None; 3];
+    };
+    let zero = Some(StatisticCount {
+        value: 0,
+        accuracy: StatisticsAccuracy::Exact,
+    });
+    let mut domains = [zero, None, zero];
+    let mut contributing = 0;
+    for stream in [
+        StatisticsStream::Asserted,
+        StatisticsStream::Reifiers,
+        StatisticsStream::Annotations,
+    ] {
+        let Some(counts) = statistics.predicate(predicate, *graph, stream) else {
+            return [None; 3];
+        };
+        if counts.rows.value == 0 {
+            continue;
+        }
+        contributing += 1;
+        for (position, count) in [(0, counts.subjects), (2, counts.objects)] {
+            domains[position] = domains[position].zip(count).and_then(|(previous, next)| {
+                Some(StatisticCount {
+                    value: previous.value.checked_add(next.value)?,
+                    accuracy: if previous.accuracy == StatisticsAccuracy::UpperBound
+                        || next.accuracy == StatisticsAccuracy::UpperBound
+                    {
+                        StatisticsAccuracy::UpperBound
+                    } else {
+                        StatisticsAccuracy::Exact
+                    },
+                })
+            });
+        }
+    }
+    for (position, term) in [(0, &pattern.s), (2, &pattern.o)] {
+        if !matches!(term, Pos::Slot(_)) {
+            domains[position] = None;
+        }
+        if contributing > 1
+            && let Some(count) = &mut domains[position]
+        {
+            // Stream identity domains can overlap. The sum is an upper bound,
+            // never an exact union or an output/allocation certificate.
+            count.accuracy = StatisticsAccuracy::UpperBound;
+        }
+    }
+    domains
+}
+
+fn pattern_domains<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    rows: impl Iterator<Item = f64>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<AdmittedVec<PatternDomains>>, EvalError> {
+    if dataset.statistics().is_none() {
+        return Ok(None);
+    }
+    let mut output: Option<AdmittedVec<PatternDomains>> = None;
+    for (index, (pattern, rows)) in compiled.iter().zip(rows).enumerate() {
+        let domains = if rows == 0.0 {
+            [None; 3]
+        } else {
+            predicate_domains(dataset, pattern, scope)
+        };
+        if output.is_none() && domains.iter().any(Option::is_some) {
+            let mut values = AdmittedVec::with_capacity(compiled.len(), workspace)?;
+            for _ in 0..index {
+                values.push_reserved([None; 3]);
+            }
+            output = Some(values);
+        }
+        if let Some(values) = &mut output {
+            values.push_reserved(domains);
+        }
+    }
+    Ok(output)
+}
+
+fn cost_domain_mask(
+    bound: &[bool],
+    t: f64,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<f64>, EvalError> {
+    let mut domains = AdmittedVec::with_capacity(bound.len(), workspace)?;
+    for _ in bound {
+        domains.push_reserved(f64::INFINITY);
+    }
+    reset_cost_domains(domains.as_mut_slice(), bound, t);
+    Ok(domains)
+}
+
+fn reset_cost_domains(domains: &mut [f64], bound: &[bool], t: f64) {
+    for (domain, &bound) in domains.iter_mut().zip(bound) {
+        *domain = if bound { t } else { f64::INFINITY };
+    }
+}
+
+fn axis_domains(known: Option<&PatternDomains>, rows: f64, fallback: f64) -> [f64; 3] {
+    std::array::from_fn(|axis| {
+        known
+            .and_then(|values| values[axis])
+            .map_or(fallback, |value| (value.value as f64).min(rows).max(1.0))
+    })
+}
+
+fn join_divisor<I: ViewTermId>(
+    ops: Binary64<'_>,
+    pattern: &CompiledPattern<I>,
+    bound: &[bool],
+    previous: Option<&[f64]>,
+    current: [f64; 3],
+    t: f64,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<f64, EvalError> {
+    let Some(previous) = previous else {
+        return Ok(power(
+            ops,
+            t,
+            join_positions_admitted(pattern, bound, workspace)?,
+        ));
+    };
+    let mut divisor = 1.0;
+    for (axis, position) in [&pattern.s, &pattern.p, &pattern.o].into_iter().enumerate() {
+        let mut domain = 0.0_f64;
+        for_each_slot_admitted(position, workspace, &mut |column| {
+            if bound[column] {
+                domain = domain.max(previous[column]);
+            }
+            Ok(())
+        })?;
+        if domain > 0.0 {
+            divisor = ops.mul(divisor, domain.max(current[axis]));
+        }
+    }
+    Ok(divisor)
+}
+
+fn extend_cost_domains<I: ViewTermId>(
+    pattern: &CompiledPattern<I>,
+    domains: &mut [f64],
+    current: [f64; 3],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    for (axis, position) in [&pattern.s, &pattern.p, &pattern.o].into_iter().enumerate() {
+        for_each_slot_admitted(position, workspace, &mut |column| {
+            domains[column] = domains[column].min(current[axis]);
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 /// Output cardinality advances the prefix; host access work ranks the read.
@@ -1335,11 +1535,15 @@ fn cost_base<D: DatasetView>(
         let mut rows = 0_u64;
         let mut work = 0_u128;
         let mut cardinality_only = true;
-        visit_access_costs(pattern, dataset, scope, &mut |probe, cost| {
+        visit_access_costs(pattern, dataset, scope, &mut |probe, cost, statistic| {
             cardinality_only &= cost.cardinality_fallback().is_some();
-            let cardinality = cost
-                .cardinality_fallback()
-                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g));
+            let cardinality = statistic.map_or_else(
+                || {
+                    cost.cardinality_fallback()
+                        .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g))
+                },
+                |count| count.value,
+            );
             // Match the conservative saturation used by base_cardinality over
             // merged graph scopes. Host work is a separate statistic: every
             // physically representable graph slice on 32/64-bit targets has
@@ -1366,7 +1570,11 @@ fn visit_access_costs<D: DatasetView>(
     pattern: &CompiledPattern<D::Id>,
     dataset: &D,
     scope: &GraphScope<D::Id>,
-    visit: &mut dyn FnMut(purrdf_core::ProbePattern<D::Id>, purrdf_core::AccessCost),
+    visit: &mut dyn FnMut(
+        purrdf_core::ProbePattern<D::Id>,
+        purrdf_core::AccessCost,
+        Option<purrdf_core::StatisticCount>,
+    ),
 ) {
     let s = constant_of(&pattern.s);
     let p = constant_of(&pattern.p);
@@ -1375,11 +1583,22 @@ fn visit_access_costs<D: DatasetView>(
         let probe = purrdf_core::ProbePattern { s, p, o, g };
         let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
         let cost = dataset.cost(probe, &plan);
+        let statistic = provider_cardinality(dataset, pattern, probe);
+        if cost.cardinality_fallback().is_some()
+            && let Some(count) = statistic
+        {
+            visit(
+                probe,
+                purrdf_core::AccessCost::from_cardinality(count.value),
+                statistic,
+            );
+            return;
+        }
         let statements = dataset
             .statement_cardinality_estimate(probe, components_of(&pattern.o, constant_of))
             .unwrap_or(0);
         if statements == 0 {
-            visit(probe, cost);
+            visit(probe, cost, statistic);
         } else {
             let ordinary = cost
                 .cardinality_fallback()
@@ -1390,6 +1609,7 @@ fn visit_access_costs<D: DatasetView>(
             visit(
                 probe,
                 purrdf_core::AccessCost::from_cardinality(ordinary.saturating_add(statements)),
+                statistic,
             );
         }
     };
@@ -1418,7 +1638,7 @@ pub(crate) fn visit_shape_cost<D: DatasetView + Sync>(
             &pattern,
             ctx.dataset,
             &ctx.active_dataset.scope_for(ctx.active_graph),
-            &mut |_, cost| visit(cost),
+            &mut |_, cost, _| visit(cost),
         ),
         None => visit(purrdf_core::AccessCost::from_cardinality(0)),
     }
@@ -1429,18 +1649,12 @@ fn statistic_f64(value: u128) -> f64 {
     u64::try_from(value).map_or(value as f64, |value| value as f64)
 }
 
-fn step_cost(
-    ops: Binary64<'_>,
-    running: f64,
-    base: PatternCost,
-    joins: usize,
-    t: f64,
-) -> (f64, f64) {
-    let rows = step_size(ops, running, base.rows, joins, t);
+fn step_cost(ops: Binary64<'_>, running: f64, base: PatternCost, divisor: f64) -> (f64, f64) {
+    let rows = step_size_by_divisor(ops, running, base.rows, divisor);
     let work = if base.cardinality_only {
         rows
     } else {
-        step_size(ops, running, base.work, joins, t)
+        step_size_by_divisor(ops, running, base.work, divisor)
     };
     (rows, work)
 }
@@ -1470,6 +1684,9 @@ fn base_cardinality<D: DatasetView>(
     let o = constant_of(&cp.o);
     let cardinality = |g| {
         let probe = purrdf_core::ProbePattern { s, p, o, g };
+        if let Some(count) = provider_cardinality(dataset, cp, probe) {
+            return count.value;
+        }
         dataset.cardinality_estimate(s, p, o, g).saturating_add(
             dataset
                 .statement_cardinality_estimate(probe, components_of(&cp.o, constant_of))
@@ -1483,6 +1700,37 @@ fn base_cardinality<D: DatasetView>(
             .map(|&g| cardinality(GraphMatch::Named(g)))
             .fold(0, u64::saturating_add),
     }
+}
+
+/// Structural statistics preserve native component-range estimates and include
+/// all three RDF streams on backends without those physical ranges.
+fn provider_cardinality<D: DatasetView>(
+    dataset: &D,
+    pattern: &CompiledPattern<D::Id>,
+    probe: purrdf_core::ProbePattern<D::Id>,
+) -> Option<purrdf_core::StatisticCount> {
+    let statistics = dataset.statistics()?;
+    if matches!(pattern.o, Pos::Triple(_)) {
+        let components = components_of(&pattern.o, constant_of);
+        let mut count = statistics.structural_pattern(probe, components)?;
+        if dataset.statement_indexes().reifier_components {
+            let indexed = dataset
+                .cardinality_estimate(probe.s, probe.p, probe.o, probe.g)
+                .saturating_add(dataset.statement_cardinality_estimate(probe, components)?);
+            count.value = count.value.min(indexed);
+        }
+        return Some(count);
+    }
+    let mut count = statistics.pattern(probe)?;
+    if count.accuracy == purrdf_core::StatisticsAccuracy::UpperBound
+        && dataset.statement_indexes() == purrdf_core::StatementIndexSupport::INDEXED
+    {
+        let indexed = dataset
+            .cardinality_estimate(probe.s, probe.p, probe.o, probe.g)
+            .saturating_add(dataset.statement_cardinality_estimate(probe, [None; 3])?);
+        count.value = count.value.min(indexed);
+    }
+    Some(count)
 }
 
 /// The ground id of a position, or `None` for a slot or (conservatively) a nested
@@ -1533,7 +1781,11 @@ fn join_positions_admitted<I: ViewTermId>(
 /// with it the join order a query's unordered rows come out in, and the peak a governed
 /// query is refused at -- is the same on every target, the x87 included.
 fn step_size(ops: Binary64<'_>, running: f64, base_p: f64, joins: usize, t: f64) -> f64 {
-    ops.div(ops.mul(running, base_p), power(ops, t, joins))
+    step_size_by_divisor(ops, running, base_p, power(ops, t, joins))
+}
+
+fn step_size_by_divisor(ops: Binary64<'_>, running: f64, base: f64, divisor: f64) -> f64 {
+    ops.div(ops.mul(running, base), divisor)
 }
 
 /// `base^exponent` by square-and-multiply, low bit first -- the order `f64::powi`'s
@@ -1579,6 +1831,7 @@ fn cost_order_greedy_from<I: ViewTermId>(
     cost_order_greedy_costs_from(
         compiled,
         &cardinality_cost_base(base),
+        None,
         t,
         n_cols,
         initial,
@@ -1592,6 +1845,7 @@ fn cost_order_greedy_from<I: ViewTermId>(
 fn cost_order_greedy_costs_from<I: ViewTermId>(
     compiled: &[CompiledPattern<I>],
     base: &[PatternCost],
+    known: Option<&[PatternDomains]>,
     t: f64,
     n_cols: usize,
     initial: &[bool],
@@ -1601,6 +1855,9 @@ fn cost_order_greedy_costs_from<I: ViewTermId>(
     let precision = Binary64Scope::enter();
     let ops = precision.ops();
     let mut bound = cost_bound_mask(initial, n_cols, workspace)?;
+    let mut domains = known
+        .map(|_| cost_domain_mask(&bound, t, workspace))
+        .transpose()?;
     let mut scheduled = AdmittedVec::with_capacity(n, workspace)?;
     for _ in 0..n {
         scheduled.push_reserved(false);
@@ -1626,8 +1883,17 @@ fn cost_order_greedy_costs_from<I: ViewTermId>(
             if any_connected && !pattern_connected_admitted(&compiled[index], &bound, workspace)? {
                 continue;
             }
-            let joins = join_positions_admitted(&compiled[index], &bound, workspace)?;
-            let (size, work) = step_cost(ops, running, base[index], joins, t);
+            let current = axis_domains(known.map(|values| &values[index]), base[index].rows, t);
+            let divisor = join_divisor(
+                ops,
+                &compiled[index],
+                &bound,
+                domains.as_deref(),
+                current,
+                t,
+                workspace,
+            )?;
+            let (size, work) = step_cost(ops, running, base[index], divisor);
             if best.is_none() || work < best_work {
                 best = Some(index);
                 best_size = size;
@@ -1636,6 +1902,15 @@ fn cost_order_greedy_costs_from<I: ViewTermId>(
         }
         let chosen = best.expect("an unscheduled pattern remains");
         scheduled.as_mut_slice()[chosen] = true;
+        if let Some(domains) = &mut domains {
+            let current = axis_domains(known.map(|values| &values[chosen]), base[chosen].rows, t);
+            extend_cost_domains(
+                &compiled[chosen],
+                domains.as_mut_slice(),
+                current,
+                workspace,
+            )?;
+        }
         mark_bound_admitted(&compiled[chosen], bound.as_mut_slice(), workspace)?;
         running = best_size;
         order.push_reserved(chosen);
@@ -1711,6 +1986,7 @@ fn cost_order_dp_from<I: ViewTermId>(
     cost_order_dp_costs_from(
         compiled,
         &cardinality_cost_base(base),
+        None,
         t,
         n_cols,
         initial,
@@ -1724,6 +2000,7 @@ fn cost_order_dp_from<I: ViewTermId>(
 fn cost_order_dp_costs_from<I: ViewTermId>(
     compiled: &[CompiledPattern<I>],
     base: &[PatternCost],
+    known: Option<&[PatternDomains]>,
     t: f64,
     n_cols: usize,
     initial: &[bool],
@@ -1750,14 +2027,25 @@ fn cost_order_dp_costs_from<I: ViewTermId>(
         order_bits: 0,
         len: 0,
     });
+    let mut bound = cost_bound_mask(initial, n_cols, workspace)?;
+    let mut domains = known
+        .map(|_| cost_domain_mask(&bound, t, workspace))
+        .transpose()?;
     for mask in 0..=full {
         let Some(plan) = dp[mask] else {
             continue;
         };
-        let mut bound = cost_bound_mask(initial, n_cols, workspace)?;
+        reset_cost_bound_mask(bound.as_mut_slice(), initial);
+        if let Some(domains) = &mut domains {
+            reset_cost_domains(domains.as_mut_slice(), &bound, t);
+        }
         for position in 0..plan.len {
             let nibble = plan.len - 1 - position;
             let index = ((plan.order_bits >> (4 * nibble)) & 0xF) as usize - 1;
+            if let Some(domains) = &mut domains {
+                let current = axis_domains(known.map(|values| &values[index]), base[index].rows, t);
+                extend_cost_domains(&compiled[index], domains.as_mut_slice(), current, workspace)?;
+            }
             mark_bound_admitted(&compiled[index], bound.as_mut_slice(), workspace)?;
         }
         let mut any_connected = false;
@@ -1776,8 +2064,17 @@ fn cost_order_dp_costs_from<I: ViewTermId>(
             if any_connected && !pattern_connected_admitted(&compiled[index], &bound, workspace)? {
                 continue;
             }
-            let joins = join_positions_admitted(&compiled[index], &bound, workspace)?;
-            let (size, work) = step_cost(ops, plan.size, base[index], joins, t);
+            let current = axis_domains(known.map(|values| &values[index]), base[index].rows, t);
+            let divisor = join_divisor(
+                ops,
+                &compiled[index],
+                &bound,
+                domains.as_deref(),
+                current,
+                t,
+                workspace,
+            )?;
+            let (size, work) = step_cost(ops, plan.size, base[index], divisor);
             let cost = ops.add(plan.cost, work);
             let order_bits = (plan.order_bits << 4) | (index as u64 + 1);
             let len = plan.len + 1;
@@ -2962,6 +3259,10 @@ pub(crate) struct PlanSurvey {
     /// Human-readable triple-pattern strings, in the order the planner chose, for every
     /// BGP with at least two patterns. The historical `explain_query` output.
     pub(crate) orders: AdmittedRecords<String>,
+    /// Immutable statistical inputs behind the surveyed BGP forecasts. These
+    /// retain exactness separately from the heuristic join/output estimates.
+    pub(crate) statistics: AdmittedRecords<String>,
+    pub(crate) record_statistics: bool,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
     pub(crate) estimates: AdmittedVec<Option<PlanEstimate>>,
@@ -2989,6 +3290,8 @@ impl PlanSurvey {
         }
         Ok(Self {
             orders: AdmittedRecords::new(workspace),
+            statistics: AdmittedRecords::new(workspace),
+            record_statistics: false,
             estimates,
             shape: shape.clone(),
             workspace: workspace.clone(),
@@ -3427,21 +3730,9 @@ fn forecast_bgp<D: DatasetView>(
             initial.push_reserved(seed.bound.contains(variable));
         }
     }
-    let mut compiled = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
-    let mut any_absent = false;
-    for pattern in patterns {
-        match compile_pattern_admitted(pattern, &working, dataset, &workspace, &|value| {
-            dataset
-                .term_id_by_value(value)
-                .map_err(|error| account.source_error(error))
-        })? {
-            Some(pattern) => compiled.push_reserved(pattern),
-            None => {
-                any_absent = true;
-                break;
-            }
-        }
-    }
+    let compiled = compile_bgp_admitted(dataset, patterns, &working, account)?;
+    let any_absent = compiled.is_none();
+    let compiled = compiled.as_deref().unwrap_or(&[]);
     let order = if any_absent {
         let mut order = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
         for index in 0..patterns.len() {
@@ -3449,7 +3740,7 @@ fn forecast_bgp<D: DatasetView>(
         }
         order
     } else {
-        cost_based_order_from_admitted(&compiled, dataset, &scope, &initial, &workspace)?
+        cost_based_order_from_admitted(compiled, dataset, &scope, &initial, &workspace)?
     };
     let schema = VarSchema::from_vars_admitted(
         working
@@ -3465,7 +3756,7 @@ fn forecast_bgp<D: DatasetView>(
         (seed.rows, seed.rows)
     } else {
         replay_cost_estimate_from_admitted(
-            &compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
+            compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
         )?
     };
     let estimate = PlanEstimate {
@@ -3474,6 +3765,102 @@ fn forecast_bgp<D: DatasetView>(
         columns: u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
     };
     Ok((schema, estimate, order))
+}
+
+/// Compile through the same term/error home for forecasting and its immutable
+/// evidence. An absent constant makes the complete BGP empty before statistics
+/// are consulted, so no partial evidence may survive that case.
+fn compile_bgp_admitted<D: DatasetView>(
+    dataset: &D,
+    patterns: &[TriplePattern],
+    schema: &VarSchema,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<Option<AdmittedVec<CompiledPattern<D::Id>>>, EvalError> {
+    let workspace = account.capability();
+    let mut compiled = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
+    for pattern in patterns {
+        let Some(pattern) =
+            compile_pattern_admitted(pattern, schema, dataset, &workspace, &|value| {
+                dataset
+                    .term_id_by_value(value)
+                    .map_err(|error| account.source_error(error))
+            })?
+        else {
+            return Ok(None);
+        };
+        compiled.push_reserved(pattern);
+    }
+    Ok(Some(compiled))
+}
+
+/// Record the immutable provider inputs read by the forecast, including retained
+/// unit forecasts. Re-reading metadata is valid under SnapshotStatistics' frozen
+/// revision contract; it never samples execution counters. Term resolution keeps
+/// the original view's admission and first-cause path, as in the forecast.
+fn record_bgp_statistics<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    node: &GraphPattern,
+    survey: &mut PlanSurvey,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<(), EvalError> {
+    if !survey.record_statistics {
+        return Ok(());
+    }
+    let Some(statistics) = dataset.statistics() else {
+        return Ok(());
+    };
+    let GraphPattern::Bgp { patterns } = node else {
+        unreachable!("statistics evidence receives a BGP node");
+    };
+    let workspace = account.capability();
+    let schema = collect_slots_admitted(patterns, None, &workspace)?;
+    let Some(compiled) = compile_bgp_admitted(dataset, patterns, &schema, account)? else {
+        return Ok(());
+    };
+    let node_id = survey.shape.node_of(node).expect("surveyed BGP").index();
+    let scope = active_dataset.scope_for(active_graph);
+    for (pattern_index, pattern) in compiled.iter().enumerate() {
+        let domains = if base_cardinality(dataset, pattern, &scope) == 0 {
+            [None; 3]
+        } else {
+            predicate_domains(dataset, pattern, &scope)
+        };
+        let mut record = |graph_index, graph| -> Result<(), EvalError> {
+            let rows = provider_cardinality(
+                dataset,
+                pattern,
+                purrdf_core::ProbePattern {
+                    s: constant_of(&pattern.s),
+                    p: constant_of(&pattern.p),
+                    o: constant_of(&pattern.o),
+                    g: graph,
+                },
+            );
+            let arguments = format_args!(
+                "#{node_id} pattern={pattern_index} graph={graph_index} source={:?} revision={} row-input={rows:?} subject-domain={:?} object-domain={:?}",
+                statistics.source(),
+                statistics.fingerprint(),
+                domains[0],
+                domains[2]
+            );
+            let bytes = crate::workspace::display_len(&arguments)?;
+            let allocation = workspace
+                .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+            let text = crate::workspace::format_exact(&arguments, bytes, "planner statistics")?;
+            survey.statistics.push(text, allocation)
+        };
+        match &scope {
+            GraphScope::One(graph) => record(0, *graph)?,
+            GraphScope::Merge(graphs) => {
+                for (index, &graph) in graphs.iter().enumerate() {
+                    record(index, GraphMatch::Named(graph))?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Record a BGP's forecast under its selected positive driver's bindings.
@@ -3498,6 +3885,7 @@ fn survey_bgp_seeded<D: DatasetView>(
         account,
     )?;
     record_bgp_forecast(node, patterns, estimate, &order, survey)?;
+    record_bgp_statistics(dataset, active_dataset, active_graph, node, survey, account)?;
     Ok(())
 }
 
@@ -3627,15 +4015,13 @@ fn replay_cost_estimate_from_admitted<D: DatasetView>(
     workspace: &crate::WorkspaceCapability,
 ) -> Result<(u64, u64), EvalError> {
     let base = cardinality_base(compiled, dataset, scope, workspace)?;
+    let known = pattern_domains(compiled, dataset, scope, base.iter().copied(), workspace)?;
     let t = dataset.term_count().max(1) as f64;
     let columns = cost_columns(compiled, workspace)?;
     let precision = Binary64Scope::enter();
     let ops = precision.ops();
     let mut bound = cost_bound_mask(initial, columns, workspace)?;
-    let mut domains = AdmittedVec::with_capacity(columns, workspace)?;
-    for _ in 0..columns {
-        domains.push_reserved(t);
-    }
+    let mut domains = cost_domain_mask(&bound, t, workspace)?;
     let mut running = driving_rows as f64;
     let mut peak = if compiled.is_empty() {
         running
@@ -3643,33 +4029,23 @@ fn replay_cost_estimate_from_admitted<D: DatasetView>(
         0.0_f64
     };
     for &index in order {
-        let mut divisor = 1.0_f64;
-        let current_domain = base[index].min(t).max(1.0);
-        for position in [&compiled[index].s, &compiled[index].p, &compiled[index].o] {
-            let mut previous_domain = 0.0_f64;
-            for_each_slot_admitted(position, workspace, &mut |column| {
-                if bound[column] {
-                    previous_domain = previous_domain.max(domains[column]);
-                }
-                Ok(())
-            })?;
-            if previous_domain > 0.0 {
-                divisor = ops.mul(divisor, previous_domain.max(current_domain));
-            }
-        }
-        running = ops.div(ops.mul(running, base[index]), divisor);
+        let current = axis_domains(
+            known.as_deref().map(|values| &values[index]),
+            base[index],
+            base[index].min(t).max(1.0),
+        );
+        let divisor = join_divisor(
+            ops,
+            &compiled[index],
+            &bound,
+            Some(&domains),
+            current,
+            t,
+            workspace,
+        )?;
+        running = step_size_by_divisor(ops, running, base[index], divisor);
         peak = peak.max(running);
-        for position in [&compiled[index].s, &compiled[index].p, &compiled[index].o] {
-            for_each_slot_admitted(position, workspace, &mut |column| {
-                let domain = if bound[column] {
-                    domains[column].min(current_domain)
-                } else {
-                    current_domain
-                };
-                domains.as_mut_slice()[column] = domain;
-                Ok(())
-            })?;
-        }
+        extend_cost_domains(&compiled[index], domains.as_mut_slice(), current, workspace)?;
         mark_bound_admitted(&compiled[index], bound.as_mut_slice(), workspace)?;
     }
     Ok((running as u64, peak as u64))
@@ -4262,7 +4638,7 @@ mod tests {
         hub: TermId,
     }
 
-    fn skewed_graph() -> Skewed {
+    fn skewed_graph(shared_object: bool) -> Skewed {
         let mut b = RdfDatasetBuilder::new();
         let hot = b.intern_iri("http://ex/hot").unwrap();
         let mid = b.intern_iri("http://ex/mid").unwrap();
@@ -4276,7 +4652,13 @@ mod tests {
             let leaf = b.intern_iri(&format!("http://ex/mid{i}")).unwrap();
             b.push_quad(hub, mid, leaf, None).unwrap();
         }
-        let only = b.intern_iri("http://ex/rare0").unwrap();
+        let only = b
+            .intern_iri(if shared_object {
+                "http://ex/hot0"
+            } else {
+                "http://ex/rare0"
+            })
+            .unwrap();
         b.push_quad(hub, rare, only, None).unwrap();
         Skewed {
             ds: b.freeze().expect("freeze"),
@@ -4310,7 +4692,7 @@ mod tests {
     /// with the lowest-cardinality predicate and ascending from there.
     #[test]
     fn cost_order_seeds_with_lowest_cardinality_pattern() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         // All three share ?s (col 0). Cardinalities: hot 20, mid 5, rare 1.
         let p0 = cp(Pos::Slot(0), Pos::Bound(g.hot), Pos::Slot(1)); // 20
         let p1 = cp(Pos::Slot(0), Pos::Bound(g.mid), Pos::Slot(2)); // 5
@@ -4323,7 +4705,7 @@ mod tests {
     /// has the lower base cardinality.
     #[test]
     fn connectivity_keeps_connected_before_disconnected() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         // P0 seeds (rare, card 1) and binds ?b = col 0.
         let p0 = cp(Pos::Bound(g.hub), Pos::Bound(g.rare), Pos::Slot(0));
         // P1 (hot, card 20) is connected via ?b.
@@ -4331,20 +4713,38 @@ mod tests {
         // P2 (mid, card 5) is disconnected — lower base than P1, but cut off.
         let p2 = cp(Pos::Slot(2), Pos::Bound(g.mid), Pos::Slot(3));
 
-        let order = plan(&g.ds, &[p0, p1, p2]);
-        assert_eq!(order, vec![0, 1, 2]);
-        let pos_of = |i: usize| order.iter().position(|&x| x == i).unwrap();
-        assert!(
-            pos_of(1) < pos_of(2),
-            "connected P1 must precede disconnected P2 (no Cartesian product)"
-        );
+        let compiled = [p0, p1, p2];
+        let fallback = HostCost::over(&g, false);
+        let legacy = cost_based_order(&compiled, &fallback, &GraphScope::One(GraphMatch::Any));
+        assert_eq!(legacy, [0, 1, 2]);
+        // Richer statistics may select another component's seed. The invariant
+        // applies at every prefix, independently of which component seeds first.
+        let variables: [&[usize]; 3] = [&[0], &[0, 1], &[2, 3]];
+        for order in [plan(&g.ds, &compiled), legacy] {
+            let mut bound = [false; 4];
+            let mut scheduled = [false; 3];
+            for chosen in order {
+                let connected = |index: usize| variables[index].iter().any(|&column| bound[column]);
+                if (0..3).any(|index| !scheduled[index] && connected(index)) {
+                    assert!(
+                        connected(chosen),
+                        "a connected pattern must precede a disconnected one"
+                    );
+                }
+                for &column in variables[chosen] {
+                    bound[column] = true;
+                }
+                scheduled[chosen] = true;
+            }
+            assert!(scheduled.into_iter().all(|scheduled| scheduled));
+        }
     }
 
     /// A fully disconnected BGP still yields a complete, valid permutation
     /// (lowest-cardinality first), without panicking.
     #[test]
     fn disconnected_bgp_yields_a_valid_permutation() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         let p0 = cp(Pos::Slot(0), Pos::Bound(g.hot), Pos::Slot(1)); // 20
         let p1 = cp(Pos::Slot(2), Pos::Bound(g.rare), Pos::Slot(3)); // 1, disconnected
         let order = plan(&g.ds, &[p0, p1]);
@@ -4358,7 +4758,7 @@ mod tests {
     /// arithmetic is order-stable and ties break on lowest index.
     #[test]
     fn order_is_deterministic() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         let make = || {
             vec![
                 cp(Pos::Slot(0), Pos::Bound(g.hot), Pos::Slot(1)),
@@ -4372,7 +4772,7 @@ mod tests {
     /// Equal-cardinality patterns are broken by lowest original index (stable).
     #[test]
     fn ties_break_on_lowest_original_index() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         // Two disconnected patterns, both `:mid` (card 5) → index 0 must lead.
         let p0 = cp(Pos::Slot(0), Pos::Bound(g.mid), Pos::Slot(1));
         let p1 = cp(Pos::Slot(2), Pos::Bound(g.mid), Pos::Slot(3));
@@ -4383,7 +4783,7 @@ mod tests {
     /// pattern plans to `[0]` — neither probes the dataset.
     #[test]
     fn trivial_bgps_plan_without_probing() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         assert_eq!(plan(&g.ds, &[]), Vec::<usize>::new());
         let one = cp(Pos::Slot(0), Pos::Bound(g.hot), Pos::Slot(1));
         assert_eq!(plan(&g.ds, &[one]), vec![0]);
@@ -4416,7 +4816,7 @@ mod tests {
     /// connected (no Cartesian product) and they schedule in ascending cardinality.
     #[test]
     fn star_spokes_follow_hub_ordered_by_cardinality() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         // P0 hot (20), P1 mid (5), P2 rare (1) — all share ?hub (col 0).
         let p0 = cp(Pos::Slot(0), Pos::Bound(g.hot), Pos::Slot(1));
         let p1 = cp(Pos::Slot(0), Pos::Bound(g.mid), Pos::Slot(2));
@@ -4436,7 +4836,7 @@ mod tests {
     /// per-predicate cardinalities.
     #[test]
     fn dp_is_never_worse_than_greedy() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         // cols: a=0, b=1, c=2, d=3.
         let compiled = [
             cp(Pos::Slot(0), Pos::Bound(g.hot), Pos::Slot(1)), // ?a :hot ?b  (20)
@@ -4478,7 +4878,7 @@ mod tests {
     /// (?v0 :hot ?v1 … so the greedy branch is taken).
     #[test]
     fn large_bgp_uses_greedy_and_returns_valid_permutation() {
-        let g = skewed_graph();
+        let g = skewed_graph(false);
         let n = COST_DP_MAX_PATTERNS + 1; // strictly above the ceiling ⇒ greedy branch.
         let compiled: Vec<CompiledPattern> = (0..n)
             .map(|i| cp(Pos::Slot(i), Pos::Bound(g.hot), Pos::Slot(i + 1)))
@@ -4624,6 +5024,8 @@ mod tests {
         predicates: [TermId; 3],
         measured: Option<[purrdf_core::AccessCost; 3]>,
         cardinalities: Option<[u64; 3]>,
+        supplied_statistics: bool,
+        statistics_accuracy: purrdf_core::StatisticsAccuracy,
         first_probe: std::sync::Mutex<Option<TermId>>,
     }
 
@@ -4639,6 +5041,8 @@ mod tests {
                     AccessCost::new(1_000, 1, 64, ReadResidency::NonResident),
                 ]),
                 cardinalities: None,
+                supplied_statistics: false,
+                statistics_accuracy: purrdf_core::StatisticsAccuracy::Exact,
                 first_probe: std::sync::Mutex::new(None),
             }
         }
@@ -4738,6 +5142,240 @@ mod tests {
         fn stats_fingerprint(&self) -> u64 {
             purrdf_hash::fixed::hash_one(&(self.inner.stats_fingerprint(), self.measured))
         }
+
+        fn statistics(&self) -> Option<&dyn purrdf_core::SnapshotStatistics<TermId>> {
+            self.supplied_statistics.then_some(self)
+        }
+    }
+
+    impl purrdf_core::SnapshotStatistics<TermId> for HostCost<'_> {
+        fn source(&self) -> &'static str {
+            "fixture-exact"
+        }
+
+        fn fingerprint(&self) -> u64 {
+            purrdf_hash::fixed::hash_one(&(
+                self.inner.stats_fingerprint(),
+                self.statistics_accuracy,
+            ))
+        }
+
+        fn predicate(
+            &self,
+            predicate: TermId,
+            graph: GraphMatch,
+            stream: purrdf_core::StatisticsStream,
+        ) -> Option<purrdf_core::PredicateStatistics> {
+            Some(purrdf_core::PredicateStatistics {
+                rows: self.predicate_object_count(predicate, None, graph, stream),
+                subjects: None,
+                objects: None,
+            })
+        }
+
+        fn predicate_object(
+            &self,
+            predicate: TermId,
+            object: TermId,
+            graph: GraphMatch,
+            stream: purrdf_core::StatisticsStream,
+        ) -> Option<purrdf_core::StatisticCount> {
+            Some(self.predicate_object_count(predicate, Some(object), graph, stream))
+        }
+
+        fn predicate_object_kind(
+            &self,
+            _predicate: TermId,
+            _kind: purrdf_core::RdfTermKind,
+            _datatype: Option<TermId>,
+            _graph: GraphMatch,
+            _stream: purrdf_core::StatisticsStream,
+        ) -> Option<purrdf_core::StatisticCount> {
+            None
+        }
+
+        fn reifier_target_predicate(
+            &self,
+            _predicate: TermId,
+            _graph: GraphMatch,
+        ) -> Option<purrdf_core::PredicateStatistics> {
+            None
+        }
+    }
+
+    impl HostCost<'_> {
+        fn predicate_object_count(
+            &self,
+            predicate: TermId,
+            object: Option<TermId>,
+            graph: GraphMatch,
+            stream: purrdf_core::StatisticsStream,
+        ) -> purrdf_core::StatisticCount {
+            // This original fixture has only asserted rows. Count the native
+            // exact p/o prefix; no replacement triple store or wrapper is built.
+            let value = match stream {
+                purrdf_core::StatisticsStream::Asserted => u64::try_from(
+                    self.inner
+                        .cardinality_estimate(None, Some(predicate), object, graph),
+                )
+                .expect("fixture count fits"),
+                purrdf_core::StatisticsStream::Reifiers
+                | purrdf_core::StatisticsStream::Annotations => 0,
+            };
+            purrdf_core::StatisticCount {
+                value,
+                accuracy: self.statistics_accuracy,
+            }
+        }
+    }
+
+    #[test]
+    fn supplied_statistics_changes_actual_join_order_without_changing_answers() {
+        let graph = skewed_graph(false);
+        let mut fallback = HostCost::over(&graph, false);
+        fallback.cardinalities = Some([1_000; 3]);
+        let mut supplied = HostCost::over(&graph, false);
+        supplied.cardinalities = fallback.cardinalities;
+        supplied.supplied_statistics = true;
+        let patterns = host_cost_patterns(&graph);
+        let columns = ["hub", "hot", "mid", "rare"];
+        let expected = run(&fallback, &patterns, &columns);
+        assert_eq!(fallback.take_first_probe(), Some(graph.hot));
+        let actual = run(&supplied, &patterns, &columns);
+        assert_eq!(supplied.take_first_probe(), Some(graph.rare));
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 100);
+
+        // A physical-work declaration must not hide the independent statistical
+        // row counts. The native replay and the host-ranked order share them.
+        let mut measured = HostCost::over(&graph, true);
+        measured.cardinalities = supplied.cardinalities;
+        measured.supplied_statistics = true;
+        let compiled = [
+            cp(Pos::Slot(0), Pos::Bound(graph.hot), Pos::Slot(1)),
+            cp(Pos::Slot(0), Pos::Bound(graph.mid), Pos::Slot(2)),
+            cp(Pos::Slot(0), Pos::Bound(graph.rare), Pos::Slot(3)),
+        ];
+        let inputs = cost_base(
+            &compiled,
+            &measured,
+            &GraphScope::One(GraphMatch::Default),
+            &crate::WorkspaceCapability::resident(),
+        )
+        .unwrap();
+        assert_eq!(
+            inputs.iter().map(|input| input.rows).collect::<Vec<_>>(),
+            [20.0, 5.0, 1.0]
+        );
+        assert_eq!(
+            inputs.iter().map(|input| input.work).collect::<Vec<_>>(),
+            [1.0, 100.0, 1000.0]
+        );
+        assert_eq!(run(&measured, &patterns, &columns), expected);
+
+        let engine = crate::NativeSparqlEngine::new();
+        let query = "SELECT * WHERE { ?hub <http://ex/hot> ?hot . ?hub <http://ex/mid> ?mid . ?hub <http://ex/rare> ?rare }";
+        let without = engine.explain_query_view(&fallback, query, None).unwrap();
+        assert_eq!(without.statistics(), [] as [String; 0]);
+        let exact = engine.explain_query_view(&supplied, query, None).unwrap();
+        assert_ne!(exact.join_orders(), without.join_orders());
+        assert_eq!(exact.statistics().len(), 3);
+        assert!(exact.statistics().iter().all(|input| {
+            input.contains("source=\"fixture-exact\"")
+                && input.contains("accuracy: Exact")
+                && input.contains("subject-domain=None object-domain=None")
+        }));
+        assert_eq!(exact.clone().render(), exact.render());
+        supplied.statistics_accuracy = purrdf_core::StatisticsAccuracy::UpperBound;
+        let bounded = engine.explain_query_view(&supplied, query, None).unwrap();
+        assert_eq!(bounded.join_orders(), exact.join_orders());
+        assert!(bounded.statistics().iter().all(|input| {
+            input.contains("accuracy: UpperBound") && !input.contains("accuracy: Exact")
+        }));
+        assert_ne!(bounded.statistics(), exact.statistics());
+
+        // A retained unit forecast and a seeded forecast both carry evidence.
+        for query in [
+            "SELECT * WHERE { { ?hub <http://ex/hot> ?hot } UNION { ?hub <http://ex/rare> ?rare } }",
+            "SELECT * WHERE { VALUES ?hub { <http://ex/hub> } ?hub <http://ex/hot> ?hot . ?hub <http://ex/rare> ?rare }",
+        ] {
+            let receipt = engine.explain_query_view(&supplied, query, None).unwrap();
+            assert_eq!(receipt.statistics().len(), 2);
+            assert!(receipt.render().contains("accuracy: UpperBound"));
+        }
+        // No statistical input was consulted when a constant made the BGP empty.
+        let empty = engine
+            .explain_query_view(
+                &supplied,
+                "SELECT * WHERE { ?s <http://ex/hot> ?o . ?s <http://ex/absent> ?other }",
+                None,
+            )
+            .unwrap();
+        assert_eq!(empty.statistics(), [] as [String; 0]);
+    }
+
+    fn host_cost_patterns(graph: &Skewed) -> Vec<TriplePattern> {
+        [graph.hot, graph.mid, graph.rare]
+            .into_iter()
+            .zip(["hot", "mid", "rare"])
+            .map(|(id, variable)| host_cost_pattern(graph, "hub", id, variable))
+            .collect()
+    }
+
+    fn host_cost_pattern(
+        graph: &Skewed,
+        subject: &str,
+        predicate: TermId,
+        object: &str,
+    ) -> TriplePattern {
+        let Ok(TermRef::Iri(iri)) = graph.ds.resolve(predicate) else {
+            panic!("fixture predicate is an IRI");
+        };
+        triple(var_pos(subject), pred(iri), var_pos(object))
+    }
+
+    #[test]
+    fn distinct_domains_change_dp_and_greedy_plans_and_match_actual_answers() {
+        let graph = skewed_graph(true);
+        let fallback = HostCost::over(&graph, false);
+        let workspace = crate::WorkspaceCapability::resident();
+        let scope = GraphScope::One(GraphMatch::Default);
+        for count in [3, COST_DP_MAX_PATTERNS + 1] {
+            let mut patterns = vec![
+                host_cost_pattern(&graph, "a", graph.rare, "b"),
+                host_cost_pattern(&graph, "x", graph.hot, "b"),
+                host_cost_pattern(&graph, "a", graph.mid, "y"),
+            ];
+            let mut compiled = vec![
+                cp(Pos::Slot(0), Pos::Bound(graph.rare), Pos::Slot(1)),
+                cp(Pos::Slot(2), Pos::Bound(graph.hot), Pos::Slot(1)),
+                cp(Pos::Slot(0), Pos::Bound(graph.mid), Pos::Slot(3)),
+            ];
+            while patterns.len() < count {
+                patterns.push(patterns[0].clone());
+                compiled.push(cp(Pos::Slot(0), Pos::Bound(graph.rare), Pos::Slot(1)));
+            }
+            let native_order = cost_based_order(&compiled, &*graph.ds, &scope);
+            let fallback_order = cost_based_order(&compiled, &fallback, &scope);
+            let position =
+                |order: &[usize], item| order.iter().position(|&index| index == item).unwrap();
+            assert!(position(&native_order, 1) < position(&native_order, 2));
+            assert!(position(&fallback_order, 2) < position(&fallback_order, 1));
+            let actual = run(&graph.ds, &patterns, &["a", "b", "x", "y"]);
+            assert_eq!(actual.len(), 5);
+            assert_eq!(actual, run(&fallback, &patterns, &["a", "b", "x", "y"]));
+            let estimate = replay_cost_estimate_from_admitted(
+                &compiled,
+                &*graph.ds,
+                &scope,
+                &native_order,
+                &[],
+                1,
+                &workspace,
+            )
+            .unwrap();
+            assert_eq!(estimate, (5, 5));
+        }
     }
 
     fn cost_spokes(graph: &Skewed, count: usize) -> Vec<CompiledPattern> {
@@ -4755,7 +5393,7 @@ mod tests {
 
     #[test]
     fn measured_host_work_inverts_native_subset_and_greedy_orders() {
-        let graph = skewed_graph();
+        let graph = skewed_graph(false);
         let host = Arc::new(HostCost::over(&graph, true));
         let scope = GraphScope::One(GraphMatch::Default);
         let small = cost_spokes(&graph, 3);
@@ -4791,7 +5429,7 @@ mod tests {
 
     #[test]
     fn cardinality_default_preserves_merge_graph_statistic_boundaries() {
-        let graph = skewed_graph();
+        let graph = skewed_graph(false);
         let compiled = cost_spokes(&graph, 3);
         let scope = GraphScope::Merge(crate::dataset_spec::GraphIds::resident(vec![
             graph.hub, graph.hot,
@@ -4836,7 +5474,7 @@ mod tests {
 
     #[test]
     fn cardinality_default_preserves_existing_plans_and_prefix_ties() {
-        let graph = skewed_graph();
+        let graph = skewed_graph(false);
         for count in [0, 1, 3, COST_DP_MAX_PATTERNS, COST_DP_MAX_PATTERNS + 1] {
             let compiled = cost_spokes(&graph, count);
             let columns = if count == 0 { 0 } else { count + 1 };
@@ -4901,19 +5539,10 @@ mod tests {
 
     #[test]
     fn actual_bgp_reads_host_cheaper_path_and_preserves_solution_bag() {
-        let graph = skewed_graph();
+        let graph = skewed_graph(false);
         let ordinary = HostCost::over(&graph, false);
         let host = HostCost::over(&graph, true);
-        let patterns = [graph.hot, graph.mid, graph.rare]
-            .into_iter()
-            .zip(["hot", "mid", "rare"])
-            .map(|(id, variable)| {
-                let Ok(TermRef::Iri(iri)) = graph.ds.resolve(id) else {
-                    panic!("fixture predicate is an IRI");
-                };
-                triple(var_pos("hub"), pred(iri), var_pos(variable))
-            })
-            .collect::<Vec<_>>();
+        let patterns = host_cost_patterns(&graph);
         let columns = ["hub", "hot", "mid", "rare"];
         let expected = run(&ordinary, &patterns, &columns);
         assert_eq!(ordinary.take_first_probe(), Some(graph.rare));
@@ -4925,7 +5554,8 @@ mod tests {
 
     #[test]
     fn work_ranking_does_not_become_cardinality_or_physical_admission() {
-        let graph = skewed_graph();
+        let graph = skewed_graph(false);
+        let ordinary = HostCost::over(&graph, false);
         let host = HostCost::over(&graph, true);
         let compiled = cost_spokes(&graph, 3);
         let scope = GraphScope::One(GraphMatch::Default);
@@ -4933,7 +5563,7 @@ mod tests {
         let workspace = crate::WorkspaceCapability::resident();
         let expected = replay_cost_estimate_from_admitted(
             &compiled,
-            &*graph.ds,
+            &ordinary,
             &scope,
             &order,
             &[],
@@ -4941,6 +5571,10 @@ mod tests {
             &workspace,
         )
         .expect("resident cardinality replay");
+        // Without provider domains, admission retains the original relation-
+        // local calibration: 7 * 20, then /20 * 5, then /5 * 1. Order search's
+        // global-term heuristic is intentionally a different approximation.
+        assert_eq!(expected, (7, 140));
         let actual = replay_cost_estimate_from_admitted(
             &compiled,
             &host,
@@ -4952,11 +5586,25 @@ mod tests {
         )
         .expect("resident measured-work replay");
         assert_eq!(actual, expected);
+        // Both host controls omit distinct metadata, so only measured work
+        // differs. Native subject domains additionally reveal that every spoke
+        // has the same hub: seven drivers produce seven times 20 * 5 * 1 rows.
+        let native = replay_cost_estimate_from_admitted(
+            &compiled,
+            &*graph.ds,
+            &scope,
+            &order,
+            &[],
+            7,
+            &workspace,
+        )
+        .expect("native distinct-domain replay");
+        assert_eq!(native, (700, 700));
     }
 
     #[test]
     fn host_statistic_snapshot_keeps_order_cache_deterministic_and_current() {
-        let graph = skewed_graph();
+        let graph = skewed_graph(false);
         let cheap_hot = HostCost::over(&graph, true);
         let mut cheap_rare = HostCost::over(&graph, true);
         cheap_rare

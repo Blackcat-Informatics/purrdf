@@ -1132,6 +1132,13 @@ pub trait DatasetView {
         0
     }
 
+    /// Immutable statistics in this view's own local identity space. Unknown
+    /// provider fields retain the existing cardinality fallback. Consumers must
+    /// include the provider's fingerprint in any retained order cache key.
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        None
+    }
+
     /// The RDF 1.2 reifier side-table AS resolved virtual triples: each
     /// `(reifier, triple-term)` binding becomes a `(reifier, rdf:reifies, triple-term)`
     /// quad carrying the declaration's own graph slot. Capability-gated: a backend
@@ -1786,6 +1793,10 @@ impl DatasetView for RdfDataset {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        Some(self.predicate_statistics())
+    }
+
     frozen_term_nesting_bound_method! {
         /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
         /// which refuses a triple term nested past 16.
@@ -2163,6 +2174,10 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     #[inline]
     fn stats_fingerprint(&self) -> u64 {
         (**self).stats_fingerprint()
+    }
+
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        (**self).statistics()
     }
 
     #[inline]

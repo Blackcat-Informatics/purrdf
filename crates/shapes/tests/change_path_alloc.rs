@@ -417,7 +417,16 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// value of either may be a SHACL list, read as a disjunction — so the decoder
 /// reads each as a sequence into its own vector. The seam shapes graph carries one
 /// of each: two allocations, once per restore, whatever the data.
-const ADMIT_ALLOC_CONST: u64 = 277;
+///
+/// # Sealed predicate statistics on the carried shapes graph
+///
+/// Product admission restores its own fixed shapes graph through `restore_pack`,
+/// which freezes the native RDF tables and their predicate/domain metadata.
+/// Sealing that metadata adds fifteen allocations for this product: the measured
+/// restore is 292 for both instance sizes. This is work on the carried product,
+/// not a scan or copy of the instance dataset. The equality across sizes and the
+/// live restored-validator checks below remain part of the contract.
+const ADMIT_ALLOC_CONST: u64 = 292;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;

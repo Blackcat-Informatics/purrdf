@@ -77,6 +77,7 @@ pub mod describe;
 pub mod diagnostic;
 pub mod evidence;
 pub mod query_scope;
+pub mod statistics;
 // The binary64 distance arithmetics every ranked-retrieval surface computes with: the
 // sealed `Arithmetic` contract, the fixed-lane `Exact` law, the target-dependent
 // reassociated law, their batch kernels and once-per-scan dispatch, and the
@@ -303,6 +304,10 @@ pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,
     SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping, SssomMappingSet,
     SssomMeta, SssomSetComment,
+};
+pub use statistics::{
+    PredicateStatistics, SnapshotStatistics, StatisticCount, StatisticsAccuracy,
+    StatisticsPosition, StatisticsStream,
 };
 pub use store::RdfStoreCapabilities;
 pub use term_writer::{write_term_value, write_term_value_with_memory};

@@ -99,11 +99,11 @@ impl SegmentedStackQuery<'_> {
         }
     }
 
-    fn source_count(&self) -> usize {
+    pub(super) fn source_count(&self) -> usize {
         self.sessions.len() + usize::from(self.snapshot.head.is_some())
     }
 
-    fn translate_pattern<D: DatasetView>(
+    pub(super) fn translate_pattern<D: DatasetView>(
         &self,
         source: &D,
         origin: SegmentedStackSource,
@@ -480,6 +480,10 @@ impl DatasetView for SegmentedStackQuery<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
+
+    fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
+        self.check_ready().ok().map(|()| self as _)
+    }
 
     fn read_error(&self) -> Option<Self::ReadError> {
         self.check_ready().err()

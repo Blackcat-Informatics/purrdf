@@ -1067,11 +1067,14 @@ pub fn read_varint(bytes: &[u8], pos: &mut usize) -> Result<u64, PackBitsError> 
         if shift >= 64 {
             return Err(PackBitsError::Malformed("varint exceeds 64 bits"));
         }
-        let byte = *bytes.get(*pos).ok_or(PackBitsError::Truncated {
-            needed: *pos + 1,
+        let byte = *bytes.get(*pos).ok_or_else(|| PackBitsError::Truncated {
+            needed: pos.saturating_add(1),
             found: bytes.len(),
         })?;
         *pos += 1;
+        if shift == 63 && byte & 0x7e != 0 {
+            return Err(PackBitsError::Malformed("varint exceeds 64 bits"));
+        }
         result |= u64::from(byte & 0x7f) << shift;
         if byte & 0x80 == 0 {
             return Ok(result);
@@ -1159,10 +1162,16 @@ impl Iterator for DeltaListRef<'_> {
         }
         self.remaining -= 1;
         match read_varint(self.bytes, &mut self.pos) {
-            Ok(delta) => {
-                self.prev += delta;
-                Some(Ok(self.prev))
-            }
+            Ok(delta) => match self.prev.checked_add(delta) {
+                Some(value) => {
+                    self.prev = value;
+                    Some(Ok(value))
+                }
+                None => {
+                    self.remaining = 0;
+                    Some(Err(PackBitsError::Malformed("delta list value overflow")))
+                }
+            },
             Err(e) => {
                 // Stop after an error rather than looping on a stuck cursor.
                 self.remaining = 0;
@@ -1503,6 +1512,26 @@ mod tests {
     }
 
     #[test]
+    fn varint_refuses_payload_overflow_and_invalid_cursor() {
+        for last in [2, 127] {
+            let mut bytes = vec![0x80; 9];
+            bytes.push(last);
+            assert_eq!(
+                read_varint(&bytes, &mut 0),
+                Err(PackBitsError::Malformed("varint exceeds 64 bits"))
+            );
+        }
+        let mut cursor = usize::MAX;
+        assert_eq!(
+            read_varint(&[], &mut cursor),
+            Err(PackBitsError::Truncated {
+                needed: usize::MAX,
+                found: 0
+            })
+        );
+    }
+
+    #[test]
     fn zigzag_round_trip_edge_values() {
         for &v in &[0i64, -1, 1, -2, 2, i64::MAX, i64::MIN] {
             assert_eq!(zigzag_decode(zigzag_encode(v)), v);
@@ -1530,6 +1559,21 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("decodes");
         assert_eq!(decoded, [] as [u64; 0]);
+    }
+
+    #[test]
+    fn delta_list_refuses_overflow_and_stops_after_the_original_error() {
+        let mut bytes = Vec::new();
+        write_varint(&mut bytes, u64::MAX);
+        write_varint(&mut bytes, 1);
+        write_varint(&mut bytes, 0);
+        let mut values = DeltaListRef::new(&bytes, 3);
+        assert_eq!(values.next(), Some(Ok(u64::MAX)));
+        assert_eq!(
+            values.next(),
+            Some(Err(PackBitsError::Malformed("delta list value overflow")))
+        );
+        assert_eq!(values.next(), None);
     }
 
     // -- property tests -----------------------------------------------------------

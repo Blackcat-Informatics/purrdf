@@ -12,8 +12,8 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG1";
-pub(super) const HEADER_BYTES: usize = 216;
+pub(super) const MAGIC: &[u8; 8] = b"PURRSEG2";
+pub(super) const HEADER_BYTES: usize = 312;
 pub(super) const RECORD_HEADER: usize = 17;
 pub(super) const SUMMARY_BYTES: usize = 88;
 pub(super) const MAX_RECORDS_PER_BLOCK: u32 = 256;
@@ -22,6 +22,27 @@ pub(super) const REVERSE: u8 = 2;
 pub(super) const QUADS: u8 = 3;
 pub(super) const GRAPHS: u8 = 4;
 pub(super) const SUMMARIES: u8 = 5;
+
+pub(super) const fn statistics_kind(section: super::super::statistics::StatisticsSection) -> u8 {
+    6 + section.index() as u8
+}
+
+/// Binary search over a certified logical directory without materializing it.
+pub(super) fn partition_point<E>(
+    count: u64,
+    mut before: impl FnMut(u64) -> Result<bool, E>,
+) -> Result<u64, E> {
+    let (mut low, mut high) = (0, count);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if before(middle)? {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    Ok(low)
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Stream {
@@ -42,6 +63,7 @@ pub(super) struct Header {
     pub streams: [Stream; 3],
     pub graphs: Stream,
     pub summaries: Stream,
+    pub statistics: [Stream; 4],
     pub flags: u8,
 }
 
@@ -49,7 +71,7 @@ impl Header {
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&1_u32.to_le_bytes());
+        out.extend_from_slice(&2_u32.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -65,6 +87,10 @@ impl Header {
             self.streams[2],
             self.graphs,
             self.summaries,
+            self.statistics[0],
+            self.statistics[1],
+            self.statistics[2],
+            self.statistics[3],
         ] {
             for value in [stream.first, stream.blocks, stream.rows] {
                 out.extend_from_slice(&value.to_le_bytes());
@@ -74,7 +100,7 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(1) {
+        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(2) {
             return Err(SegmentedError::Corrupt(
                 "unsupported segmented format/profile",
             ));
@@ -97,7 +123,7 @@ impl Header {
         first_term_index
             .checked_add(terms)
             .ok_or(SegmentedError::AddressExhausted)?;
-        let mut streams = [Stream::default(); 7];
+        let mut streams = [Stream::default(); 11];
         for stream in &mut streams {
             *stream = Stream {
                 first: input.u64()?,
@@ -117,6 +143,7 @@ impl Header {
             streams: [streams[2], streams[3], streams[4]],
             graphs: streams[5],
             summaries: streams[6],
+            statistics: [streams[7], streams[8], streams[9], streams[10]],
         };
         if header.dictionary.rows != terms || header.reverse.rows != terms {
             return Err(SegmentedError::Corrupt(
@@ -131,6 +158,13 @@ impl Header {
         {
             return Err(SegmentedError::Corrupt("dictionary block count mismatch"));
         }
+        for section in super::super::statistics::StatisticsSection::ALL {
+            let stream = header.statistics[section.index()];
+            let per_block = (u64::from(block_bytes) - 9) / section.width() as u64;
+            if stream.blocks != stream.rows.div_ceil(per_block) {
+                return Err(SegmentedError::Corrupt("statistics block count mismatch"));
+            }
+        }
         Ok(header)
     }
 
@@ -144,6 +178,10 @@ impl Header {
             self.streams[2],
             self.graphs,
             self.summaries,
+            self.statistics[0],
+            self.statistics[1],
+            self.statistics[2],
+            self.statistics[3],
         ] {
             if stream.first != next || (stream.blocks == 0) != (stream.rows == 0) {
                 return Err(SegmentedError::Corrupt("non-contiguous block directory"));
