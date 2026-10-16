@@ -644,9 +644,17 @@ fn rdf12_references_empty_graphs_and_streamed_lines_survive() {
     let cause = record.child("cause");
     assert_eq!(cause.code, "drain");
     assert_eq!(cause.child("kind").code, "drain-other");
+    let native = cause.child("cause");
+    assert_eq!(native.code, "drain-io");
+    let io = native.child("cause");
+    assert_eq!(io.code, "std-io");
     assert!(matches!(
-        cause.field("message"),
-        purrdf_hash::error::ErrorValue::Text(message) if !message.is_empty()
+        io.child("kind").field("name"),
+        purrdf_hash::error::ErrorValue::Code("write-zero")
+    ));
+    assert!(matches!(
+        io.field("message"),
+        purrdf_hash::error::ErrorValue::Message(message) if !message.is_empty()
     ));
     assert_eq!(
         read.read_error(),

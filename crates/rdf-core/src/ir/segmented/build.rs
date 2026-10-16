@@ -1335,6 +1335,7 @@ mod certification_tests {
     #[test]
     fn freeze_storage_refusal_stays_distinct_from_malformed_rdf() {
         use purrdf_lex::allocation::{Admission, Memory, StorageError};
+        assert!(size_of::<SegmentedError>() <= 40);
 
         struct Ceiling<'a>(&'a core::cell::Cell<usize>);
         impl Admission for Ceiling<'_> {
@@ -1378,12 +1379,31 @@ mod certification_tests {
             .intern_literal(crate::RdfLiteral::simple("literal"))
             .unwrap();
         invalid.builder.declare_named_graph(graph).unwrap();
+        let error = invalid
+            .seal()
+            .expect_err("a literal cannot declare a named graph");
+        let record = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(record.code, "segmented-rdf");
         assert!(matches!(
-            invalid.seal(),
-            Err(SegmentedError::Corrupt(
-                "resident RDF freeze rejected the fixture"
-            ))
+            record.field("boundary"),
+            purrdf_hash::error::ErrorValue::Code("resident RDF freeze rejected the fixture")
         ));
+        assert!(matches!(
+            record.child("cause").field("code"),
+            purrdf_hash::error::ErrorValue::Code("rdf-ir-graph-name-invalid")
+        ));
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<crate::RdfDiagnostic>()
+                .unwrap()
+                .code,
+            "rdf-ir-graph-name-invalid"
+        );
+        assert_eq!(
+            error.to_string(),
+            "invalid segmented snapshot: resident RDF freeze rejected the fixture"
+        );
     }
 
     #[test]

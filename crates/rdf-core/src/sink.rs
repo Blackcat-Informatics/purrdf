@@ -102,10 +102,30 @@ pub const DRAIN_BUFFER_BYTES: usize = 64 << 10;
 /// function pointer, or a Python file object, none of which produce one. The
 /// `kind` is retained rather than flattened into prose so an owner can act on it —
 /// treating a broken downstream pipe as clean success, for one.
+/// Writer failures retain their original I/O kind, OS code and source through
+/// [`purrdf_hash::error::IoFailure`]. A known structured cause crosses `Write`
+/// through [`purrdf_hash::error::io_error`] without being rendered. Host messages
+/// supplied to [`DrainError::new`] remain external message data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrainError {
     kind: DrainErrorKind,
-    message: String,
+    cause: DrainCause,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DrainCause {
+    Message(String),
+    Io(purrdf_hash::error::IoFailure),
+}
+
+// Retaining I/O metadata must not enlarge every sink's pending-error slot.
+const _: () = assert!(size_of::<DrainError>() <= 32);
+
+impl purrdf_hash::error::StructuredError for DrainCause {
+    purrdf_hash::error_visit! {
+        Message(message) => "drain-message" { "message" => Message(message) },
+        Io(cause) => "drain-io" { "cause" => Cause(cause) },
+    }
 }
 
 /// The classification a [`DrainError`] carries.
@@ -128,9 +148,9 @@ impl purrdf_hash::error::StructuredError for DrainErrorKind {
 
 impl purrdf_hash::error::StructuredError for DrainError {
     purrdf_hash::error_visit! {
-        @record self { kind, message } => "drain" {
+        @record self { kind, cause } => "drain" {
             "kind" => Record(&self.kind),
-            "message" => Text(&self.message),
+            "cause" => Cause(&self.cause),
         }
     }
 }
@@ -141,7 +161,7 @@ impl DrainError {
     pub fn new(kind: DrainErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            message: message.into(),
+            cause: DrainCause::Message(message.into()),
         }
     }
 
@@ -154,17 +174,41 @@ impl DrainError {
     /// This failure's description.
     #[must_use]
     pub fn message(&self) -> &str {
-        &self.message
+        match &self.cause {
+            DrainCause::Message(message) => message,
+            DrainCause::Io(error) => error.message(),
+        }
     }
 }
 
 impl fmt::Display for DrainError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(self.message())
     }
 }
 
-impl std::error::Error for DrainError {}
+impl std::error::Error for DrainError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.cause {
+            DrainCause::Io(error) => Some(error),
+            DrainCause::Message(_) => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for DrainError {
+    fn from(error: std::io::Error) -> Self {
+        let kind = if error.kind() == std::io::ErrorKind::BrokenPipe {
+            DrainErrorKind::BrokenPipe
+        } else {
+            DrainErrorKind::Other
+        };
+        Self {
+            kind,
+            cause: DrainCause::Io(error.into()),
+        }
+    }
+}
 
 /// The infallible append target every text writer emits into, defined in the
 /// lexical layer beside the term-spelling writers ([`purrdf_lex::iri_escape`],
@@ -225,14 +269,7 @@ pub struct WriterDrain<W>(pub W);
 
 impl<W: std::io::Write> ByteDrain for WriterDrain<W> {
     fn drain(&mut self, chunk: &[u8]) -> Result<(), DrainError> {
-        self.0.write_all(chunk).map_err(|error| {
-            let kind = if error.kind() == std::io::ErrorKind::BrokenPipe {
-                DrainErrorKind::BrokenPipe
-            } else {
-                DrainErrorKind::Other
-            };
-            DrainError::new(kind, error.to_string())
-        })
+        self.0.write_all(chunk).map_err(DrainError::from)
     }
 }
 
@@ -743,9 +780,24 @@ mod tests {
         assert_eq!(record.code, "drain");
         assert_eq!(record.child("kind").code, "drain-broken-pipe");
         assert!(matches!(
-            record.field("message"),
-            purrdf_hash::error::ErrorValue::Text("closed")
+            record.child("cause").field("message"),
+            purrdf_hash::error::ErrorValue::Message("closed")
         ));
+        let native = DrainError::from(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+        assert_eq!(native.kind(), DrainErrorKind::BrokenPipe);
+        let record = purrdf_testkit::error_capture::Capture::read(&native);
+        let io = record.child("cause").child("cause");
+        assert_eq!(io.code, "std-io");
+        assert!(matches!(
+            io.child("kind").field("name"),
+            purrdf_hash::error::ErrorValue::Code("broken-pipe")
+        ));
+        let copy = native.clone();
+        drop(native);
+        assert_eq!(
+            copy.message(),
+            std::io::Error::from(std::io::ErrorKind::BrokenPipe).to_string()
+        );
     }
 
     /// `Tee` feeds both drains the same bytes in one pass.

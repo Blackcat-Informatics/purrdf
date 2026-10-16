@@ -137,6 +137,13 @@ pub enum SegmentedError {
     Storage(purrdf_lex::allocation::StorageError),
     /// Original malformed statistical-record or domain-codec failure.
     Statistics(super::pack::bits::PackBitsError),
+    /// Original invalid-RDF diagnostic at the named construction boundary.
+    Rdf {
+        /// Stable boundary that refused the RDF content.
+        boundary: &'static str,
+        /// Complete native diagnostic, retained without rendering or cloning.
+        diagnostic: Box<crate::RdfDiagnostic>,
+    },
     /// The host could not complete a requested read.
     Provider {
         /// Fixed host operation label; retaining an error never allocates text.
@@ -178,10 +185,17 @@ pub enum SegmentedError {
     Stopped(StopCause),
 }
 
+// Invalid-RDF reporting must not enlarge ordinary session/read error values.
+const _: () = assert!(size_of::<SegmentedError>() <= 40);
+
 impl purrdf_hash::error::StructuredError for SegmentedError {
     purrdf_hash::error_visit! {
         Storage(cause) => "segmented-storage" { "cause" => Cause(cause) },
         Statistics(cause) => "segmented-statistics" { "cause" => Cause(cause) },
+        Rdf { boundary, diagnostic } => "segmented-rdf" {
+            "boundary" => Code(boundary),
+            "cause" => Cause(diagnostic.as_ref()),
+        },
         Provider { operation, host_code } => "segmented-provider" {
             "operation" => Text(operation),
             "host_code" => Value(host_code.map_or(purrdf_hash::error::ErrorValue::Absent,
@@ -209,11 +223,16 @@ impl purrdf_hash::error::StructuredError for SegmentedError {
 
 impl SegmentedError {
     fn from_rdf(error: crate::RdfDiagnostic, invalid: &'static str) -> Self {
-        let result = error
-            .storage_error()
-            .map_or(Self::Corrupt(invalid), Self::Storage);
-        drop(error);
-        result
+        if let Some(cause) = error.storage_error() {
+            // The physical refusal stays inline: retaining it cannot require a
+            // further allocation after its original admission failed.
+            Self::Storage(cause)
+        } else {
+            Self::Rdf {
+                boundary: invalid,
+                diagnostic: Box::new(error),
+            }
+        }
     }
 }
 
@@ -222,6 +241,7 @@ impl std::fmt::Display for SegmentedError {
         match self {
             Self::Storage(error) => error.fmt(f),
             Self::Statistics(error) => write!(f, "invalid segmented statistics: {error}"),
+            Self::Rdf { boundary, .. } => write!(f, "invalid segmented snapshot: {boundary}"),
             Self::Provider {
                 operation,
                 host_code,
@@ -254,11 +274,17 @@ impl std::fmt::Display for SegmentedError {
         }
     }
 }
-purrdf_lex::error_source!(SegmentedError {
-    Storage,
-    Statistics,
-    SharedOwnership
-});
+impl std::error::Error for SegmentedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            Self::Statistics(error) => Some(error),
+            Self::SharedOwnership(error) => Some(error),
+            Self::Rdf { diagnostic, .. } => Some(diagnostic.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 purrdf_lex::variant_from!(SegmentedError { Storage(purrdf_lex::allocation::StorageError), Statistics(super::pack::bits::PackBitsError) });
 

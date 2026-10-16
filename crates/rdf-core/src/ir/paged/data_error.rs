@@ -122,7 +122,7 @@ purrdf_lex::variant_from!(PageDataError { Message(&str) as ToString::to_string }
 
 impl purrdf_hash::error::StructuredError for PageDataError {
     purrdf_hash::error_visit! {
-        Message(message) => "page-data-message" { "message" => Text(message) },
+        Message(message) => "page-data-message" { "message" => Message(message) },
         Source { source, requested, original } => "page-source-failure" {
             "source" => Unsigned(u128::from(*source)),
             "requested" => Unsigned(u128::from(requested.0)),

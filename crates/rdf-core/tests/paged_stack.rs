@@ -403,7 +403,7 @@ fn typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold() {
             ));
             assert!(matches!(
                 original.child("cause").field("message"),
-                purrdf_hash::error::ErrorValue::Text("provider refusal")
+                purrdf_hash::error::ErrorValue::Message("provider refusal")
             ));
         }
         assert_eq!(view.annotation_quads().count(), 0);

@@ -342,6 +342,16 @@ formatting them. Stack and subset routing preserve the original provider fault
 and its original page identity as well as the caller-visible page. Additional
 generation-fault details survive query conversion and request qualification.
 
+The shared `purrdf_hash::error::io_error` bridge carries a known structured error
+through standard `Read`/`Write` erasure. `IoFailure` preserves the actual I/O kind,
+OS code and original source; a generic visitor reaches the native cause without
+rendering it. Opaque external I/O messages remain message data. Native human
+presentation is lazy and is computed only when explicitly requested. The native
+DEFLATE adapter uses this bridge: its original error is reachable through the
+standard source chain and structured visitor, rather than a direct downcast of
+`std::io::Error::get_ref()` to the decoder error. Drain broken-pipe classification
+and the original error's `Display` text retain their previous meanings.
+
 ### G5 — the shipped `PageProvider` is in-memory; durable tiers are external
 
 The reference `PageProvider` shipped in `purrdf-core` is **in-memory**. A durable

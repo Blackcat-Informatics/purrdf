@@ -1511,7 +1511,7 @@ fn provider_fault_categories_remain_distinct() {
     assert_eq!(record.code, "paged-query-stale-generation");
     assert!(matches!(
         record.child("detail").field("message"),
-        ErrorValue::Text("original provider detail")
+        ErrorValue::Message("original provider detail")
     ));
     assert!(std::error::Error::source(&query).is_some());
 

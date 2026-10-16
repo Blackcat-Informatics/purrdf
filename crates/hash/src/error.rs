@@ -8,6 +8,9 @@
 //! Nested payloads are references, not recursive calls: a consumer can put them
 //! on its own heap work list. Inspection neither formats nor clones a payload.
 
+mod io;
+pub use io::{IoFailure, io_error};
+
 /// An error, or a structured compound value carried by an error.
 ///
 /// Variant codes and field names are stable public identities. Adding a producer

@@ -280,7 +280,7 @@ fn provider_failure_after_seal_is_sticky_and_never_panics() {
     assert_eq!(record.child("cause").code, "stop-cancelled");
     assert!(matches!(
         record.child("detail").field("message"),
-        purrdf_hash::error::ErrorValue::Text("cancel token set")
+        purrdf_hash::error::ErrorValue::Message("cancel token set")
     ));
     assert_eq!(evidence.requested_pages, vec![PageId(0)]);
     assert_eq!(evidence.consumed_pages, 0);
