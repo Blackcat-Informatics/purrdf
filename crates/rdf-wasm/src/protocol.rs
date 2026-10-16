@@ -40,7 +40,6 @@ use purrdf_sparql_eval::protocol::{
 use wasm_bindgen::prelude::*;
 
 use crate::operation::{OPTIONS_CODE, USAGE_CODE};
-use crate::query::aggregate_env_message;
 
 #[wasm_bindgen]
 extern "C" {
@@ -362,24 +361,12 @@ impl FailureProblem {
     }
 }
 
-/// The HTTP status a protocol refusal maps to: `405 Method Not Allowed` for a method the
-/// protocol does not bind, `415 Unsupported Media Type` for a `POST` body type it does not
-/// define, and `400 Bad Request` for every other malformed request (Protocol §2.1.1,
-/// §2.2.1).
-const fn refusal_status(error: &ProtocolError) -> u16 {
-    match error {
-        ProtocolError::UnsupportedMethod { .. } => 405,
-        ProtocolError::UnsupportedContentType { .. } => 415,
-        _ => 400,
-    }
-}
-
 /// Throwable form of a [`ProtocolError`]: an `Error` with `name`, `status` and, when the
 /// error names one, `parameter`. Built only on wasm, where the host constructor exists.
 fn protocol_error(error: &ProtocolError) -> JsValue {
     let thrown = ProtocolJsError::new(&error.to_string());
     thrown.set_name(error.name());
-    thrown.set_status(refusal_status(error));
+    thrown.set_status(error.status());
     if let Some(parameter) = error.parameter() {
         thrown.set_parameter(parameter);
     }
@@ -434,9 +421,12 @@ pub(crate) fn not_acceptable_message(kind: ResultKind) -> String {
 /// (an environment with no registered aggregates, no base IRI) and would refuse it
 /// identically.
 fn effective_text(request: &ProtocolRequest) -> Result<String, ProtocolError> {
-    let env = aggregate_env_message(None).map_err(|message| ProtocolError::MalformedOperation {
+    let env = purrdf_sparql_eval::ExtensionEnv::over_aggregates(
+        purrdf_sparql_eval::AggregateRegistry::EMPTY,
+    )
+    .map_err(|error| ProtocolError::MalformedOperation {
         kind: request.kind(),
-        message,
+        cause: error.into(),
     })?;
     let options = env.parser_options();
     let parser = SparqlParser::new();
@@ -448,7 +438,7 @@ fn effective_text(request: &ProtocolRequest) -> Result<String, ProtocolError> {
         };
         parsed.map_err(|err| ProtocolError::MalformedOperation {
             kind: request.kind(),
-            message: err.to_string(),
+            cause: err.into(),
         })?;
     }
     Ok(text)
@@ -717,12 +707,12 @@ mod tests {
     #[test]
     fn refusal_statuses_are_specific_where_http_has_a_status_and_400_elsewhere() {
         let method = ProtocolRequest::parse("PUT", None, None, b"").unwrap_err();
-        assert_eq!(refusal_status(&method), 405);
+        assert_eq!(method.status(), 405);
         let media = ProtocolRequest::parse("POST", Some("text/plain"), None, b"x").unwrap_err();
-        assert_eq!(refusal_status(&media), 415);
+        assert_eq!(media.status(), 415);
         let missing = ProtocolRequest::parse("GET", None, None, b"").unwrap_err();
         assert_eq!(missing.name(), "MissingOperation");
-        assert_eq!(refusal_status(&missing), 400);
+        assert_eq!(missing.status(), 400);
         // The valid neighbours of the refused method and media type parse.
         assert!(
             ProtocolRequest::parse("POST", Some("application/sparql-query"), None, b"ASK {}")
@@ -741,7 +731,7 @@ mod tests {
         );
         let error = effective_text(&bad).unwrap_err();
         assert_eq!(error.name(), "MalformedOperation");
-        assert_eq!(refusal_status(&error), 400);
+        assert_eq!(error.status(), 400);
         let good = request(
             "POST",
             Some("application/sparql-query"),

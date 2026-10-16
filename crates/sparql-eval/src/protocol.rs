@@ -94,6 +94,205 @@ impl OperationKind {
     }
 }
 
+impl purrdf_hash::error::StructuredError for OperationKind {
+    purrdf_hash::error_visit! {
+        Query => "sparql-operation-query" {},
+        Update => "sparql-operation-update" {},
+    }
+}
+
+/// The original native reason a SPARQL protocol request is refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProtocolReason {
+    /// Original parser error, including lexical offsets and nested native causes.
+    Parse(Box<purrdf_sparql_algebra::ParseError>),
+    /// Native allocation refused while retaining the original error.
+    Storage(purrdf_lex::allocation::StorageError),
+    /// Original parser storage refusal, retained without another allocation.
+    ParseStorage(purrdf_lex::allocation::StorageError),
+    /// Original allocation-free environment control failure.
+    EnvironmentControl(crate::QueryControlFailure),
+    /// Original environment capacity refusal and its full-width counts.
+    EnvironmentCapacity(purrdf_lex::allocation::CapacityError),
+    /// Original environment allocator refusal.
+    EnvironmentAllocationFailed {
+        /// The original allocation construct.
+        construct: &'static str,
+    },
+    /// The first non-prologue word is not a query form.
+    ExpectedQueryForm {
+        /// The original word.
+        word: String,
+    },
+    /// No query-form word follows the prologue.
+    MissingQueryForm,
+    /// The configured extension environment could not be constructed.
+    Environment(Box<EvalError>),
+    /// Original graph-IRI validation failure.
+    Iri(Box<purrdf_iri::IriError>),
+    /// A graph name is a valid relative reference, without a scheme.
+    RelativeIri,
+    /// A form body contains invalid UTF-8.
+    InvalidFormBody {
+        /// Length of the valid UTF-8 prefix in bytes.
+        valid_up_to: usize,
+    },
+    /// One original encoded form component could not be decoded.
+    FormComponent {
+        /// Original encoded input.
+        input: String,
+        /// Original percent-decoder failure.
+        cause: percent::PercentError,
+    },
+    /// A direct operation body was combined with an operation parameter.
+    BodyAndOperation {
+        /// The direct body's operation kind.
+        kind: OperationKind,
+    },
+    /// Both operation parameter names were supplied.
+    QueryAndUpdate,
+    /// One operation parameter occurred more than once.
+    RepeatedOperation {
+        /// The repeated operation.
+        kind: OperationKind,
+        /// Number of supplied values.
+        count: usize,
+    },
+}
+
+impl From<purrdf_sparql_algebra::ParseError> for ProtocolReason {
+    fn from(error: purrdf_sparql_algebra::ParseError) -> Self {
+        match error {
+            purrdf_sparql_algebra::ParseError::Storage(error) => Self::ParseStorage(error),
+            error => Self::retain(error, Self::Parse),
+        }
+    }
+}
+
+impl From<EvalError> for ProtocolReason {
+    fn from(error: EvalError) -> Self {
+        match error {
+            EvalError::AllocationFailed { construct } => {
+                Self::EnvironmentAllocationFailed { construct }
+            }
+            EvalError::Capacity(error) => Self::EnvironmentCapacity(error),
+            error => match crate::QueryControlFailure::from_eval_error(&error) {
+                Some(failure) => Self::EnvironmentControl(failure),
+                None => Self::retain(error, Self::Environment),
+            },
+        }
+    }
+}
+
+impl From<purrdf_iri::IriError> for ProtocolReason {
+    fn from(error: purrdf_iri::IriError) -> Self {
+        Self::retain(error, Self::Iri)
+    }
+}
+
+impl ProtocolReason {
+    fn retain<T>(error: T, variant: fn(Box<T>) -> Self) -> Self {
+        match purrdf_core::small::try_boxed(error) {
+            Ok(error) => variant(error),
+            Err(_) => Self::Storage(purrdf_lex::allocation::StorageError::AllocationFailed),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ProtocolReason {
+    purrdf_hash::error_visit! {
+        Parse(error) => "sparql-protocol-parse" { "cause" => Cause(&**error) },
+        Storage(error) => "sparql-protocol-storage" { "cause" => Cause(error) },
+        ParseStorage(error) => "sparql-protocol-parse-storage" { "cause" => Cause(error) },
+        EnvironmentControl(error) => "sparql-protocol-environment-control" { "cause" => Cause(error) },
+        EnvironmentCapacity(error) => "sparql-protocol-environment-capacity" { "cause" => Cause(error) },
+        EnvironmentAllocationFailed { construct } => "sparql-protocol-environment-allocation-failed" { "construct" => Text(construct) },
+        ExpectedQueryForm { word } => "sparql-protocol-expected-query-form" { "word" => Text(word) },
+        MissingQueryForm => "sparql-protocol-missing-query-form" {},
+        Environment(error) => "sparql-protocol-environment" { "cause" => Cause(&**error) },
+        Iri(error) => "sparql-protocol-iri" { "cause" => Cause(&**error) },
+        RelativeIri => "sparql-protocol-relative-iri" {},
+        InvalidFormBody { valid_up_to } => "sparql-protocol-form-body-utf8" { "valid_up_to" => ByteCount(*valid_up_to as u128) },
+        FormComponent { input, cause } => "sparql-protocol-form-component" { "input" => Text(input), "cause" => Cause(cause) },
+        BodyAndOperation { kind } => "sparql-protocol-body-and-operation" { "kind" => Record(kind) },
+        QueryAndUpdate => "sparql-protocol-query-and-update" {},
+        RepeatedOperation { kind, count } => "sparql-protocol-repeated-operation" { "kind" => Record(kind), "count" => Unsigned(*count as u128) },
+    }
+}
+
+impl fmt::Display for ProtocolReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
+            Self::ParseStorage(error) => purrdf_sparql_algebra::ParseError::Storage(*error).fmt(f),
+            Self::EnvironmentControl(error) => write!(f, "extension environment: {error}"),
+            Self::EnvironmentCapacity(error) => {
+                write!(f, "extension environment: {}", EvalError::Capacity(*error))
+            }
+            Self::EnvironmentAllocationFailed { construct } => write!(
+                f,
+                "extension environment: {}",
+                EvalError::AllocationFailed { construct }
+            ),
+            Self::Environment(error) => write!(f, "extension environment: {error}"),
+            Self::ExpectedQueryForm { word } => write!(
+                f,
+                "expected SELECT, CONSTRUCT, ASK or DESCRIBE after the prologue, found `{word}`"
+            ),
+            Self::MissingQueryForm => f.write_str(
+                "no query form (SELECT, CONSTRUCT, ASK or DESCRIBE) follows the prologue",
+            ),
+            Self::Iri(error) => error.fmt(f),
+            Self::RelativeIri => f.write_str("it is a relative reference, with no scheme"),
+            Self::InvalidFormBody { valid_up_to } => write!(
+                f,
+                "the form body is not UTF-8 (invalid byte sequence at offset {valid_up_to})"
+            ),
+            Self::FormComponent { input, cause } => {
+                write!(f, "`{input}` is not form-urlencoded: {cause}")
+            }
+            Self::BodyAndOperation { kind } => write!(
+                f,
+                "{} {} body and an operation parameter in the query string",
+                match kind {
+                    OperationKind::Query => "a",
+                    OperationKind::Update => "an",
+                },
+                kind.as_str()
+            ),
+            Self::QueryAndUpdate => f.write_str("both a `query` and an `update` parameter"),
+            Self::RepeatedOperation { kind, count } => {
+                write!(f, "{count} `{}` parameters", kind.as_str())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProtocolReason {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Parse(error) => Some(&**error),
+            Self::Storage(error) => Some(error),
+            Self::ParseStorage(error) => Some(error),
+            Self::EnvironmentControl(error) => Some(error),
+            Self::EnvironmentCapacity(error) => Some(error),
+            Self::Environment(error) => Some(&**error),
+            Self::Iri(error) => Some(&**error),
+            Self::FormComponent { cause, .. } => Some(cause),
+            Self::ExpectedQueryForm { .. }
+            | Self::MissingQueryForm
+            | Self::RelativeIri
+            | Self::InvalidFormBody { .. }
+            | Self::BodyAndOperation { .. }
+            | Self::QueryAndUpdate
+            | Self::RepeatedOperation { .. } => None,
+            Self::EnvironmentAllocationFailed { .. } => None,
+        }
+    }
+}
+
 /// The shapes a query result takes, which decide the formats it can be sent in
 /// (Protocol §2.1.5 → the SPARQL 1.1 result formats and the RDF syntaxes).
 ///
@@ -121,7 +320,7 @@ pub enum ResultKind {
 /// Why an HTTP request is not a SPARQL 1.1 Protocol operation, or why its dataset
 /// parameters cannot be applied to it.
 ///
-/// Every variant is a client error — the protocol's `400 Bad Request` (Protocol §2.1.1,
+/// Request refusals are client errors — the protocol's `400 Bad Request` (Protocol §2.1.1,
 /// §2.2.1: "a malformed request") — except that a host may answer
 /// [`ProtocolError::UnsupportedMethod`] with `405` and
 /// [`ProtocolError::UnsupportedContentType`] with `415`, the more specific HTTP statuses.
@@ -164,7 +363,7 @@ pub enum ProtocolError {
     /// not followed by two hex digits, or decoded bytes that are not UTF-8.
     MalformedForm {
         /// What was wrong, and where.
-        reason: String,
+        reason: ProtocolReason,
     },
     /// No operation: no `query`/`update` parameter where the request form puts one
     /// (Protocol §2.1.1, §2.1.2, §2.2.1).
@@ -173,7 +372,7 @@ pub enum ProtocolError {
     /// — the protocol conveys exactly one per request (Protocol §2.1, §2.2).
     AmbiguousOperation {
         /// Which operations the request carried.
-        reason: String,
+        reason: ProtocolReason,
     },
     /// An `update` parameter in a `GET` query string: the update operation is bound to
     /// `POST` only (Protocol §2.2), so a `GET` never performs one.
@@ -199,7 +398,7 @@ pub enum ProtocolError {
         /// The value as sent.
         value: String,
         /// Why it is not an absolute IRI.
-        reason: String,
+        reason: ProtocolReason,
     },
     /// `using-graph-uri`/`using-named-graph-uri` given for an update in which an
     /// operation already writes `USING`, `USING NAMED` or `WITH` (Protocol §2.2.3: the
@@ -218,12 +417,52 @@ pub enum ProtocolError {
     MalformedOperation {
         /// The operation that failed.
         kind: OperationKind,
-        /// The parser's diagnostic.
-        message: String,
+        /// The original parser or native request-processing failure.
+        cause: ProtocolReason,
     },
 }
 
 impl ProtocolError {
+    /// HTTP classification shared by every host protocol adapter.
+    /// Native storage and environment failures are server failures, distinct
+    /// from malformed request data.
+    pub fn status(&self) -> u16 {
+        let reason = match self {
+            Self::MalformedForm { reason }
+            | Self::AmbiguousOperation { reason }
+            | Self::InvalidGraphIri { reason, .. } => Some(reason),
+            Self::MalformedOperation { cause, .. } => Some(cause),
+            _ => None,
+        };
+        if reason.is_some_and(|reason| match reason {
+            ProtocolReason::Storage(_)
+            | ProtocolReason::Environment(_)
+            | ProtocolReason::ParseStorage(_)
+            | ProtocolReason::EnvironmentControl(_)
+            | ProtocolReason::EnvironmentCapacity(_)
+            | ProtocolReason::EnvironmentAllocationFailed { .. } => true,
+            ProtocolReason::Parse(error) => {
+                matches!(&**error, purrdf_sparql_algebra::ParseError::Storage(_))
+            }
+            ProtocolReason::ExpectedQueryForm { .. }
+            | ProtocolReason::MissingQueryForm
+            | ProtocolReason::Iri(_)
+            | ProtocolReason::RelativeIri
+            | ProtocolReason::InvalidFormBody { .. }
+            | ProtocolReason::FormComponent { .. }
+            | ProtocolReason::BodyAndOperation { .. }
+            | ProtocolReason::QueryAndUpdate
+            | ProtocolReason::RepeatedOperation { .. } => false,
+        }) {
+            return 500;
+        }
+        match self {
+            Self::UnsupportedMethod { .. } => 405,
+            Self::UnsupportedContentType { .. } => 415,
+            _ => 400,
+        }
+    }
+
     /// A stable identifier for the variant, e.g. `"MissingOperation"` — the name a host
     /// carries across a language boundary or into a problem document's `title`.
     pub const fn name(&self) -> &'static str {
@@ -332,17 +571,53 @@ impl fmt::Display for ProtocolError {
                 "`{parameter}` cannot be combined with an update that writes its own dataset: \
                  operation {operation} has a {clause} clause"
             ),
-            Self::MalformedOperation { kind, message } => write!(
+            Self::MalformedOperation { kind, cause } => write!(
                 f,
                 "the {} does not parse, so the dataset parameters cannot be applied to it: \
-                 {message}",
+                 {cause}",
                 kind.as_str()
             ),
         }
     }
 }
 
-impl std::error::Error for ProtocolError {}
+impl std::error::Error for ProtocolError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MalformedForm { reason }
+            | Self::AmbiguousOperation { reason }
+            | Self::InvalidGraphIri { reason, .. } => Some(reason),
+            Self::MalformedOperation { cause, .. } => Some(cause),
+            _ => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ProtocolError {
+    purrdf_hash::error_visit! {
+        UnsupportedMethod { method } => "sparql-protocol-unsupported-method" { "method" => Text(method) },
+        MissingContentType => "sparql-protocol-missing-content-type" {},
+        UnsupportedContentType { content_type } => "sparql-protocol-unsupported-content-type" { "content_type" => Text(content_type) },
+        UnsupportedCharset { charset } => "sparql-protocol-unsupported-charset" { "charset" => Text(charset) },
+        NonUtf8Body { valid_up_to } => "sparql-protocol-body-utf8" { "valid_up_to" => ByteCount(*valid_up_to as u128) },
+        BodyOnGet => "sparql-protocol-body-on-get" {},
+        MalformedForm { reason } => "sparql-protocol-malformed-form" { "reason" => Cause(reason) },
+        MissingOperation => "sparql-protocol-missing-operation" {},
+        AmbiguousOperation { reason } => "sparql-protocol-ambiguous-operation" { "reason" => Cause(reason) },
+        QueryViaGetIsNotUpdate => "sparql-protocol-update-via-get" {},
+        DatasetParametersOnUpdate { parameter } => "sparql-protocol-dataset-on-update" { "parameter" => Text(parameter) },
+        UsingParametersOnQuery { parameter } => "sparql-protocol-using-on-query" { "parameter" => Text(parameter) },
+        InvalidGraphIri { parameter, value, reason } => "sparql-protocol-invalid-graph-iri" {
+            "parameter" => Text(parameter), "value" => Iri(value), "reason" => Cause(reason),
+        },
+        UsingConflictsWithClause { parameter, operation, clause } => "sparql-protocol-using-conflict" {
+            "parameter" => Text(parameter), "operation" => Unsigned(*operation as u128), "clause" => Code(clause),
+        },
+        MalformedOperation { kind, cause } => "sparql-protocol-malformed-operation" {
+            "kind" => Record(kind), "cause" => Cause(cause),
+        },
+    }
+}
 
 /// One SPARQL 1.1 Protocol operation, read from an HTTP request by
 /// [`ProtocolRequest::parse`].
@@ -417,7 +692,7 @@ impl ProtocolRequest {
                 }
                 (
                     OperationKind::Query,
-                    single(params.query.drain(..), "query")?,
+                    single(params.query.drain(..), OperationKind::Query)?,
                 )
             }
             "POST" => {
@@ -430,9 +705,9 @@ impl ProtocolRequest {
                     SPARQL_QUERY => {
                         if !params.query.is_empty() || !params.update.is_empty() {
                             return Err(ProtocolError::AmbiguousOperation {
-                                reason: "a query body and an operation parameter in the query \
-                                         string"
-                                    .to_owned(),
+                                reason: ProtocolReason::BodyAndOperation {
+                                    kind: OperationKind::Query,
+                                },
                             });
                         }
                         (OperationKind::Query, utf8_body(body)?)
@@ -441,9 +716,9 @@ impl ProtocolRequest {
                     SPARQL_UPDATE => {
                         if !params.query.is_empty() || !params.update.is_empty() {
                             return Err(ProtocolError::AmbiguousOperation {
-                                reason: "an update body and an operation parameter in the \
-                                         query string"
-                                    .to_owned(),
+                                reason: ProtocolReason::BodyAndOperation {
+                                    kind: OperationKind::Update,
+                                },
                             });
                         }
                         (OperationKind::Update, utf8_body(body)?)
@@ -452,27 +727,25 @@ impl ProtocolRequest {
                     FORM => {
                         let body = std::str::from_utf8(body).map_err(|err| {
                             ProtocolError::MalformedForm {
-                                reason: format!(
-                                    "the form body is not UTF-8 (invalid byte sequence at \
-                                     offset {})",
-                                    err.valid_up_to()
-                                ),
+                                reason: ProtocolReason::InvalidFormBody {
+                                    valid_up_to: err.valid_up_to(),
+                                },
                             }
                         })?;
                         params.absorb(decode_form(body)?);
                         match (params.query.is_empty(), params.update.is_empty()) {
                             (false, false) => {
                                 return Err(ProtocolError::AmbiguousOperation {
-                                    reason: "both a `query` and an `update` parameter".to_owned(),
+                                    reason: ProtocolReason::QueryAndUpdate,
                                 });
                             }
                             (false, true) => (
                                 OperationKind::Query,
-                                single(params.query.drain(..), "query")?,
+                                single(params.query.drain(..), OperationKind::Query)?,
                             ),
                             (true, false) => (
                                 OperationKind::Update,
-                                single(params.update.drain(..), "update")?,
+                                single(params.update.drain(..), OperationKind::Update)?,
                             ),
                             (true, true) => return Err(ProtocolError::MissingOperation),
                         }
@@ -597,11 +870,11 @@ impl ProtocolRequest {
         if self.kind == OperationKind::Update {
             return Ok(None);
         }
-        let malformed = |message: String| ProtocolError::MalformedOperation {
+        let malformed = |cause: ProtocolReason| ProtocolError::MalformedOperation {
             kind: OperationKind::Query,
-            message,
+            cause,
         };
-        let tokens = tokenize(&self.text).map_err(|err| malformed(err.to_string()))?;
+        let tokens = tokenize(&self.text).map_err(|err| malformed(err.into()))?;
         for spanned in &tokens {
             if let Token::Word(word) = &spanned.token {
                 if ["BASE", "PREFIX", "VERSION"]
@@ -619,15 +892,12 @@ impl ProtocolRequest {
                 if word.eq_ignore_ascii_case("CONSTRUCT") || word.eq_ignore_ascii_case("DESCRIBE") {
                     return Ok(Some(ResultKind::Graph));
                 }
-                return Err(malformed(format!(
-                    "expected SELECT, CONSTRUCT, ASK or DESCRIBE after the prologue, found \
-                     `{word}`"
-                )));
+                return Err(malformed(ProtocolReason::ExpectedQueryForm {
+                    word: (*word).to_owned(),
+                }));
             }
         }
-        Err(malformed(
-            "no query form (SELECT, CONSTRUCT, ASK or DESCRIBE) follows the prologue".to_owned(),
-        ))
+        Err(malformed(ProtocolReason::MissingQueryForm))
     }
 
     /// The operation text with the request's dataset parameters applied, parsed under a
@@ -688,7 +958,7 @@ impl ProtocolRequest {
             .parse_query_dataset_slot(&self.text, options)
             .map_err(|err| ProtocolError::MalformedOperation {
                 kind: OperationKind::Query,
-                message: err.to_string(),
+                cause: err.into(),
             })?;
         let mut clause = String::from(" ");
         for iri in &self.default_graph_uris {
@@ -714,7 +984,7 @@ impl ProtocolRequest {
             .parse_update_split(&self.text, options)
             .map_err(|err| ProtocolError::MalformedOperation {
                 kind: OperationKind::Update,
-                message: err.to_string(),
+                cause: err.into(),
             })?;
         let parameter = if self.using_graph_uris.is_empty() {
             USING_NAMED_GRAPH_URI
@@ -793,13 +1063,13 @@ fn push_clause(out: &mut String, keyword: &str, iri: &str) {
 /// Exactly one value of an operation parameter, or the protocol error for none or many.
 fn single(
     mut values: impl ExactSizeIterator<Item = String>,
-    name: &str,
+    kind: OperationKind,
 ) -> Result<String, ProtocolError> {
     match values.len() {
         0 => Err(ProtocolError::MissingOperation),
         1 => Ok(values.next().unwrap_or_default()),
         n => Err(ProtocolError::AmbiguousOperation {
-            reason: format!("{n} `{name}` parameters"),
+            reason: ProtocolReason::RepeatedOperation { kind, count: n },
         }),
     }
 }
@@ -819,12 +1089,12 @@ fn validate_graph_iri(parameter: &'static str, value: &str) -> Result<(), Protoc
         Ok(false) => Err(ProtocolError::InvalidGraphIri {
             parameter,
             value: value.to_owned(),
-            reason: "it is a relative reference, with no scheme".to_owned(),
+            reason: ProtocolReason::RelativeIri,
         }),
         Err(err) => Err(ProtocolError::InvalidGraphIri {
             parameter,
             value: value.to_owned(),
-            reason: err.to_string(),
+            reason: err.into(),
         }),
     }
 }
@@ -890,7 +1160,10 @@ fn form_component(text: &str) -> Result<String, ProtocolError> {
     percent::decode_form(text)
         .map(std::borrow::Cow::into_owned)
         .map_err(|error| ProtocolError::MalformedForm {
-            reason: format!("`{text}` is not form-urlencoded: {error}"),
+            reason: ProtocolReason::FormComponent {
+                input: text.to_owned(),
+                cause: error,
+            },
         })
 }
 

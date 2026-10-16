@@ -116,6 +116,15 @@ impl std::fmt::Display for QueryControlFailure {
 
 impl std::error::Error for QueryControlFailure {}
 
+impl purrdf_hash::error::StructuredError for QueryControlFailure {
+    purrdf_hash::error_visit! {
+        Unpriced(construct) => "sparql-control-unpriced" { "construct" => Text(construct) },
+        LayoutOverflow => "sparql-control-layout-overflow" {},
+        DiagnosticFormatting => "sparql-control-diagnostic-formatting" {},
+        WorkspaceStopped => "sparql-control-workspace-stopped" {},
+    }
+}
+
 /// A query over a [`FallibleDatasetView`](purrdf_core::FallibleDatasetView) that did not
 /// reach a complete result.
 ///

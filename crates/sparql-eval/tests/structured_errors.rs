@@ -267,6 +267,185 @@ fn admitted_service_native_causes_survive_without_rendering_or_inspection_alloca
     );
 }
 
+fn actual_protocol_errors_keep_parser_form_iri_and_operation_fields() {
+    use purrdf_sparql_eval::protocol::{
+        OperationKind, ProtocolError, ProtocolReason, ProtocolRequest,
+    };
+    const {
+        assert!(size_of::<ProtocolError>() < 128);
+    }
+    let request =
+        ProtocolRequest::parse("POST", Some("application/sparql-query"), None, b"%").unwrap();
+    let error = request.result_kind().unwrap_err();
+    assert_eq!(error.status(), 400);
+    let events = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let capture = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    let lexical = capture.child("cause").child("cause");
+    assert_eq!(lexical.code, "sparql-parse-lex");
+    assert!(matches!(lexical.field("at"), ErrorValue::ByteCount(0)));
+    assert!(matches!(
+        lexical.child("reason").field("character"),
+        ErrorValue::Character('%')
+    ));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<purrdf_sparql_algebra::ParseError>()
+    );
+
+    let error = ProtocolRequest::parse("GET", None, Some("query=%"), b"").unwrap_err();
+    let form = Capture::read(&error).child("reason");
+    assert!(matches!(form.field("input"), ErrorValue::Text("%")));
+    assert!(matches!(
+        form.child("cause").field("offset"),
+        ErrorValue::ByteCount(0)
+    ));
+
+    let error = ProtocolRequest::parse(
+        "POST",
+        Some("application/x-www-form-urlencoded"),
+        None,
+        b"x\xff",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        Capture::read(&error).child("reason").field("valid_up_to"),
+        ErrorValue::ByteCount(1)
+    ));
+
+    let error = ProtocolRequest::parse("GET", None, Some("query=a&query=b"), b"").unwrap_err();
+    let repeated = Capture::read(&error).child("reason");
+    assert!(matches!(repeated.field("count"), ErrorValue::Unsigned(2)));
+    assert_eq!(repeated.child("kind").code, "sparql-operation-query");
+
+    let error = ProtocolRequest::parse(
+        "GET",
+        None,
+        Some("query=ASK+%7B%7D&default-graph-uri=http%3A%2F%2Fexample.org%2Fa+b"),
+        b"",
+    )
+    .unwrap_err();
+    let iri = Capture::read(&error);
+    assert!(matches!(
+        iri.field("value"),
+        ErrorValue::Iri("http://example.org/a b")
+    ));
+    let original = purrdf_iri::is_absolute("http://example.org/a b").unwrap_err();
+    assert_eq!(
+        iri.child("reason").child("cause").code,
+        original.diagnostic_code()
+    );
+
+    let request =
+        ProtocolRequest::parse("POST", Some("application/sparql-query"), None, b"BLAH").unwrap();
+    assert!(matches!(
+        Capture::read(&request.result_kind().unwrap_err())
+            .child("cause")
+            .field("word"),
+        ErrorValue::Text("BLAH")
+    ));
+    for cause in [
+        ProtocolReason::Storage(purrdf_lex::allocation::StorageError::AllocationFailed),
+        purrdf_sparql_algebra::ParseError::Storage(
+            purrdf_lex::allocation::StorageError::AllocationFailed,
+        )
+        .into(),
+        EvalError::Internal("native environment fault".into()).into(),
+    ] {
+        let error = ProtocolError::MalformedOperation {
+            kind: OperationKind::Query,
+            cause,
+        };
+        assert_eq!(error.status(), 500);
+        assert!(std::error::Error::source(&error).is_some());
+    }
+}
+
+fn control_and_load_errors_keep_native_causes_and_genuine_messages() {
+    use purrdf_sparql_eval::{LoadError, QueryControlFailure};
+    for error in [
+        QueryControlFailure::Unpriced("original producer"),
+        QueryControlFailure::LayoutOverflow,
+        QueryControlFailure::DiagnosticFormatting,
+        QueryControlFailure::WorkspaceStopped,
+    ] {
+        assert_ne!(Capture::read(&error).code, "");
+    }
+    for error in [
+        LoadError::Transport("host transport".into()),
+        LoadError::Decode("host decode".into()),
+        LoadError::HostDenied("host policy".into()),
+        LoadError::Fault("host fault".into()),
+    ] {
+        assert!(matches!(
+            Capture::read(&error).field("message"),
+            ErrorValue::Message(_)
+        ));
+    }
+    let denied = LoadError::Denied(ServiceDenial::new(
+        "https://example.org/load",
+        ServiceCapability::Network,
+        "caller policy",
+    ));
+    assert_eq!(
+        Capture::read(&denied).child("cause").child("withheld").code,
+        "service-capability-network"
+    );
+    let stopped = LoadError::Governed(TrippedGovernor::Stopped {
+        cause: StopCause::Cancelled,
+    });
+    assert_eq!(
+        Capture::read(&stopped)
+            .child("governor")
+            .child("cause")
+            .code,
+        "stop-cancelled"
+    );
+}
+
+fn native_protocol_resource_refusals_remain_allocation_free() {
+    use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+    use purrdf_sparql_eval::protocol::{OperationKind, ProtocolError, ProtocolReason};
+    let capacity = CapacityError::new(CapacitySpace::GlobalTerms, u128::MAX, u128::MAX - 1);
+    let window = CurrentThreadWindow::open();
+    let parsed = ProtocolReason::from(purrdf_sparql_algebra::ParseError::Storage(
+        StorageError::Capacity(capacity),
+    ));
+    let stopped = ProtocolReason::from(EvalError::WorkspaceStopped);
+    let allocator = ProtocolReason::from(EvalError::AllocationFailed {
+        construct: "original native allocation",
+    });
+    let exhausted = ProtocolReason::from(EvalError::Capacity(capacity));
+    assert_eq!(window.close().allocations, 0);
+    for original in [
+        Capture::read(&parsed).child("cause").child("cause"),
+        Capture::read(&exhausted).child("cause"),
+    ] {
+        assert!(matches!(
+            original.field("attempted"),
+            ErrorValue::Unsigned(u128::MAX)
+        ));
+        assert!(
+            matches!(original.field("limit"), ErrorValue::Unsigned(value) if value == u128::MAX - 1)
+        );
+    }
+    assert!(matches!(
+        Capture::read(&allocator).field("construct"),
+        ErrorValue::Text("original native allocation")
+    ));
+    for cause in [parsed, stopped, allocator, exhausted] {
+        let error = ProtocolError::MalformedOperation {
+            kind: OperationKind::Query,
+            cause,
+        };
+        assert_eq!(error.status(), 500);
+    }
+}
+
 purrdf_testkit::harness_main!(
     erased_function_causes_keep_original_fields_and_identity_without_rendering,
     parsed_errors_and_optional_classifications_keep_their_native_shapes,
@@ -275,4 +454,7 @@ purrdf_testkit::harness_main!(
     admitted_diagnostics_borrow_original_text_and_clone_the_same_owner,
     actual_service_builder_preserves_original_failure_under_its_admission,
     admitted_service_native_causes_survive_without_rendering_or_inspection_allocation,
+    actual_protocol_errors_keep_parser_form_iri_and_operation_fields,
+    control_and_load_errors_keep_native_causes_and_genuine_messages,
+    native_protocol_resource_refusals_remain_allocation_free,
 );

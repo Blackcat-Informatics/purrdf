@@ -341,7 +341,25 @@ impl core::fmt::Display for LoadError {
     }
 }
 
-impl std::error::Error for LoadError {}
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Denied(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for LoadError {
+    purrdf_hash::error_visit! {
+        Transport(message) => "sparql-load-transport" { "message" => Message(message) },
+        Decode(message) => "sparql-load-decode" { "message" => Message(message) },
+        Denied(error) => "sparql-load-denied" { "cause" => Cause(error) },
+        HostDenied(message) => "sparql-load-host-denied" { "message" => Message(message) },
+        Fault(message) => "sparql-load-fault" { "message" => Message(message) },
+        Governed(governor) => "sparql-load-governed" { "governor" => Record(governor) },
+    }
+}
 
 /// One governed request handed to a SPARQL `LOAD` host resolver.
 #[derive(Clone, Copy)]
