@@ -273,12 +273,20 @@ impl Drop for SegmentedReservation {
 struct CachedBlock {
     encoded: Vec<u8>,
     decoded: Option<DecodedRecords>,
+    dictionary_range: Option<(u64, u64)>,
     reservation: SegmentedReservation,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct CacheKey {
     snapshot: SegmentedSnapshot,
     slot: u64,
+}
+#[derive(Clone, Copy, Debug)]
+struct DictionaryPosition {
+    key: CacheKey,
+    bucket: u64,
+    first: u64,
+    end: u64,
 }
 #[derive(Debug)]
 struct CacheEntry {
@@ -289,13 +297,20 @@ struct CacheEntry {
 }
 #[derive(Clone, Copy)]
 enum ReaderBuffer {
-    Cache { block_charge: u64 },
+    Cache {
+        block_charge: u64,
+        dictionary_entries: usize,
+    },
     Requests,
 }
 struct State {
     cache: HashTable<CacheEntry>,
     oldest: Option<CacheKey>,
     newest: Option<CacheKey>,
+    // Learn routing bounds only from authenticated dictionary reads. They
+    // survive payload eviction without owning a pin or lexical bytes, and grow
+    // under the operation's original grant, never from a declared image size.
+    dictionary_positions: HashTable<DictionaryPosition>,
     requests: Vec<SegmentedRequest>,
     error: Option<SegmentedError>,
     io_bytes: u64,
@@ -313,8 +328,10 @@ impl State {
             // Memory checks the old/new replacement overlap. Also plan the
             // final cache-plus-block layout before allocating: reclaiming one
             // slot can avoid growth altogether, especially beside pinned blocks.
-            let refusal = if let ReaderBuffer::Cache { block_charge } = buffer
-                && self.cache.len() == self.cache.capacity()
+            let refusal = if let ReaderBuffer::Cache {
+                block_charge,
+                dictionary_entries,
+            } = buffer
             {
                 let required = self
                     .cache
@@ -325,7 +342,27 @@ impl State {
                     .ok_or(StorageError::SizeOverflow)?;
                 let old =
                     hash_table_retained_bound(&self.cache).ok_or(StorageError::SizeOverflow)?;
-                let increase = next.saturating_sub(old);
+                let mut increase = if required > self.cache.capacity() {
+                    next.saturating_sub(old)
+                } else {
+                    0
+                };
+                if dictionary_entries != 0 {
+                    let required = self
+                        .dictionary_positions
+                        .len()
+                        .checked_add(dictionary_entries)
+                        .ok_or(StorageError::SizeOverflow)?;
+                    if required > self.dictionary_positions.capacity() {
+                        let next = hash_table_allocation_bound::<DictionaryPosition>(required)
+                            .ok_or(StorageError::SizeOverflow)?;
+                        let old = hash_table_retained_bound(&self.dictionary_positions)
+                            .ok_or(StorageError::SizeOverflow)?;
+                        increase = increase
+                            .checked_add(next.saturating_sub(old))
+                            .ok_or(StorageError::SizeOverflow)?;
+                    }
+                }
                 let increase = u64::try_from(increase).map_err(|_| StorageError::SizeOverflow)?;
                 let budget = &self.storage.reservation.budget;
                 let live = lock_read_state(&budget.state).live;
@@ -344,7 +381,9 @@ impl State {
                 Err(error)
             } else {
                 match buffer {
-                    ReaderBuffer::Cache { .. } => {
+                    ReaderBuffer::Cache {
+                        dictionary_entries, ..
+                    } => {
                         let required = self
                             .cache
                             .len()
@@ -356,7 +395,21 @@ impl State {
                                 required,
                                 |entry| hash_of(&entry.key),
                                 memory,
-                            )
+                            )?;
+                            if dictionary_entries != 0 {
+                                let required = self
+                                    .dictionary_positions
+                                    .len()
+                                    .checked_add(dictionary_entries)
+                                    .ok_or(StorageError::SizeOverflow)?;
+                                reserve_table_with_memory(
+                                    &mut self.dictionary_positions,
+                                    required,
+                                    |entry| hash_of(&(entry.key.snapshot, entry.bucket)),
+                                    memory,
+                                )?;
+                            }
+                            Ok::<(), StorageError>(())
                         })
                     }
                     ReaderBuffer::Requests => self
@@ -366,7 +419,19 @@ impl State {
             };
             // State is already locked. Evict here rather than installing a
             // reservation backlink that would recursively acquire that lock.
-            if matches!(&result, Err(SegmentedError::Residency { .. })) && self.evict_one()? {
+            // Optional routing must fit spare capacity without evicting payloads.
+            let can_evict = matches!(
+                buffer,
+                ReaderBuffer::Requests
+                    | ReaderBuffer::Cache {
+                        dictionary_entries: 0,
+                        ..
+                    }
+            );
+            if can_evict
+                && matches!(&result, Err(SegmentedError::Residency { .. }))
+                && self.evict_one()?
+            {
                 continue;
             }
             return result;
@@ -656,6 +721,7 @@ impl SegmentedOperation {
             cache: HashTable::new(),
             oldest: None,
             newest: None,
+            dictionary_positions: HashTable::new(),
             requests: Vec::new(),
             error: None,
             io_bytes: 0,
@@ -1043,6 +1109,7 @@ impl SegmentedSession {
         self.make_room(&mut state, charge, true)?;
         if let Err(error) = state.reserve_buffer(ReaderBuffer::Cache {
             block_charge: charge,
+            dictionary_entries: 0,
         }) {
             state.error.get_or_insert_with(|| error.clone());
             return Err(error);
@@ -1098,6 +1165,21 @@ impl SegmentedSession {
                 )?),
                 _ => None,
             };
+            let dictionary_range = if in_dictionary {
+                let records = decoded_records.as_ref().ok_or(SegmentedError::Corrupt(
+                    "forward dictionary block kind changed",
+                ))?;
+                let first = records.entries[0].0.index();
+                let end = first
+                    .checked_add(
+                        u64::try_from(records.entries.len())
+                            .map_err(|_| SegmentedError::AddressExhausted)?,
+                    )
+                    .ok_or(SegmentedError::AddressExhausted)?;
+                Some((first, end))
+            } else {
+                None
+            };
             let actual = encoded
                 + overhead
                 + decoded_records.as_ref().map_or(0, |records| {
@@ -1112,12 +1194,47 @@ impl SegmentedSession {
             Ok(Arc::new(CachedBlock {
                 encoded: bytes,
                 decoded: decoded_records,
+                dictionary_range,
                 reservation,
             }))
         })();
         match result {
             Ok(block) => {
-                state.cache_insert(key, Arc::clone(&block));
+                // Only authenticated decoded bounds establish whether a page
+                // spans one or two buckets. Admit that exact index growth while
+                // the pending payload is already charged, before publishing it.
+                let dictionary_entries = block.dictionary_range.map_or(0, |(first, end)| {
+                    let width = u64::from(format::MAX_RECORDS_PER_BLOCK);
+                    (first / width..=(end - 1) / width)
+                        .filter(|&bucket| {
+                            state
+                                .dictionary_positions
+                                .find(hash_of(&(key.snapshot, bucket)), |position| {
+                                    position.key == key && position.bucket == bucket
+                                })
+                                .is_none()
+                        })
+                        .count()
+                });
+                let retain_route = if dictionary_entries == 0 {
+                    true
+                } else {
+                    match state.reserve_buffer(ReaderBuffer::Cache {
+                        block_charge: 0,
+                        dictionary_entries,
+                    }) {
+                        Ok(()) => true,
+                        // Routing hints are optional cache metadata. The payload
+                        // and exact request ledger have already been admitted;
+                        // refusing only this index growth cannot invalidate them.
+                        Err(SegmentedError::Residency { .. }) => false,
+                        Err(error) => {
+                            state.error.get_or_insert_with(|| error.clone());
+                            return Err(error);
+                        }
+                    }
+                };
+                state.cache_insert(key, Arc::clone(&block), retain_route);
                 Ok(block)
             }
             Err(error) => {
@@ -1136,24 +1253,86 @@ impl SegmentedSession {
         if local >= self.header.terms {
             return self.fail(SegmentedError::Corrupt("foreign term ID"));
         }
-        let slot = self.header.dictionary.first + local / u64::from(self.header.records_per_block);
-        let index = usize::try_from(local % u64::from(self.header.records_per_block))
-            .map_err(|_| SegmentedError::AddressExhausted)?;
-        let block = self.block(slot)?;
-        let records = block.decoded.as_ref().ok_or(SegmentedError::Corrupt(
-            "forward dictionary block kind changed",
-        ))?;
-        if records
-            .entries
-            .get(index)
-            .is_none_or(|(stored, _)| *stored != id)
+        // The count cap gives a lower bound, never an exact block address. Probe
+        // it first so existing full-population images still need one block read.
+        // Variable populations then use authenticated ID fences in a bounded
+        // binary search, learning bounds lazily and releasing every probe pin.
+        let mut lo = local / u64::from(self.header.records_per_block);
+        let mut hi = self.header.dictionary.blocks;
+        let bucket = id.index() / u64::from(format::MAX_RECORDS_PER_BLOCK);
+        let mut first_probe = None;
         {
-            return self.fail(SegmentedError::Corrupt(
-                "forward dictionary ordinal changed",
-            ));
+            let state = lock_read_state(&self.state);
+            'buckets: for nearby in bucket.saturating_sub(1)..=bucket.saturating_add(1) {
+                for position in state
+                    .dictionary_positions
+                    .iter_hash(hash_of(&(self.receipt.snapshot, nearby)))
+                {
+                    if position.key.snapshot != self.receipt.snapshot || position.bucket != nearby {
+                        continue;
+                    }
+                    let mid = position.key.slot - self.header.dictionary.first;
+                    // Dense IDs and nonempty pages bound the distance to an
+                    // unknown page. Use nearby authenticated ranges without
+                    // scanning the cache or eagerly reading a directory.
+                    if id.index() < position.first {
+                        let distance = position.first - id.index();
+                        lo = lo.max(mid.saturating_sub(distance));
+                        let pages = distance.div_ceil(u64::from(self.header.records_per_block));
+                        hi = hi.min(mid.saturating_sub(pages).saturating_add(1));
+                    } else if id.index() >= position.end {
+                        let distance = id.index() - position.end;
+                        lo = lo.max(
+                            mid.checked_add(1)
+                                .and_then(|value| {
+                                    value.checked_add(
+                                        distance / u64::from(self.header.records_per_block),
+                                    )
+                                })
+                                .ok_or(SegmentedError::AddressExhausted)?,
+                        );
+                        hi = hi.min(mid.saturating_add(distance).saturating_add(2));
+                    } else {
+                        first_probe = Some(mid);
+                        break 'buckets;
+                    }
+                }
+            }
         }
-        format::decode_term(records.key(index))?;
-        Ok((block, index))
+        let mut first_probe = Some(first_probe.unwrap_or(lo));
+        while lo < hi {
+            let mid = first_probe.take().unwrap_or_else(|| lo + (hi - lo) / 2);
+            let block = self.block(self.header.dictionary.first + mid)?;
+            let records = block.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+                "forward dictionary block kind changed",
+            ))?;
+            let first = records.entries[0].0.index();
+            if id.index() < first {
+                hi = mid;
+            } else {
+                let offset = id.index() - first;
+                if offset
+                    < u64::try_from(records.entries.len())
+                        .map_err(|_| SegmentedError::AddressExhausted)?
+                {
+                    // Narrow only an in-block offset, including on wasm32.
+                    let index =
+                        usize::try_from(offset).map_err(|_| SegmentedError::AddressExhausted)?;
+                    let (stored, _) = records.entries[index];
+                    if stored != id {
+                        return self.fail(SegmentedError::Corrupt(
+                            "forward dictionary ordinal changed",
+                        ));
+                    }
+                    format::decode_term(records.key(index))?;
+                    return Ok((block, index));
+                }
+                lo = mid + 1;
+            }
+        }
+        self.fail(SegmentedError::Corrupt(
+            "forward dictionary ordinal missing",
+        ))
     }
 
     fn lookup_key(&self, key: &[u8]) -> Result<Option<GlobalTermId>, SegmentedError> {
@@ -1810,7 +1989,8 @@ mod operation_tests {
         {
             let state = lock_read_state(&session.state);
             let buffers = state.requests.capacity() * size_of::<SegmentedRequest>()
-                + hash_table_retained_bound(&state.cache).unwrap();
+                + hash_table_retained_bound(&state.cache).unwrap()
+                + hash_table_retained_bound(&state.dictionary_positions).unwrap();
             drop(state);
             assert_eq!(
                 evidence.bookkeeping_bytes(),
@@ -2061,9 +2241,18 @@ mod operation_tests {
                 let request_room = state.requests.capacity() - state.requests.len();
                 assert_eq!(shape.0, shape.1);
                 assert!(request_room > 8);
+                let positions = hash_table_retained_bound(&state.dictionary_positions).unwrap();
+                // These aligned four-ID fixture pages occupy one bucket each.
+                let required = state.dictionary_positions.len() + 1;
+                let next_positions = if required > state.dictionary_positions.capacity() {
+                    hash_table_allocation_bound::<DictionaryPosition>(required).unwrap()
+                } else {
+                    positions
+                };
                 (
-                    hash_table_retained_bound(&state.cache).unwrap(),
-                    hash_table_allocation_bound::<CacheEntry>(state.cache.len() + 1).unwrap(),
+                    hash_table_retained_bound(&state.cache).unwrap() + positions,
+                    hash_table_allocation_bound::<CacheEntry>(state.cache.len() + 1).unwrap()
+                        + next_positions,
                 )
             };
             let records = u64::from(session.header.records_per_block);
@@ -2094,7 +2283,11 @@ mod operation_tests {
             assert!(session.evidence().peak_bytes() <= CEILING);
             assert_eq!(session.read_error(), None);
             assert_eq!(
-                hash_table_retained_bound(&lock_read_state(&session.state).cache).unwrap(),
+                {
+                    let state = lock_read_state(&session.state);
+                    hash_table_retained_bound(&state.cache).unwrap()
+                        + hash_table_retained_bound(&state.dictionary_positions).unwrap()
+                },
                 if pin_header { next_layout } else { old_layout }
             );
             drop(held);
@@ -2194,5 +2387,88 @@ mod operation_tests {
             Err(SegmentedError::EvidenceExhausted)
         ));
         assert_eq!(a.evidence().request_count(), count as usize);
+    }
+
+    #[test]
+    fn dictionary_positions_are_bound_to_their_certified_source() {
+        let mut images = Vec::new();
+        for width in [180, 80] {
+            let limits = SegmentedBuildLimits::new(20, 20_000, 0, 512, 8)
+                .unwrap()
+                .with_first_term_index((1_u64 << 54) + 251)
+                .unwrap();
+            let mut builder = SegmentedBuilder::new(limits).unwrap();
+            let values: Vec<_> = (0..10)
+                .map(|index| {
+                    let prefix = if index % 2 == 0 { "a" } else { "z" };
+                    TermValue::iri(format!(
+                        "https://example.org/{}/{index:02}",
+                        prefix.repeat(width)
+                    ))
+                })
+                .collect();
+            let mut id = None;
+            builder
+                .intern_batch(&values, |offered, value| {
+                    if offered == &values[5] {
+                        id = Some(value);
+                    }
+                })
+                .unwrap();
+            images.push((builder.seal().unwrap(), id.unwrap(), values[5].clone()));
+        }
+        let operation =
+            SegmentedOperation::new(SegmentedReadLimits::new(2_000_000, 2, 2000, 10_000_000, 4))
+                .unwrap();
+        let sessions: Vec<_> = images
+            .iter()
+            .map(|(image, _, _)| {
+                operation
+                    .open(Arc::new(image.provider()), image.receipt())
+                    .unwrap()
+            })
+            .collect();
+        let pins: Vec<_> = sessions
+            .iter()
+            .zip(&images)
+            .map(|(session, (_, id, _))| session.resolve(*id).unwrap())
+            .collect();
+        let before = operation.evidence(()).request_count();
+        for index in [0, 1, 0, 1] {
+            let (_, id, value) = &images[index];
+            assert_eq!(sessions[index].term_value(*id).unwrap(), *value);
+        }
+        assert_eq!(operation.evidence(()).request_count(), before);
+        let state = lock_read_state(&operation.state);
+        let positions: Vec<_> = state
+            .dictionary_positions
+            .iter()
+            .filter(|position| {
+                position.first <= images[0].1.index() && images[0].1.index() < position.end
+            })
+            .collect();
+        // One retained page crosses a 256-ID bucket boundary; both entries
+        // must name the same physical owner without confusing the other image.
+        assert_eq!(positions.len(), 3);
+        assert_eq!(
+            positions
+                .iter()
+                .filter(|position| position.key.snapshot == images[0].0.receipt().snapshot())
+                .count(),
+            1
+        );
+        assert_eq!(
+            positions
+                .iter()
+                .filter(|position| position.key.snapshot == images[1].0.receipt().snapshot())
+                .count(),
+            2
+        );
+        assert!(
+            state.dictionary_positions.len() > positions.len(),
+            "routing bounds survive eviction of their payload pages"
+        );
+        drop(state);
+        drop(pins);
     }
 }

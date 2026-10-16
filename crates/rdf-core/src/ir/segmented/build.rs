@@ -31,7 +31,7 @@ pub struct SegmentedBuildLimits {
     first_term_index: u64,
 }
 impl SegmentedBuildLimits {
-    /// Choose all resident capacities and the persisted block layout explicitly.
+    /// Choose resident construction limits and the persisted block layout explicitly.
     ///
     /// # Errors
     /// Refuses invalid block sizes or zero/oversized dictionary block counts.
@@ -45,7 +45,7 @@ impl SegmentedBuildLimits {
         if terms == u32::MAX
             || !(512..=1_048_576).contains(&block_bytes)
             || records_per_block == 0
-            || records_per_block > 256
+            || records_per_block > format::MAX_RECORDS_PER_BLOCK
         {
             return Err(SegmentedError::ConstructionLimit);
         }
@@ -72,7 +72,7 @@ impl SegmentedBuildLimits {
     }
 }
 
-/// Small resident construction path with pre-admitted term/string/row capacities.
+/// Resident construction with explicit limits and storage grown as input arrives.
 /// The ordinary validated IR builder owns RDF normalization and positional checks.
 /// This constructor's bounded IDs are translated arithmetically, without a global
 /// per-page translation vector.
@@ -85,16 +85,10 @@ pub struct SegmentedBuilder {
     admitted_rows: u64,
 }
 impl SegmentedBuilder {
-    /// Reserve the resident fixture capacities before accepting input.
+    /// Start an empty resident builder without allocating its declared ceilings.
     pub fn new(limits: SegmentedBuildLimits) -> Result<Self, SegmentedError> {
-        let mut builder = RdfDatasetBuilder::new();
-        builder.reserve_for_replay(
-            usize::try_from(limits.terms).expect("u32 capacity fits supported pointer widths"),
-            usize::try_from(limits.term_bytes).expect("u32 capacity fits supported pointer widths"),
-            usize::try_from(limits.rows).expect("u32 capacity fits supported pointer widths"),
-        )?;
         Ok(Self {
-            builder,
+            builder: RdfDatasetBuilder::new(),
             limits,
             admitted_terms: 0,
             admitted_bytes: 0,
@@ -130,7 +124,7 @@ impl SegmentedBuilder {
     ///
     /// # Errors
     /// Refuses before interning when conservative referenced-term/string bounds
-    /// would exceed the pre-reserved resident capacities.
+    /// would exceed the declared resident construction limits.
     pub fn intern_batch(
         &mut self,
         values: &[TermValue],
@@ -731,8 +725,12 @@ fn append_records(
     block_bytes: usize,
 ) -> Result<Stream, SegmentedError> {
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    for records in records.chunks(chunk) {
-        blocks.push(format::record_block(kind, records, block_bytes)?);
+    let mut remaining = records;
+    while !remaining.is_empty() {
+        let (block, used) =
+            format::record_block(kind, &remaining[..remaining.len().min(chunk)], block_bytes)?;
+        blocks.push(block);
+        remaining = &remaining[used..];
     }
     Ok(Stream {
         first,
@@ -903,10 +901,12 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             header.records_per_block,
             u64::from(header.block_bytes) * u64::from(header.records_per_block),
         )?;
-        let remaining = header.terms
-            - u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+        let remaining = header
+            .terms
+            .checked_sub(u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?)
+            .ok_or(SegmentedError::Corrupt("dictionary cardinality is false"))?;
         if u64::try_from(records.entries.len()).map_err(|_| SegmentedError::AddressExhausted)?
-            != remaining.min(u64::from(header.records_per_block))
+            > remaining
         {
             return Err(SegmentedError::Corrupt(
                 "forward dictionary block packing is false",
@@ -1414,10 +1414,19 @@ mod certification_tests {
     }
 
     fn image() -> SegmentedImage {
-        let limits = SegmentedBuildLimits::new(100, 20_000, 100, 1024, 4).unwrap();
+        let limits = SegmentedBuildLimits::new(100, 20_000, 100, 512, 4).unwrap();
         let mut builder = SegmentedBuilder::new(limits).unwrap();
         let values = (0..13)
-            .map(|n| TermValue::iri(format!("http://example.org/{n:02}")))
+            .map(|n| {
+                TermValue::iri(format!(
+                    "http://example.org/{}/{n:02}",
+                    if n % 2 == 0 {
+                        "a".repeat(180)
+                    } else {
+                        "z".repeat(180)
+                    }
+                ))
+            })
             .collect::<Vec<_>>();
         let mut ids = Vec::new();
         builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
@@ -1460,7 +1469,10 @@ mod certification_tests {
         let source = image.open_session(limits).unwrap();
         let opening = source.evidence().with_requests(<[_]>::len);
         let predicate = source
-            .term_id_by_value(&TermValue::iri("http://example.org/00"))
+            .term_id_by_value(&TermValue::iri(format!(
+                "http://example.org/{}/00",
+                "a".repeat(180)
+            )))
             .unwrap()
             .unwrap();
         let before = source.evidence().with_requests(<[_]>::len);

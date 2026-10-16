@@ -3,15 +3,38 @@
 
 # Segmented query storage and block sizing
 
+`SegmentedBuildLimits` sets resident construction ceilings. Creating an empty
+`SegmentedBuilder` does not reserve those ceilings; native term and row storage
+grows as input arrives. Callers do not need to estimate private term expansion
+to avoid a reservation for unused capacity. Offered input still obeys the
+original explicit term, lexical-byte and row limits.
+
+Dictionary blocks close before the next encoded record would exceed
+`block_bytes`, or when they reach `records_per_block`. The record count is an
+upper bound. Both insertion-order and lexical-order streams use the same
+front-coding encoder; their block populations and block counts may differ.
+One encoded record, including its fence and framing, must fit a block or sealing
+returns `ConstructionLimit`. The encoder does not retry the complete image with
+a larger layout. Selective term lookup uses authenticated stored ID ranges;
+opening still loads no dictionary directory or term map. Existing full-count
+blocks retain their encoding and their direct first-probe lookup.
+
 `SegmentedReadLimits` specifies ceilings, not arrays to allocate at opening.
-The exact request ledger and cache hash table grow as they are used. Their
+The exact request ledger, payload cache and learned routing bounds grow as they are used. Their
 concrete capacities, copied/decoded blocks, pins and query scratch share the
 live-byte admission. Buffer replacement admits both the old and new layouts
 until the old allocation is destroyed. A refusal reports the original typed
 cause; evidence is never truncated to fit a smaller ledger.
 
+Learned routing bounds are cache hints, not required read state. Their index
+grows only from spare capacity, without evicting cached payloads. If growth
+exceeds the live-byte ceiling after a payload is admitted, the reader keeps the
+payload without adding that hint. The same authenticated ID-range
+search remains authoritative. Payload, exact-ledger, source and allocator
+failures still report their original typed causes; none is hidden by this policy.
+
 `SegmentedEvidence::bookkeeping_bytes()` reports the exact charged capacity of
-the reader's retained request ledger and cache buckets. It is included in
+the reader's retained request ledger, cache buckets and routing-bound buckets. It is included in
 `live_bytes()` and can grow across queries. For query-owner release checks,
 exclude this capacity and `unpinned_cache_bytes()` from both observations;
 the original control, pinned blocks and query workspace remain in the balance.
@@ -61,6 +84,13 @@ skipping pinned owners, and unlinks the first eligible block. Hash buckets,
 control bytes and replacement overlap are admitted through the shared physical
 table allocator; cached payloads and escaped pins keep their original grants.
 
+Authenticated dictionary reads also teach a source-qualified page-range index.
+It retains only bounds learned from actual reads, without lexical bytes or payload
+pins. Those bounds survive payload eviction, so reloading a known page does not
+repeat its fence search. Cold searches use nearby known ranges to narrow their
+ordinal interval. Routing metadata shares the original live-byte grant and is
+released with the operation; opening never preloads a directory or term map.
+
 ## Measured layout controls
 
 The byte and peak figures in this section were recorded on main at
@@ -85,16 +115,18 @@ representatives. The smaller 2,000-claim neighbor checks the same behavior.
 
 Each total also includes one header block. The dictionary appears twice: in
 original ID order and in lexical reverse-lookup order. Both use fixed-size,
-prefix-compressed blocks with the selected number of records. At 4096 / 32,
+prefix-compressed blocks capped at the selected number of records. At 4096 / 32,
 these two indexes occupy about 90% of this image. Sparse dictionary blocks,
 rather than the authentication tree, dominate the expansion over the compact
 pack. The row streams are ordinary, reifier and annotation rows, each in one
 subject-first order; they are not three permutations of the entire dataset.
 
-Increasing records per block reduces padding and the number of authenticated
-blocks, but the encoded records and fence must fit the selected byte size.
-For this corpus, 4096 / 128 refuses with `ConstructionLimit`; 4096 / 64 and
-8192 / 128 fit and retain identical decoded query answers. Longer lexical values
-can require different settings. These measurements describe this authored
-corpus, not a universal compression ratio or timing claim. Peak admitted COUNT
+Increasing the record cap can reduce padding and the number of authenticated
+blocks. These recorded measurements used fixed-count grouping: for this corpus,
+4096 / 128 refused with `ConstructionLimit`, while 4096 / 64 and 8192 / 128 fit
+and retained identical decoded query answers. The byte-aware encoder now closes
+an overflowing group before its next record instead of refusing that group;
+the old 4096 / 128 refusal is historical evidence, not current behavior or a new
+layout measurement. These measurements describe this authored corpus, not a
+universal compression ratio or timing claim. Recorded peak admitted COUNT
 bytes are 193,304,220 for both 4096-byte layouts and 168,269,468 for 8192 / 128.
