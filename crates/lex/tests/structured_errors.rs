@@ -13,6 +13,14 @@ struct Fields<'error> {
     list_ends: usize,
 }
 
+struct RefusingRead;
+
+impl std::io::Read for RefusingRead {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::ErrorKind::PermissionDenied.into())
+    }
+}
+
 impl<'error> ErrorVisitor<'error> for Fields<'error> {
     fn variant(&mut self, code: &'static str) {
         self.entries.push(("variant", ErrorValue::Code(code)));
@@ -342,5 +350,58 @@ fn html_inspection_preserves_reference_ranges_and_destination_refusal() {
     assert!(matches!(
         destination.entries[0],
         ("variant", ErrorValue::Code("html-destination-capacity"))
+    ));
+}
+
+#[test]
+fn cbor_reader_preserves_original_io_category_and_depth_limit() {
+    use purrdf_lex::cbor::{Limits, decode, read_from};
+
+    let error = read_from(&mut RefusingRead, Limits::DEFAULT)
+        .expect_err("the actual caller's reader refuses");
+    let mut outer = Fields::default();
+    error.visit(&mut outer);
+    assert!(matches!(
+        outer.entries[2],
+        ("offset", ErrorValue::ByteCount(0))
+    ));
+    let ErrorValue::Cause(kind) = outer.entries[1].1 else {
+        panic!("the CBOR document must retain its typed refusal");
+    };
+    let mut refusal = Fields::default();
+    kind.visit(&mut refusal);
+    assert!(matches!(
+        refusal.entries[0],
+        ("variant", ErrorValue::Code("cbor-io"))
+    ));
+    let ErrorValue::Record(category) = refusal.entries[1].1 else {
+        panic!("the native I/O category must remain a typed record");
+    };
+    let mut io = Fields::default();
+    category.visit(&mut io);
+    assert!(matches!(
+        io.entries[1],
+        ("name", ErrorValue::Code("permission-denied"))
+    ));
+    assert!(
+        matches!(io.entries[2], ("native_discriminant", ErrorValue::Unsigned(n)) if n == std::io::ErrorKind::PermissionDenied as u128)
+    );
+
+    let error = decode(&[0x81, 0], Limits { max_depth: 0 })
+        .expect_err("the original depth limit refuses the outer array");
+    let mut document = Fields::default();
+    error.visit(&mut document);
+    let ErrorValue::Cause(kind) = document.entries[1].1 else {
+        panic!("the caller's limit must remain structured");
+    };
+    let mut depth = Fields::default();
+    kind.visit(&mut depth);
+    assert!(matches!(
+        depth.entries[0],
+        ("variant", ErrorValue::Code("cbor-depth-limit"))
+    ));
+    assert!(matches!(
+        depth.entries[1],
+        ("limit", ErrorValue::Unsigned(0))
     ));
 }

@@ -209,3 +209,41 @@ fn generic_capture_preserves_wide_values_lists_and_unformatted_causes() {
         }
     }
 }
+
+#[test]
+fn standard_io_categories_retain_native_identity_without_formatting_or_allocation() {
+    let kinds = [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::Other,
+        std::io::Error::from_raw_os_error(i32::MAX).kind(),
+    ];
+    let mut captures: [Capture<'_>; 3] = core::array::from_fn(|_| Capture::default());
+    let window = CurrentThreadWindow::open();
+    for (kind, capture) in kinds.iter().zip(&mut captures) {
+        kind.visit(capture);
+    }
+    assert_eq!(window.close().allocations, 0);
+    for (kind, capture) in kinds.iter().zip(&captures) {
+        assert_eq!(capture.code, "std-io-kind");
+        assert_eq!(capture.count, 2);
+        assert!(
+            matches!(capture.fields[1], Some((Some("native_discriminant"), ErrorValue::Unsigned(n))) if n == *kind as u128)
+        );
+    }
+    assert!(matches!(
+        captures[0].fields[0],
+        Some((Some("name"), ErrorValue::Code("permission-denied")))
+    ));
+    assert!(matches!(
+        captures[1].fields[0],
+        Some((Some("name"), ErrorValue::Code("other")))
+    ));
+    assert_eq!(
+        matches!(
+            captures[2].fields[0],
+            Some((Some("name"), ErrorValue::Code("other")))
+        ),
+        kinds[2] == std::io::ErrorKind::Other,
+        "an unnamed standard category must not be relabeled Other",
+    );
+}

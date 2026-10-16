@@ -13,6 +13,10 @@
 /// Variant codes and field names are stable public identities. Adding a producer
 /// variant or field does not add a variant to [`ErrorValue`]. Implementations
 /// report all semantic fields, including explicit absence and empty lists.
+/// Standard-library I/O categories report a portable `name` for public stable
+/// categories and the original `native_discriminant` for every category.
+/// That native discriminant is compiler-specific, not a persistent error code;
+/// hidden or future categories have an absent name and retain their exact value.
 pub trait StructuredError {
     /// Report this value's variant and fields without rendering it to text.
     /// Borrowed payloads remain valid for the original value's lifetime.
@@ -24,6 +28,66 @@ impl StructuredError for core::convert::Infallible {
         // Generic query errors can name Infallible without ever carrying one.
         // Do not dereference an uninhabited reference to implement that bound.
         unreachable!("an Infallible error has no value to inspect")
+    }
+}
+
+impl StructuredError for std::io::ErrorKind {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        // Public stable categories have portable names. The standard library
+        // also produces hidden categories and may add further ones. Retain
+        // their actual unit discriminant rather than calling them Other or
+        // formatting them. This native value is not a persistent identity.
+        let name = match self {
+            Self::NotFound => Some("not-found"),
+            Self::PermissionDenied => Some("permission-denied"),
+            Self::ConnectionRefused => Some("connection-refused"),
+            Self::ConnectionReset => Some("connection-reset"),
+            Self::HostUnreachable => Some("host-unreachable"),
+            Self::NetworkUnreachable => Some("network-unreachable"),
+            Self::ConnectionAborted => Some("connection-aborted"),
+            Self::NotConnected => Some("not-connected"),
+            Self::AddrInUse => Some("address-in-use"),
+            Self::AddrNotAvailable => Some("address-not-available"),
+            Self::NetworkDown => Some("network-down"),
+            Self::BrokenPipe => Some("broken-pipe"),
+            Self::AlreadyExists => Some("already-exists"),
+            Self::WouldBlock => Some("would-block"),
+            Self::NotADirectory => Some("not-a-directory"),
+            Self::IsADirectory => Some("is-a-directory"),
+            Self::DirectoryNotEmpty => Some("directory-not-empty"),
+            Self::ReadOnlyFilesystem => Some("read-only-filesystem"),
+            Self::StaleNetworkFileHandle => Some("stale-network-file-handle"),
+            Self::InvalidInput => Some("invalid-input"),
+            Self::InvalidData => Some("invalid-data"),
+            Self::TimedOut => Some("timed-out"),
+            Self::WriteZero => Some("write-zero"),
+            Self::StorageFull => Some("storage-full"),
+            Self::NotSeekable => Some("not-seekable"),
+            Self::QuotaExceeded => Some("quota-exceeded"),
+            Self::FileTooLarge => Some("file-too-large"),
+            Self::ResourceBusy => Some("resource-busy"),
+            Self::ExecutableFileBusy => Some("executable-file-busy"),
+            Self::Deadlock => Some("deadlock"),
+            Self::CrossesDevices => Some("crosses-devices"),
+            Self::TooManyLinks => Some("too-many-links"),
+            Self::InvalidFilename => Some("invalid-filename"),
+            Self::ArgumentListTooLong => Some("argument-list-too-long"),
+            Self::Interrupted => Some("interrupted"),
+            Self::Unsupported => Some("unsupported"),
+            Self::UnexpectedEof => Some("unexpected-eof"),
+            Self::OutOfMemory => Some("out-of-memory"),
+            Self::Other => Some("other"),
+            _ => None,
+        };
+        visitor.variant("std-io-kind");
+        visitor.value(
+            Some("name"),
+            name.map_or(ErrorValue::Absent, ErrorValue::Code),
+        );
+        visitor.value(
+            Some("native_discriminant"),
+            ErrorValue::Unsigned(*self as u128),
+        );
     }
 }
 
