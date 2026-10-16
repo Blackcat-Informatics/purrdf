@@ -1,0 +1,11 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 02s
+     Running tests/fallible_query.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/8867b3a01342eaf1/out/fallible_query-8867b3a01342eaf1)
+
+running 3 tests
+test fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure ... ok
+test fallible_explain_options_measure_the_same_registered_relation_as_resident ... ok
+test healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entries ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s
+

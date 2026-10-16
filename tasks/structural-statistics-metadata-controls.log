@@ -1,0 +1,14 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 5m 22s
+     Running unittests src/lib.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 5 tests
+test ir::statistics::tests::native_summaries_match_actual_graph_streams_and_sorted_domains ... ok
+test ir::statistics::tests::compact_statistics_preserve_ids_and_refuse_named_graph_metadata ... ok
+test ir::statistics::tests::translated_domains_keep_full_width_ids_and_sort_after_translation ... ok
+test ir::statistics::tests::paged_metadata_is_exact_shared_on_reopen_and_requires_no_query_io ... ok
+test ir::statistics::tests::property_translated_two_page_summaries_match_one_combined_snapshot ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1355 filtered out; finished in 0.13s
+

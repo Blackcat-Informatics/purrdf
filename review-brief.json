@@ -1,0 +1,108 @@
+{
+  "issue": 484,
+  "branch": "paudley/484-planner-statistics-per-predicate-per",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "279a26a0eab462ab17799c04f6a8c95da4a8c885",
+      "subject": "Version snapshot-aware planning charges and document source format costs",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "1a2e326a73fdcd6985a89676d66a821f21e0fcdd",
+      "subject": "Expose sound statistics for chronological stack queries",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "8390182780533e71a4c32d0e6f354b76d76af58c",
+      "subject": "Persist certified source statistics for segmented queries",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "7c5a41cc2b8353977b84e619e985aa4cc0fa0b5b",
+      "subject": "Estimate structural RDF patterns across every statement stream",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "5bcff126e7f9b1d2bd0b0d1f7a13e46b849220fe",
+      "subject": "Use snapshot statistics to break connected rule-order ties",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "2bb0691b204130332da675ebd4e68c59db14e64d",
+      "subject": "Seal paged predicate statistics in the shared dictionary",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "076aac6d33ba7bf0e5d99b6e54731547df1a0d5a",
+      "subject": "Demonstrate reifier join estimates on one million claims",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "0f51370460da1612fa717a867ce8660cc24f37d5",
+      "subject": "Record snapshot statistics and exactness in query explanations",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "de36c484047475ba0d0aefa3fc63d4a2b460d7da",
+      "subject": "Use predicate distinct domains in join planning and forecasts",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "527f70f642f398b1c8ebfdb668c05ad35353ec43",
+      "subject": "Seal native predicate statistics through original admission",
+      "date": "2026-10-15"
+    },
+    {
+      "oid": "a84f28cdd9c075fc96a547fa36ed3180e444df7d",
+      "subject": "Expose snapshot statistics to actual SPARQL planning",
+      "date": "2026-10-15"
+    }
+  ],
+  "files": [
+    "crates/datalog/src/plan.rs",
+    "crates/rdf-core/src/dataset_view.rs",
+    "crates/rdf-core/src/ir/builder.rs",
+    "crates/rdf-core/src/ir/builder/triple.rs",
+    "crates/rdf-core/src/ir/dataset.rs",
+    "crates/rdf-core/src/ir/mod.rs",
+    "crates/rdf-core/src/ir/pack/bits.rs",
+    "crates/rdf-core/src/ir/paged/mod.rs",
+    "crates/rdf-core/src/ir/paged/query.rs",
+    "crates/rdf-core/src/ir/paged/stack.rs",
+    "crates/rdf-core/src/ir/paged/summary.rs",
+    "crates/rdf-core/src/ir/paged/translation.rs",
+    "crates/rdf-core/src/ir/segmented/build.rs",
+    "crates/rdf-core/src/ir/segmented/format.rs",
+    "crates/rdf-core/src/ir/segmented/mod.rs",
+    "crates/rdf-core/src/ir/segmented/query.rs",
+    "crates/rdf-core/src/ir/segmented/query/statistics.rs",
+    "crates/rdf-core/src/ir/segmented/query/view.rs",
+    "crates/rdf-core/src/ir/segmented/session.rs",
+    "crates/rdf-core/src/ir/segmented/session/statistics.rs",
+    "crates/rdf-core/src/ir/segmented/stack.rs",
+    "crates/rdf-core/src/ir/statistics.rs",
+    "crates/rdf-core/src/ir/statistics/codec.rs",
+    "crates/rdf-core/src/ir/triple.rs",
+    "crates/rdf-core/src/ir/triple/read.rs",
+    "crates/rdf-core/src/lib.rs",
+    "crates/rdf-core/src/statistics.rs",
+    "crates/rdf-core/src/statistics/layered.rs",
+    "crates/rdf-core/tests/ir_zero_alloc.rs",
+    "crates/rdf-core/tests/paged_stack.rs",
+    "crates/rdf-core/tests/segmented_stack.rs",
+    "crates/rdf-core/tests/support/statistics.rs",
+    "crates/sparql-eval/src/bgp.rs",
+    "crates/sparql-eval/src/bgp/positive.rs",
+    "crates/sparql-eval/src/engine.rs",
+    "crates/sparql-eval/src/governor/ledger.rs",
+    "crates/sparql-eval/src/governor/mod.rs",
+    "crates/sparql-eval/tests/governed_query.rs",
+    "crates/sparql-eval/tests/support/mod.rs",
+    "docs/SPARQL-GOVERNOR-PROFILE.md",
+    "docs/design/purrdf-backend-contract.md",
+    "docs/design/purrdf-segmented-query-storage.md",
+    "helpers-ledger.toml"
+  ],
+  "adrs_touched": []
+}

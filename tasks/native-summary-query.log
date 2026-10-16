@@ -1,0 +1,18 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4m 41s
+     Running unittests src/lib.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 1 test
+test bgp::tests::supplied_statistics_changes_actual_join_order_without_changing_answers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1632 filtered out; finished in 0.00s
+
+     Running tests/statement_indexes.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/c4e4ede6d330e789/out/statement_indexes-c4e4ede6d330e789)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+

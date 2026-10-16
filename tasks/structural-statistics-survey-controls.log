@@ -1,0 +1,19 @@
+
+running 14 tests
+test bgp::positive::tests::canonical_hidden_match_keys_keep_positive_children_connected ... ok
+test bgp::positive::tests::seeded_union_prices_the_full_combined_header ... ok
+test bgp::positive::tests::retained_unit_orders_preserve_native_survey_provenance ... ok
+test bgp::positive::tests::independent_factors_are_priced_once_before_the_product ... ok
+test bgp::survey_tests::the_survey_agrees_with_its_recursive_reference_on_generated_plans ... ok
+test bgp::term_walk_tests::binding_agrees_with_its_reference_on_generated_positions ... ok
+test bgp::term_walk_tests::compilation_agrees_with_its_reference_on_generated_patterns ... ok
+test bgp::term_walk_tests::disconnected_and_folded_path_products_keep_their_relation_domains ... ok
+test bgp::term_walk_tests::explain_writes_literals_in_term_syntax_with_the_direction_token ... ok
+test bgp::term_walk_tests::position_walks_agree_with_their_references_on_generated_positions ... ok
+test bgp::term_walk_tests::slot_keys_and_rendering_agree_with_their_references_on_generated_patterns ... ok
+test bgp::positive::tests::eligibility_is_retained_across_a_deep_plain_join_chain_and_a_barrier ... ok
+test bgp::term_walk_tests::a_hundred_thousand_level_position_is_walked_on_a_128_kib_stack ... ok
+test bgp::survey_tests::a_hundred_thousand_levels_are_surveyed_on_a_128_kib_thread ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1620 filtered out; finished in 2.36s
+

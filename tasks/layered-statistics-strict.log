@@ -1,0 +1,13 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+error: it looks like you're trying to convert a tuple to an array
+   --> crates/rdf-core/tests/segmented_stack.rs:600:13
+    |
+600 |             [expected.0, expected.1, expected.2],
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: use `.into()` instead, or `<[T; N]>::from` if type annotations are needed
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#tuple_array_conversions
+    = note: `-D clippy::tuple-array-conversions` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::tuple_array_conversions)]`
+
+error: could not compile `purrdf-core` (test "segmented_stack") due to 1 previous error

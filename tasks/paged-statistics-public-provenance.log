@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 3m 56s
+     Running tests/governed_query.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/d66b9695b6ff5bd1/out/governed_query-d66b9695b6ff5bd1)
+
+running 1 test
+test paged_reifier_counts_change_the_plan_with_identical_terms_and_assertions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+

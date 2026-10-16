@@ -1,0 +1,64 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+error: unused import: `codec::StatisticsReadError`
+  --> crates/rdf-core/src/ir/statistics.rs:19:16
+   |
+19 | pub(super) use codec::StatisticsReadError;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: enum `StatisticsReadError` is never used
+  --> crates/rdf-core/src/ir/statistics/codec.rs:14:24
+   |
+14 | pub(in crate::ir) enum StatisticsReadError<E> {
+   |                        ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: struct `Words` is never constructed
+  --> crates/rdf-core/src/ir/statistics/codec.rs:21:8
+   |
+21 | struct Words<R>(R);
+   |        ^^^^^
+
+error: methods `word`, `length`, `flag`, `id`, and `domain` are never used
+  --> crates/rdf-core/src/ir/statistics/codec.rs:27:8
+   |
+23 | / impl<R, E> Words<R>
+24 | | where
+25 | |     R: FnMut() -> Result<u64, E>,
+   | |_________________________________- methods in this implementation
+26 |   {
+27 |       fn word(&mut self) -> Result<u64, StatisticsReadError<E>> {
+   |          ^^^^
+...
+31 |       fn length(&mut self) -> Result<usize, StatisticsReadError<E>> {
+   |          ^^^^^^
+...
+35 |       fn flag(&mut self) -> Result<bool, StatisticsReadError<E>> {
+   |          ^^^^
+...
+43 |       fn id<I: StatisticsId>(&mut self) -> Result<I, StatisticsReadError<E>> {
+   |          ^^
+...
+47 |       fn domain(&mut self) -> Result<Domain, StatisticsReadError<E>> {
+   |          ^^^^^^
+
+error: associated items `to_words`, `from_words`, and `validate_words` are never used
+   --> crates/rdf-core/src/ir/statistics/codec.rs:59:26
+    |
+ 56 | impl<I: StatisticsId> LocalStatistics<I> {
+    | ---------------------------------------- associated items in this implementation
+...
+ 59 |     pub(in crate::ir) fn to_words<S: Admission + ?Sized>(
+    |                          ^^^^^^^^
+...
+ 73 |     pub(in crate::ir) fn from_words<S: Admission + ?Sized, E>(
+    |                          ^^^^^^^^^^
+...
+167 |     fn validate_words(&self) -> Result<(), PackBitsError> {
+    |        ^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-core` (lib) due to 5 previous errors

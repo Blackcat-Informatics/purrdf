@@ -1,0 +1,115 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 37,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- On a dataset with 10^6 reified claims, the estimate for `?r rdf:reifies ?t . ?r :validFrom ?v` is within 2x of the actual row count (today the quoted-triple position is unconstrained).",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 38,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- A paged dataset's plan uses the stored reifier counts (test: plan changes when only reifier counts change).",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 39,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- `?x a :RareClass . ?x :p ?y` is planned class-first when `:RareClass` has few instances and `:p` many, on both `RdfDataset` and paged backends.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B4",
+      "line": 40,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- A consumer-supplied statistics implementation can be passed in and changes the plan; EXPLAIN shows which statistics were exact.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B5",
+      "line": 41,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Summaries from two segments merge to the same statistics as one segment holding both (property test).",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "C1.1",
+      "line": 6,
+      "rules": [
+        "modal"
+      ],
+      "text": "and native rule-order caller must consume this seam; an unused statistics API",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-15T14:20:21Z"
+    },
+    {
+      "id": "C1.2",
+      "line": 35,
+      "rules": [
+        "modal"
+      ],
+      "text": "A real consumer-supplied provider must change an actual plan. Keep cost units,",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-15T14:20:21Z"
+    },
+    {
+      "id": "C1.3",
+      "line": 47,
+      "rules": [
+        "modal"
+      ],
+      "text": "Run the single required full final gate after source settles. Resolve actual",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-15T14:20:21Z"
+    },
+    {
+      "id": "C4.1",
+      "line": 16,
+      "rules": [
+        "modal"
+      ],
+      "text": "remain required. No partial PR or whole-issue completion is claimed.",
+      "source": "comment 4",
+      "author": "paudley",
+      "date": "2026-10-15T16:45:16Z"
+    }
+  ],
+  "silent_comments": [
+    {
+      "comment": 2,
+      "author": "paudley",
+      "date": "2026-10-15T14:51:42Z"
+    },
+    {
+      "comment": 3,
+      "author": "paudley",
+      "date": "2026-10-15T15:36:49Z"
+    }
+  ]
+}

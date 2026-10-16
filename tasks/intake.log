@@ -1,0 +1,14 @@
+issue      /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/.stage/planner-statistics-per-predicate-per/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/.stage/planner-statistics-per-predicate-per/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/.stage/planner-statistics-per-predicate-per/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/.stage/planner-statistics-per-predicate-per/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/.stage/planner-statistics-per-predicate-per/brief.json  (+ requirements.json, references.json)
+
+  - issue #484 + 0 comment(s) via github
+  - link crawl: 12 issue(s) within 2 hop(s) of `#N` references
+  - forge search on ['Planner', 'statistics:', 'per-predicate,']: 14 other item(s)
+  - GhpRsq-Defect-Class trailers: 4 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #484 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #484: 0
+  - requirement candidates: 5 line(s); 0 comment(s) matched no rule
+  - referenced artifacts: 20 path(s) (2 on disk), 8 identifier(s), 1 workspace package(s), 0 URL(s)

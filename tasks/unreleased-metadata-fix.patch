@@ -1,0 +1,46 @@
+diff --git crates/shapes/src/term.rs crates/shapes/src/term.rs
+index ec7fc0edf..56a59b042 100644
+--- crates/shapes/src/term.rs
++++ crates/shapes/src/term.rs
+@@ -1066,6 +1066,11 @@ impl Term {
+     // No `since`: the version this deprecation first ships in is not knowable from
+     // inside the commit that writes it, and a wrong `since` is a claim about a
+     // release rather than a pointer to the supported route.
++    #[allow(
++        unknown_lints,
++        clippy::deprecated_attributes_without_since,
++        reason = "first publication version is unassigned; older Clippy lacks this metadata lint"
++    )]
+     #[deprecated(
+         note = "resolve a Term through PreparedValidator::term_id, which answers the interned \
+                 identity against the binding it indexes, instead of handing back lookup keys"
+diff --git crates/sparql-eval/src/engine.rs crates/sparql-eval/src/engine.rs
+index 837271d3e..2c5fbb75f 100644
+--- crates/sparql-eval/src/engine.rs
++++ crates/sparql-eval/src/engine.rs
+@@ -5680,6 +5680,11 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
+ /// Extensions, Appendix A) — so both values evaluate identically: a prepared
+ /// execution's parameters, a request's substitutions, SHACL-SPARQL and every other
+ /// caller share one meaning, one admission and one answer.
++#[allow(
++    unknown_lints,
++    clippy::deprecated_attributes_without_since,
++    reason = "first publication version is unassigned; older Clippy lacks this metadata lint"
++)]
+ #[deprecated(
+     note = "every lane applies the SHACL pre-binding rewrite; both values evaluate identically"
+ )]
+@@ -6031,7 +6036,12 @@ impl<'a> QueryOptions<'a> {
+     /// Set the pre-binding lane the request names (see [`ShaclPrebinding`]); every lane
+     /// takes the same rewrite.
+     #[deprecated(note = "every lane applies the SHACL pre-binding rewrite; the lane has no effect")]
+-    #[allow(deprecated)]
++    #[allow(
++        deprecated,
++        unknown_lints,
++        clippy::deprecated_attributes_without_since,
++        reason = "first publication version is unassigned; older Clippy lacks this metadata lint"
++    )]
+     #[must_use]
+     pub const fn with_prebinding(mut self, prebinding: ShaclPrebinding) -> Self {
+         self.prebinding = prebinding;

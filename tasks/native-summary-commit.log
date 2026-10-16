@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against eb824c0e20ef (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/484-planner-statistics-per-predicate-per 527f70f64] Seal native predicate statistics through original admission
+ 13 files changed, 1134 insertions(+), 119 deletions(-)
+ create mode 100644 crates/rdf-core/src/ir/statistics.rs

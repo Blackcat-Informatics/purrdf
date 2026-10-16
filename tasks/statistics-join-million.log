@@ -1,0 +1,7 @@
+
+running 1 test
+claims=1000000 annotations=6000000 actual_rows=1000000 estimated_rows=1000000 candidates=2000000
+test statement_statistics_at_one_million_claims ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 7.85s
+

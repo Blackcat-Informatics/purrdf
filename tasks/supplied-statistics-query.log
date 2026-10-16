@@ -1,0 +1,44 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-events)
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling libc v0.2.186
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/lex)
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling getrandom v0.3.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/xsd)
+   Compiling either v1.16.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/testkit)
+   Compiling rayon v1.12.0
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/alloc-probe)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/stack)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 7m 41s
+     Running unittests src/lib.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 1 test
+test bgp::tests::supplied_statistics_changes_actual_join_order_without_changing_answers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1632 filtered out; finished in 0.00s
+

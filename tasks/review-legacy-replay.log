@@ -1,0 +1,6 @@
+
+running 1 test
+test bgp::tests::work_ranking_does_not_become_cardinality_or_physical_admission ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1634 filtered out; finished in 0.01s
+

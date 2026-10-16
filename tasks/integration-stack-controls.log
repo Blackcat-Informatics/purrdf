@@ -1,0 +1,67 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/lex)
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling libc v0.2.186
+   Compiling sha2 v0.11.0
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/xsd)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-events)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/cdt)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/alloc-probe)
+    Finished `test` profile [optimized] target(s) in 2m 30s
+     Running tests/paged_stack.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-core/e7198b4ae2dd2d13/out/paged_stack-e7198b4ae2dd2d13)
+
+running 23 tests
+test cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open_iterators ... ok
+test annotation_only_pages_demote_only_after_last_original_reifier_in_the_graph ... ok
+test chronological_removal_reinsertion_same_head_and_snapshot_isolation ... ok
+test declaration_faults_only_gate_rows_that_need_annotation_classification ... ok
+test construction_append_and_snapshot_do_not_read_lower_pages ... ok
+test drift_of_skipped_or_zero_page_sources_gates_the_entire_head_and_metadata ... ok
+test graph_pruning_partial_removals_empty_declarations_and_scoped_head_values_survive ... ok
+test explicit_head_graph_lifetime_survives_sealing_while_populated_then_last_row_removal ... ok
+test head_charges_once_under_global_limits_and_folds_have_no_partial_success ... ok
+test invalid_rows_never_mutate_the_head_and_pending_head_never_reorders ... ok
+test metadata_point_reads_detect_source_drift_without_an_earlier_status_checkpoint ... ok
+test native_equal_primary_and_virtual_reifier_rows_retain_both_streams ... ok
+test logical_id_filters_do_not_recheck_descriptors_per_row_or_cached_reread ... ok
+test new_reifiers_preserve_older_primary_rows_in_every_graph ... ok
+test newer_typed_occurrence_wins_before_partition_and_native_primary_typing_is_retained ... ok
+test page_count_drift_is_checked_without_materialization_and_is_sticky ... ok
+test orphan_annotation_association_uses_its_visible_introduction_prefix ... ok
+test removal_only_head_statistics_are_bounds_without_a_head_page ... ok
+test sealed_implicit_graph_disappears_when_its_last_effective_row_is_removed ... ok
+test summary_drift_is_refused_even_with_equal_local_values_counts_and_charges ... ok
+test canonical_fold_matches_independent_eager_typed_surface_and_dictionary_for_two_histories_and_bounds ... ok
+test typed_faults_changed_charges_and_layouts_refuse_reads_mutation_and_fold ... ok
+test deterministic_value_set_mutations_match_an_independent_oracle_at_each_snapshot ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/segmented_stack.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 15 tests
+test empty_certified_streams_do_not_probe_dictionary_for_bound_head_row ... ok
+test persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last ... ok
+test chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs ... ok
+test removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view ... ok
+test fallible_evidence_pins_complete_publication_and_immutable_request_prefix ... ok
+test ordinary_quads_keep_their_authored_kind_across_layer_partitions ... ok
+test tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation ... ok
+test effective_annotation_classification_uses_original_chronology_and_first_occurrence ... ok
+test memoized_term_hits_allocate_nothing_and_failed_import_latches ... ok
+test admitted_identity_walk_releases_spill_and_preserves_hash_law ... ok
+test final_query_readiness_checks_untouched_evicted_descriptors ... ok
+test resident_head_copy_refuses_under_the_shared_operation_grant ... ok
+test query_ids_touch_only_values_and_preserve_source_scopes ... ok
+test thousand_distinct_sources_open_only_headers_under_one_request_budget ... ok
+test generated_chronological_publications_match_eager_typed_seals ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+

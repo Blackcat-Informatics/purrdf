@@ -1,0 +1,15 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/slice)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/datalog)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/shapes)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/jsonschema)
+    Finished `test` profile [optimized] target(s) in 12m 11s
+     Running tests/change_path_alloc.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-shapes/0834188c7f3862fa/out/change_path_alloc-0834188c7f3862fa)
+
+running 1 test
+test admit_allocation_is_independent_of_dataset_size ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.30s
+

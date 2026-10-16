@@ -1,0 +1,283 @@
+{
+  "paths": [
+    {
+      "ref": "crates/sparql-eval/src/bgp.rs:878-882",
+      "path": "/home/paudley/Active/purrdf/crates/sparql-eval/src/bgp.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 6810,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "2c13dbe4d Fix merged estimates and qualify backend explanation receipts",
+        "d0f544f49 perf(rdf): index structural reifiers and annotation values",
+        "47725646e Stop bounded statement scans and index segmented source probes",
+        "ae502bfc1 Keep nested SELECT star projections persistent across consumers",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "5e1f3658a fix(eval): retain query evidence ownership and closed absence",
+        "f49c2f1a5 Carry query evidence and scoped ranked retrieval through physical shapes",
+        "c3171c015 Admit complete operational SPARQL storage before allocation",
+        "e72660e87 fix(sparql): compile contextual mappings through native algebra",
+        "af0019173 Price GRAPH over a name that addresses no graph as an empty scope"
+      ]
+    },
+    {
+      "ref": "rdf-core/src/ir/dataset.rs:1252-1261",
+      "path": "/home/paudley/Active/purrdf/rdf-core/src/ir/dataset.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "rdf-core/src/ir/paged/summary.rs:421-460",
+      "path": "/home/paudley/Active/purrdf/rdf-core/src/ir/paged/summary.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "paged/admission.rs:171-190",
+      "path": "/home/paudley/Active/purrdf/paged/admission.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "admission.rs:182-183",
+      "path": "/home/paudley/Active/purrdf/admission.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "ir/segmented/session.rs:1242-1296",
+      "path": "/home/paudley/Active/purrdf/ir/segmented/session.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "rdf-core/src/dataset_view.rs:679-689",
+      "path": "/home/paudley/Active/purrdf/rdf-core/src/dataset_view.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "bgp.rs:503-517",
+      "path": "/home/paudley/Active/purrdf/bgp.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "bgp.rs:968-972",
+      "path": "/home/paudley/Active/purrdf/bgp.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "ir/mutable/delta_view.rs:705-722",
+      "path": "/home/paudley/Active/purrdf/ir/mutable/delta_view.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "retrieval/src/statistics.rs:81-156",
+      "path": "/home/paudley/Active/purrdf/retrieval/src/statistics.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "1/T",
+      "path": "/home/paudley/Active/purrdf/1/T",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "paudley/484-planner-statistics-per-predicate-per",
+      "path": "/home/paudley/Active/purrdf/paudley/484-planner-statistics-per-predicate-per",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/sparql-eval/src/bgp.rs",
+      "path": "/home/paudley/Active/purrdf/crates/sparql-eval/src/bgp.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 6810,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "2c13dbe4d Fix merged estimates and qualify backend explanation receipts",
+        "d0f544f49 perf(rdf): index structural reifiers and annotation values",
+        "47725646e Stop bounded statement scans and index segmented source probes",
+        "ae502bfc1 Keep nested SELECT star projections persistent across consumers",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "5e1f3658a fix(eval): retain query evidence ownership and closed absence",
+        "f49c2f1a5 Carry query evidence and scoped ranked retrieval through physical shapes",
+        "c3171c015 Admit complete operational SPARQL storage before allocation",
+        "e72660e87 fix(sparql): compile contextual mappings through native algebra",
+        "af0019173 Price GRAPH over a name that addresses no graph as an empty scope"
+      ]
+    },
+    {
+      "ref": "rdf-core/src/ir/dataset.rs",
+      "path": "/home/paudley/Active/purrdf/rdf-core/src/ir/dataset.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "rdf-core/src/ir/paged/summary.rs",
+      "path": "/home/paudley/Active/purrdf/rdf-core/src/ir/paged/summary.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "paged/admission.rs",
+      "path": "/home/paudley/Active/purrdf/paged/admission.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "ir/segmented/session.rs",
+      "path": "/home/paudley/Active/purrdf/ir/segmented/session.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "rdf-core/src/dataset_view.rs",
+      "path": "/home/paudley/Active/purrdf/rdf-core/src/dataset_view.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "ir/mutable/delta_view.rs",
+      "path": "/home/paudley/Active/purrdf/ir/mutable/delta_view.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "retrieval/src/statistics.rs",
+      "path": "/home/paudley/Active/purrdf/retrieval/src/statistics.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "main",
+      "files": 2073
+    },
+    {
+      "name": "DatasetView::cardinality_estimate",
+      "files": 6
+    },
+    {
+      "name": "RdfDataset",
+      "files": 744
+    },
+    {
+      "name": "PageSummary",
+      "files": 8
+    },
+    {
+      "name": "PageStream::Base",
+      "files": 5
+    },
+    {
+      "name": "emit_virtual_candidates",
+      "files": 4
+    },
+    {
+      "name": "Statistics",
+      "files": 48
+    },
+    {
+      "name": "DatasetView",
+      "files": 303
+    },
+    {
+      "name": "a84f28cdd",
+      "files": 0
+    },
+    {
+      "name": "de36c4840",
+      "files": 0
+    }
+  ],
+  "packages": [
+    "purrdf"
+  ],
+  "urls": [],
+  "truncated": []
+}

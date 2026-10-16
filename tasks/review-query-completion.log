@@ -1,0 +1,29 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 6m 49s
+     Running tests/query_completion.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/36266da0255b16b1/out/query_completion-36266da0255b16b1)
+
+running 21 tests
+test preexisting_source_failure_outranks_parse_and_empty_pattern_success ... ok
+test retained_prepared_visits_remain_inside_the_checked_publication_scope ... ok
+test public_explain_projection_holds_real_execution_permit_through_final_read ... ok
+test refused_reporting_admission_remains_typed_even_before_sticky_failure ... ok
+test typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures ... ok
+test named_graph_lookup_refusal_never_certifies_an_empty_scope ... ok
+test sticky_operational_root_outranks_the_direct_admission_error ... ok
+test refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry ... ok
+test final_checkpoint_failure_discards_success_and_keeps_workspace_held ... ok
+test graph_admission_and_final_checkpoint_failures_leave_destination_unchanged ... ok
+test explain_preflight_failure_outranks_malformed_query ... ok
+test direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence ... ok
+test healthy_query_routes_hold_execution_admission_through_final_checkpoint ... ok
+test explain_admission_failures_remain_typed_without_an_explanation ... ok
+test explain_admitted_supplied_inputs_preserve_parse_failure_before_reading ... ok
+test explain_measuring_and_final_checkpoint_failures_publish_no_ledger ... ok
+test prepared_governed_queries_discard_rows_produced_before_an_iterator_failure ... ok
+test healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence ... ok
+test explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence ... ok
+test healthy_explain_is_identical_to_resident_and_holds_admission_through_publication ... ok
+test the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

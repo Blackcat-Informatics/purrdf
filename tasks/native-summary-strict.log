@@ -1,0 +1,30 @@
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/alloc-probe)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/rdf-core/src/ir/statistics.rs:284:19
+    |
+284 |         reifiers: (usize, impl Fn(usize) -> ReifierRow),
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+284 |         reifiers: &(usize, impl Fn(usize) -> ReifierRow),
+    |                   +
+
+error: returning a `str` unnecessarily tied to the lifetime of arguments
+   --> crates/rdf-core/src/ir/statistics.rs:445:25
+    |
+445 |     fn source(&self) -> &str {
+    |                         ^^^^ help: try: `&'static str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_literal_bound
+    = note: `-D clippy::unnecessary-literal-bound` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_literal_bound)]`
+
+error: could not compile `purrdf-core` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

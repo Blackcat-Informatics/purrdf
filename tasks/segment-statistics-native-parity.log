@@ -1,0 +1,44 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+error: unnecessary qualification
+    --> crates/rdf-core/src/ir/segmented/build.rs:1470:17
+     |
+1470 |                 crate::GraphMatch::Any,
+     |                 ^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1470 -                 crate::GraphMatch::Any,
+1470 +                 GraphMatch::Any,
+     |
+
+error: taking a mutable reference to a `const` item
+    --> crates/rdf-core/src/ir/pack/bits.rs:1525:30
+     |
+1525 |             read_varint(&[], &mut usize::MAX),
+     |                              ^^^^^^^^^^^^^^^
+     |
+     = note: each usage of a `const` item creates a new temporary
+     = note: the mutable reference will refer to this temporary, not the original `const` item
+note: `const` item defined here
+    --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/core/src/num/uint_macros.rs:51:9
+     |
+  51 |           pub const MAX: Self = !0;
+     |           ^^^^^^^^^^^^^^^^^^^
+     |
+    ::: /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/core/src/num/mod.rs:1457:5
+     |
+1457 | /     uint_impl! {
+1458 | |         Self = usize,
+1459 | |         ActualT = u64,
+1460 | |         SignedT = isize,
+...    |
+1480 | |         bound_condition = " on 64-bit targets",
+1481 | |     }
+     | |_____- in this macro invocation
+     = note: `-D const-item-mutation` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(const_item_mutation)]`
+     = note: this error originates in the macro `uint_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

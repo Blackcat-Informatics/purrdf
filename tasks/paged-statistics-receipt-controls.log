@@ -1,0 +1,29 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4m 45s
+     Running tests/fallible_query.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/8867b3a01342eaf1/out/fallible_query-8867b3a01342eaf1)
+
+running 3 tests
+test fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure ... ok
+test fallible_explain_options_measure_the_same_registered_relation_as_resident ... ok
+test healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entries ... FAILED
+
+failures:
+
+---- healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entries stdout ----
+
+thread 'healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entries' (399111) panicked at crates/sparql-eval/tests/support/mod.rs:31:5:
+assertion `left == right` failed
+  left: "profile purrdf-sparql-governors v19 digest 8f256fbd39c945b841ef6c2df028881c27fe5af0f5c84c22d4b60ba5d73ef342 stop-poll-fuel 4093\nschedule\n  algebra-node-entry\t1\n  committed-output-row\t1\n  bgp-candidate-quad\t1\n  path-frontier-expansion\t1\n  row-expression-evaluation\t1\n  user-function-invocation\t1\n  remote-request-issued\t1\n  remote-row-ingested\t1\n  update-mutated-quad\t1\n  property-function-invocation\t1\n  property-function-row\t1\n  aggregate-invocation\t1\n  aggregate-accumulation\t1\n  exists-probe-answered\t1\n  exists-definition-answered\t1\n  exists-inner-solutions-consumed\t1\n  property-function-work\t1\n  native-function-work\t1\nledger\n  #0 Project fuel=3 rows=2 cells=4\n    algebra-node-entry\t1\n    committed-output-row\t2\n    #1 Bgp fuel=7 rows=2 cells=4 estimated-rows=1 actual-rows=2 estimated-peak-cells=4\n      algebra-node-entry\t1\n      committed-output-row\t2\n      bgp-candidate-quad\t4\nrelations\naggregates\njoin-orders\n  ?s <http://example.org/p> ?o .\n  ?s <http://example.org/q> ?o .\nstatistics\n  #1 pattern=0 graph=0 source=\"merged-dictionary-predicate-domains-v1\" revision=8006163558146599510 row-input=Some(StatisticCount { value: 2, accuracy: Exact }) subject-domain=Some(StatisticCount { value: 2, accuracy: Exact }) object-domain=Some(StatisticCount { value: 2, accuracy: Exact })\n  #1 pattern=1 graph=0 source=\"merged-dictionary-predicate-domains-v1\" revision=8006163558146599510 row-input=Some(StatisticCount { value: 2, accuracy: Exact }) subject-domain=Some(StatisticCount { value: 2, accuracy: Exact }) object-domain=Some(StatisticCount { value: 2, accuracy: Exact })\nstatement-indexes reifier-target=scan-default reifier-components=scan-default annotation-values=scan-default\nconsumed\n  fuel\t10\n  answer-rows\t2\n  intermediate-cells\t4\n  scratch-bytes\t0\n  remote-requests\t0\n  udf-depth\t0\n  pages\t0\n  bytes\t0\n"
+ right: "profile purrdf-sparql-governors v19 digest 8f256fbd39c945b841ef6c2df028881c27fe5af0f5c84c22d4b60ba5d73ef342 stop-poll-fuel 4093\nschedule\n  algebra-node-entry\t1\n  committed-output-row\t1\n  bgp-candidate-quad\t1\n  path-frontier-expansion\t1\n  row-expression-evaluation\t1\n  user-function-invocation\t1\n  remote-request-issued\t1\n  remote-row-ingested\t1\n  update-mutated-quad\t1\n  property-function-invocation\t1\n  property-function-row\t1\n  aggregate-invocation\t1\n  aggregate-accumulation\t1\n  exists-probe-answered\t1\n  exists-definition-answered\t1\n  exists-inner-solutions-consumed\t1\n  property-function-work\t1\n  native-function-work\t1\nledger\n  #0 Project fuel=3 rows=2 cells=4\n    algebra-node-entry\t1\n    committed-output-row\t2\n    #1 Bgp fuel=7 rows=2 cells=4 estimated-rows=1 actual-rows=2 estimated-peak-cells=4\n      algebra-node-entry\t1\n      committed-output-row\t2\n      bgp-candidate-quad\t4\nrelations\naggregates\njoin-orders\n  ?s <http://example.org/p> ?o .\n  ?s <http://example.org/q> ?o .\nstatistics\n  #1 pattern=0 graph=0 source=\"native-frozen-predicate-domains-v1\" revision=13324684471919508257 row-input=Some(StatisticCount { value: 2, accuracy: Exact }) subject-domain=Some(StatisticCount { value: 2, accuracy: Exact }) object-domain=Some(StatisticCount { value: 2, accuracy: Exact })\n  #1 pattern=1 graph=0 source=\"native-frozen-predicate-domains-v1\" revision=13324684471919508257 row-input=Some(StatisticCount { value: 2, accuracy: Exact }) subject-domain=Some(StatisticCount { value: 2, accuracy: Exact }) object-domain=Some(StatisticCount { value: 2, accuracy: Exact })\nstatement-indexes reifier-target=scan-default reifier-components=scan-default annotation-values=scan-default\nconsumed\n  fuel\t10\n  answer-rows\t2\n  intermediate-cells\t4\n  scratch-bytes\t0\n  remote-requests\t0\n  udf-depth\t0\n  pages\t0\n  bytes\t0\n"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entries
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test fallible_query`

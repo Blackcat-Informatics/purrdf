@@ -1,0 +1,13 @@
+
+running 8 tests
+test ir::segmented::build::certification_tests::freeze_storage_refusal_stays_distinct_from_malformed_rdf ... ok
+test ir::segmented::build::certification_tests::conservative_term_admission_does_not_authorize_unminted_ids ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_a_false_dictionary_fence ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_pruning_bounds ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_an_underpriced_owned_term ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_statistics ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_foreign_quad_references ... ok
+test ir::segmented::build::certification_tests::statistical_counts_are_selective_and_preserve_original_read_refusal ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1357 filtered out; finished in 0.01s
+

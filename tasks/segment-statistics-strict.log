@@ -1,0 +1,72 @@
+    Blocking waiting for file lock on build directory
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/rdf-core/src/ir/statistics/codec.rs:292:17
+    |
+292 |                 words.values = PredicateRecord::from(self.predicates.get(index)?).words()
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `words.values = PredicateRecord::from(self.predicates.get(index)?).words();`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: using `chunks_exact_mut` with a constant chunk size
+   --> crates/rdf-core/src/ir/statistics/codec.rs:363:38
+    |
+363 |         for (bytes, &word) in output.chunks_exact_mut(8).zip(words.values()) {
+    |                                      ^^^^^^^^^^^^^^^^^^^ help: consider using `as_chunks_mut` instead: `as_chunks_mut::<8>().0.iter_mut()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#chunks_exact_to_as_chunks
+    = note: `-D clippy::chunks-exact-to-as-chunks` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::chunks_exact_to_as_chunks)]`
+
+error: this argument (304 byte) is passed by value, but might be more efficient if passed by reference (limit: 256 byte)
+   --> crates/rdf-core/src/ir/segmented/build.rs:878:32
+    |
+878 | fn block(bytes: &[u8], header: Header, slot: u64) -> Result<&[u8], SegmentedError> {
+    |                                ^^^^^^ help: consider passing by reference instead: `&Header`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_types_passed_by_value
+    = note: `-D clippy::large-types-passed-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_types_passed_by_value)]`
+
+error: this argument (304 byte) is passed by value, but might be more efficient if passed by reference (limit: 256 byte)
+   --> crates/rdf-core/src/ir/segmented/build.rs:895:43
+    |
+895 | fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> {
+    |                                           ^^^^^^ help: consider passing by reference instead: `&Header`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_types_passed_by_value
+
+error: this argument (304 byte) is passed by value, but might be more efficient if passed by reference (limit: 256 byte)
+    --> crates/rdf-core/src/ir/segmented/build.rs:1186:13
+     |
+1186 |     header: Header,
+     |             ^^^^^^ help: consider passing by reference instead: `&Header`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_types_passed_by_value
+
+error: function call inside of `ok_or`
+    --> crates/rdf-core/src/ir/pack/bits.rs:1070:37
+     |
+1070 |           let byte = *bytes.get(*pos).ok_or(PackBitsError::Truncated {
+     |  _____________________________________^
+1071 | |             needed: pos.saturating_add(1),
+1072 | |             found: bytes.len(),
+1073 | |         })?;
+     | |__________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+     = note: `-D clippy::or-fun-call` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+help: try
+     |
+1070 ~         let byte = *bytes.get(*pos).ok_or_else(|| PackBitsError::Truncated {
+1071 +             needed: pos.saturating_add(1),
+1072 +             found: bytes.len(),
+1073 ~         })?;
+     |
+
+error: could not compile `purrdf-core` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-core` (lib test) due to 6 previous errors

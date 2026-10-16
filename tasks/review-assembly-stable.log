@@ -1,0 +1,33 @@
+== x86_64: 1 Cargo jobs
+== x86_64 graph 0: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/b10c6a0aafeb814f5811bb32584eec5d2487ed17088c59438f5edc644e836543/cargo.graph-0.stderr.log
+== x86_64-v3: 1 Cargo jobs
+== x86_64-v3 graph 0: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/4ebc41ac8e0d9ba61802453359406152282ca8dadac44bafd5200b0f22e3e3e8/cargo.graph-0.stderr.log
+== x86_64-v3 graph 1: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/4ebc41ac8e0d9ba61802453359406152282ca8dadac44bafd5200b0f22e3e3e8/cargo.graph-1.stderr.log
+== x86_64-v3 graph 2: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/4ebc41ac8e0d9ba61802453359406152282ca8dadac44bafd5200b0f22e3e3e8/cargo.graph-2.stderr.log
+== x86_64-v3: {"analysis_seconds": 53.6256471730303, "build_seconds": 3286.9536031840835, "fresh_artifacts": 65, "lock_seconds": 0.0036116569535806775, "parsed_units": 144, "reused_units": 65, "rustc_invocations": 144, "seconds": 3341.770247090026}
+== x86_64-v4: 1 Cargo jobs
+== x86_64-v4 graph 0: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/63b8ea1c78efc2fe740038aaa38e34a2ccb816fcf3508ebeea1e0accd7ece1ad/cargo.graph-0.stderr.log
+== x86_64-v4 graph 1: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/63b8ea1c78efc2fe740038aaa38e34a2ccb816fcf3508ebeea1e0accd7ece1ad/cargo.graph-1.stderr.log
+== x86_64-v4 graph 2: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/63b8ea1c78efc2fe740038aaa38e34a2ccb816fcf3508ebeea1e0accd7ece1ad/cargo.graph-2.stderr.log
+== x86_64-v4: {"analysis_seconds": 127.03377153701149, "build_seconds": 3486.78778184182, "fresh_artifacts": 65, "lock_seconds": 0.000384898972697556, "parsed_units": 144, "reused_units": 65, "rustc_invocations": 144, "seconds": 3616.36367520201}
+== aarch64: 1 Cargo jobs
+== aarch64 graph 0: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/8bb0b65be1332ebf738a524715984d1baee343d677b1461f72857940691d0fcc/cargo.graph-0.stderr.log
+== aarch64 graph 1: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/8bb0b65be1332ebf738a524715984d1baee343d677b1461f72857940691d0fcc/cargo.graph-1.stderr.log
+== aarch64 graph 2: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/8bb0b65be1332ebf738a524715984d1baee343d677b1461f72857940691d0fcc/cargo.graph-2.stderr.log
+== aarch64: {"analysis_seconds": 68.68799136008602, "build_seconds": 3685.5233727230225, "fresh_artifacts": 65, "lock_seconds": 0.0004216369707137346, "parsed_units": 144, "reused_units": 65, "rustc_invocations": 144, "seconds": 3755.009201565059}
+== aarch64-neoverse-v1: 1 Cargo jobs
+== aarch64-neoverse-v1 graph 0: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/bd768bf939fb78a94c97ac0a8a09d292235a50eca4adf717f9a872a34b32091b/cargo.graph-0.stderr.log
+== aarch64-neoverse-v1 graph 1: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/bd768bf939fb78a94c97ac0a8a09d292235a50eca4adf717f9a872a34b32091b/cargo.graph-1.stderr.log
+== aarch64-neoverse-v1 graph 2: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/bd768bf939fb78a94c97ac0a8a09d292235a50eca4adf717f9a872a34b32091b/cargo.graph-2.stderr.log
+== aarch64-neoverse-v1: {"analysis_seconds": 69.39749155309983, "build_seconds": 3585.881637327955, "fresh_artifacts": 65, "lock_seconds": 0.010939334984868765, "parsed_units": 144, "reused_units": 65, "rustc_invocations": 144, "seconds": 3657.1640546040144}
+== wasm32: 1 Cargo jobs
+== wasm32 graph 0: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/6fb207ebc9f9e9bf683ac8dd0b09c03995143d514c97c082bd53e01e3efa4e74/cargo.graph-0.stderr.log
+== wasm32 graph 1: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/6fb207ebc9f9e9bf683ac8dd0b09c03995143d514c97c082bd53e01e3efa4e74/cargo.graph-1.stderr.log
+== wasm32 graph 2: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/6fb207ebc9f9e9bf683ac8dd0b09c03995143d514c97c082bd53e01e3efa4e74/cargo.graph-2.stderr.log
+== wasm32: {"analysis_seconds": 90.70544558903202, "build_seconds": 2344.262688989984, "fresh_artifacts": 66, "lock_seconds": 0.005773240001872182, "parsed_units": 142, "reused_units": 66, "rustc_invocations": 142, "seconds": 2435.836550651933}
+== wasm32-simd128: 1 Cargo jobs
+== wasm32-simd128 graph 0: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/32219a131cbae92b6693e86558a620299a5c17dcf2f7daad80e4c88175d19c0f/cargo.graph-0.stderr.log
+== wasm32-simd128 graph 1: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/32219a131cbae92b6693e86558a620299a5c17dcf2f7daad80e4c88175d19c0f/cargo.graph-1.stderr.log
+== wasm32-simd128 graph 2: /home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/target/simd-asm/contexts/32219a131cbae92b6693e86558a620299a5c17dcf2f7daad80e4c88175d19c0f/cargo.graph-2.stderr.log
+== wasm32-simd128: {"analysis_seconds": 220.3383608889999, "build_seconds": 2485.088776060031, "fresh_artifacts": 66, "lock_seconds": 0.00024045305326581, "parsed_units": 142, "reused_units": 66, "rustc_invocations": 142, "seconds": 2707.695665334002}
+FAIL: x86_64: missing/changed assembly provenance for /opt/.cargo/0d/156876eb992a5d/x86_64-unknown-linux-gnu/release/build/typenum/7636000ed98a27d2/out/typenum-7636000ed98a27d2.s; rerun with --fresh

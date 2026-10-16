@@ -1,0 +1,9 @@
+Auto-merging crates/rdf-core/src/dataset_view.rs
+Auto-merging crates/sparql-eval/src/bgp.rs
+Auto-merging crates/sparql-eval/src/governor/ledger.rs
+CONFLICT (content): Merge conflict in crates/sparql-eval/src/governor/ledger.rs
+Auto-merging helpers-ledger.toml
+CONFLICT (content): Merge conflict in helpers-ledger.toml
+Recorded preimage for 'crates/sparql-eval/src/governor/ledger.rs'
+Recorded preimage for 'helpers-ledger.toml'
+Automatic merge failed; fix conflicts and then commit the result.

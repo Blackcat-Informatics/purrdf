@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.12s
+     Running unittests src/lib.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 1 test
+test bgp::tests::actual_bgp_reads_host_cheaper_path_and_preserves_solution_bag ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1632 filtered out; finished in 0.02s
+

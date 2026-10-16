@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against 7734b013d19b (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/rdf-core/tests/paged_stack.rs'.
+Recorded resolution for 'helpers-ledger.toml'.
+[paudley/484-planner-statistics-per-predicate-per 91334d30c] Merge main and preserve chronological statistics

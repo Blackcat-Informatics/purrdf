@@ -1,0 +1,9 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 3m 08s
+     Running unittests src/lib.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 1 test
+test bgp::tests::distinct_domains_change_dp_and_greedy_plans_and_match_actual_answers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1633 filtered out; finished in 0.00s
+

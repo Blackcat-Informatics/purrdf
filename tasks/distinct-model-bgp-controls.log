@@ -1,0 +1,68 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 47s
+     Running unittests src/lib.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 37 tests
+test bgp::tests::all_ground_bgp_orders_without_panicking ... ok
+test bgp::tests::absent_constant_yields_empty ... ok
+test bgp::tests::annotation_pattern_bound_predicate ... ok
+test bgp::tests::annotation_pattern_bound_subject_indexes ... ok
+test bgp::tests::blank_node_acts_as_a_variable_and_is_projected_out ... ok
+test bgp::tests::cardinality_default_preserves_merge_graph_statistic_boundaries ... ok
+test bgp::tests::connectivity_keeps_connected_before_disconnected ... FAILED
+test bgp::tests::cost_order_seeds_with_lowest_cardinality_pattern ... ok
+test bgp::tests::disconnected_bgp_yields_a_valid_permutation ... ok
+test bgp::tests::distinct_domains_change_dp_and_greedy_plans_and_match_actual_answers ... ok
+test bgp::tests::dp_is_never_worse_than_greedy ... ok
+test bgp::tests::host_statistic_snapshot_keeps_order_cache_deterministic_and_current ... ok
+test bgp::tests::join_reifier_to_its_annotation ... ok
+test bgp::tests::large_bgp_uses_greedy_and_returns_valid_permutation ... ok
+test bgp::tests::literal_object_constant_matches ... ok
+test bgp::tests::measured_host_work_inverts_native_subset_and_greedy_orders ... ok
+test bgp::tests::open_pattern_enumerates_assertions_reifies_edge_and_annotations ... ok
+test bgp::tests::order_is_deterministic ... ok
+test bgp::tests::actual_bgp_reads_host_cheaper_path_and_preserves_solution_bag ... ok
+test bgp::tests::reifies_pattern_binds_reifier_and_inner_variables ... ok
+test bgp::tests::reifies_pattern_inner_mismatch_is_empty ... ok
+test bgp::tests::reifies_pattern_on_plain_graph_is_empty ... ok
+test bgp::tests::reifies_pattern_repeated_inner_variable_enforced ... ok
+test bgp::tests::reifies_pattern_with_partly_ground_inner ... ok
+test bgp::tests::cardinality_default_preserves_existing_plans_and_prefix_ties ... ok
+test bgp::tests::repeated_variable_requires_self_loop ... ok
+test bgp::tests::single_pattern_one_variable ... ok
+test bgp::tests::reordering_source_patterns_preserves_results ... ok
+test bgp::tests::single_pattern_two_variables_enumerates_all_quads ... ok
+test bgp::tests::star_spokes_follow_hub_ordered_by_cardinality ... ok
+test bgp::tests::ties_break_on_lowest_original_index ... ok
+test bgp::tests::trivial_bgps_plan_without_probing ... ok
+test bgp::tests::two_pattern_join_on_shared_variable ... ok
+test bgp::tests::work_ranking_does_not_become_cardinality_or_physical_admission ... FAILED
+test bgp::tests::supplied_statistics_changes_actual_join_order_without_changing_answers ... ok
+test bgp::tests::the_cost_model_is_correctly_rounded_binary64_in_a_defined_order ... ok
+test bgp::tests::cost_order_materialises_fewer_rows_than_structural ... ok
+
+failures:
+
+---- bgp::tests::connectivity_keeps_connected_before_disconnected stdout ----
+
+thread 'bgp::tests::connectivity_keeps_connected_before_disconnected' (3291432) panicked at crates/sparql-eval/src/bgp.rs:4466:9:
+assertion `left == right` failed
+  left: [2, 0, 1]
+ right: [0, 1, 2]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- bgp::tests::work_ranking_does_not_become_cardinality_or_physical_admission stdout ----
+
+thread 'bgp::tests::work_ranking_does_not_become_cardinality_or_physical_admission' (3291461) panicked at crates/sparql-eval/src/bgp.rs:5227:9:
+assertion `left == right` failed
+  left: (7, 140)
+ right: (700, 700)
+
+
+failures:
+    bgp::tests::connectivity_keeps_connected_before_disconnected
+    bgp::tests::work_ranking_does_not_become_cardinality_or_physical_admission
+
+test result: FAILED. 35 passed; 2 failed; 0 ignored; 0 measured; 1597 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --lib`

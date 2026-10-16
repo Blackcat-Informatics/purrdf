@@ -1,0 +1,29 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+error[E0425]: cannot find value `INTEGER` in module `purrdf_xsd::datatype`
+   --> crates/rdf-core/src/ir/statistics.rs:341:90
+    |
+341 |         let number = builder.intern_literal(RdfLiteral::typed("7", purrdf_xsd::datatype::INTEGER)).unwrap();
+    |                                                                                          ^^^^^^^ not found in `purrdf_xsd::datatype`
+
+error[E0425]: cannot find value `INTEGER` in module `purrdf_xsd::datatype`
+   --> crates/rdf-core/src/ir/statistics.rs:395:68
+    |
+395 |         let integer = dataset.term_id_by_iri(purrdf_xsd::datatype::INTEGER).unwrap();
+    |                                                                    ^^^^^^^ not found in `purrdf_xsd::datatype`
+
+error[E0782]: expected a type, found a trait
+   --> crates/rdf-core/src/ir/statistics.rs:413:20
+    |
+413 |         assert_eq!(crate::FallibleDatasetView::read_error(&read), Some(super::super::triple::TripleReadError::NamedGraphsUnsupporte...
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^  ---------- not an associated item of trait `FallibleDatasetView`, so `FallibleDatasetView` is interpreted as a type
+    |
+help: you can add the `dyn` keyword if you want a trait object
+    |
+413 |         assert_eq!(<dyn crate::FallibleDatasetView>::read_error(&read), Some(super::super::triple::TripleReadError::NamedGraphsUnsupported));
+    |                    ++++                           +
+
+Some errors have detailed explanations: E0425, E0782.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `purrdf-core` (lib test) due to 3 previous errors

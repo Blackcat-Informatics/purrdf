@@ -1,0 +1,10 @@
+
+running 5 tests
+test ir::paged::summary::tests::changed_joint_statistics_are_certified_even_when_all_marginals_match ... ok
+test ir::paged::summary::tests::page_summary_matches_an_independent_recount ... ok
+test ir::paged::summary::tests::moving_one_row_between_graphs_changes_the_digest ... ok
+test ir::paged::summary::tests::every_under_count_changes_the_digest ... ok
+test ir::paged::summary::tests::sealing_the_same_page_twice_yields_the_same_digest ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1360 filtered out; finished in 0.00s
+

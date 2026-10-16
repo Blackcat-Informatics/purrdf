@@ -1,0 +1,5 @@
+The relation-local fallback is intentional and already present on main before this change. Admission replay and order search use different approximations: replay calibrates a missing positional domain with `min(relation_rows, global_terms)`, while order search retains its cheaper global-term heuristic. Making replay use global terms would change the existing metadata-free admission law and let unrelated dictionary terms dilute its forecast.
+
+The existing metadata-free host-cost control has seven driver rows and three 20/5/1-row spokes. Replay computes 140, then 35, then 7 rows, with peak 140. The focused control passes with an explicit `(7, 140)` assertion in the current remediation. Known provider domains still select the new distinct-aware path. Physical host work remains separate from both cardinality models.
+
+I am retaining that original fallback rather than applying the suggested change. The numerical assertion will be published with the current remediation; no estimate is being promoted into a guaranteed allocation/output bound.

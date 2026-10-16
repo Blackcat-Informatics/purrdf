@@ -1,0 +1,6 @@
+
+running 1 test
+test paged_reifier_counts_change_the_plan_with_identical_terms_and_assertions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.08s
+

@@ -1,0 +1,35 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 17s
+     Running unittests src/lib.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 5 tests
+test ir::statistics::tests::native_summaries_match_actual_graph_streams_and_sorted_domains ... ok
+test ir::statistics::tests::compact_statistics_preserve_ids_and_refuse_named_graph_metadata ... ok
+test ir::statistics::tests::translated_domains_keep_full_width_ids_and_sort_after_translation ... ok
+test ir::statistics::tests::paged_metadata_is_exact_shared_on_reopen_and_requires_no_query_io ... ok
+test ir::statistics::tests::property_translated_two_page_summaries_match_one_combined_snapshot ... FAILED
+
+failures:
+
+---- ir::statistics::tests::property_translated_two_page_summaries_match_one_combined_snapshot stdout ----
+
+thread 'ir::statistics::tests::property_translated_two_page_summaries_match_one_combined_snapshot' (4107971) panicked at crates/rdf-core/src/ir/statistics.rs:1144:17:
+called `Result::unwrap()` on an `Err` value: QuadOverlap(PagedQuadOverlap { first_page: PageId(0), second_page: PageId(1), table: Annotation, subject: Iri("http://example.org/r2"), predicate: Iri("http://example.org/annotation"), object: Literal { lexical_form: "7", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None }, graph: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'ir::statistics::tests::property_translated_two_page_summaries_match_one_combined_snapshot' (4107971) panicked at crates/rdf-core/src/ir/statistics.rs:1144:17:
+called `Result::unwrap()` on an `Err` value: QuadOverlap(PagedQuadOverlap { first_page: PageId(0), second_page: PageId(1), table: Annotation, subject: Iri("http://example.org/r2"), predicate: Iri("http://example.org/annotation"), object: Literal { lexical_form: "7", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None }, graph: None })
+
+thread 'ir::statistics::tests::property_translated_two_page_summaries_match_one_combined_snapshot' (4107971) panicked at crates/testkit/src/prop/runner.rs:398:9:
+property `purrdf_core::ir::statistics::tests::property_translated_two_page_summaries_match_one_combined_snapshot` failed after 66 passing case(s): panicked: called `Result::unwrap()` on an `Err` value: QuadOverlap(PagedQuadOverlap { first_page: PageId(0), second_page: PageId(1), table: Annotation, subject: Iri("http://example.org/r2"), predicate: Iri("http://example.org/annotation"), object: Literal { lexical_form: "7", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None }, graph: None })
+minimal failing input: (0, 2, false)
+choice sequence (hex, for Choices::from_hex): 000100
+seed: 0xedb701d99db5d5e8 (0 shrink(s)); rerun the same cases with PURRDF_PROP_SEED=0xedb701d99db5d5e8
+
+
+failures:
+    ir::statistics::tests::property_translated_two_page_summaries_match_one_combined_snapshot
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 1354 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`

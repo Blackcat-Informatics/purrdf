@@ -1,0 +1,6 @@
+
+running 1 test
+test selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.00s
+

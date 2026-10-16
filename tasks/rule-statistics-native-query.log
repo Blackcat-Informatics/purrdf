@@ -1,0 +1,46 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/datalog)
+error[E0599]: no method named `len` found for reference `&store::RelationStore` in the current scope
+    --> crates/datalog/src/plan.rs:1719:35
+     |
+1719 |         assert_eq!(actual.facts().len(), baseline.facts().len());
+     |                                   ^^^ method not found in `&store::RelationStore`
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `len`, perhaps you need to implement one of them:
+             candidate #1: `ExactSizeIterator`
+             candidate #2: `range_inclusive::private::IndexedRangeInteger`
+             candidate #3: `rayon::iter::IndexedParallelIterator`
+             candidate #4: `rayon::range::private::IndexedRangeInteger`
+             candidate #5: `typenum::type_operators::Len`
+
+error[E0599]: no method named `len` found for reference `&store::RelationStore` in the current scope
+    --> crates/datalog/src/plan.rs:1719:59
+     |
+1719 |         assert_eq!(actual.facts().len(), baseline.facts().len());
+     |                                                           ^^^ method not found in `&store::RelationStore`
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `len`, perhaps you need to implement one of them:
+             candidate #1: `ExactSizeIterator`
+             candidate #2: `range_inclusive::private::IndexedRangeInteger`
+             candidate #3: `rayon::iter::IndexedParallelIterator`
+             candidate #4: `rayon::range::private::IndexedRangeInteger`
+             candidate #5: `typenum::type_operators::Len`
+
+error[E0599]: no method named `len` found for reference `&store::RelationStore` in the current scope
+    --> crates/datalog/src/plan.rs:1720:35
+     |
+1720 |         assert_eq!(actual.facts().len(), 8);
+     |                                   ^^^ method not found in `&store::RelationStore`
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `len`, perhaps you need to implement one of them:
+             candidate #1: `ExactSizeIterator`
+             candidate #2: `range_inclusive::private::IndexedRangeInteger`
+             candidate #3: `rayon::iter::IndexedParallelIterator`
+             candidate #4: `rayon::range::private::IndexedRangeInteger`
+             candidate #5: `typenum::type_operators::Len`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-datalog` (lib test) due to 3 previous errors

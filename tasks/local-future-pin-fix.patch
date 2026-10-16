@@ -1,0 +1,39 @@
+diff --git crates/retrieval/src/executor.rs crates/retrieval/src/executor.rs
+index 88cc6f1d0..a3f1693ec 100644
+--- crates/retrieval/src/executor.rs
++++ crates/retrieval/src/executor.rs
+@@ -29,7 +29,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
+ 
+     let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
+     let mut context = Context::from_waker(&waker);
+-    let mut future = Box::pin(future);
++    let mut future = std::pin::pin!(future);
+     loop {
+         match future.as_mut().poll(&mut context) {
+             Poll::Ready(output) => return output,
+diff --git crates/retrieval/src/fusion_stream.rs crates/retrieval/src/fusion_stream.rs
+index 81eea766e..0801a3749 100644
+--- crates/retrieval/src/fusion_stream.rs
++++ crates/retrieval/src/fusion_stream.rs
+@@ -5183,7 +5183,7 @@ mod tests {
+     /// pends: an assertion that the fixture streams are synchronous, not an executor.
+     fn poll_once_expect_ready<F: Future>(future: F) -> F::Output {
+         let mut context = Context::from_waker(Waker::noop());
+-        let mut future = Box::pin(future);
++        let mut future = std::pin::pin!(future);
+         match future.as_mut().poll(&mut context) {
+             Poll::Ready(output) => output,
+             Poll::Pending => panic!("the fixture streams are synchronous and never pend"),
+diff --git crates/retrieval/tests/support/streams.rs crates/retrieval/tests/support/streams.rs
+index 060818231..f71e1400e 100644
+--- crates/retrieval/tests/support/streams.rs
++++ crates/retrieval/tests/support/streams.rs
+@@ -29,7 +29,7 @@ use purrdf_retrieval::{
+ /// When the future pends: the fixture streams are synchronous and never do.
+ pub fn ready<F: Future>(future: F) -> F::Output {
+     let mut context = Context::from_waker(Waker::noop());
+-    let mut future = Box::pin(future);
++    let mut future = std::pin::pin!(future);
+     match future.as_mut().poll(&mut context) {
+         Poll::Ready(output) => output,
+         Poll::Pending => panic!("the fixture streams are synchronous and never pend"),

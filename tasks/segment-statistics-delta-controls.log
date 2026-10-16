@@ -1,0 +1,8 @@
+
+running 3 tests
+test ir::pack::bits::tests::delta_list_empty ... ok
+test ir::pack::bits::tests::delta_list_refuses_overflow_and_stops_after_the_original_error ... ok
+test ir::pack::bits::tests::delta_list_round_trip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1362 filtered out; finished in 0.00s
+

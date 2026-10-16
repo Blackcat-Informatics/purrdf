@@ -1,0 +1,9 @@
+Closes #484.
+
+The SPARQL planner now consumes immutable predicate/class frequencies, positional distinct domains and RDF 1.2 reifier/annotation statistics instead of relying only on a global term count. Native, compact, paged and persisted stores expose the same caller-implementable seam; EXPLAIN records consulted counts, exactness and provider revision. Native Datalog planning can use the provider for connected-order tie-breaking.
+
+Paged metadata translates identities before exact domain union and is shared on unchanged warm reopen. Persisted statistics use authenticated, selectively readable records and streamed domains. Chronological stacks expose conservative physical bounds across overlap/removals, retaining unknown distinct counts rather than adding local domains. Allocation admission and original storage failures remain on their existing owners.
+
+Validation includes the actual million-claim/six-million-annotation join (one million estimated and actual results), native/paged rare-class ordering, a reifier-count-only plan change, a supplied-provider plan/EXPLAIN change, and actual two-segment versus combined-image parity. Affected planner, rule, allocation, certification, source-fault and public-query controls pass, including 200,000-claim persisted LIMIT/count and three exact scalar WASM executions. All 15 normative governor-corpus checks pass, including unchanged frozen receipts and the complete fuel-sweep trace. Hosted qualification and review are pending.
+
+Governor profile 20 identifies changed join orders and charged-work cut points; the point schedule is unchanged. Persisted data profile 2 adds authenticated statistics sections and explicitly refuses old profile-1 images, which must be regenerated from their RDF inputs. Historical storage measurements are labeled with their original source rather than claimed for the new encoding.

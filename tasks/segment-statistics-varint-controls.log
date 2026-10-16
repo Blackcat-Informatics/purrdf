@@ -1,0 +1,8 @@
+
+running 3 tests
+test ir::pack::bits::tests::varint_read_past_end_is_truncated ... ok
+test ir::pack::bits::tests::varint_refuses_payload_overflow_and_invalid_cursor ... ok
+test ir::pack::bits::tests::varint_round_trip_edge_values ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1362 filtered out; finished in 0.00s
+

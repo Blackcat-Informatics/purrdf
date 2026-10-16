@@ -1,0 +1,19 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+error[E0277]: `D` cannot be shared between threads safely
+   --> crates/rdf-core/src/statistics/layered.rs:114:58
+    |
+114 | impl<D: LayeredStatistics> SnapshotStatistics<D::Id> for D {
+    |                                                          ^ `D` cannot be shared between threads safely
+    |
+note: required by a bound in `SnapshotStatistics`
+   --> crates/rdf-core/src/statistics.rs:71:46
+    |
+ 71 | pub trait SnapshotStatistics<I: ViewTermId>: Sync {
+    |                                              ^^^^ required by this bound in `SnapshotStatistics`
+help: consider further restricting type parameter `D` with trait `Sync`
+    |
+114 | impl<D: LayeredStatistics + std::marker::Sync> SnapshotStatistics<D::Id> for D {
+    |                           +++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (lib) due to 1 previous error

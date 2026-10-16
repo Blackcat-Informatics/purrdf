@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 0d075201ffe6 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/484-planner-statistics-per-predicate-per 839018278] Persist certified source statistics for segmented queries
+ 11 files changed, 1394 insertions(+), 203 deletions(-)
+ create mode 100644 crates/rdf-core/src/ir/segmented/session/statistics.rs
+ create mode 100644 crates/rdf-core/src/ir/statistics/codec.rs

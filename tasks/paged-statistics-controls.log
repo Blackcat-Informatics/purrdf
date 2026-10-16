@@ -1,0 +1,213 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/rdf-core)
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/statistics.rs:1035:35
+     |
+1035 |                 .term_id_by_value(&native.term_value(id))
+     |                  ---------------- ^^^^^^^^^^^^^^^^^^^^^^ expected `&TermValue`, found `&Result<TermValue, TermLookupError>`
+     |                  |
+     |                  arguments to this method are incorrect
+     |
+     = note: expected reference `&TermValue`
+                found reference `&Result<TermValue, TermLookupError>`
+note: method defined here
+    --> crates/rdf-core/src/dataset_view.rs:921:8
+     |
+ 921 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+     |        ^^^^^^^^^^^^^^^^        -----
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/statistics.rs:1146:43
+     |
+1146 |                 combined.term_id_by_value(&left.term_value(id)).unwrap()).collect();
+     |                          ---------------- ^^^^^^^^^^^^^^^^^^^^ expected `&TermValue`, found `&Result<TermValue, TermLookupError>`
+     |                          |
+     |                          arguments to this method are incorrect
+     |
+     = note: expected reference `&TermValue`
+                found reference `&Result<TermValue, TermLookupError>`
+note: method defined here
+    --> crates/rdf-core/src/dataset_view.rs:921:8
+     |
+ 921 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+     |        ^^^^^^^^^^^^^^^^        -----
+note: the `term_id_by_value` call is resolved to the method in `dataset_view::DatasetView`, shadowing the method of the same name on the inherent impl for `ir::dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/statistics.rs:1146:26
+     |
+ 855 |         DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, StatisticsPosition,
+     |         ----------- `dataset_view::DatasetView` imported here
+...
+1146 |                 combined.term_id_by_value(&left.term_value(id)).unwrap()).collect();
+     |                          ^^^^^^^^^^^^^^^^ refers to `dataset_view::DatasetView::term_id_by_value`
+     |
+    ::: crates/rdf-core/src/lib.rs:172:29
+     |
+ 172 |     AccessCost, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView,
+     |                             ----------- `dataset_view::DatasetView` imported here
+help: you might have meant to call the other method; you can use the fully-qualified path to call it explicitly
+     |
+1146 -                 combined.term_id_by_value(&left.term_value(id)).unwrap()).collect();
+1146 +                 dataset::RdfDataset::term_id_by_value(&combined, &left.term_value(id)).unwrap()).collect();
+     |
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/statistics.rs:1148:40
+     |
+1148 |                 paged.term_id_by_value(&left.term_value(id)).unwrap().unwrap()).collect();
+     |                       ---------------- ^^^^^^^^^^^^^^^^^^^^ expected `&TermValue`, found `&Result<TermValue, TermLookupError>`
+     |                       |
+     |                       arguments to this method are incorrect
+     |
+     = note: expected reference `&TermValue`
+                found reference `&Result<TermValue, TermLookupError>`
+note: method defined here
+    --> crates/rdf-core/src/dataset_view.rs:921:8
+     |
+ 921 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+     |        ^^^^^^^^^^^^^^^^        -----
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/statistics.rs:1157:88
+     |
+1157 |                         native_scopes.push(GraphMatch::Named(combined.term_id_by_value(&value).unwrap()));
+     |                                                                       ---------------- ^^^^^^ expected `&TermValue`, found `&Result<TermValue, TermLookupError>`
+     |                                                                       |
+     |                                                                       arguments to this method are incorrect
+     |
+     = note: expected reference `&TermValue`
+                found reference `&Result<TermValue, TermLookupError>`
+note: method defined here
+    --> crates/rdf-core/src/dataset_view.rs:921:8
+     |
+ 921 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+     |        ^^^^^^^^^^^^^^^^        -----
+note: the `term_id_by_value` call is resolved to the method in `dataset_view::DatasetView`, shadowing the method of the same name on the inherent impl for `ir::dataset::RdfDataset`
+    --> crates/rdf-core/src/ir/statistics.rs:1157:71
+     |
+ 855 |         DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, StatisticsPosition,
+     |         ----------- `dataset_view::DatasetView` imported here
+...
+1157 |                         native_scopes.push(GraphMatch::Named(combined.term_id_by_value(&value).unwrap()));
+     |                                                                       ^^^^^^^^^^^^^^^^ refers to `dataset_view::DatasetView::term_id_by_value`
+     |
+    ::: crates/rdf-core/src/lib.rs:172:29
+     |
+ 172 |     AccessCost, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView,
+     |                             ----------- `dataset_view::DatasetView` imported here
+help: you might have meant to call the other method; you can use the fully-qualified path to call it explicitly
+     |
+1157 -                         native_scopes.push(GraphMatch::Named(combined.term_id_by_value(&value).unwrap()));
+1157 +                         native_scopes.push(GraphMatch::Named(dataset::RdfDataset::term_id_by_value(&combined, &value).unwrap()));
+     |
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/statistics.rs:1158:85
+     |
+1158 |                         global_scopes.push(GraphMatch::Named(paged.term_id_by_value(&value).unwrap().unwrap()));
+     |                                                                    ---------------- ^^^^^^ expected `&TermValue`, found `&Result<TermValue, TermLookupError>`
+     |                                                                    |
+     |                                                                    arguments to this method are incorrect
+     |
+     = note: expected reference `&TermValue`
+                found reference `&Result<TermValue, TermLookupError>`
+note: method defined here
+    --> crates/rdf-core/src/dataset_view.rs:921:8
+     |
+ 921 |     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError>;
+     |        ^^^^^^^^^^^^^^^^        -----
+
+error[E0308]: arguments to this function are incorrect
+    --> crates/rdf-core/src/ir/statistics.rs:1162:13
+     |
+1162 |             assert_rows(&*combined, &native_ids, &native_scopes);
+     |             ^^^^^^^^^^^
+     |
+note: expected `&[TermId]`, found `&Vec<Option<TermId>>`
+    --> crates/rdf-core/src/ir/statistics.rs:1162:37
+     |
+1162 |             assert_rows(&*combined, &native_ids, &native_scopes);
+     |                                     ^^^^^^^^^^^
+     = note: expected reference `&[ir::term::TermId]`
+                found reference `&Vec<Option<ir::term::TermId>>`
+note: expected `&[GraphMatch]`, found `&Vec<GraphMatch<Option<TermId>>>`
+    --> crates/rdf-core/src/ir/statistics.rs:1162:50
+     |
+1162 |             assert_rows(&*combined, &native_ids, &native_scopes);
+     |                                                  ^^^^^^^^^^^^^^
+     = note: expected reference `&[dataset_view::GraphMatch]`
+                found reference `&Vec<dataset_view::GraphMatch<Option<ir::term::TermId>>>`
+note: function defined here
+    --> crates/rdf-core/src/ir/statistics.rs:930:8
+     |
+ 930 |     fn assert_rows<D: DatasetView>(view: &D, predicates: &[D::Id], scopes: &[GraphMatch<D::Id>]) {
+     |        ^^^^^^^^^^^                           --------------------  ----------------------------
+
+error[E0308]: arguments to this method are incorrect
+    --> crates/rdf-core/src/ir/statistics.rs:1168:60
+     |
+1168 | ...                   combined.statistics().unwrap().predicate(native_id, native_scope, stream),
+     |                                                      ^^^^^^^^^
+     |
+note: expected `TermId`, found `Option<TermId>`
+    --> crates/rdf-core/src/ir/statistics.rs:1168:70
+     |
+1168 | ...                   combined.statistics().unwrap().predicate(native_id, native_scope, stream),
+     |                                                                ^^^^^^^^^
+     = note: expected struct `TermId`
+                  found enum `Option<TermId>`
+note: expected `GraphMatch`, found `GraphMatch<Option<TermId>>`
+    --> crates/rdf-core/src/ir/statistics.rs:1168:81
+     |
+1168 | ...                   combined.statistics().unwrap().predicate(native_id, native_scope, stream),
+     |                                                                           ^^^^^^^^^^^^
+     = note: expected enum `GraphMatch<TermId>`
+                found enum `GraphMatch<Option<TermId>>`
+note: method defined here
+    --> crates/rdf-core/src/statistics.rs:125:8
+     |
+ 125 |     fn predicate(
+     |        ^^^^^^^^^
+ 126 |         &self,
+ 127 |         predicate: I,
+     |         ---------
+ 128 |         graph: GraphMatch<I>,
+     |         -----
+help: consider using `Option::expect` to unwrap the `Option<ir::term::TermId>` value, panicking if the value is an `Option::None`
+     |
+1168 |                             combined.statistics().unwrap().predicate(native_id.expect("REASON"), native_scope, stream),
+     |                                                                               +++++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+   --> crates/rdf-core/src/ir/paged/summary.rs:933:30
+    |
+933 |         let sealed = fresh().digest();
+    |                              ^^^^^^-- argument #1 of type `&ir::statistics::LocalStatistics` is missing
+    |
+note: method defined here
+   --> crates/rdf-core/src/ir/paged/summary.rs:357:8
+    |
+357 |     fn digest(&self, statistics: &super::super::statistics::LocalStatistics) -> u64 {
+    |        ^^^^^^        ------------------------------------------------------
+help: provide the argument
+    |
+933 |         let sealed = fresh().digest(/* &LocalStatistics */);
+    |                                     ++++++++++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+   --> crates/rdf-core/src/ir/paged/summary.rs:958:24
+    |
+958 |                 counts.digest(),
+    |                        ^^^^^^-- argument #1 of type `&ir::statistics::LocalStatistics` is missing
+    |
+note: method defined here
+   --> crates/rdf-core/src/ir/paged/summary.rs:357:8
+    |
+357 |     fn digest(&self, statistics: &super::super::statistics::LocalStatistics) -> u64 {
+    |        ^^^^^^        ------------------------------------------------------
+help: provide the argument
+    |
+958 |                 counts.digest(/* &LocalStatistics */),
+    |                               ++++++++++++++++++++++
+
+Some errors have detailed explanations: E0061, E0308.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-core` (lib test) due to 9 previous errors

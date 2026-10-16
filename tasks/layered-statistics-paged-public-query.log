@@ -1,0 +1,16 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 44.92s
+     Running tests/paged_stack_query.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-eval/31f3a2e814b80b61/out/paged_stack_query-31f3a2e814b80b61)
+
+running 8 tests
+test aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary ... ok
+test constants_and_head_queries_check_skipped_and_zero_page_source_descriptors ... ok
+test delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold ... ok
+test native_primary_and_virtual_reifier_overlap_reaches_the_same_consumer_bag ... ok
+test source_faults_are_operational_sticky_and_refuse_compacted_artifacts ... ok
+test typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables ... ok
+test chronological_layers_match_eager_bags_for_every_consumer_family ... ok
+test generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+

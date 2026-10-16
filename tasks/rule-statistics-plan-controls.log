@@ -1,0 +1,36 @@
+
+running 31 tests
+test plan::tests::cyclic_certification_is_independent_of_edge_discovery_order ... ok
+test plan::tests::cyclic_certification_keeps_bridge_atoms_binary ... ok
+test plan::tests::acyclic_plan_has_no_join_groups - should panic ... ok
+test plan::tests::bridge_edges_identifies_exactly_the_non_cycle_edges ... ok
+test plan::tests::cyclic_certification_promotes_a_triangle ... ok
+test plan::tests::a_constant_predicate_atom_reaches_an_index_without_sweeping ... ok
+test plan::tests::cyclic_certification_leaves_acyclic_bodies_binary ... ok
+test plan::tests::index_choice_round_trips_through_the_adornment_lattice ... ok
+test plan::tests::hybrid_sips_connects_bridges_and_any_member_of_a_cycle ... ok
+test plan::tests::index_choice_tracks_the_binding_frontier ... ok
+test plan::tests::pipeline_preserves_program_order_within_a_stratum ... ok
+test plan::tests::index_choice_rejects_a_non_binary_adornment - should panic ... ok
+test plan::tests::index_choice_lowers_to_a_store_bound ... ok
+test plan::tests::pipeline_refuses_a_non_stratifiable_program ... ok
+test plan::tests::pipeline_refuses_every_non_datalog_head_form ... ok
+test plan::tests::pipeline_seals_a_stratified_planned_program ... ok
+test plan::tests::plan_sips_connects_before_scanning_another_type ... ok
+test plan::tests::plan_assigns_slots_in_authored_first_occurrence_order ... ok
+test plan::tests::plan_sips_connects_through_predicate_and_graph_variables ... ok
+test plan::tests::plan_sips_preserves_repetition_and_authored_ties ... ok
+test plan::tests::plan_sips_runs_the_most_bound_atom_first ... ok
+test plan::tests::planning_is_reproducible ... ok
+test plan::tests::restore_body_order_swaps_is_a_correct_in_place_program ... ok
+test plan::tests::plan_lowers_every_position_shape ... ok
+test plan::tests::snapshot_statistics_change_connected_order_and_preserve_native_proofs ... ok
+test plan::tests::plan_partitions_the_body_preserving_authored_order ... ok
+test plan::tests::stratify_admits_positive_recursion ... ok
+test plan::tests::stratify_lifts_a_negated_dependency_one_stratum ... ok
+test plan::tests::stratify_of_an_empty_program_is_empty ... ok
+test plan::tests::stratify_rejects_negation_inside_a_cycle ... ok
+test plan::tests::union_find_merges_connected_components ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 338 filtered out; finished in 0.00s
+

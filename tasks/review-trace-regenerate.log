@@ -1,0 +1,22 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/entail)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/retrieval)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/validate)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/columnar)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/hnsw)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/json)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/mime)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/shex)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/purrdf)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/conformance-kit)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/484-planner-statistics-per-predicate-per/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 8m 25s
+     Running tests/evaluator_trace.rs (/opt/.cargo/0d/156876eb992a5d/debug/build/purrdf-sparql-conformance/baa6f57b0aa21a6f/out/evaluator_trace-baa6f57b0aa21a6f)
+
+running 1 test
+test regenerate_evaluator_trace ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 17.87s
+

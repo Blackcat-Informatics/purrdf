@@ -1,0 +1,6 @@
+
+running 1 test
+test ir::builder::native_graph_birth_tests::native_statistics_refusal_refunds_partial_buffers_and_uses_original_grant ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1359 filtered out; finished in 0.00s
+

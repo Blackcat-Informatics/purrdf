@@ -1,0 +1,3 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 0d075201ffe6 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/484-planner-statistics-per-predicate-per 279a26a0e] Version snapshot-aware planning charges and document source format costs
+ 3 files changed, 24 insertions(+), 7 deletions(-)
