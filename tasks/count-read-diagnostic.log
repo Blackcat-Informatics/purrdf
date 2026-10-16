@@ -1,0 +1,9 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/sparql-eval)
+error[E0599]: no method named `evidence` found for struct `SegmentedStackQuery<'a>` in the current scope
+    --> crates/sparql-eval/tests/segmented_query.rs:1519:24
+     |
+1519 |                 source.evidence().with_requests(|requests| {
+     |                        ^^^^^^^^ method not found in `SegmentedStackQuery<'_>`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (test "segmented_query") due to 1 previous error

@@ -1,0 +1,47 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 21.57s
+     Running tests/segmented.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/699105bc0bc52225/out/segmented-699105bc0bc52225)
+
+running 18 tests
+test demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic ... ok
+test a_single_oversized_encoded_term_refuses_without_a_sealed_image ... ok
+test construction_limits_grow_on_input_instead_of_reserving_their_ceilings ... ok
+test live_pins_are_charged_and_cannot_be_evicted ... ok
+test exact_evidence_and_workspace_refuse_before_unbounded_growth ... ok
+test cache_eviction_preserves_exact_non_cache_owner_conservation ... ok
+test corruption_cannot_turn_an_omitted_fact_into_success ... ok
+test rdf12_references_empty_graphs_and_streamed_lines_survive ... ok
+test indexed_reopen_preserves_high_ids_and_bidirectional_batches ... ok
+test persisted_certification_reopens_only_with_retained_authority ... ok
+test retained_v1_pack_reader_migrates_into_the_versioned_representation ... ok
+test snapshot_qualified_handles_do_not_reinterpret_reused_compact_ids ... ok
+test cancellation_retains_the_exact_failed_request_and_refuses_partial_drains ... ok
+test pin_refusal_precedes_io_and_owned_pin_survives_session_drop ... ok
+test composite_lexical_blank_references_keep_their_scoped_dictionary_closure ... ok
+test charged_read_peak_covers_measured_allocations_including_streamed_output ... ok
+test byte_packed_dictionaries_round_trip_with_sparse_high_id_reads ... ok
+test routing_growth_cannot_refuse_an_already_admitted_payload ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/segmented_stack.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/5470527d8878d0c3/out/segmented_stack-5470527d8878d0c3)
+
+running 15 tests
+test empty_certified_streams_do_not_probe_dictionary_for_bound_head_row ... ok
+test persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last ... ok
+test chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs ... ok
+test removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view ... ok
+test fallible_evidence_pins_complete_publication_and_immutable_request_prefix ... ok
+test ordinary_quads_keep_their_authored_kind_across_layer_partitions ... ok
+test tenfold_historical_dictionary_and_removals_do_not_grow_snapshot_allocation ... ok
+test effective_annotation_classification_uses_original_chronology_and_first_occurrence ... ok
+test memoized_term_hits_allocate_nothing_and_failed_import_latches ... ok
+test admitted_identity_walk_releases_spill_and_preserves_hash_law ... ok
+test final_query_readiness_checks_untouched_evicted_descriptors ... ok
+test resident_head_copy_refuses_under_the_shared_operation_grant ... ok
+test query_ids_touch_only_values_and_preserve_source_scopes ... ok
+test thousand_distinct_sources_open_only_headers_under_one_request_budget ... ok
+test generated_chronological_publications_match_eager_typed_seals ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+

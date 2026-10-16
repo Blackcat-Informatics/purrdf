@@ -1,0 +1,22 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 5.70s
+     Running tests/segmented.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/699105bc0bc52225/out/segmented-699105bc0bc52225)
+
+running 1 test
+test byte_packed_dictionaries_round_trip_with_sparse_high_id_reads ... FAILED
+
+failures:
+
+---- byte_packed_dictionaries_round_trip_with_sparse_high_id_reads stdout ----
+thread 'byte_packed_dictionaries_round_trip_with_sparse_high_id_reads' panicked at crates/rdf-core/tests/segmented.rs:234:9:
+assertion `left == right` failed: cached variable-population terms must not reread search fences
+  left: 10400
+ right: 160
+
+
+failures:
+    byte_packed_dictionaries_round_trip_with_sparse_high_id_reads
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-core --test segmented`

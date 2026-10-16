@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 8m 04s
+     Running unittests src/lib.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::segmented::session::operation_tests::cache_slot_growth_counts_the_pending_block_before_allocating ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1354 filtered out; finished in 0.00s
+

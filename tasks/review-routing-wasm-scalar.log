@@ -1,0 +1,16 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 2m 49s
+     Running unittests src/lib.rs (/opt/.cargo/30/044a3953b5e566/wasm32-unknown-unknown/debug/build/purrdf-core/b1194e7f2d3990b6/out/purrdf_core-b1194e7f2d3990b6.wasm)
+error: the wasm32 module failed outside any test case:
+RuntimeError: unreachable
+    at purrdf_core-b1194e7f2d3990b6.wasm.__rustc[611f7a7a19d737f7]::__rust_abort (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[10811]:0x9df1a9)
+    at purrdf_core-b1194e7f2d3990b6.wasm.__rustc[611f7a7a19d737f7]::__rust_start_panic (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[10794]:0x9df146)
+    at purrdf_core-b1194e7f2d3990b6.wasm.__rustc[611f7a7a19d737f7]::rust_panic (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[10524]:0x9de450)
+    at purrdf_core-b1194e7f2d3990b6.wasm.std[20479c4d650b61f9]::panicking::panic_with_hook (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[6806]:0x974e6b)
+    at purrdf_core-b1194e7f2d3990b6.wasm.std[20479c4d650b61f9]::panicking::panic_handler::{closure#0} (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[8272]:0x9b6b16)
+    at purrdf_core-b1194e7f2d3990b6.wasm.std[20479c4d650b61f9]::sys::backtrace::__rust_end_short_backtrace::<std[20479c4d650b61f9]::panicking::panic_handler::{closure#0}, !> (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[10740]:0x9def8f)
+    at purrdf_core-b1194e7f2d3990b6.wasm.__rustc[611f7a7a19d737f7]::rust_begin_unwind (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[10105]:0x9db7ca)
+    at purrdf_core-b1194e7f2d3990b6.wasm.core[e8e77cc1e90bd3b0]::panicking::panic_fmt (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[9367]:0x9d0ee1)
+    at purrdf_core-b1194e7f2d3990b6.wasm.core[e8e77cc1e90bd3b0]::result::unwrap_failed (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[8785]:0x9c4d50)
+    at purrdf_core-b1194e7f2d3990b6.wasm.std[20479c4d650b61f9]::thread::functions::spawn::<purrdf_core[277cf0cf504b6db7]::ir::dataset::tests::content_addressing::predecessors_concurrent_first_build_is_consistent::{closure#0}, alloc[6a665ba0e7790d46]::vec::Vec<purrdf_core[277cf0cf504b6db7]::ir::term::TermId>> (wasm://wasm/purrdf_core-b1194e7f2d3990b6.wasm-03a45c1e:wasm-function[9169]:0x9cd590)
+error: test failed, to rerun pass `-p purrdf-core --lib`

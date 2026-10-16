@@ -1,0 +1,45 @@
+## Summary
+
+Querying a persisted segmented image of a realistic size never returns: interning each newly touched term copies the whole query-local representative table, so a query's cost is quadratic in the terms it touches. Even `LIMIT 10` doesn't return, because the query touches far more terms than it emits.
+
+Found while measuring Katamari's restart cost against purrdf's segmented snapshots (`main` at `541427dc2`, #544).
+
+## Repro shape
+
+- 200,000 RDF 1.2 claims, synthetic: each one is a reifier (`rdf:reifies` a triple term) plus its annotations. Projected into one `RdfDatasetBuilder`: 600,263 terms.
+- Frozen, `PackBuilder::build_view_bytes`, then `SegmentedImage::from_pack_v1` with `SegmentedBuildLimits::new(u32::MAX - 1, u32::MAX, u32::MAX, 4096, 32)`. Pack 25,409,077 B; image 190,832,640 B.
+- Fresh process: `SegmentedReceipt::from_authenticated_bytes`, a file-backed `SegmentedProvider` (`read_exact_at`), one `SegmentedLayer` (no removals or declarations), `SegmentedStack::publish`, `snapshot().query(limits)`, then `NativeSparqlEngine::query_fallible_view`.
+
+## What happens
+
+| Step | Result |
+|---|---|
+| layer, publish, snapshot and header open | under 1 ms; 34 reads, 9,216 B; RSS ~10 MB. Excellent. |
+| `SELECT ?r WHERE { ?r rdf:reifies ?t } LIMIT 10` | no answer within 300 s (two runs) |
+| `SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }` | no answer within 300 s; also killed at 1,200 s |
+
+`perf record -F 199 -e cycles:u --call-graph=dwarf` for 60 s during the `LIMIT 10` query:
+
+- `Vec<purrdf_core::ir::segmented::query::Representative>::append_elements`: 84-85% inclusive
+- `SegmentedSession::block`: 11.2% self
+- everything else: under 1%
+
+## Cause
+
+- `crates/rdf-core/src/ir/segmented/query.rs:228-232`: on each new term, `memory.reserve(representatives, representatives.len() + 1)`, and `reserve_table_with_memory(values, next, ..)` likewise.
+- `crates/lex/src/allocation.rs:503-526` (`Memory::reserve`): when `required > capacity`, it does `try_reserve_exact(required)` into a new `Vec` and then `replacement.append(values)`. That's a full copy at every growth step, growing by exactly one element.
+
+So n touched terms cost O(n^2) element copies. The hash tables reserved alongside may have the same shape.
+
+## Suggested direction
+
+- Geometric growth inside `Memory::reserve`, e.g. reserve `max(required, 2 * capacity)`, admitting the larger layout through the same accounting. The admission stays exact; the growth step stops being one element.
+- Separately: should `LIMIT 10` over a single pattern need to intern every term the scan passes? A streaming page that touches about 10 representatives would make first results independent of image size.
+
+## Two related observations
+
+1. **Publish admission.** With `SegmentedReadLimits` live bytes at 256 MiB, `SegmentedStack::publish` of this single 191 MB layer refuses with `Residency { requested: 2400215288, limit: 268435456 }`. With 4 GiB it succeeds, and RSS stays around 10 MB. Is the 2.4 GB a worst-case admission rather than real use? If so, a caller that has to pick a budget can't distinguish the two.
+2. **Image size.** At 4 KiB blocks of 32 records, the segmented image is 7.5x the compact pack of the same data (954 B vs 127 B per claim). We'll measure other block sizes on our side. If you know which part of the layout dominates (block authentication, dictionary blocks, the three orders), that would help us pick sizes.
+
+The harness is Katamari's `crates/katamari-unlock/tests/idle_cost.rs`, test `the_segmented_graph`. We can share the exact construction code or run a candidate fix against the same 200k image.
+

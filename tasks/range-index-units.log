@@ -1,0 +1,58 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+error[E0283]: type annotations needed
+   --> crates/rdf-core/src/ir/segmented/session.rs:406:29
+    |
+386 |                         self.storage.run(|memory| {
+    |                                      --- type must be known at this point
+...
+406 |                             Ok(())
+    |                             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+    |
+    = note: the type must implement `Into<segmented::SegmentedError>`
+note: required by a bound in `QueryStorage::run`
+   --> crates/rdf-core/src/ir/segmented/query.rs:374:29
+    |
+358 | impl QueryStorage {
+...
+374 |     pub(super) fn run<T, E: Into<SegmentedError>>(
+    |                             ^^^^^^^^^^^^^^^^^^^^ required by this bound in `QueryStorage::run`
+help: consider specifying the generic arguments
+    |
+406 |                             Ok::<(), E>(())
+    |                               +++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+    --> crates/rdf-core/src/ir/segmented/session.rs:2353:32
+     |
+2353 |         let before = operation.evidence().request_count();
+     |                                ^^^^^^^^-- argument #1 is missing
+     |
+note: method defined here
+    --> crates/rdf-core/src/ir/segmented/session.rs:734:19
+     |
+ 734 |     pub(super) fn evidence<I>(&self, identity: I) -> SegmentedEvidence<I> {
+     |                   ^^^^^^^^           -----------
+help: provide the argument
+     |
+2353 |         let before = operation.evidence(/* identity */).request_count();
+     |                                         ++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+    --> crates/rdf-core/src/ir/segmented/session.rs:2358:30
+     |
+2358 |         assert_eq!(operation.evidence().request_count(), before);
+     |                              ^^^^^^^^-- argument #1 is missing
+     |
+note: method defined here
+    --> crates/rdf-core/src/ir/segmented/session.rs:734:19
+     |
+ 734 |     pub(super) fn evidence<I>(&self, identity: I) -> SegmentedEvidence<I> {
+     |                   ^^^^^^^^           -----------
+help: provide the argument
+     |
+2358 |         assert_eq!(operation.evidence(/* identity */).request_count(), before);
+     |                                       ++++++++++++++
+
+Some errors have detailed explanations: E0061, E0283.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-core` (lib test) due to 3 previous errors

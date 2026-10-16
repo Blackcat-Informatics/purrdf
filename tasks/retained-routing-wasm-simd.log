@@ -1,0 +1,51 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/lex)
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling digest v0.11.3
+   Compiling unicode-ident v1.0.24
+   Compiling wasm-bindgen v0.2.125
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/xsd)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-events)
+   Compiling once_cell v1.21.4
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/cdt)
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/alloc-probe)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/stack)
+    Finished `test` profile [optimized] target(s) in 3m 16s
+     Running tests/segmented.rs (/opt/.cargo/30/044a3953b5e566/wasm32-unknown-unknown/debug/build/purrdf-core/1dfb8a39fde2755a/out/segmented-1dfb8a39fde2755a.wasm)
+
+running 17 tests
+test construction_limits_grow_on_input_instead_of_reserving_their_ceilings ... ok
+test demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic ... ok
+test byte_packed_dictionaries_round_trip_with_sparse_high_id_reads ... ok
+test a_single_oversized_encoded_term_refuses_without_a_sealed_image ... ok
+test indexed_reopen_preserves_high_ids_and_bidirectional_batches ... ok
+test live_pins_are_charged_and_cannot_be_evicted ... ok
+test exact_evidence_and_workspace_refuse_before_unbounded_growth ... ok
+test cache_eviction_preserves_exact_non_cache_owner_conservation ... ok
+test corruption_cannot_turn_an_omitted_fact_into_success ... ok
+test rdf12_references_empty_graphs_and_streamed_lines_survive ... ok
+test retained_v1_pack_reader_migrates_into_the_versioned_representation ... ok
+test persisted_certification_reopens_only_with_retained_authority ... ok
+test snapshot_qualified_handles_do_not_reinterpret_reused_compact_ids ... ok
+test cancellation_retains_the_exact_failed_request_and_refuses_partial_drains ... ok
+test charged_read_peak_covers_measured_allocations_including_streamed_output ... ok
+test pin_refusal_precedes_io_and_owned_pin_survives_session_drop ... ok
+test composite_lexical_blank_references_keep_their_scoped_dictionary_closure ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+

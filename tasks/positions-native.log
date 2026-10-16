@@ -1,0 +1,9 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 42s
+     Running tests/segmented.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/699105bc0bc52225/out/segmented-699105bc0bc52225)
+
+running 1 test
+test byte_packed_dictionaries_round_trip_with_sparse_high_id_reads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.01s
+

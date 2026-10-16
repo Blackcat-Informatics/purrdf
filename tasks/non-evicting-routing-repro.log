@@ -1,0 +1,22 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 59s
+     Running tests/segmented.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/699105bc0bc52225/out/segmented-699105bc0bc52225)
+
+running 1 test
+test routing_growth_cannot_refuse_an_already_admitted_payload ... FAILED
+
+failures:
+
+---- routing_growth_cannot_refuse_an_already_admitted_payload stdout ----
+thread 'routing_growth_cannot_refuse_an_already_admitted_payload' panicked at crates/rdf-core/tests/segmented.rs:74:9:
+assertion `left == right` failed: optional routing growth cannot consume the payload cache (128 slots)
+  left: 102944
+ right: 94624
+
+
+failures:
+    routing_growth_cannot_refuse_an_already_admitted_payload
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-core --test segmented`

@@ -1,0 +1,66 @@
+diff --git crates/sparql-eval/tests/segmented_query.rs crates/sparql-eval/tests/segmented_query.rs
+index 40fc26684..525d12531 100644
+--- crates/sparql-eval/tests/segmented_query.rs
++++ crates/sparql-eval/tests/segmented_query.rs
+@@ -1315,7 +1315,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+         PackBuilder, RdfDatasetBuilder, SegmentedBuildLimits, SegmentedFileProvider,
+         SegmentedImage, SegmentedLayer, SegmentedLayerMetadata, SegmentedStack, TermBox,
+     };
+-    for claims in [2000, 200_000] {
++    for claims in [200_000] {
+         let mut builder = RdfDatasetBuilder::new();
+         let predicate = TermValue::iri("https://example.org/claim-predicate");
+         let annotation = builder
+@@ -1347,7 +1347,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+         }
+         let resident = builder.freeze().unwrap();
+         let packed = PackBuilder::build_view_bytes(resident.as_ref()).unwrap();
+-        for (block_bytes, records_per_block) in [(4096, 32), (4096, 64), (4096, 128), (8192, 128)] {
++        for (block_bytes, records_per_block) in [(4096, 128)] {
+             let built = SegmentedImage::from_pack_v1(
+                 &packed,
+                 SegmentedBuildLimits::new(
+@@ -1367,12 +1367,14 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+                 image.bytes().len()
+             );
+             let mut kinds = [0_u64; 256];
++            let mut block_kinds = vec![0_u8];
+             let authenticated_bytes = image.receipt().block_count() * u64::from(block_bytes);
+             for block in image.bytes()[..usize::try_from(authenticated_bytes).unwrap()]
+                 .chunks_exact(usize::try_from(block_bytes).unwrap())
+                 .skip(1)
+             {
+                 kinds[usize::from(block[0])] += u64::from(block_bytes);
++                block_kinds.push(block[0]);
+             }
+             eprintln!(
+                 "claims={claims} block_bytes={block_bytes} records_per_block={records_per_block} block_kind_bytes={:?} authentication_bytes={}",
+@@ -1510,8 +1512,26 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
+                         substitutions: &[],
+                     },
+                     QueryOptions::EMPTY,
+-                )
+-                .unwrap();
++                );
++            if let Err(refusal) = &counted {
++                let mut reads = [0_u64; 256];
++                let mut hot = purrdf_core::FastMap::<u64, u64>::default();
++                refusal.evidence().with_requests(|requests| {
++                    for request in requests {
++                        if request.bytes() == block_bytes {
++                            let slot = request.position() / u64::from(block_bytes);
++                            let kind = block_kinds[usize::try_from(slot).unwrap()];
++                            reads[usize::from(kind)] += 1;
++                            *hot.entry(slot).or_insert(0) += 1;
++                        }
++                    }
++                });
++                let mut hot = hot.into_iter().collect::<Vec<_>>();
++                hot.sort_unstable_by_key(|&(slot, count)| (core::cmp::Reverse(count), slot));
++                eprintln!("diagnostic data reads by kind={:?}", &reads[..6]);
++                eprintln!("diagnostic hottest slots={:?}", &hot[..hot.len().min(24)]);
++            }
++            let counted = counted.unwrap();
+             assert_eq!(support::solutions(counted.result), expected);
+             source.check_ready().unwrap();
+             eprintln!(

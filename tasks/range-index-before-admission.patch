@@ -1,0 +1,428 @@
+diff --git crates/rdf-core/src/ir/segmented/build.rs crates/rdf-core/src/ir/segmented/build.rs
+index 17905907d..a8eb20d74 100644
+--- crates/rdf-core/src/ir/segmented/build.rs
++++ crates/rdf-core/src/ir/segmented/build.rs
+@@ -43,7 +43,7 @@ impl SegmentedBuildLimits {
+         if terms == u32::MAX
+             || !(512..=1_048_576).contains(&block_bytes)
+             || records_per_block == 0
+-            || records_per_block > 256
++            || records_per_block > format::MAX_RECORDS_PER_BLOCK
+         {
+             return Err(SegmentedError::ConstructionLimit);
+         }
+diff --git crates/rdf-core/src/ir/segmented/format.rs crates/rdf-core/src/ir/segmented/format.rs
+index a3fc7f065..33638f484 100644
+--- crates/rdf-core/src/ir/segmented/format.rs
++++ crates/rdf-core/src/ir/segmented/format.rs
+@@ -16,6 +16,7 @@ pub(super) const MAGIC: &[u8; 8] = b"PURRSEG1";
+ pub(super) const HEADER_BYTES: usize = 216;
+ pub(super) const RECORD_HEADER: usize = 17;
+ pub(super) const SUMMARY_BYTES: usize = 88;
++pub(super) const MAX_RECORDS_PER_BLOCK: u32 = 256;
+ pub(super) const DICTIONARY: u8 = 1;
+ pub(super) const REVERSE: u8 = 2;
+ pub(super) const QUADS: u8 = 3;
+@@ -86,7 +87,7 @@ impl Header {
+             || flags > 7
+             || !(512..=1_048_576).contains(&block_bytes)
+             || records_per_block == 0
+-            || records_per_block > 256
++            || records_per_block > MAX_RECORDS_PER_BLOCK
+         {
+             return Err(SegmentedError::Corrupt("invalid segmented header"));
+         }
+diff --git crates/rdf-core/src/ir/segmented/session.rs crates/rdf-core/src/ir/segmented/session.rs
+index 40dcb56dd..3c50112d8 100644
+--- crates/rdf-core/src/ir/segmented/session.rs
++++ crates/rdf-core/src/ir/segmented/session.rs
+@@ -272,6 +272,7 @@ impl Drop for SegmentedReservation {
+ struct CachedBlock {
+     encoded: Vec<u8>,
+     decoded: Option<DecodedRecords>,
++    dictionary_range: Option<(u64, u64)>,
+     reservation: SegmentedReservation,
+ }
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+@@ -279,6 +280,13 @@ struct CacheKey {
+     snapshot: SegmentedSnapshot,
+     slot: u64,
+ }
++#[derive(Clone, Copy, Debug)]
++struct DictionaryPosition {
++    key: CacheKey,
++    bucket: u64,
++    first: u64,
++    end: u64,
++}
+ #[derive(Debug)]
+ struct CacheEntry {
+     key: CacheKey,
+@@ -288,13 +296,17 @@ struct CacheEntry {
+ }
+ #[derive(Clone, Copy)]
+ enum ReaderBuffer {
+-    Cache { block_charge: u64 },
++    Cache { block_charge: u64, dictionary: bool },
+     Requests,
+ }
+ struct State {
+     cache: HashTable<CacheEntry>,
+     oldest: Option<CacheKey>,
+     newest: Option<CacheKey>,
++    // Index only resident dictionary ranges. A page intersects at most two
++    // MAX_RECORDS_PER_BLOCK-wide ID buckets, independently of image size.
++    // Entries own no pins; their allocation shares the cache's original grant.
++    dictionary_positions: HashTable<DictionaryPosition>,
+     requests: Vec<SegmentedRequest>,
+     error: Option<SegmentedError>,
+     io_bytes: u64,
+@@ -312,8 +324,10 @@ impl State {
+             // Memory checks the old/new replacement overlap. Also plan the
+             // final cache-plus-block layout before allocating: reclaiming one
+             // slot can avoid growth altogether, especially beside pinned blocks.
+-            let refusal = if let ReaderBuffer::Cache { block_charge } = buffer
+-                && self.cache.len() == self.cache.capacity()
++            let refusal = if let ReaderBuffer::Cache {
++                block_charge,
++                dictionary,
++            } = buffer
+             {
+                 let required = self
+                     .cache
+@@ -324,7 +338,27 @@ impl State {
+                     .ok_or(StorageError::SizeOverflow)?;
+                 let old =
+                     hash_table_retained_bound(&self.cache).ok_or(StorageError::SizeOverflow)?;
+-                let increase = next.saturating_sub(old);
++                let mut increase = if required > self.cache.capacity() {
++                    next.saturating_sub(old)
++                } else {
++                    0
++                };
++                if dictionary {
++                    let required = self
++                        .dictionary_positions
++                        .len()
++                        .checked_add(2)
++                        .ok_or(StorageError::SizeOverflow)?;
++                    if required > self.dictionary_positions.capacity() {
++                        let next = hash_table_allocation_bound::<DictionaryPosition>(required)
++                            .ok_or(StorageError::SizeOverflow)?;
++                        let old = hash_table_retained_bound(&self.dictionary_positions)
++                            .ok_or(StorageError::SizeOverflow)?;
++                        increase = increase
++                            .checked_add(next.saturating_sub(old))
++                            .ok_or(StorageError::SizeOverflow)?;
++                    }
++                }
+                 let increase = u64::try_from(increase).map_err(|_| StorageError::SizeOverflow)?;
+                 let budget = &self.storage.reservation.budget;
+                 let live = lock_read_state(&budget.state).live;
+@@ -343,7 +377,7 @@ impl State {
+                 Err(error)
+             } else {
+                 match buffer {
+-                    ReaderBuffer::Cache { .. } => {
++                    ReaderBuffer::Cache { dictionary, .. } => {
+                         let required = self
+                             .cache
+                             .len()
+@@ -355,7 +389,21 @@ impl State {
+                                 required,
+                                 |entry| hash_of(&entry.key),
+                                 memory,
+-                            )
++                            )?;
++                            if dictionary {
++                                let required = self
++                                    .dictionary_positions
++                                    .len()
++                                    .checked_add(2)
++                                    .ok_or(StorageError::SizeOverflow)?;
++                                reserve_table_with_memory(
++                                    &mut self.dictionary_positions,
++                                    required,
++                                    |entry| hash_of(&(entry.key.snapshot, entry.bucket)),
++                                    memory,
++                                )?;
++                            }
++                            Ok::<(), StorageError>(())
+                         })
+                     }
+                     ReaderBuffer::Requests => self
+@@ -655,6 +703,7 @@ impl SegmentedOperation {
+             cache: HashTable::new(),
+             oldest: None,
+             newest: None,
++            dictionary_positions: HashTable::new(),
+             requests: Vec::new(),
+             error: None,
+             io_bytes: 0,
+@@ -1041,6 +1090,7 @@ impl SegmentedSession {
+         self.make_room(&mut state, charge, true)?;
+         if let Err(error) = state.reserve_buffer(ReaderBuffer::Cache {
+             block_charge: charge,
++            dictionary: in_dictionary,
+         }) {
+             state.error.get_or_insert_with(|| error.clone());
+             return Err(error);
+@@ -1096,6 +1146,21 @@ impl SegmentedSession {
+                 )?),
+                 _ => None,
+             };
++            let dictionary_range = if in_dictionary {
++                let records = decoded_records.as_ref().ok_or(SegmentedError::Corrupt(
++                    "forward dictionary block kind changed",
++                ))?;
++                let first = records.entries[0].0.index();
++                let end = first
++                    .checked_add(
++                        u64::try_from(records.entries.len())
++                            .map_err(|_| SegmentedError::AddressExhausted)?,
++                    )
++                    .ok_or(SegmentedError::AddressExhausted)?;
++                Some((first, end))
++            } else {
++                None
++            };
+             let actual = encoded
+                 + overhead
+                 + decoded_records.as_ref().map_or(0, |records| {
+@@ -1110,6 +1175,7 @@ impl SegmentedSession {
+             Ok(Arc::new(CachedBlock {
+                 encoded: bytes,
+                 decoded: decoded_records,
++                dictionary_range,
+                 reservation,
+             }))
+         })();
+@@ -1140,14 +1206,22 @@ impl SegmentedSession {
+         // binary search, retaining no directory and releasing every probe pin.
+         let mut lo = local / u64::from(self.header.records_per_block);
+         let mut hi = self.header.dictionary.blocks;
+-        let mut first_probe = true;
++        let bucket = id.index() / u64::from(format::MAX_RECORDS_PER_BLOCK);
++        let mut first_probe = Some(
++            lock_read_state(&self.state)
++                .dictionary_positions
++                .find(hash_of(&(self.receipt.snapshot, bucket)), |position| {
++                    position.key.snapshot == self.receipt.snapshot
++                        && position.bucket == bucket
++                        && position.first <= id.index()
++                        && id.index() < position.end
++                })
++                .map_or(lo, |position| {
++                    position.key.slot - self.header.dictionary.first
++                }),
++        );
+         while lo < hi {
+-            let mid = if first_probe {
+-                first_probe = false;
+-                lo
+-            } else {
+-                lo + (hi - lo) / 2
+-            };
++            let mid = first_probe.take().unwrap_or_else(|| lo + (hi - lo) / 2);
+             let block = self.block(self.header.dictionary.first + mid)?;
+             let records = block.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+                 "forward dictionary block kind changed",
+@@ -1839,7 +1913,8 @@ mod operation_tests {
+         {
+             let state = lock_read_state(&session.state);
+             let buffers = state.requests.capacity() * size_of::<SegmentedRequest>()
+-                + hash_table_retained_bound(&state.cache).unwrap();
++                + hash_table_retained_bound(&state.cache).unwrap()
++                + hash_table_retained_bound(&state.dictionary_positions).unwrap();
+             drop(state);
+             assert_eq!(
+                 evidence.bookkeeping_bytes(),
+@@ -2090,9 +2165,17 @@ mod operation_tests {
+                 let request_room = state.requests.capacity() - state.requests.len();
+                 assert_eq!(shape.0, shape.1);
+                 assert!(request_room > 8);
++                let positions = hash_table_retained_bound(&state.dictionary_positions).unwrap();
++                let required = state.dictionary_positions.len() + 2;
++                let next_positions = if required > state.dictionary_positions.capacity() {
++                    hash_table_allocation_bound::<DictionaryPosition>(required).unwrap()
++                } else {
++                    positions
++                };
+                 (
+-                    hash_table_retained_bound(&state.cache).unwrap(),
+-                    hash_table_allocation_bound::<CacheEntry>(state.cache.len() + 1).unwrap(),
++                    hash_table_retained_bound(&state.cache).unwrap() + positions,
++                    hash_table_allocation_bound::<CacheEntry>(state.cache.len() + 1).unwrap()
++                        + next_positions,
+                 )
+             };
+             let records = u64::from(session.header.records_per_block);
+@@ -2123,7 +2206,11 @@ mod operation_tests {
+             assert!(session.evidence().peak_bytes() <= CEILING);
+             assert_eq!(session.read_error(), None);
+             assert_eq!(
+-                hash_table_retained_bound(&lock_read_state(&session.state).cache).unwrap(),
++                {
++                    let state = lock_read_state(&session.state);
++                    hash_table_retained_bound(&state.cache).unwrap()
++                        + hash_table_retained_bound(&state.dictionary_positions).unwrap()
++                },
+                 if pin_header { next_layout } else { old_layout }
+             );
+             drop(held);
+@@ -2224,4 +2311,63 @@ mod operation_tests {
+         ));
+         assert_eq!(a.evidence().request_count(), count as usize);
+     }
++
++    #[test]
++    fn dictionary_positions_are_bound_to_their_certified_source() {
++        let mut images = Vec::new();
++        for width in [180, 80] {
++            let mut builder =
++                SegmentedBuilder::new(SegmentedBuildLimits::new(20, 20_000, 0, 512, 8).unwrap())
++                    .unwrap();
++            let values: Vec<_> = (0..10)
++                .map(|index| {
++                    let prefix = if index % 2 == 0 { "a" } else { "z" };
++                    TermValue::iri(format!(
++                        "https://example.org/{}/{index:02}",
++                        prefix.repeat(width)
++                    ))
++                })
++                .collect();
++            let mut id = None;
++            builder
++                .intern_batch(&values, |_, value| id = Some(value))
++                .unwrap();
++            images.push((builder.seal().unwrap(), id.unwrap(), values[9].clone()));
++        }
++        let operation =
++            SegmentedOperation::new(SegmentedReadLimits::new(2_000_000, 2, 2000, 10_000_000, 4))
++                .unwrap();
++        let sessions: Vec<_> = images
++            .iter()
++            .map(|(image, _, _)| {
++                operation
++                    .open(Arc::new(image.provider()), image.receipt())
++                    .unwrap()
++            })
++            .collect();
++        let pins: Vec<_> = sessions
++            .iter()
++            .zip(&images)
++            .map(|(session, (_, id, _))| session.resolve(*id).unwrap())
++            .collect();
++        let before = operation.evidence(()).request_count();
++        for index in [0, 1, 0, 1] {
++            let (_, id, value) = &images[index];
++            assert_eq!(sessions[index].term_value(*id).unwrap(), *value);
++        }
++        assert_eq!(operation.evidence(()).request_count(), before);
++        let state = lock_read_state(&operation.state);
++        let positions: Vec<_> = state.dictionary_positions.iter().collect();
++        assert_eq!(positions.len(), 2);
++        assert_ne!(positions[0].key.snapshot, positions[1].key.snapshot);
++        assert_ne!(positions[0].key.slot, positions[1].key.slot);
++        assert!(
++            positions
++                .iter()
++                .all(|position| position.first <= images[0].1.index()
++                    && images[0].1.index() < position.end)
++        );
++        drop(state);
++        drop(pins);
++    }
+ }
+diff --git crates/rdf-core/src/ir/segmented/session/cache.rs crates/rdf-core/src/ir/segmented/session/cache.rs
+index ca56d0e8b..f11c1d533 100644
+--- crates/rdf-core/src/ir/segmented/session/cache.rs
++++ crates/rdf-core/src/ir/segmented/session/cache.rs
+@@ -3,7 +3,9 @@
+ 
+ //! Source-qualified block lookup and recency links in the admitted cache table.
+ 
+-use super::{Arc, CacheEntry, CacheKey, CachedBlock, SegmentedError, State};
++use super::{
++    Arc, CacheEntry, CacheKey, CachedBlock, DictionaryPosition, SegmentedError, State, format,
++};
+ use crate::hash::hash_of;
+ 
+ impl State {
+@@ -22,6 +24,24 @@ impl State {
+     /// The caller has admitted table capacity before reading the new block.
+     pub(super) fn cache_insert(&mut self, key: CacheKey, block: Arc<CachedBlock>) {
+         debug_assert!(self.cache.len() < self.cache.capacity());
++        if let Some((first, end)) = block.dictionary_range {
++            let width = u64::from(format::MAX_RECORDS_PER_BLOCK);
++            for bucket in first / width..=(end - 1) / width {
++                debug_assert!(
++                    self.dictionary_positions.len() < self.dictionary_positions.capacity()
++                );
++                self.dictionary_positions.insert_unique(
++                    hash_of(&(key.snapshot, bucket)),
++                    DictionaryPosition {
++                        key,
++                        bucket,
++                        first,
++                        end,
++                    },
++                    |entry| hash_of(&(entry.key.snapshot, entry.bucket)),
++                );
++            }
++        }
+         self.cache.insert_unique(
+             hash_of(&key),
+             CacheEntry {
+@@ -57,6 +77,17 @@ impl State {
+                 .expect("selected cache block exists")
+                 .remove()
+                 .0;
++            if let Some((first, end)) = entry.block.dictionary_range {
++                let width = u64::from(format::MAX_RECORDS_PER_BLOCK);
++                for bucket in first / width..=(end - 1) / width {
++                    self.dictionary_positions
++                        .find_entry(hash_of(&(key.snapshot, bucket)), |position| {
++                            position.key == key && position.bucket == bucket
++                        })
++                        .expect("resident dictionary page has indexed bounds")
++                        .remove();
++                }
++            }
+             self.detach_cache_links(entry.older, entry.newer);
+             self.evictions = evictions;
+             return Ok(true);
+diff --git crates/rdf-core/tests/segmented.rs crates/rdf-core/tests/segmented.rs
+index ffb0cd1e5..c72844609 100644
+--- crates/rdf-core/tests/segmented.rs
++++ crates/rdf-core/tests/segmented.rs
+@@ -215,6 +215,29 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
+     }
+     assert!(read.evidence().peak_bytes() <= read.storage_live_budget().unwrap());
+     assert_eq!(read.read_error(), None);
++
++    for indices in [&[78, 79][..], &[77, 78, 79][..]] {
++        let hot = session(&certified, u32::try_from(indices.len()).unwrap());
++        let pins: Vec<_> = indices
++            .iter()
++            .map(|&index| hot.resolve(ids[index]).unwrap())
++            .collect();
++        drop(pins);
++        let before = hot.evidence();
++        for _ in 0..64 {
++            for &index in indices {
++                let guard = hot.resolve(ids[index]).unwrap();
++                assert_eq!(guard.term(), TermRef::Iri(values[index].as_iri().unwrap()));
++            }
++        }
++        let after = hot.evidence();
++        assert_eq!(
++            after.request_count(),
++            before.request_count(),
++            "cached variable-population terms must not reread search fences"
++        );
++        assert_eq!(after.evictions(), before.evictions());
++    }
+ }
+ 
+ fn a_single_oversized_encoded_term_refuses_without_a_sealed_image() {

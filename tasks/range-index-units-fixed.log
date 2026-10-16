@@ -1,0 +1,40 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 5m 35s
+     Running unittests src/lib.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 19 tests
+test ir::segmented::build::certification_tests::freeze_storage_refusal_stays_distinct_from_malformed_rdf ... ok
+test ir::segmented::build::certification_tests::conservative_term_admission_does_not_authorize_unminted_ids ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_a_false_dictionary_fence ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_an_underpriced_owned_term ... ok
+test ir::segmented::format::tests::record_fit_includes_fence_framing_and_actual_front_coding ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_pruning_bounds ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_foreign_quad_references ... ok
+test ir::segmented::session::operation_tests::composed_sources_share_cache_admission_and_qualified_requests ... ok
+test ir::segmented::session::operation_tests::dictionary_positions_are_bound_to_their_certified_source ... ok
+test ir::segmented::session::operation_tests::escaped_request_retains_its_identity_and_original_charge ... ok
+test ir::segmented::session::operation_tests::fault_between_ready_and_block_lock_preserves_the_first_cause ... ok
+test ir::segmented::session::operation_tests::cache_slot_growth_counts_the_pending_block_before_allocating ... FAILED
+test ir::segmented::session::operation_tests::reader_buffer_growth_reclaims_unpinned_blocks_before_refusal ... ok
+test ir::segmented::session::operation_tests::second_source_exhaustion_is_first_fault_for_every_session ... ok
+test ir::segmented::session::operation_tests::workspace_outlives_session_with_original_budget_control_charge ... ok
+test ir::segmented::stack::tests::declaration_carrier_rejects_implicit_row_graph_presence ... ok
+test ir::segmented::stack::tests::snapshots_pin_original_metadata_and_atomic_replacement_releases_old_owners ... ok
+test ir::segmented::query::tests::returned_term_retains_original_base_and_payload_charge_after_query_drop ... ok
+test ir::segmented::session::cache_control::cache_hits_preserve_full_recency_and_pinned_owners ... ok
+
+failures:
+
+---- ir::segmented::session::operation_tests::cache_slot_growth_counts_the_pending_block_before_allocating stdout ----
+
+thread 'ir::segmented::session::operation_tests::cache_slot_growth_counts_the_pending_block_before_allocating' (3100546) panicked at crates/rdf-core/src/ir/segmented/session.rs:2199:22:
+called `Result::unwrap()` on an `Err` value: Residency { requested: 2000856, limit: 2000000 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ir::segmented::session::operation_tests::cache_slot_growth_counts_the_pending_block_before_allocating
+
+test result: FAILED. 18 passed; 1 failed; 0 ignored; 0 measured; 1336 filtered out; finished in 0.19s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`

@@ -1,0 +1,48 @@
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 11m 14s
+     Running tests/segmented_query.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-sparql-eval/75e071c550c35b0c/out/segmented_query-75e071c550c35b0c)
+
+running 1 test
+claims=2000 block_bytes=4096 records_per_block=32 terms=6260 pack_bytes=80373 image_bytes=1777664
+claims=2000 block_bytes=4096 records_per_block=32 block_kind_bytes=[0, 802816, 802816, 131072, 0, 4096] authentication_bytes=32768
+claims=2000 limit_touched=21 requests=120 io_bytes=52608 peak_bytes=235737
+claims=2000 count_touched=4258 requests=7410 io_bytes=3248544 peak_bytes=2024405
+claims=2000 block_bytes=4096 records_per_block=64 terms=6260 pack_bytes=80373 image_bytes=958464
+claims=2000 block_bytes=4096 records_per_block=64 block_kind_bytes=[0, 401408, 401408, 131072, 0, 4096] authentication_bytes=16384
+claims=2000 limit_touched=21 requests=99 io_bytes=47872 peak_bytes=358079
+claims=2000 count_touched=4258 requests=3357 io_bytes=1623296 peak_bytes=2067703
+claims=2000 block_bytes=4096 records_per_block=128 terms=6260 pack_bytes=80373 image_bytes=675840
+claims=2000 block_bytes=4096 records_per_block=128 block_kind_bytes=[0, 303104, 217088, 131072, 0, 4096] authentication_bytes=16384
+claims=2000 limit_touched=21 requests=90 io_bytes=43520 peak_bytes=635403
+claims=2000 count_touched=4258 requests=14130 io_bytes=6832640 peak_bytes=2639145
+claims=2000 block_bytes=8192 records_per_block=128 terms=6260 pack_bytes=80373 image_bytes=958464
+claims=2000 block_bytes=8192 records_per_block=128 block_kind_bytes=[0, 401408, 401408, 131072, 0, 8192] authentication_bytes=8192
+claims=2000 limit_touched=21 requests=80 io_bytes=84160 peak_bytes=1189419
+claims=2000 count_touched=4258 requests=1056 io_bytes=1110912 peak_bytes=3040548
+claims=200000 block_bytes=4096 records_per_block=32 terms=600260 pack_bytes=9291797 image_bytes=171057152
+claims=200000 block_bytes=4096 records_per_block=32 block_kind_bytes=[0, 76836864, 76836864, 12902400, 0, 282624] authentication_bytes=4194304
+claims=200000 limit_touched=21 requests=935 io_bytes=253440 peak_bytes=337990
+claims=200000 count_touched=400258 requests=1818303 io_bytes=492867072 peak_bytes=193304348
+claims=200000 block_bytes=4096 records_per_block=64 terms=600260 pack_bytes=9291797 image_bytes=92127232
+claims=200000 block_bytes=4096 records_per_block=64 block_kind_bytes=[0, 38420480, 38420480, 12902400, 0, 282624] authentication_bytes=2097152
+claims=200000 limit_touched=21 requests=864 io_bytes=247104 peak_bytes=464457
+claims=200000 count_touched=400258 requests=1200672 io_bytes=343392192 peak_bytes=193304348
+claims=200000 block_bytes=4096 records_per_block=128 terms=600260 pack_bytes=9291797 image_bytes=64860160
+claims=200000 block_bytes=4096 records_per_block=128 block_kind_bytes=[0, 30011392, 20611072, 12902400, 0, 282624] authentication_bytes=1048576
+claims=200000 limit_touched=21 requests=780 io_bytes=236288 peak_bytes=728137
+
+thread 'persisted_reifier_limit_bounds_touched_terms_and_full_count_matches' (2891645) panicked at crates/sparql-eval/tests/segmented_query.rs:1514:18:
+called `Result::unwrap()` on an `Err` value: Operational { error: Residency { requested: 307964316, limit: 268435456 }, evidence: SegmentedEvidence { snapshot: SegmentedStackSnapshot { layers: [SegmentedLayer { provider: SegmentedFileProvider { bytes: 64860160, snapshot: SegmentedSnapshot([240, 111, 98, 5, 226, 106, 97, 141, 255, 39, 57, 118, 120, 190, 229, 5, 82, 140, 32, 223, 225, 224, 47, 223, 167, 163, 154, 36, 144, 148, 9, 234]), .. }, receipt: SegmentedReceipt { snapshot: SegmentedSnapshot([240, 111, 98, 5, 226, 106, 97, 141, 255, 39, 57, 118, 120, 190, 229, 5, 82, 140, 32, 223, 225, 224, 47, 223, 167, 163, 154, 36, 144, 148, 9, 234]), root: [142, 106, 82, 81, 146, 8, 37, 47, 5, 178, 94, 142, 168, 17, 228, 168, 132, 0, 7, 138, 252, 22, 234, 217, 203, 68, 185, 70, 88, 92, 224, 35], block_bytes: 4096, block_count: 15579, leaf_count: 16384, byte_len: 64860160 }, metadata: SegmentedLayerMetadata { removals: None, declarations: None, max_owned_term_bytes: 0 } }], head: None }, state: Mutex { data: SegmentedReadState { cache_blocks: 0, requests: 4194304, error: Some(Residency { requested: 307964316, limit: 268435456 }), io_bytes: 1270597472, evictions: 279620, .. }, poisoned: false, .. }, prefix: 4194304, hash: [6, 191, 137, 183, 87, 12, 235, 222, 244, 207, 129, 198, 175, 35, 36, 48, 244, 25, 255, 119, 247, 140, 62, 7, 238, 193, 115, 60, 25, 151, 50, 24], io_bytes: 1270597472, live_bytes: 105548790, unpinned_cache_bytes: 0, bookkeeping_bytes: 100672592, peak_bytes: 154781122, evictions: 279620, _base: SegmentedReservation { budget: Budget { state: Mutex { data: Residency { live: 105548790, peak: 154781122, pins: 0 }, poisoned: false, .. }, limit: 268435456, max_pins: 32 }, bytes: 18992, control: 0, cache: None, base: None } } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test persisted_reifier_limit_bounds_touched_terms_and_full_count_matches ... FAILED
+
+failures:
+
+failures:
+    persisted_reifier_limit_bounds_touched_terms_and_full_count_matches
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in 21.58s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test segmented_query`

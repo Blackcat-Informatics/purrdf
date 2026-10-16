@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.11s
+     Running tests/segmented.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/699105bc0bc52225/out/segmented-699105bc0bc52225)
+
+running 1 test
+test demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+

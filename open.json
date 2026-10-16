@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "issue": 560,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks",
+  "branch": "paudley/560-segmentedbuilder-pack-dictionary-blocks",
+  "slug": "segmentedbuilder-pack-dictionary-blocks",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/.stage/segmentedbuilder-pack-dictionary-blocks",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "7734b013d19b68600ad24c4e8aa5a40955a8e89e",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks",
+    "branch:paudley/560-segmentedbuilder-pack-dictionary-blocks",
+    "stage:/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/.stage/segmentedbuilder-pack-dictionary-blocks"
+  ],
+  "warnings": [
+    "could not fetch issue #560 (Post \"https://api.github.com/graphql\": net/http: TLS handshake timeout); /home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/.stage/segmentedbuilder-pack-dictionary-blocks/issue.md was NOT written and agents have no issue text - do not proceed as if the issue were empty"
+  ],
+  "timestamp": "2026-10-15T19:59:01-0600"
+}

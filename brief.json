@@ -1,0 +1,34 @@
+{
+  "issue": 560,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "SegmentedBuilder: pack dictionary blocks by bytes, and size resident capacities as input arrives",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [],
+  "defect_classes": {
+    "correctness": 1,
+    "none": 23,
+    "bug": 2,
+    "performance": 2,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/560-segmentedbuilder-pack-dictionary-blocks"
+  },
+  "coverage": [
+    "issue #560 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['SegmentedBuilder:', 'dictionary', 'blocks']: 0 other item(s)",
+    "GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #560 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #560: 0",
+    "requirement candidates: 0 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 2 path(s) (1 on disk), 8 identifier(s), 1 workspace package(s), 0 URL(s)"
+  ]
+}

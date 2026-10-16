@@ -1,0 +1,67 @@
+{
+  "paths": [
+    {
+      "ref": "crates/rdf-core/src/ir/segmented/format.rs",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/ir/segmented/format.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 486,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "58c1fa987 Enforce logical capacity refusal at native producer boundaries",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "04e516a1a feat!: establish v3 storage and distribution contracts"
+      ]
+    },
+    {
+      "ref": "crates/katamari-query-purrdf/src/layers.rs",
+      "path": "/home/paudley/Active/purrdf/crates/katamari-query-purrdf/src/layers.rs",
+      "where": "not here; exists in sibling(s): katamari",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "SegmentedBuildLimits",
+      "files": 22
+    },
+    {
+      "name": "block_bytes",
+      "files": 8
+    },
+    {
+      "name": "records_per_block",
+      "files": 5
+    },
+    {
+      "name": "ConstructionLimit",
+      "files": 5
+    },
+    {
+      "name": "SegmentedBuilder::new",
+      "files": 17
+    },
+    {
+      "name": "value_bound",
+      "files": 3
+    },
+    {
+      "name": "build_limits",
+      "files": 0
+    },
+    {
+      "name": "seal_image",
+      "files": 0
+    }
+  ],
+  "packages": [
+    "purrdf"
+  ],
+  "urls": [],
+  "truncated": []
+}

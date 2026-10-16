@@ -1,0 +1,22 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 4m 11s
+     Running unittests src/lib.rs (/opt/.cargo/30/044a3953b5e566/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test ir::segmented::session::operation_tests::routing_growth_cannot_refuse_an_already_admitted_payload ... FAILED
+
+failures:
+
+---- ir::segmented::session::operation_tests::routing_growth_cannot_refuse_an_already_admitted_payload stdout ----
+
+thread 'ir::segmented::session::operation_tests::routing_growth_cannot_refuse_an_already_admitted_payload' (109622) panicked at crates/rdf-core/src/ir/segmented/session.rs:2325:44:
+called `Result::unwrap()` on an `Err` value: Residency { requested: 2006315, limit: 2000000 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ir::segmented::session::operation_tests::routing_growth_cannot_refuse_an_already_admitted_payload
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1355 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`

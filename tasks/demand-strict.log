@@ -1,0 +1,27 @@
+    Blocking waiting for file lock on package cache
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/hash)
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/lex)
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking digest v0.11.3
+   Compiling libc v0.2.186
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking sha2 v0.11.0
+    Checking regex-automata v0.4.14
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/xsd)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-core)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/rdf-events)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/cdt)
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/deflate)
+    Checking hashbrown v0.17.1
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/stack)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/560-segmentedbuilder-pack-dictionary-blocks/crates/alloc-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 02s
