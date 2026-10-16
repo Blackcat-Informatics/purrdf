@@ -5680,6 +5680,11 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
 /// Extensions, Appendix A) — so both values evaluate identically: a prepared
 /// execution's parameters, a request's substitutions, SHACL-SPARQL and every other
 /// caller share one meaning, one admission and one answer.
+#[allow(
+    unknown_lints,
+    clippy::deprecated_attributes_without_since,
+    reason = "first publication version is unassigned; older Clippy lacks this metadata lint"
+)]
 #[deprecated(
     note = "every lane applies the SHACL pre-binding rewrite; both values evaluate identically"
 )]
@@ -6031,7 +6036,12 @@ impl<'a> QueryOptions<'a> {
     /// Set the pre-binding lane the request names (see [`ShaclPrebinding`]); every lane
     /// takes the same rewrite.
     #[deprecated(note = "every lane applies the SHACL pre-binding rewrite; the lane has no effect")]
-    #[allow(deprecated)]
+    #[allow(
+        deprecated,
+        unknown_lints,
+        clippy::deprecated_attributes_without_since,
+        reason = "first publication version is unassigned; older Clippy lacks this metadata lint"
+    )]
     #[must_use]
     pub const fn with_prebinding(mut self, prebinding: ShaclPrebinding) -> Self {
         self.prebinding = prebinding;
