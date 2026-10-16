@@ -102,14 +102,39 @@ impl core::fmt::Display for TextError {
     }
 }
 
-impl std::error::Error for TextError {}
+impl std::error::Error for TextError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Capacity(error) => Some(error),
+            Self::Diagnostic(error) => Some(error),
+            Self::Substring(error) => Some(error),
+            Self::Phonetic(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for TextError {
+    purrdf_hash::error_visit! {
+        Capacity(error) => "text-capacity" { "cause" => Cause(error) },
+        Diagnostic(error) => "text-diagnostic" { "cause" => Cause(error) },
+        Substring(error) => "text-substring" { "cause" => Cause(error) },
+        Phonetic(error) => "text-phonetic" { "cause" => Cause(error) },
+        Config(reason) => "text-config" { "reason" => Text(reason) },
+        Html(diagnostics) => "text-html" { "diagnostics" => List(diagnostics.iter().map(|diagnostic| purrdf_hash::error::ErrorValue::Record(diagnostic))) },
+        Data(reason) => "text-data" { "reason" => Text(reason) },
+        SourceRead(message) => "text-source-read" { "message" => Message(message) },
+        Overflow(reason) => "text-overflow" { "reason" => Text(reason) },
+        Domain(reason) => "text-domain" { "reason" => Text(reason) },
+    }
+}
 
 purrdf_lex::variant_from!(TextError {
     Substring(crate::surface::SubstringRefusal),
     Phonetic(crate::phonetic::PhoneticRefusal),
 });
 
-impl From<TextError> for purrdf_sparql_eval::EvalError {
+impl TextError {
     /// Reduce a text-index failure to the evaluator's own channel.
     ///
     /// The mapping is decided here and nowhere else:
@@ -124,24 +149,37 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
     ///   relation's own computation failing inside a property-function call,
     ///   and the evaluator classifies a callee that could not be invoked as
     ///   written — a relation's own returned `Err` included — as
-    ///   [`EvalError::Function`](purrdf_sparql_eval::EvalError::Function).
+    ///   [`NativeDiagnosticKind::Function`](purrdf_sparql_eval::NativeDiagnosticKind::Function)
+    ///   while retaining the original text error as its native cause.
     ///   Neither is a statement about the caller's configuration or about the
     ///   dataset, so neither borrows those labels.
-    fn from(err: TextError) -> Self {
-        match err {
-            TextError::Capacity(failure) => failure.into_eval(),
-            TextError::Diagnostic(diagnostic) => Self::NativeDiagnostic(diagnostic),
-            TextError::Substring(refusal) => Self::data(refusal.to_string()),
-            TextError::Phonetic(refusal) => Self::data(refusal.to_string()),
-            TextError::Html(diagnostics) => {
-                Self::data(format!("HTML reference errors: {diagnostics:?}"))
-            }
-            TextError::Config(msg) => Self::config(msg),
-            TextError::Data(msg) => Self::data(msg),
-            TextError::SourceRead(msg) => Self::SourceRead(msg),
-            TextError::Overflow(msg) => Self::function(format!("fixed-point overflow: {msg}")),
-            TextError::Domain(msg) => Self::function(format!("fixed-point domain error: {msg}")),
+    ///
+    /// Fresh cause and presentation allocations use the supplied query account.
+    #[must_use]
+    pub fn into_eval_in(
+        self,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> purrdf_sparql_eval::EvalError {
+        use purrdf_sparql_eval::{EvalError, NativeDiagnostic, NativeDiagnosticKind};
+        let kind = match self {
+            Self::Capacity(failure) => return failure.into_eval(),
+            Self::Diagnostic(diagnostic) => return EvalError::NativeDiagnostic(diagnostic),
+            Self::Config(message) => return EvalError::config(message),
+            Self::Data(message) => return EvalError::data(message),
+            Self::SourceRead(message) => return EvalError::SourceRead(message),
+            Self::Substring(_) | Self::Phonetic(_) | Self::Html(_) => NativeDiagnosticKind::Data,
+            Self::Overflow(_) | Self::Domain(_) => NativeDiagnosticKind::Function,
+        };
+        match NativeDiagnostic::render_cause(kind, self, workspace) {
+            Ok(diagnostic) => EvalError::NativeDiagnostic(diagnostic),
+            Err(error) => error,
         }
+    }
+}
+
+impl From<TextError> for purrdf_sparql_eval::EvalError {
+    fn from(error: TextError) -> Self {
+        error.into_eval_in(&purrdf_sparql_eval::WorkspaceCapability::resident())
     }
 }
 
@@ -242,8 +280,8 @@ mod tests {
         ] {
             let converted: EvalError = err.clone().into();
             assert!(
-                matches!(converted, EvalError::Function(_)),
-                "{err:?} must map to EvalError::Function, got {converted:?}"
+                matches!(&converted, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == purrdf_sparql_eval::NativeDiagnosticKind::Function),
+                "{err:?} must retain the function classification, got {converted:?}"
             );
         }
     }

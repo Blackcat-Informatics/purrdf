@@ -56,7 +56,9 @@ pub(crate) fn prepare<P: CorpusProfile>(
             let Some(lexical) = text(token) else {
                 return Ok(None);
             };
-            let normalized = index.query_terms_owned(lexical, workspace)?;
+            let normalized = index
+                .query_terms_owned(lexical, workspace)
+                .map_err(|error| error.into_eval_in(workspace))?;
             if normalized.len() != 1 {
                 return Ok(None);
             }
@@ -67,7 +69,9 @@ pub(crate) fn prepare<P: CorpusProfile>(
             let Some(lexical) = text(value) else {
                 continue;
             };
-            let normalized = index.query_terms_owned(lexical, workspace)?;
+            let normalized = index
+                .query_terms_owned(lexical, workspace)
+                .map_err(|error| error.into_eval_in(workspace))?;
             if normalized.len() == tokens.len()
                 && normalized
                     .iter()

@@ -1270,6 +1270,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         selection: ScopedSearch<'_>,
         workspace: &WorkspaceCapability,
     ) -> Result<ScopedHits, EvalError> {
+        let to_eval = |error: TextError| error.into_eval_in(workspace);
         self.observations.rankings.fetch_add(1, Ordering::Relaxed);
         let mut work = ScoringWork::default();
         let mut declarations = AdmittedVec::new(workspace);
@@ -1287,7 +1288,9 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                         document,
                         needle.iter().map(QueryString::as_str),
                         selection.predicate,
-                    )? {
+                    )
+                    .map_err(to_eval)?
+                    {
                         return Ok(false);
                     }
                     let source = self.index.document(document).ok_or_else(|| {
@@ -1398,6 +1401,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
     ) -> Result<WorkspaceCursor, EvalError> {
+        let to_eval = |error: TextError| error.into_eval_in(&workspace);
         check_arity_owned(args, self.arity(), "text search", &workspace)?;
         let needle = args.get(SEARCH_NEEDLE).ok_or_else(|| NativeDiagnostic::error(NativeDiagnosticKind::Function,
             format_args!("the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
@@ -1445,7 +1449,10 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
             || args.get(SEARCH_SCORE).is_some()
             || args.get(SEARCH_MATCHED).is_some();
         let select_ceiling = if post_rank_filtered { None } else { ceiling };
-        let analyzed = self.index.query_terms_owned(text, &workspace)?;
+        let analyzed = self
+            .index
+            .query_terms_owned(text, &workspace)
+            .map_err(to_eval)?;
         let rank_at = match rank {
             RankBound::At(at) => Some(at),
             _ => None,
@@ -1458,14 +1465,11 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                     && args.is_unobserved(SEARCH_RANK)
                 {
                     let terms =
-                        distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)?;
-                    let holdings = self.holdings_owned(
-                        subject,
-                        &terms,
-                        &language,
-                        &workspace,
-                        query.predicate,
-                    )?;
+                        distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)
+                            .map_err(to_eval)?;
+                    let holdings = self
+                        .holdings_owned(subject, &terms, &language, &workspace, query.predicate)
+                        .map_err(to_eval)?;
                     let mut selected = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
                     for holding in holdings {
                         let document = self.index.document(holding.document).ok_or_else(|| {
@@ -1483,7 +1487,9 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                             selected.push(holding)?;
                         }
                     }
-                    rows = self.scored_in_place_owned(&terms, &selected, &workspace)?;
+                    rows = self
+                        .scored_in_place_owned(&terms, &selected, &workspace)
+                        .map_err(to_eval)?;
                     declarations
                         .as_mut_slice()
                         .sort_unstable_by_key(|entry| entry.0);
@@ -1493,14 +1499,12 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                         let terms = distinct_terms_owned(
                             analyzed.iter().map(QueryString::as_str),
                             &workspace,
-                        )?;
-                        for holding in self.holdings_owned(
-                            subject,
-                            &terms,
-                            &language,
-                            &workspace,
-                            query.predicate,
-                        )? {
+                        )
+                        .map_err(to_eval)?;
+                        for holding in self
+                            .holdings_owned(subject, &terms, &language, &workspace, query.predicate)
+                            .map_err(to_eval)?
+                        {
                             partitions.push(holding.partition)?;
                         }
                     }
@@ -1531,14 +1535,16 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
             match args.get(SEARCH_DOC) {
                 _ if rank == RankBound::BeyondTheIndex => {}
                 None => {
-                    let scored = self.ranked_owned(
-                        &analyzed,
-                        |key| language_matches(&language, key),
-                        select_ceiling,
-                        rank_at,
-                        &workspace,
-                        query.predicate,
-                    )?;
+                    let scored = self
+                        .ranked_owned(
+                            &analyzed,
+                            |key| language_matches(&language, key),
+                            select_ceiling,
+                            rank_at,
+                            &workspace,
+                            query.predicate,
+                        )
+                        .map_err(to_eval)?;
                     rows = AdmittedVec::with_capacity(scored.len(), &workspace)?;
                     for row in scored {
                         rows.push(Hit::from(row))?;
@@ -1546,17 +1552,16 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                 }
                 Some(subject) => {
                     let terms =
-                        distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)?;
-                    let holdings = self.holdings_owned(
-                        subject,
-                        &terms,
-                        &language,
-                        &workspace,
-                        query.predicate,
-                    )?;
+                        distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)
+                            .map_err(to_eval)?;
+                    let holdings = self
+                        .holdings_owned(subject, &terms, &language, &workspace, query.predicate)
+                        .map_err(to_eval)?;
                     if args.is_unobserved(SEARCH_RANK) {
                         if !holdings.is_empty() {
-                            rows = self.scored_in_place_owned(&terms, &holdings, &workspace)?;
+                            rows = self
+                                .scored_in_place_owned(&terms, &holdings, &workspace)
+                                .map_err(to_eval)?;
                         }
                     } else if !holdings.is_empty() {
                         let mut documents = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
@@ -1566,20 +1571,22 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                             keys.push(holding.partition)?;
                         }
                         drop(holdings);
-                        let scored = self.ranked_owned(
-                            &analyzed,
-                            |key| {
-                                language_matches(&language, key)
-                                    && self
-                                        .index
-                                        .local_partition_ordinal(key)
-                                        .is_some_and(|ordinal| keys.contains(&ordinal))
-                            },
-                            select_ceiling,
-                            rank_at,
-                            &workspace,
-                            query.predicate,
-                        )?;
+                        let scored = self
+                            .ranked_owned(
+                                &analyzed,
+                                |key| {
+                                    language_matches(&language, key)
+                                        && self
+                                            .index
+                                            .local_partition_ordinal(key)
+                                            .is_some_and(|ordinal| keys.contains(&ordinal))
+                                },
+                                select_ceiling,
+                                rank_at,
+                                &workspace,
+                                query.predicate,
+                            )
+                            .map_err(to_eval)?;
                         rows = AdmittedVec::with_capacity(
                             documents.len().min(scored.len()),
                             &workspace,
@@ -2121,7 +2128,10 @@ impl<P: CorpusProfile> TermOccurrenceRelation<P> {
             .get(OCCURRENCE_DOC)
             .map(|subject| self.index.documents_with_subject_owned(subject, &workspace))
             .transpose()?;
-        let analyzed = self.index.query_terms_owned(text, &workspace)?;
+        let analyzed = self
+            .index
+            .query_terms_owned(text, &workspace)
+            .map_err(|error| error.into_eval_in(&workspace))?;
         if analyzed.len() > 1 {
             return Err(NativeDiagnostic::error(
                 NativeDiagnosticKind::Function,

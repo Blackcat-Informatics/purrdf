@@ -52,12 +52,40 @@ impl core::fmt::Display for CapacityFailure {
     }
 }
 
+impl std::error::Error for CapacityFailure {}
+
+impl purrdf_hash::error::StructuredError for CapacityFailure {
+    purrdf_hash::error_visit! {
+        Stopped => "text-capacity-stopped" {},
+        LayoutOverflow => "text-capacity-layout-overflow" {},
+        Allocator { construct } => "text-capacity-allocator" { "construct" => Text(construct) },
+        UnstableDiagnostic => "text-capacity-unstable-diagnostic" {},
+    }
+}
+
 pub(crate) fn admitted<T>(value: Result<T, EvalError>) -> Result<T, TextError> {
     value.map_err(|error| TextError::Capacity(CapacityFailure::from_workspace(&error)))
 }
 
 pub(crate) fn overflow() -> TextError {
     TextError::Capacity(CapacityFailure::LayoutOverflow)
+}
+
+/// The scorer's two error channels share computation and preserve its account.
+pub(crate) trait TextErrorTarget: Sized {
+    fn from_text(error: TextError, workspace: &WorkspaceCapability) -> Self;
+}
+
+impl TextErrorTarget for TextError {
+    fn from_text(error: TextError, _workspace: &WorkspaceCapability) -> Self {
+        error
+    }
+}
+
+impl TextErrorTarget for EvalError {
+    fn from_text(error: TextError, workspace: &WorkspaceCapability) -> Self {
+        error.into_eval_in(workspace)
+    }
 }
 
 /// One fresh token or generated lexical string, without a lease-dropping clone.

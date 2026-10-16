@@ -577,7 +577,11 @@ pub(crate) struct CandidateSelection<P, M> {
     pub candidates: M,
 }
 
-pub(crate) fn select_counted_membership_owned<'a, E: From<TextError>, P: CorpusProfile>(
+pub(crate) fn select_counted_membership_owned<
+    'a,
+    E: crate::query_workspace::TextErrorTarget,
+    P: CorpusProfile,
+>(
     index: &TextIndex<P>,
     needle: impl ExactSizeIterator<Item = &'a str>,
     mut selection: CandidateSelection<
@@ -589,7 +593,8 @@ pub(crate) fn select_counted_membership_owned<'a, E: From<TextError>, P: CorpusP
     work: &mut ScoringWork,
     workspace: &WorkspaceCapability,
 ) -> Result<AdmittedVec<Scored>, E> {
-    let terms = distinct_terms_owned(needle, workspace)?;
+    let convert = |error| E::from_text(error, workspace);
+    let terms = distinct_terms_owned(needle, workspace).map_err(convert)?;
     let limit = partition_rank.map_or(ceiling, |wanted| Some(u64::from(wanted)));
     let emitted = ceiling.map_or(usize::MAX, |k| usize::try_from(k).unwrap_or(usize::MAX));
     let mut rows = AdmittedVec::new(workspace);
@@ -619,7 +624,7 @@ pub(crate) fn select_counted_membership_owned<'a, E: From<TextError>, P: CorpusP
                 if rows.len() == emitted {
                     break;
                 }
-                admitted(rows.push(row))?;
+                admitted(rows.push(row)).map_err(convert)?;
             }
         }
     }
@@ -773,7 +778,7 @@ fn rank_terms<P: CorpusProfile>(
     .collect())
 }
 
-fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
+fn rank_terms_owned<E: crate::query_workspace::TextErrorTarget, P: CorpusProfile>(
     index: &TextIndex<P>,
     partition: &PartitionKey<P>,
     terms: &[&str],
@@ -782,17 +787,25 @@ fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
     workspace: &WorkspaceCapability,
     membership: &mut impl FnMut(u32) -> Result<bool, E>,
 ) -> Result<AdmittedVec<Scored>, E> {
-    let Some(partition) = admitted(index.partition_key_owned(partition, workspace))? else {
+    let convert = |error| E::from_text(error, workspace);
+    let Some(partition) =
+        admitted(index.partition_key_owned(partition, workspace)).map_err(convert)?
+    else {
         return Ok(AdmittedVec::new(workspace));
     };
     let candidates = candidates_owned(index, partition, terms, work, workspace, membership)?;
     let keep = limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
-    let ordered = order_owned(candidates, keep, workspace)?;
-    let mut rows = admitted(AdmittedVec::with_capacity(ordered.len(), workspace))?;
+    let ordered = order_owned(candidates, keep, workspace).map_err(convert)?;
+    let mut rows =
+        admitted(AdmittedVec::with_capacity(ordered.len(), workspace)).map_err(convert)?;
     for (position, ByRank(candidate)) in ordered.into_iter().enumerate() {
-        let rank = position.checked_add(1).ok_or_else(overflow)?;
-        let partition_rank = u32::try_from(rank).map_err(|_| {
-            query_error(
+        let rank = position
+            .checked_add(1)
+            .ok_or_else(overflow)
+            .map_err(convert)?;
+        let partition_rank = u32::try_from(rank)
+            .map_err(|_| {
+                query_error(
                 workspace,
                 NativeDiagnosticKind::Function,
                 format_args!(
@@ -800,14 +813,16 @@ fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
                 ),
             )
             .unwrap_or_else(|failure| failure)
-        })?;
+            })
+            .map_err(convert)?;
         admitted(rows.push(Scored {
             document: candidate.document,
             score: candidate.score,
             score_bound: candidate.score_bound,
             partition_rank,
             matched: candidate.matched,
-        }))?;
+        }))
+        .map_err(convert)?;
     }
     Ok(rows)
 }
@@ -828,7 +843,7 @@ struct CandidateOccurrence<'a> {
 /// A document holding none of them is not a candidate. Candidate membership is
 /// independent of field weights: a matching document can legitimately score
 /// zero, and still participates in the canonical tie order.
-fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
+fn candidates_owned<E: crate::query_workspace::TextErrorTarget, P: CorpusProfile>(
     index: &TextIndex<P>,
     partition: &PartitionKey<P>,
     terms: &[&str],
@@ -836,32 +851,48 @@ fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
     workspace: &WorkspaceCapability,
     membership: &mut impl FnMut(u32) -> Result<bool, E>,
 ) -> Result<AdmittedVec<Candidate>, E> {
+    let convert = |error| E::from_text(error, workspace);
     if index.partition_stats(partition).is_none() {
         return Ok(AdmittedVec::new(workspace));
     }
-    let occurrences_count = terms.iter().try_fold(0usize, |count, term| {
-        let run =
-            usize::try_from(index.document_frequency(partition, term)).map_err(|_| overflow())?;
-        count.checked_add(run).ok_or_else(overflow)
-    })?;
-    let mut occurrences = admitted(AdmittedVec::with_capacity(occurrences_count, workspace))?;
+    let occurrences_count = terms
+        .iter()
+        .try_fold(0usize, |count, term| {
+            let run = usize::try_from(index.document_frequency(partition, term))
+                .map_err(|_| overflow())?;
+            count.checked_add(run).ok_or_else(overflow)
+        })
+        .map_err(convert)?;
+    let mut occurrences =
+        admitted(AdmittedVec::with_capacity(occurrences_count, workspace)).map_err(convert)?;
     for (ordinal, term) in terms.iter().enumerate() {
         for (document, counts) in index.field_postings(partition, term) {
             admitted(occurrences.push(CandidateOccurrence {
                 document,
                 ordinal,
                 counts,
-            }))?;
+            }))
+            .map_err(convert)?;
         }
     }
     work.posting_lists = work
         .posting_lists
-        .checked_add(u64::try_from(terms.len()).map_err(|_| overflow())?)
-        .ok_or_else(overflow)?;
+        .checked_add(
+            u64::try_from(terms.len())
+                .map_err(|_| overflow())
+                .map_err(convert)?,
+        )
+        .ok_or_else(overflow)
+        .map_err(convert)?;
     work.postings = work
         .postings
-        .checked_add(u64::try_from(occurrences.len()).map_err(|_| overflow())?)
-        .ok_or_else(overflow)?;
+        .checked_add(
+            u64::try_from(occurrences.len())
+                .map_err(|_| overflow())
+                .map_err(convert)?,
+        )
+        .ok_or_else(overflow)
+        .map_err(convert)?;
     occurrences
         .as_mut_slice()
         .sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
@@ -869,13 +900,16 @@ fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
     let mut prior = None;
     for entry in &occurrences {
         if prior != Some(entry.document) {
-            count = count.checked_add(1).ok_or_else(overflow)?;
+            count = count.checked_add(1).ok_or_else(overflow).map_err(convert)?;
         }
         prior = Some(entry.document);
     }
-    let corpus = index.prepared_corpus_owned(partition, workspace)?;
-    let query = prepare_terms_owned(index, partition, &corpus, terms, workspace)?;
-    let mut out = admitted(AdmittedVec::with_capacity(count, workspace))?;
+    let corpus = index
+        .prepared_corpus_owned(partition, workspace)
+        .map_err(convert)?;
+    let query =
+        prepare_terms_owned(index, partition, &corpus, terms, workspace).map_err(convert)?;
+    let mut out = admitted(AdmittedVec::with_capacity(count, workspace)).map_err(convert)?;
     let mut at = 0;
     while at < occurrences.len() {
         let document = occurrences[at].document;
@@ -887,9 +921,10 @@ fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
             .iter()
             .map(|entry| (entry.ordinal, entry.counts));
         if membership(document)? {
-            admitted(out.push(score_document(
-                index, &query, document, held, work, workspace,
-            )?))?;
+            admitted(out.push(
+                score_document(index, &query, document, held, work, workspace).map_err(convert)?,
+            ))
+            .map_err(convert)?;
         }
         at += run;
     }

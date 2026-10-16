@@ -388,7 +388,7 @@ fn literal_matches<P: CorpusProfile>(
 ) -> Result<DictionaryMatches<P>, EvalError> {
     let terms = index
         .query_terms_owned(phrase, workspace)
-        .map_err(EvalError::from)?;
+        .map_err(|error| error.into_eval_in(workspace))?;
     let mut candidates = AdmittedVec::with_capacity(terms.len(), workspace)?;
     for term in &terms {
         let mut occurrences = AdmittedVec::new(workspace);

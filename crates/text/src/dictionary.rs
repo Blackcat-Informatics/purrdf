@@ -88,7 +88,7 @@ impl Dictionary {
             })?;
             let tokens = index
                 .query_terms_owned(authored.phrase, workspace)
-                .map_err(EvalError::from)?;
+                .map_err(|error| error.into_eval_in(workspace))?;
             lengths.push(tokens.len())?;
             let mut state = 0;
             for token in &tokens {

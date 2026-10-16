@@ -55,6 +55,18 @@ pub enum PhoneticRefusal {
     EmptyCode,
 }
 
+impl purrdf_hash::error::StructuredError for PhoneticRefusal {
+    purrdf_hash::error_visit! {
+        SurfaceWordCount { observed } => "text-phonetic-surface-word-count" { "observed" => Unsigned(*observed as u128) },
+        UnsupportedScalar { scalar } => "text-phonetic-unsupported-scalar" { "scalar" => Character(*scalar) },
+        InvalidApostrophe => "text-phonetic-invalid-apostrophe" {},
+        EmptySpelling => "text-phonetic-empty-spelling" {},
+        InputTooLong { limit, observed } => "text-phonetic-input-too-long" { "limit" => Unsigned(*limit as u128), "observed" => Unsigned(*observed as u128) },
+        NonCanonicalSpelling { scalar } => "text-phonetic-noncanonical-spelling" { "scalar" => Character(*scalar) },
+        EmptyCode => "text-phonetic-empty-code" {},
+    }
+}
+
 impl core::fmt::Display for PhoneticRefusal {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

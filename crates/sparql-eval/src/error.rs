@@ -132,8 +132,9 @@ impl purrdf_hash::error::StructuredError for NativeDiagnosticKind {
 
 #[derive(Debug)]
 struct NativeDiagnosticPayload {
-    // Payload dies before its string+Shared-header admission is released.
+    // Text and boxed cause die before this native allocation admission.
     text: String,
+    cause: Option<Box<dyn purrdf_hash::error::NativeError>>,
     _allocation: crate::WorkspaceAllocation,
 }
 
@@ -155,13 +156,7 @@ impl NativeDiagnostic {
         message: impl core::fmt::Display,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
-        let preserve_failure = |error| {
-            if workspace.has_failed() {
-                EvalError::WorkspaceStopped
-            } else {
-                error
-            }
-        };
+        let preserve_failure = |error| Self::keep_first_failure(workspace, error);
         let length = crate::workspace::display_len(&message).map_err(preserve_failure)?;
         let control =
             purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout().size();
@@ -174,6 +169,7 @@ impl NativeDiagnostic {
             .map_err(preserve_failure)?;
         let payload = purrdf_core::small::Shared::try_new(NativeDiagnosticPayload {
             text,
+            cause: None,
             _allocation: allocation,
         })
         .map_err(|_| EvalError::AllocationFailed {
@@ -225,6 +221,7 @@ impl NativeDiagnostic {
                 .expect("native diagnostic text checked before transfer");
             NativeDiagnosticPayload {
                 text,
+                cause: None,
                 _allocation: allocation,
             }
         })
@@ -243,6 +240,64 @@ impl NativeDiagnostic {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.payload.text
+    }
+
+    /// Render a native cause while retaining its original typed fields and owner.
+    /// Existing payload buffers must be caller-owned or retain their original
+    /// admission. New box, presentation and shared-control layouts are admitted
+    /// before construction. The cause's formatter must borrow without allocating.
+    /// # Errors
+    /// Preserves admission, allocator and inconsistent-rendering failures.
+    pub fn render_cause<E: purrdf_hash::error::NativeError + 'static>(
+        kind: NativeDiagnosticKind,
+        cause: E,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let cause = purrdf_lex::allocation::Memory::new(&mut frame)
+            .boxed(cause)
+            .map_err(|error| frame.storage_error(error, "native diagnostic cause"))?;
+        let length = crate::workspace::display_len(&cause)
+            .map_err(|error| Self::keep_first_failure(workspace, error))?;
+        let total = frame
+            .admitted_bytes()
+            .checked_add(length)
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout()
+                        .size(),
+                )
+            })
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        frame.resize_live(total)?;
+        let text = crate::workspace::format_exact(&cause, length, "native diagnostic text")
+            .map_err(|error| Self::keep_first_failure(workspace, error))?;
+        let allocation = frame
+            .into_allocation()
+            .expect("native diagnostic control is nonzero");
+        let payload = purrdf_core::small::Shared::try_new(NativeDiagnosticPayload {
+            text,
+            cause: Some(cause),
+            _allocation: allocation,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "native diagnostic owner",
+        })?;
+        Ok(Self { kind, payload })
+    }
+
+    /// Borrow an original native cause when this diagnostic retained one.
+    #[must_use]
+    pub fn cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
+        self.payload.cause.as_deref()
+    }
+
+    fn keep_first_failure(workspace: &crate::WorkspaceCapability, error: EvalError) -> EvalError {
+        if workspace.has_failed() {
+            EvalError::WorkspaceStopped
+        } else {
+            error
+        }
     }
     /// One native diagnostic adaptation for `ok_or_else` and `map_err` callers.
     /// A refused render returns its original static operational failure.
@@ -297,12 +352,22 @@ impl core::fmt::Display for NativeDiagnostic {
         write!(f, "{prefix}: {}", self.message())
     }
 }
-impl std::error::Error for NativeDiagnostic {}
+impl std::error::Error for NativeDiagnostic {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause().map(|cause| cause as _)
+    }
+}
 
 impl purrdf_hash::error::StructuredError for NativeDiagnostic {
     purrdf_hash::error_visit! {
         @record self { kind, payload } => "sparql-native-diagnostic" {
-            "kind" => Record(&self.kind), "text" => Text(self.message()),
+            "kind" => Record(&self.kind),
+            "text" => Value({
+                // Check the private semantic payload's complete shape as well.
+                let NativeDiagnosticPayload { text, cause, _allocation: _ } = &*self.payload;
+                cause.as_ref().map_or_else(|| purrdf_hash::error::ErrorValue::Text(text), |_| purrdf_hash::error::ErrorValue::Absent)
+            }),
+            "cause" => Value(self.cause().map_or(purrdf_hash::error::ErrorValue::Absent, |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
         }
     }
 }
@@ -1158,6 +1223,102 @@ mod tests {
         assert_eq!(short, "read refused");
     }
     use super::*;
+
+    #[test]
+    fn native_diagnostic_retains_original_cause_and_last_owner_without_inspection_rendering() {
+        use purrdf_testkit::error_capture::Capture;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        #[derive(Debug)]
+        struct Cause {
+            limit: u128,
+            formats: Arc<AtomicUsize>,
+        }
+        impl core::fmt::Display for Cause {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                self.formats.fetch_add(1, Ordering::Relaxed);
+                write!(f, "native limit {}", self.limit)
+            }
+        }
+        impl std::error::Error for Cause {}
+        impl purrdf_hash::error::StructuredError for Cause {
+            purrdf_hash::error_visit! {
+                @record self { limit, formats } => "original-native-limit" {
+                    "limit" => Unsigned(self.limit),
+                }
+            }
+        }
+        let (workspace, ledger, base) = crate::workspace::owned_row_regressions::account(65_536);
+        let capability = workspace.capability();
+        let formats = Arc::new(AtomicUsize::new(0));
+        let diagnostic = NativeDiagnostic::render_cause(
+            NativeDiagnosticKind::Data,
+            Cause {
+                limit: u128::MAX,
+                formats: formats.clone(),
+            },
+            &capability,
+        )
+        .unwrap();
+        let pointer = core::ptr::from_ref(diagnostic.cause().unwrap());
+        let clone = diagnostic.clone();
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert!(live > base);
+        drop(diagnostic);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        assert!(core::ptr::eq(
+            pointer,
+            core::ptr::from_ref(clone.cause().unwrap())
+        ));
+        let before = formats.load(Ordering::Relaxed);
+        let buffer = Vec::with_capacity(4);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let captured = Capture::read_with_buffer(&clone, buffer);
+        assert_eq!(window.close().allocations, 0);
+        assert!(matches!(
+            captured.field("text"),
+            purrdf_hash::error::ErrorValue::Absent
+        ));
+        assert!(matches!(
+            captured.child("cause").field("limit"),
+            purrdf_hash::error::ErrorValue::Unsigned(u128::MAX)
+        ));
+        assert_eq!(formats.load(Ordering::Relaxed), before);
+        assert_eq!(
+            std::error::Error::source(&clone)
+                .unwrap()
+                .downcast_ref::<Cause>()
+                .unwrap()
+                .limit,
+            u128::MAX
+        );
+        drop(clone);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_cause_admission_refuses_before_allocating_or_rendering() {
+        use crate::workspace::owned_row_regressions::{Refusal, account};
+        let base = crate::workspace::QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let (workspace, ledger, _) = account(base + 1);
+        let capability = workspace.capability();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = NativeDiagnostic::render_cause(
+            NativeDiagnosticKind::Data,
+            purrdf_testkit::error_capture::CallerRefusal { limit: u128::MAX },
+            &capability,
+        )
+        .unwrap_err();
+        assert_eq!(window.close().allocations, 0);
+        assert!(matches!(error, EvalError::WorkspaceStopped));
+        assert_eq!(ledger.live.load(std::sync::atomic::Ordering::Relaxed), base);
+        assert_eq!(workspace.take_failure().unwrap().identity, 7);
+    }
 
     #[test]
     fn parse_error_converts_and_renders() {

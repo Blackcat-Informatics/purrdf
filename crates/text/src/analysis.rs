@@ -719,6 +719,31 @@ struct DecodedOwner<'a> {
     _diagnostics: Option<WorkspaceAllocation>,
 }
 
+#[derive(Debug)]
+struct HtmlFailure {
+    error: TextError,
+    // The original diagnostic vector dies before its original grant.
+    _allocation: Option<WorkspaceAllocation>,
+}
+
+impl core::fmt::Display for HtmlFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+impl std::error::Error for HtmlFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+impl purrdf_hash::error::StructuredError for HtmlFailure {
+    purrdf_hash::error_visit! {
+        @record self { error, _allocation } => "text-admitted-html" {
+            "cause" => Cause(&self.error),
+        }
+    }
+}
+
 fn decode_owned<'a>(
     input: &'a str,
     mode: purrdf_lex::html::Mode,
@@ -744,15 +769,71 @@ fn decode_owned<'a>(
         _diagnostics: diagnostic_owner,
     };
     if !owner.resolution.diagnostics.is_empty() {
-        // The diagnostic vector and every decoded buffer remain live and covered
-        // through rendering. Once this immutable message exists they can die.
-        return Err(query_error(
-            workspace,
+        let DecodedOwner {
+            resolution:
+                purrdf_lex::html::Resolution {
+                    decoded,
+                    diagnostics,
+                },
+            _text: text_owner,
+            _sources: source_owner,
+            _diagnostics: diagnostic_owner,
+        } = owner;
+        // Retain only the original error vector and grant. Construction buffers
+        // die before their grants, before admitting the immutable diagnostic.
+        drop(decoded);
+        drop(text_owner);
+        drop(source_owner);
+        let cause = HtmlFailure {
+            error: TextError::Html(diagnostics),
+            _allocation: diagnostic_owner,
+        };
+        let diagnostic = admitted(purrdf_sparql_eval::NativeDiagnostic::render_cause(
             NativeDiagnosticKind::Data,
-            format_args!("HTML reference errors: {:?}", owner.resolution.diagnostics),
-        )?);
+            cause,
+            workspace,
+        ))?;
+        return Err(TextError::Diagnostic(diagnostic));
     }
     Ok(owner)
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn owned_html_failure_keeps_original_diagnostics_through_last_clone() {
+        use purrdf_testkit::error_capture::{Capture, Event};
+        let workspace = WorkspaceCapability::resident();
+        let error = decode_owned("&bogus; &#xD800;", purrdf_lex::html::Mode::Text, &workspace)
+            .err()
+            .expect("invalid references");
+        let TextError::Diagnostic(diagnostic) = error else {
+            panic!("native diagnostic owner")
+        };
+        let original: &(dyn std::error::Error + 'static) = diagnostic.cause().unwrap();
+        let original = original.downcast_ref::<HtmlFailure>().unwrap();
+        let TextError::Html(diagnostics) = &original.error else {
+            panic!("original HTML diagnostics")
+        };
+        let pointer = diagnostics.as_ptr();
+        let clone = diagnostic.clone();
+        drop(diagnostic);
+        let retained: &(dyn std::error::Error + 'static) = clone.cause().unwrap();
+        let retained = retained.downcast_ref::<HtmlFailure>().unwrap();
+        let TextError::Html(diagnostics) = &retained.error else {
+            panic!("retained HTML diagnostics")
+        };
+        assert_eq!(pointer, diagnostics.as_ptr());
+        assert_eq!(diagnostics.len(), 2);
+        let captured = Capture::read(&clone).child("cause").child("cause");
+        assert_eq!(captured.code, "text-html");
+        assert!(matches!(
+            captured.events.first(),
+            Some(Event::BeginList(Some("diagnostics"), 2))
+        ));
+    }
 }
 
 /// Source tracking is orthogonal to every normalization decision. Streaming

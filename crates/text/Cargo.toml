@@ -72,6 +72,10 @@ name = "wasm_determinism"
 harness = false
 
 [[test]]
+name = "structured_errors"
+harness = false
+
+[[test]]
 # The same public exact shapes, dictionary and span consumers on native/WASM.
 name = "physical_shapes"
 harness = false

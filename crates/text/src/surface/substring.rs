@@ -34,6 +34,16 @@ impl Default for SubstringLimits {
     }
 }
 
+impl purrdf_hash::error::StructuredError for SubstringLimits {
+    purrdf_hash::error_visit! {
+        @record self { posting_operations, candidate_spans, verification_bytes } => "text-substring-limits" {
+            "posting_operations" => Unsigned(u128::from(self.posting_operations)),
+            "candidate_spans" => Unsigned(u128::from(self.candidate_spans)),
+            "verification_bytes" => ByteCount(u128::from(self.verification_bytes)),
+        }
+    }
+}
+
 /// Charged logical work; independent of CPU, search strategy and architecture.
 /// Charges precede work, so a refusal includes the first charge exceeding its
 /// budget. Exact byte verification never starts before selective admission.
@@ -47,6 +57,16 @@ pub struct SubstringWork {
     pub verification_bytes: u64,
 }
 
+impl purrdf_hash::error::StructuredError for SubstringWork {
+    purrdf_hash::error_visit! {
+        @record self { posting_operations, candidate_spans, verification_bytes } => "text-substring-work" {
+            "posting_operations" => Unsigned(u128::from(self.posting_operations)),
+            "candidate_spans" => Unsigned(u128::from(self.candidate_spans)),
+            "verification_bytes" => ByteCount(u128::from(self.verification_bytes)),
+        }
+    }
+}
+
 /// Why an indexed or explicitly exhaustive query did not produce an answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SubstringRefusalReason {
@@ -58,6 +78,15 @@ pub enum SubstringRefusalReason {
     CandidateSpans,
     /// The next candidate's text exceeded the immutable verification budget.
     VerificationBytes,
+}
+
+impl purrdf_hash::error::StructuredError for SubstringRefusalReason {
+    purrdf_hash::error_visit! {
+        NonSelective => "text-substring-nonselective" {},
+        PostingOperations => "text-substring-posting-operations" {},
+        CandidateSpans => "text-substring-candidate-spans" {},
+        VerificationBytes => "text-substring-verification-bytes" {},
+    }
 }
 
 /// A complete typed refusal; it never carries partial matches.
@@ -74,6 +103,16 @@ pub struct SubstringRefusal {
     /// Exact immutable index generation.
     pub generation: [u8; 32],
 }
+impl purrdf_hash::error::StructuredError for SubstringRefusal {
+    purrdf_hash::error_visit! {
+        @record self { reason, counters, limits, distinct_spans, generation } => "text-substring-refusal" {
+            "reason" => Record(&self.reason), "counters" => Record(&self.counters),
+            "limits" => Record(&self.limits), "distinct_spans" => Unsigned(u128::from(self.distinct_spans)),
+            "generation" => Bytes(&self.generation),
+        }
+    }
+}
+
 impl fmt::Display for SubstringRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
