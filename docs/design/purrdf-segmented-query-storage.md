@@ -26,9 +26,10 @@ live-byte admission. Buffer replacement admits both the old and new layouts
 until the old allocation is destroyed. A refusal reports the original typed
 cause; evidence is never truncated to fit a smaller ledger.
 
-Learned routing bounds are cache hints, not required read state. If their index
-growth exceeds the live-byte ceiling after a payload is admitted, the reader
-keeps the payload without adding that hint. The same authenticated ID-range
+Learned routing bounds are cache hints, not required read state. Their index
+grows only from spare capacity, without evicting cached payloads. If growth
+exceeds the live-byte ceiling after a payload is admitted, the reader keeps the
+payload without adding that hint. The same authenticated ID-range
 search remains authoritative. Payload, exact-ledger, source and allocator
 failures still report their original typed causes; none is hidden by this policy.
 

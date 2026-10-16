@@ -419,7 +419,19 @@ impl State {
             };
             // State is already locked. Evict here rather than installing a
             // reservation backlink that would recursively acquire that lock.
-            if matches!(&result, Err(SegmentedError::Residency { .. })) && self.evict_one()? {
+            // Optional routing must fit spare capacity without evicting payloads.
+            let can_evict = matches!(
+                buffer,
+                ReaderBuffer::Requests
+                    | ReaderBuffer::Cache {
+                        dictionary_entries: 0,
+                        ..
+                    }
+            );
+            if can_evict
+                && matches!(&result, Err(SegmentedError::Residency { .. }))
+                && self.evict_one()?
+            {
                 continue;
             }
             return result;

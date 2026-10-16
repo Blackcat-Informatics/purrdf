@@ -55,28 +55,32 @@ fn routing_growth_cannot_refuse_an_already_admitted_payload() {
     let mut ids = Vec::new();
     builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
     let image = builder.seal().unwrap();
-    let read = session(&image, 2);
-    // One-record pages reach a learned-index growth boundary after 112 reads.
-    // The request ledger already has room for the next authenticated read.
-    for &id in &ids[..112] {
-        drop(read.resolve(id).unwrap());
+    for slots in [2, 128] {
+        let read = session(&image, slots);
+        // One-record pages reach a learned-index growth boundary after 112 reads.
+        // The request ledger already has room for the next authenticated read.
+        // A larger payload cache must not be cannibalized for optional hints.
+        for &id in &ids[..112] {
+            drop(read.resolve(id).unwrap());
+        }
+        let before = read.evidence();
+        let held = read
+            .reserve_workspace(CEILING - before.live_bytes() - 4096)
+            .unwrap();
+        let guard = read.resolve(ids[112]).unwrap();
+        assert_eq!(guard.term(), TermRef::Iri(values[112].as_iri().unwrap()));
+        drop(guard);
+        assert_eq!(read.read_error(), None);
+        assert_eq!(
+            read.evidence().bookkeeping_bytes(),
+            before.bookkeeping_bytes(),
+            "optional routing growth cannot consume the payload cache ({slots} slots)"
+        );
+        assert!(read.evidence().peak_bytes() <= CEILING);
+        drop(held);
+        assert_eq!(read.term_value(ids[113]).unwrap(), values[113]);
+        assert_eq!(read.read_error(), None);
     }
-    let before = read.evidence();
-    let held = read
-        .reserve_workspace(CEILING - before.live_bytes() - 4096)
-        .unwrap();
-    let guard = read.resolve(ids[112]).unwrap();
-    assert_eq!(guard.term(), TermRef::Iri(values[112].as_iri().unwrap()));
-    drop(guard);
-    assert_eq!(read.read_error(), None);
-    assert_eq!(
-        read.evidence().bookkeeping_bytes(),
-        before.bookkeeping_bytes()
-    );
-    assert!(read.evidence().peak_bytes() <= CEILING);
-    drop(held);
-    assert_eq!(read.term_value(ids[113]).unwrap(), values[113]);
-    assert_eq!(read.read_error(), None);
 }
 
 fn construction_limits_grow_on_input_instead_of_reserving_their_ceilings() {
