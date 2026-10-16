@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T18:39:29-06:00\n"
+"POT-Creation-Date: 2026-10-15T19:00:28-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -33,7 +33,7 @@ msgstr "简介"
 msgid "Getting Started"
 msgstr "入门"
 
-#: src/SUMMARY.md:12 src/concepts/projections.md:449 src/concepts/jsonld.md:36
+#: src/SUMMARY.md:12 src/concepts/projections.md:451 src/concepts/jsonld.md:36
 #: src/sparql/querying.md:2236 src/validation/shacl.md:302
 #: src/validation/shacl.md:406 src/validation/shacl.md:441
 #: src/validation/shacl.md:1190 src/validation/shacl.md:1464
@@ -41,7 +41,7 @@ msgstr "入门"
 msgid "Rust"
 msgstr "Rust"
 
-#: src/SUMMARY.md:13 src/concepts/projections.md:451
+#: src/SUMMARY.md:13 src/concepts/projections.md:453
 #: src/concepts/base-iris.md:55 src/concepts/jsonld.md:80
 #: src/sparql/querying.md:2238 src/validation/shacl.md:304
 #: src/validation/shacl.md:403 src/validation/shacl.md:438
@@ -62,7 +62,7 @@ msgstr "Python API 签名"
 msgid "JavaScript / WebAssembly"
 msgstr "JavaScript / WebAssembly"
 
-#: src/SUMMARY.md:17 src/concepts/projections.md:453 src/concepts/jsonld.md:120
+#: src/SUMMARY.md:17 src/concepts/projections.md:455 src/concepts/jsonld.md:120
 #: src/sparql/querying.md:2240 src/validation/shacl.md:405
 #: src/validation/shacl.md:440 src/validation/shacl.md:1468
 #: src/entailment.md:53 src/entailment.md:98
@@ -5150,8 +5150,8 @@ msgstr "具体化节点接口"
 msgid "`sh:reifierShape`, `sh:reificationRequired`"
 msgstr "`sh:reifierShape`、`sh:reificationRequired`"
 
-#: src/concepts/rdf12.md:73 src/concepts/projections.md:450
-#: src/concepts/projections.md:452 src/concepts/projections.md:453
+#: src/concepts/rdf12.md:73 src/concepts/projections.md:452
+#: src/concepts/projections.md:454 src/concepts/projections.md:455
 #: src/entailment.md:23 src/entailment.md:24 src/entailment.md:25
 #: src/entailment.md:50
 msgid "—"
@@ -6577,7 +6577,7 @@ msgstr ""
 "b\"<https://example.org/alice> <https://example.org/knows> <https://"
 "example.org/bob> .\""
 
-#: src/concepts/projections.md:435
+#: src/concepts/projections.md:437
 msgid ""
 "`ProjectionArchive` contains the profile, USTAR bytes, and loss ledger. "
 "`ProjectionLift` contains the reconstructed immutable dataset and its lift "
@@ -6594,15 +6594,15 @@ msgstr ""
 "的 API 还公开带类型的 LPG、CSVW、OBO、SKOS、DCAT RDF、VoID 以及内存中的 "
 "Research Object/工件模型。"
 
-#: src/concepts/projections.md:443
+#: src/concepts/projections.md:445
 msgid "Other production surfaces"
 msgstr "其他生产接口"
 
-#: src/concepts/projections.md:445
+#: src/concepts/projections.md:447
 msgid "The surface names follow the same profile/config/archive contract:"
 msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 
-#: src/concepts/projections.md:447 src/sparql/querying.md:2234
+#: src/concepts/projections.md:449 src/sparql/querying.md:2234
 #: src/validation/shacl.md:300 src/validation/shacl.md:400
 #: src/validation/shacl.md:435 src/validation/shacl.md:1357
 #: src/validation/shacl.md:1462 src/validation/shex.md:72 src/entailment.md:47
@@ -6610,39 +6610,39 @@ msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 msgid "Host"
 msgstr "宿主"
 
-#: src/concepts/projections.md:447
+#: src/concepts/projections.md:449
 msgid "Materialized project"
 msgstr "物化投影"
 
-#: src/concepts/projections.md:447
+#: src/concepts/projections.md:449
 msgid "Attached RO-Crate"
 msgstr "Attached RO-Crate"
 
-#: src/concepts/projections.md:447
+#: src/concepts/projections.md:449
 msgid "Direct LPG artifacts"
 msgstr "直接 LPG 工件"
 
-#: src/concepts/projections.md:447
+#: src/concepts/projections.md:449
 msgid "Lift"
 msgstr "提升（lift）"
 
-#: src/concepts/projections.md:449
+#: src/concepts/projections.md:451
 msgid "`project_archive`"
 msgstr "`project_archive`"
 
-#: src/concepts/projections.md:449
+#: src/concepts/projections.md:451
 msgid "`project_archive_with_assets`"
 msgstr "`project_archive_with_assets`"
 
-#: src/concepts/projections.md:449
+#: src/concepts/projections.md:451
 msgid "`project_lpg_artifacts_to_sink`"
 msgstr "`project_lpg_artifacts_to_sink`"
 
-#: src/concepts/projections.md:449
+#: src/concepts/projections.md:451
 msgid "`lift_archive`"
 msgstr "`lift_archive`"
 
-#: src/concepts/projections.md:450 src/concepts/jsonld.md:68
+#: src/concepts/projections.md:452 src/concepts/jsonld.md:68
 #: src/sparql/querying.md:2237 src/validation/shacl.md:303
 #: src/validation/shacl.md:402 src/validation/shacl.md:437
 #: src/validation/shacl.md:1190 src/validation/shacl.md:1359
@@ -6651,115 +6651,115 @@ msgstr "`lift_archive`"
 msgid "CLI"
 msgstr "CLI"
 
-#: src/concepts/projections.md:450
+#: src/concepts/projections.md:452
 msgid "`purrdf project`"
 msgstr "`purrdf project`"
 
-#: src/concepts/projections.md:450
+#: src/concepts/projections.md:452
 msgid "`purrdf project --assets PAYLOADS.tar`"
 msgstr "`purrdf project --assets PAYLOADS.tar`"
 
-#: src/concepts/projections.md:450
+#: src/concepts/projections.md:452
 msgid "`purrdf lift`"
 msgstr "`purrdf lift`"
 
-#: src/concepts/projections.md:451
+#: src/concepts/projections.md:453
 msgid "`purrdf.project(...)`"
 msgstr "`purrdf.project(...)`"
 
-#: src/concepts/projections.md:451
+#: src/concepts/projections.md:453
 msgid "`purrdf.project(..., assets=archive)`"
 msgstr "`purrdf.project(..., assets=archive)`"
 
-#: src/concepts/projections.md:451
+#: src/concepts/projections.md:453
 msgid "`purrdf.project_artifacts(...)`"
 msgstr "`purrdf.project_artifacts(...)`"
 
-#: src/concepts/projections.md:451
+#: src/concepts/projections.md:453
 msgid "`purrdf.lift(...)`"
 msgstr "`purrdf.lift(...)`"
 
-#: src/concepts/projections.md:452
+#: src/concepts/projections.md:454
 msgid "JavaScript"
 msgstr "JavaScript"
 
-#: src/concepts/projections.md:452
+#: src/concepts/projections.md:454
 msgid "`dataset.project(...)`"
 msgstr "`dataset.project(...)`"
 
-#: src/concepts/projections.md:452
+#: src/concepts/projections.md:454
 msgid "`dataset.projectWithAssets(...)`"
 msgstr "`dataset.projectWithAssets(...)`"
 
-#: src/concepts/projections.md:452
+#: src/concepts/projections.md:454
 msgid "`liftProjection(...)`"
 msgstr "`liftProjection(...)`"
 
-#: src/concepts/projections.md:453
+#: src/concepts/projections.md:455
 msgid "`purrdf_project(...)`"
 msgstr "`purrdf_project(...)`"
 
-#: src/concepts/projections.md:453
+#: src/concepts/projections.md:455
 msgid "`purrdf_project_with_assets(...)`"
 msgstr "`purrdf_project_with_assets(...)`"
 
-#: src/concepts/projections.md:453
+#: src/concepts/projections.md:455
 msgid "`purrdf_lift(...)`"
 msgstr "`purrdf_lift(...)`"
 
-#: src/concepts/projections.md:455
+#: src/concepts/projections.md:457
 msgid "Runnable examples live at:"
 msgstr "可运行的示例位于："
 
-#: src/concepts/projections.md:457
+#: src/concepts/projections.md:459
 msgid "`crates/rdf/examples/projection_archive.rs`"
 msgstr "`crates/rdf/examples/projection_archive.rs`"
 
-#: src/concepts/projections.md:458
+#: src/concepts/projections.md:460
 msgid "`crates/rdf/examples/csvw_terms.rs`"
 msgstr "`crates/rdf/examples/csvw_terms.rs`"
 
-#: src/concepts/projections.md:459
+#: src/concepts/projections.md:461
 msgid "`crates/rdf/examples/okf_terms.rs`"
 msgstr "`crates/rdf/examples/okf_terms.rs`"
 
-#: src/concepts/projections.md:460
+#: src/concepts/projections.md:462
 msgid "`crates/rdf/examples/research_object_roundtrip.rs`"
 msgstr "`crates/rdf/examples/research_object_roundtrip.rs`"
 
-#: src/concepts/projections.md:461
+#: src/concepts/projections.md:463
 msgid "`crates/rdf/examples/attached_ro_crate.rs`"
 msgstr "`crates/rdf/examples/attached_ro_crate.rs`"
 
-#: src/concepts/projections.md:462
+#: src/concepts/projections.md:464
 msgid "`crates/cli/examples/projection-roundtrip.sh`"
 msgstr "`crates/cli/examples/projection-roundtrip.sh`"
 
-#: src/concepts/projections.md:463
+#: src/concepts/projections.md:465
 msgid "`crates/cli/examples/dataset-descriptions.sh`"
 msgstr "`crates/cli/examples/dataset-descriptions.sh`"
 
-#: src/concepts/projections.md:464
+#: src/concepts/projections.md:466
 msgid "`bindings/python/examples/projection_roundtrip.py`"
 msgstr "`bindings/python/examples/projection_roundtrip.py`"
 
-#: src/concepts/projections.md:465
+#: src/concepts/projections.md:467
 msgid "`bindings/python/examples/projection_stream.py`"
 msgstr "`bindings/python/examples/projection_stream.py`"
 
-#: src/concepts/projections.md:466
+#: src/concepts/projections.md:468
 msgid "`crates/rdf-wasm/js/examples/projection-roundtrip.mjs`"
 msgstr "`crates/rdf-wasm/js/examples/projection-roundtrip.mjs`"
 
-#: src/concepts/projections.md:467
+#: src/concepts/projections.md:469
 msgid "`crates/rdf-capi/examples/projection_roundtrip.c`"
 msgstr "`crates/rdf-capi/examples/projection_roundtrip.c`"
 
-#: src/concepts/projections.md:469
+#: src/concepts/projections.md:471
 msgid "Determinism and verification"
 msgstr "确定性与验证"
 
-#: src/concepts/projections.md:471
+#: src/concepts/projections.md:473
 msgid ""
 "Archive members use safe POSIX-relative paths in lexical order. USTAR "
 "headers, metadata, checksums, padding, and trailer are fixed. A reader "
@@ -6771,7 +6771,7 @@ msgstr ""
 "结尾块都是固定的。读取器验证归档，并要求其规范重编码与输入字节一致，因此不会"
 "静默地把攻击者控制的替代形式规范化。"
 
-#: src/concepts/projections.md:476
+#: src/concepts/projections.md:478
 msgid ""
 "The pinned W3C CSVW manifests exercise 270 RDF cases and 282 validation "
 "cases. A locked independent `csvw` implementation validates production "
@@ -6783,7 +6783,7 @@ msgstr ""
 "独立 `csvw` 实现验证生产输出，并拒绝刻意构造的元数据/数据损坏。OBO 写出器依据"
 "固定版本的官方模式独立验证，并配有损坏探针。运行整个投影验证切片："
 
-#: src/concepts/projections.md:487
+#: src/concepts/projections.md:489
 msgid ""
 "The benchmark is report-only. It measures RDF-to-LPG mapping, scoped versus "
 "explicit-all mapping over a 20-graph carrier, materialized package versus "
