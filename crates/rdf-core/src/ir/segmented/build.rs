@@ -654,8 +654,12 @@ fn append_records(
     block_bytes: usize,
 ) -> Result<Stream, SegmentedError> {
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    for records in records.chunks(chunk) {
-        blocks.push(format::record_block(kind, records, block_bytes)?);
+    let mut remaining = records;
+    while !remaining.is_empty() {
+        let (block, used) =
+            format::record_block(kind, &remaining[..remaining.len().min(chunk)], block_bytes)?;
+        blocks.push(block);
+        remaining = &remaining[used..];
     }
     Ok(Stream {
         first,
@@ -825,10 +829,12 @@ fn validate_content(bytes: &[u8], header: Header) -> Result<(), SegmentedError> 
             header.records_per_block,
             u64::from(header.block_bytes) * u64::from(header.records_per_block),
         )?;
-        let remaining = header.terms
-            - u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+        let remaining = header
+            .terms
+            .checked_sub(u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?)
+            .ok_or(SegmentedError::Corrupt("dictionary cardinality is false"))?;
         if u64::try_from(records.entries.len()).map_err(|_| SegmentedError::AddressExhausted)?
-            != remaining.min(u64::from(header.records_per_block))
+            > remaining
         {
             return Err(SegmentedError::Corrupt(
                 "forward dictionary block packing is false",
@@ -1287,10 +1293,19 @@ mod certification_tests {
     }
 
     fn image() -> SegmentedImage {
-        let limits = SegmentedBuildLimits::new(100, 20_000, 100, 1024, 4).unwrap();
+        let limits = SegmentedBuildLimits::new(100, 20_000, 100, 512, 4).unwrap();
         let mut builder = SegmentedBuilder::new(limits).unwrap();
         let values = (0..13)
-            .map(|n| TermValue::iri(format!("http://example.org/{n:02}")))
+            .map(|n| {
+                TermValue::iri(format!(
+                    "http://example.org/{}/{n:02}",
+                    if n % 2 == 0 {
+                        "a".repeat(180)
+                    } else {
+                        "z".repeat(180)
+                    }
+                ))
+            })
             .collect::<Vec<_>>();
         let mut ids = Vec::new();
         builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();

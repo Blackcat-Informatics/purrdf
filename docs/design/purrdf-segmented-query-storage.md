@@ -3,6 +3,22 @@
 
 # Segmented query storage and block sizing
 
+`SegmentedBuildLimits` sets resident construction ceilings. Creating an empty
+`SegmentedBuilder` does not reserve those ceilings; native term and row storage
+grows as input arrives. Callers do not need to estimate private term expansion
+to avoid a reservation for unused capacity. Offered input still obeys the
+original explicit term, lexical-byte and row limits.
+
+Dictionary blocks close before the next encoded record would exceed
+`block_bytes`, or when they reach `records_per_block`. The record count is an
+upper bound. Both insertion-order and lexical-order streams use the same
+front-coding encoder; their block populations and block counts may differ.
+One encoded record, including its fence and framing, must fit a block or sealing
+returns `ConstructionLimit`. The encoder does not retry the complete image with
+a larger layout. Selective term lookup uses authenticated stored ID ranges;
+opening still loads no dictionary directory or term map. Existing full-count
+blocks retain their encoding and their direct first-probe lookup.
+
 `SegmentedReadLimits` specifies ceilings, not arrays to allocate at opening.
 The exact request ledger and cache hash table grow as they are used. Their
 concrete capacities, copied/decoded blocks, pins and query scratch share the
@@ -55,16 +71,18 @@ representatives. The smaller 2,000-claim neighbor checks the same behavior.
 
 Each total also includes one header block. The dictionary appears twice: in
 original ID order and in lexical reverse-lookup order. Both use fixed-size,
-prefix-compressed blocks with the selected number of records. At 4096 / 32,
+prefix-compressed blocks capped at the selected number of records. At 4096 / 32,
 these two indexes occupy about 90% of this image. Sparse dictionary blocks,
 rather than the authentication tree, dominate the expansion over the compact
 pack. The row streams are ordinary, reifier and annotation rows, each in one
 subject-first order; they are not three permutations of the entire dataset.
 
-Increasing records per block reduces padding and the number of authenticated
-blocks, but the encoded records and fence must fit the selected byte size.
-For this corpus, 4096 / 128 refuses with `ConstructionLimit`; 4096 / 64 and
-8192 / 128 fit and retain identical decoded query answers. Longer lexical values
-can require different settings. These measurements describe this authored
-corpus, not a universal compression ratio or timing claim. Peak admitted COUNT
+Increasing the record cap can reduce padding and the number of authenticated
+blocks. These recorded measurements used fixed-count grouping: for this corpus,
+4096 / 128 refused with `ConstructionLimit`, while 4096 / 64 and 8192 / 128 fit
+and retained identical decoded query answers. The byte-aware encoder now closes
+an overflowing group before its next record instead of refusing that group;
+the old 4096 / 128 refusal is historical evidence, not current behavior or a new
+layout measurement. These measurements describe this authored corpus, not a
+universal compression ratio or timing claim. Recorded peak admitted COUNT
 bytes are 193,304,220 for both 4096-byte layouts and 168,269,468 for 8192 / 128.

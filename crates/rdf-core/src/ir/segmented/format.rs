@@ -117,17 +117,17 @@ impl Header {
             graphs: streams[5],
             summaries: streams[6],
         };
-        if header.dictionary.rows != terms
-            || header.reverse.rows != terms
-            || header.dictionary.blocks != header.reverse.blocks
-        {
+        if header.dictionary.rows != terms || header.reverse.rows != terms {
             return Err(SegmentedError::Corrupt(
                 "dictionary/index cardinality mismatch",
             ));
         }
         let expected = terms / u64::from(records_per_block)
             + u64::from(terms % u64::from(records_per_block) != 0);
-        if header.dictionary.blocks != expected {
+        if [header.dictionary, header.reverse]
+            .iter()
+            .any(|stream| stream.blocks < expected || stream.blocks > terms)
+        {
             return Err(SegmentedError::Corrupt("dictionary block count mismatch"));
         }
         Ok(header)
@@ -312,20 +312,26 @@ pub(super) fn record_block(
     kind: u8,
     records: &[(GlobalTermId, Vec<u8>)],
     block_bytes: usize,
-) -> Result<Vec<u8>, SegmentedError> {
-    let fence = records.first().map_or(&[][..], |(_, key)| key.as_slice());
-    let decoded = records.iter().try_fold(0_u32, |n, (_, key)| {
-        let bytes = u32::try_from(key.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-        n.checked_add(bytes).ok_or(SegmentedError::AddressExhausted)
-    })?;
+) -> Result<(Vec<u8>, usize), SegmentedError> {
+    let fence = records
+        .first()
+        .ok_or(SegmentedError::Corrupt("empty record block input"))?
+        .1
+        .as_slice();
+    // The first key is also the fence. Refuse it before copying either instance;
+    // all following records are admitted at this same encoder before appending.
+    let first_bytes = fence
+        .len()
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(RECORD_HEADER + 16))
+        .ok_or(SegmentedError::AddressExhausted)?;
+    if first_bytes > block_bytes {
+        return Err(SegmentedError::ConstructionLimit);
+    }
     let mut out = Vec::with_capacity(block_bytes);
     out.push(kind);
-    out.extend_from_slice(
-        &u32::try_from(records.len())
-            .map_err(|_| SegmentedError::AddressExhausted)?
-            .to_le_bytes(),
-    );
-    out.extend_from_slice(&decoded.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
     out.extend_from_slice(&0_u32.to_le_bytes());
     out.extend_from_slice(
         &u32::try_from(fence.len())
@@ -334,8 +340,21 @@ pub(super) fn record_block(
     );
     out.extend_from_slice(fence);
     let mut previous = &[][..];
+    let mut count = 0_usize;
+    let mut decoded = 0_u32;
     for (id, key) in records {
         let prefix = purrdf_deflate::common_prefix_len(previous, key);
+        let next = out
+            .len()
+            .checked_add(16)
+            .and_then(|bytes| bytes.checked_add(key.len() - prefix))
+            .ok_or(SegmentedError::AddressExhausted)?;
+        if next > block_bytes {
+            break;
+        }
+        decoded = decoded
+            .checked_add(u32::try_from(key.len()).map_err(|_| SegmentedError::AddressExhausted)?)
+            .ok_or(SegmentedError::AddressExhausted)?;
         out.extend_from_slice(
             &u32::try_from(prefix)
                 .map_err(|_| SegmentedError::AddressExhausted)?
@@ -349,15 +368,20 @@ pub(super) fn record_block(
         push_id(&mut out, *id);
         out.extend_from_slice(&key[prefix..]);
         previous = key;
+        count += 1;
     }
-    if out.len() > block_bytes {
-        return Err(SegmentedError::ConstructionLimit);
-    }
+    crate::bytes::put_u32_le(
+        &mut out,
+        1,
+        u32::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?,
+    )
+    .expect("record header is present");
+    crate::bytes::put_u32_le(&mut out, 5, decoded).expect("record header is present");
     let payload =
         u32::try_from(out.len() - RECORD_HEADER).map_err(|_| SegmentedError::AddressExhausted)?;
     crate::bytes::put_u32_le(&mut out, 9, payload).expect("record header is present");
     out.resize(block_bytes, 0);
-    Ok(out)
+    Ok((out, count))
 }
 
 #[derive(Debug)]
@@ -483,4 +507,45 @@ pub(super) fn snapshot_digest(root: &[u8; 32], block_bytes: u32, count: u64) -> 
     hash.update(&block_bytes.to_le_bytes());
     hash.update(&count.to_le_bytes());
     SegmentedSnapshot(*hash.finalize().as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_fit_includes_fence_framing_and_actual_front_coding() {
+        let mut second = vec![b'a'; 200];
+        second[199] = b'b';
+        let records = [
+            (GlobalTermId::from_index(12).unwrap(), vec![b'a'; 200]),
+            (GlobalTermId::from_index(13).unwrap(), second),
+            (GlobalTermId::from_index(14).unwrap(), vec![b'z'; 200]),
+        ];
+        // 17 header + 200 fence + 16 framing + 200 first key = 433.
+        // The next key shares 199 bytes, so adds exactly 17 bytes.
+        for (width, expected) in [(433, 1), (449, 1), (450, 2), (512, 2)] {
+            let (bytes, used) = record_block(DICTIONARY, &records, width).unwrap();
+            assert_eq!(bytes.len(), width);
+            assert_eq!(used, expected);
+            let decoded = DecodedRecords::decode(&bytes, DICTIONARY, 3, 600).unwrap();
+            assert_eq!(decoded.entries.len(), expected);
+            for (index, (id, key)) in records[..used].iter().enumerate() {
+                assert_eq!(decoded.entries[index].0, *id);
+                assert_eq!(decoded.key(index), key);
+            }
+        }
+        assert!(matches!(
+            record_block(DICTIONARY, &records, 432),
+            Err(SegmentedError::ConstructionLimit)
+        ));
+        let (bytes, used) = record_block(REVERSE, &records[..1], 512).unwrap();
+        assert_eq!(used, 1);
+        assert_eq!(
+            DecodedRecords::decode(&bytes, REVERSE, 1, 200)
+                .unwrap()
+                .key(0),
+            records[0].1
+        );
+    }
 }

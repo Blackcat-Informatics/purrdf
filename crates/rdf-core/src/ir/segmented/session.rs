@@ -1134,24 +1134,51 @@ impl SegmentedSession {
         if local >= self.header.terms {
             return self.fail(SegmentedError::Corrupt("foreign term ID"));
         }
-        let slot = self.header.dictionary.first + local / u64::from(self.header.records_per_block);
-        let index = usize::try_from(local % u64::from(self.header.records_per_block))
-            .map_err(|_| SegmentedError::AddressExhausted)?;
-        let block = self.block(slot)?;
-        let records = block.decoded.as_ref().ok_or(SegmentedError::Corrupt(
-            "forward dictionary block kind changed",
-        ))?;
-        if records
-            .entries
-            .get(index)
-            .is_none_or(|(stored, _)| *stored != id)
-        {
-            return self.fail(SegmentedError::Corrupt(
-                "forward dictionary ordinal changed",
-            ));
+        // The count cap gives a lower bound, never an exact block address. Probe
+        // it first so existing full-population images still need one block read.
+        // Variable populations then use authenticated ID fences in a bounded
+        // binary search, retaining no directory and releasing every probe pin.
+        let mut lo = local / u64::from(self.header.records_per_block);
+        let mut hi = self.header.dictionary.blocks;
+        let mut first_probe = true;
+        while lo < hi {
+            let mid = if first_probe {
+                first_probe = false;
+                lo
+            } else {
+                lo + (hi - lo) / 2
+            };
+            let block = self.block(self.header.dictionary.first + mid)?;
+            let records = block.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+                "forward dictionary block kind changed",
+            ))?;
+            let first = records.entries[0].0.index();
+            if id.index() < first {
+                hi = mid;
+            } else {
+                let offset = id.index() - first;
+                if offset
+                    < u64::try_from(records.entries.len())
+                        .map_err(|_| SegmentedError::AddressExhausted)?
+                {
+                    // Narrow only an in-block offset, including on wasm32.
+                    let index =
+                        usize::try_from(offset).map_err(|_| SegmentedError::AddressExhausted)?;
+                    let (stored, _) = records.entries[index];
+                    if stored != id {
+                        return self.fail(SegmentedError::Corrupt(
+                            "forward dictionary ordinal changed",
+                        ));
+                    }
+                    format::decode_term(records.key(index))?;
+                    return Ok((block, index));
+                }
+                lo = mid + 1;
+            }
         }
-        format::decode_term(records.key(index))?;
-        Ok((block, index))
+        self.fail(SegmentedError::Corrupt(
+            "forward dictionary ordinal missing",
+        ))
     }
 
     fn lookup_key(&self, key: &[u8]) -> Result<Option<GlobalTermId>, SegmentedError> {

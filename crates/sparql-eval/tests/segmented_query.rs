@@ -1359,13 +1359,6 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
                 )
                 .unwrap(),
             );
-            if (block_bytes, records_per_block) == (4096, 128) {
-                assert!(matches!(built, Err(SegmentedError::ConstructionLimit)));
-                eprintln!(
-                    "claims={claims} block_bytes=4096 records_per_block=128 refusal=ConstructionLimit"
-                );
-                continue;
-            }
             let image = built.unwrap();
             eprintln!(
                 "claims={claims} block_bytes={block_bytes} records_per_block={records_per_block} terms={} pack_bytes={} image_bytes={}",

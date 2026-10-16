@@ -129,6 +129,105 @@ fn demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic() {
     assert_eq!(read.quads().count(), 1);
 }
 
+fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
+    let values: Vec<_> = (0..80)
+        .map(|index| {
+            let prefix = if index % 2 == 0 { "a" } else { "z" };
+            TermValue::iri(format!(
+                "https://example.org/{}/{index:03}",
+                prefix.repeat(180)
+            ))
+        })
+        .collect();
+    let first = (1_u64 << 54) + 19;
+    let limits = SegmentedBuildLimits::new(100, 100_000, 100, 512, 8)
+        .unwrap()
+        .with_first_term_index(first)
+        .unwrap();
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
+    let mut ids = Vec::new();
+    builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+    for &id in &ids {
+        builder
+            .push_quad(QuadIds {
+                s: id,
+                p: ids[0],
+                o: id,
+                g: None,
+            })
+            .unwrap();
+    }
+    let image = builder.seal().unwrap();
+    let certified = SegmentedImage::certify(image.bytes().to_vec()).unwrap();
+    assert_eq!(certified.bytes(), image.bytes());
+    // Read the persisted stream descriptors, not a reconstruction of their
+    // encoder: dictionary/reverse descriptors begin at bytes 48 and 72.
+    let dictionary_blocks = purrdf_core::bytes::read_u64_le(image.bytes(), 56).unwrap();
+    let reverse_first = purrdf_core::bytes::read_u64_le(image.bytes(), 72).unwrap();
+    let reverse_blocks = purrdf_core::bytes::read_u64_le(image.bytes(), 80).unwrap();
+    assert_eq!(dictionary_blocks, 80);
+    assert!(reverse_blocks < dictionary_blocks);
+    let mut count = 0_u64;
+    let mut widest = 0;
+    for slot in reverse_first..reverse_first + reverse_blocks {
+        let offset = usize::try_from(slot * 512).unwrap();
+        let population = purrdf_core::bytes::read_u32_le(image.bytes(), offset + 1).unwrap();
+        assert!((1..=8).contains(&population));
+        widest = widest.max(population);
+        count += u64::from(population);
+    }
+    assert_eq!(count, 80);
+    assert!(widest > 1);
+    let read = session(&certified, 2);
+    let opened = read.evidence();
+    opened.with_requests(|requests| {
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.bytes() == 512)
+                .count(),
+            1
+        );
+        assert_eq!(requests[0].position(), 0);
+    });
+    let before = opened.request_count();
+    assert_eq!(read.term_value(ids[79]).unwrap(), values[79]);
+    assert!(
+        read.evidence().request_count() - before < 80,
+        "one sparse read must not scan the complete dictionary"
+    );
+    // Both insertion order and lexical order cross variable-size boundaries.
+    for index in (0..ids.len()).rev() {
+        assert_eq!(read.term_value(ids[index]).unwrap(), values[index]);
+        assert_eq!(
+            read.term_id_by_value(&values[index]).unwrap(),
+            Some(ids[index])
+        );
+        assert_eq!(ids[index].index(), first + u64::try_from(index).unwrap());
+    }
+    assert_eq!(read.checked_read(|view| view.quads().count()).unwrap(), 80);
+    let mut output = Vec::new();
+    read.export_trig_lines(&mut purrdf_core::sink::WriterDrain(&mut output))
+        .unwrap();
+    let text = String::from_utf8(output).unwrap();
+    for value in &values {
+        assert!(text.contains(value.as_iri().unwrap()));
+    }
+    assert!(read.evidence().peak_bytes() <= read.storage_live_budget().unwrap());
+    assert_eq!(read.read_error(), None);
+}
+
+fn a_single_oversized_encoded_term_refuses_without_a_sealed_image() {
+    let mut builder =
+        SegmentedBuilder::new(SegmentedBuildLimits::new(4, 4096, 0, 512, 8).unwrap()).unwrap();
+    let term = TermValue::iri(format!("https://example.org/{}", "x".repeat(300)));
+    builder.intern_batch(&[term], |_, _| {}).unwrap();
+    assert!(matches!(
+        builder.seal(),
+        Err(SegmentedError::ConstructionLimit)
+    ));
+}
+
 fn indexed_reopen_preserves_high_ids_and_bidirectional_batches() {
     let values: Vec<_> = (0..37)
         .map(|n| TermValue::iri(format!("http://example.org/中文/long/{n:04}")))
@@ -350,7 +449,7 @@ fn rdf12_references_empty_graphs_and_streamed_lines_survive() {
         label: "主题".into(),
         scope: BlankScope(71),
     };
-    let predicate = TermValue::iri("http://example.org/p");
+    let predicate = TermValue::iri(format!("http://example.org/p{}", "p".repeat(180)));
     let literal = TermValue::Literal {
         lexical_form: "方向".into(),
         datatype: purrdf_iri::vocab::rdf::DIR_LANG_STRING.into(),
@@ -367,11 +466,14 @@ fn rdf12_references_empty_graphs_and_streamed_lines_survive() {
         predicate,
         literal,
         triple,
-        TermValue::iri("http://example.org/claim"),
-        TermValue::iri("http://example.org/g"),
+        TermValue::iri(format!("http://example.org/claim{}", "c".repeat(180))),
+        TermValue::iri(format!("http://example.org/g{}", "g".repeat(180))),
         TermValue::iri("http://example.org/empty"),
     ];
-    let limits = SegmentedBuildLimits::new(100, 20_000, 30, 2048, 3).unwrap();
+    let limits = SegmentedBuildLimits::new(100, 20_000, 30, 512, 8)
+        .unwrap()
+        .with_first_term_index((1_u64 << 54) + 31)
+        .unwrap();
     let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut ids = Vec::new();
     builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
@@ -691,6 +793,8 @@ fn composite_lexical_blank_references_keep_their_scoped_dictionary_closure() {
 purrdf_testkit::harness_main!(
     construction_limits_grow_on_input_instead_of_reserving_their_ceilings,
     demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic,
+    byte_packed_dictionaries_round_trip_with_sparse_high_id_reads,
+    a_single_oversized_encoded_term_refuses_without_a_sealed_image,
     indexed_reopen_preserves_high_ids_and_bidirectional_batches,
     live_pins_are_charged_and_cannot_be_evicted,
     exact_evidence_and_workspace_refuse_before_unbounded_growth,
