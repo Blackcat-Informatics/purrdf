@@ -1244,15 +1244,21 @@ fn native_iri_dynamic_error_keeps_its_exact_message_and_original_capacity() {
     };
     let measured = window.close();
     assert_eq!(error, expected);
-    let purrdf_iri::IriError::BadAuthority(text) = error else {
-        panic!("invalid IPv6 must retain its authority message");
+    let purrdf_iri::IriError::BadAuthority(purrdf_iri::AuthorityError::InvalidIpv6 {
+        address,
+        offset,
+    }) = error
+    else {
+        panic!("invalid IPv6 must retain its original address and offset");
     };
-    assert_eq!(memory.admitted_bytes(), text.capacity());
+    assert_eq!(offset, 8);
+    assert_eq!(address, "badé".repeat(2048));
+    assert_eq!(memory.admitted_bytes(), address.capacity());
     assert_eq!(
         usize::try_from(measured.retained_bytes).unwrap(),
-        text.capacity()
+        address.capacity()
     );
-    memory.release_string(text).unwrap();
+    memory.release_string(address).unwrap();
     assert_eq!(memory.admitted_bytes(), 0);
     assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
 }

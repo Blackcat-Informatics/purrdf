@@ -111,6 +111,44 @@ pub enum CdtError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for CdtError {
+    purrdf_hash::error_visit! {
+        InputTooLarge { offset, length } => "cdt-input-too-large" {
+            "offset" => ByteCount(*offset as u128), "length" => ByteCount(*length as u128),
+        },
+        TooManyElements { offset, limit } => "cdt-too-many-elements" {
+            "offset" => ByteCount(*offset as u128), "limit" => Unsigned(*limit as u128),
+        },
+        Unexpected { offset, expected } => "cdt-unexpected" {
+            "offset" => ByteCount(*offset as u128), "expected" => Text(expected),
+        },
+        UnexpectedEnd { offset, expected } => "cdt-unexpected-end" {
+            "offset" => ByteCount(*offset as u128), "expected" => Text(expected),
+        },
+        BadEscape { offset, reason } => "cdt-bad-escape" {
+            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
+        },
+        NotAbsoluteIri { offset, iri, reason } => "cdt-not-absolute-iri" {
+            "offset" => ByteCount(*offset as u128), "iri" => Iri(iri), "reason" => Text(reason),
+        },
+        BadLanguageTag { offset, reason } => "cdt-bad-language-tag" {
+            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
+        },
+        BadNumericLiteral { offset, reason } => "cdt-bad-numeric-literal" {
+            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
+        },
+        BadBlankNodeLabel { offset, reason } => "cdt-bad-blank-node-label" {
+            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
+        },
+        DuplicateMapKey { offset, key } => "cdt-duplicate-map-key" {
+            "offset" => ByteCount(*offset as u128), "key" => Text(key),
+        },
+        TrailingText { offset } => "cdt-trailing-text" {
+            "offset" => ByteCount(*offset as u128),
+        },
+    }
+}
+
 impl CdtError {
     /// Native diagnostic payload retained after the parser's scratch is destroyed.
     /// The original admission keeps these bytes until the diagnostic is dropped.
@@ -229,6 +267,14 @@ pub enum CdtTypeErrorKind {
     Undefined,
 }
 
+impl purrdf_hash::error::StructuredError for CdtTypeErrorKind {
+    purrdf_hash::error_visit! {
+        IllTyped => "cdt-type-ill-typed" {},
+        Unmodelled => "cdt-type-unmodelled" {},
+        Undefined => "cdt-type-undefined" {},
+    }
+}
+
 /// A SPARQL **type error** raised by a value-space comparison.
 ///
 /// This is the third outcome of [`crate::list_equal`] / [`crate::list_less_than`]
@@ -241,6 +287,14 @@ pub struct CdtTypeError {
     pub kind: CdtTypeErrorKind,
     /// A short, stable explanation of which pair could not be compared and why.
     pub reason: &'static str,
+}
+
+impl purrdf_hash::error::StructuredError for CdtTypeError {
+    purrdf_hash::error_visit! {
+        @record self { kind, reason } => "cdt-type" {
+            "kind" => Record(&self.kind), "reason" => Text(self.reason),
+        }
+    }
 }
 
 impl CdtTypeError {

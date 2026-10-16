@@ -854,7 +854,7 @@ mod tests {
             IriError::BadScheme("1_bad".to_owned()),
             IriError::BadPercentEncoding(7),
             IriError::DisallowedChar('漢', 12),
-            IriError::BadAuthority("unclosed host".to_owned()),
+            IriError::BadAuthority(purrdf_iri::AuthorityError::UnterminatedIpLiteral),
             IriError::NonAbsoluteBase("relative".to_owned()),
             IriError::NoBase {
                 reference: "relative\"\\漢".to_owned(),
