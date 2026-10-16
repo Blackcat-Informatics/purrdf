@@ -44,6 +44,41 @@ fn session(image: &SegmentedImage, cache: u32) -> SegmentedSession {
     .unwrap()
 }
 
+fn routing_growth_cannot_refuse_an_already_admitted_payload() {
+    const CEILING: u64 = 2_000_000;
+    let mut builder =
+        SegmentedBuilder::new(SegmentedBuildLimits::new(1024, 200_000, 0, 512, 1).unwrap())
+            .unwrap();
+    let values: Vec<_> = (0..512)
+        .map(|index| TermValue::iri(format!("urn:routing:{index:04}")))
+        .collect();
+    let mut ids = Vec::new();
+    builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+    let image = builder.seal().unwrap();
+    let read = session(&image, 2);
+    // One-record pages reach a learned-index growth boundary after 112 reads.
+    // The request ledger already has room for the next authenticated read.
+    for &id in &ids[..112] {
+        drop(read.resolve(id).unwrap());
+    }
+    let before = read.evidence();
+    let held = read
+        .reserve_workspace(CEILING - before.live_bytes() - 4096)
+        .unwrap();
+    let guard = read.resolve(ids[112]).unwrap();
+    assert_eq!(guard.term(), TermRef::Iri(values[112].as_iri().unwrap()));
+    drop(guard);
+    assert_eq!(read.read_error(), None);
+    assert_eq!(
+        read.evidence().bookkeeping_bytes(),
+        before.bookkeeping_bytes()
+    );
+    assert!(read.evidence().peak_bytes() <= CEILING);
+    drop(held);
+    assert_eq!(read.term_value(ids[113]).unwrap(), values[113]);
+    assert_eq!(read.read_error(), None);
+}
+
 fn construction_limits_grow_on_input_instead_of_reserving_their_ceilings() {
     let values = [
         TermValue::iri("https://example.org/subject"),
@@ -847,6 +882,7 @@ fn composite_lexical_blank_references_keep_their_scoped_dictionary_closure() {
 }
 
 purrdf_testkit::harness_main!(
+    routing_growth_cannot_refuse_an_already_admitted_payload,
     construction_limits_grow_on_input_instead_of_reserving_their_ceilings,
     demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic,
     byte_packed_dictionaries_round_trip_with_sparse_high_id_reads,
