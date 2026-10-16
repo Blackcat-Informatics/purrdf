@@ -1202,16 +1202,25 @@ impl SegmentedSession {
                         })
                         .count()
                 });
-                if dictionary_entries != 0
-                    && let Err(error) = state.reserve_buffer(ReaderBuffer::Cache {
+                let retain_route = if dictionary_entries == 0 {
+                    true
+                } else {
+                    match state.reserve_buffer(ReaderBuffer::Cache {
                         block_charge: 0,
                         dictionary_entries,
-                    })
-                {
-                    state.error.get_or_insert_with(|| error.clone());
-                    return Err(error);
-                }
-                state.cache_insert(key, Arc::clone(&block));
+                    }) {
+                        Ok(()) => true,
+                        // Routing hints are optional cache metadata. The payload
+                        // and exact request ledger have already been admitted;
+                        // refusing only this index growth cannot invalidate them.
+                        Err(SegmentedError::Residency { .. }) => false,
+                        Err(error) => {
+                            state.error.get_or_insert_with(|| error.clone());
+                            return Err(error);
+                        }
+                    }
+                };
+                state.cache_insert(key, Arc::clone(&block), retain_route);
                 Ok(block)
             }
             Err(error) => {
@@ -2275,6 +2284,70 @@ mod operation_tests {
             drop(header_pin);
             drop(pinned);
         }
+    }
+
+    #[test]
+    fn routing_growth_cannot_refuse_an_already_admitted_payload() {
+        const CEILING: u64 = 2_000_000;
+        let limits = SegmentedBuildLimits::new(1024, 200_000, 0, 512, 1).unwrap();
+        let mut builder = SegmentedBuilder::new(limits).unwrap();
+        let values: Vec<_> = (0..512)
+            .map(|index| TermValue::iri(format!("urn:routing:{index:04}")))
+            .collect();
+        let mut ids = Vec::new();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        let image = builder.seal().unwrap();
+        let session = SegmentedSession::open(
+            Arc::new(image.provider()),
+            image.receipt(),
+            SegmentedReadLimits::new(CEILING, 2, 20_000, 20_000_000, 4),
+        )
+        .unwrap();
+        let mut next = 0;
+        loop {
+            let state = lock_read_state(&session.state);
+            let positions = &state.dictionary_positions;
+            let full = positions.len() == positions.capacity() && positions.len() >= 100;
+            drop(state);
+            if full {
+                break;
+            }
+            drop(session.term_block(ids[next]).unwrap());
+            next += 1;
+        }
+        let original_capacity = {
+            let mut state = lock_read_state(&session.state);
+            let request_count = state.requests.len() + 64;
+            let State {
+                storage, requests, ..
+            } = &mut *state;
+            storage
+                .run(|memory| memory.reserve(requests, request_count))
+                .unwrap();
+            state.dictionary_positions.capacity()
+        };
+        let charge = 2 * u64::from(session.header.block_bytes)
+            + u64::try_from(size_of::<(GlobalTermId, core::ops::Range<usize>)>()).unwrap()
+            + u64::try_from(size_of::<CachedBlock>() + 64).unwrap();
+        let before = session.evidence();
+        let held = session
+            .reserve_workspace(CEILING - before.live_bytes() - charge)
+            .unwrap();
+        // The actual encoded/decoded payload fits; only the learned index's
+        // replacement table exceeds the remaining live-byte budget.
+        drop(session.term_block(ids[next]).unwrap());
+        assert_eq!(session.read_error(), None);
+        assert_eq!(
+            lock_read_state(&session.state)
+                .dictionary_positions
+                .capacity(),
+            original_capacity
+        );
+        assert!(session.evidence().peak_bytes() <= CEILING);
+        drop(held);
+        assert_eq!(session.term_value(ids[next]).unwrap(), values[next]);
+        assert_eq!(session.term_value(ids[next + 1]).unwrap(), values[next + 1]);
+        assert_eq!(session.read_error(), None);
     }
 
     #[test]

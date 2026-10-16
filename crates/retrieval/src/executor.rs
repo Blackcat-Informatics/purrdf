@@ -29,7 +29,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
 
     let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
     let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
+    let mut future = std::pin::pin!(future);
     loop {
         match future.as_mut().poll(&mut context) {
             Poll::Ready(output) => return output,
