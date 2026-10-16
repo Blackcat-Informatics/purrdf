@@ -87,6 +87,19 @@ pub enum PagedStackError {
     /// Publishing an external delta would reorder pending head mutations.
     PendingHead,
 }
+
+impl purrdf_hash::error::StructuredError for PagedStackError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "paged-stack-storage" { "cause" => Cause(cause) },
+        Invalid(cause) => "paged-stack-invalid" { "cause" => Cause(cause) },
+        Freeze(cause) => "paged-stack-freeze" { "cause" => Cause(cause) },
+        Read(cause) => "paged-stack-read" { "cause" => Cause(cause) },
+        Seal(cause) => "paged-stack-seal" { "cause" => Cause(cause) },
+        Capacity => "paged-stack-capacity" {},
+        MissingBase => "paged-stack-missing-base" {},
+        PendingHead => "paged-stack-pending-head" {},
+    }
+}
 impl std::fmt::Display for PagedStackError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1005,6 +1018,21 @@ pub enum CanonicalPagedError<E> {
     Capacity,
     /// Snapshot construction failed before a read operation could start.
     Construction(Box<PagedStackError>),
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for CanonicalPagedError<E>
+{
+    purrdf_hash::error_visit! {
+        Storage(cause) => "canonical-paged-storage" { "cause" => Cause(cause) },
+        Read(cause) => "canonical-paged-read" { "cause" => Cause(cause) },
+        Term(cause) => "canonical-paged-term" { "cause" => Cause(cause) },
+        Invalid(cause) => "canonical-paged-invalid" { "cause" => Cause(cause) },
+        Freeze(cause) => "canonical-paged-freeze" { "cause" => Cause(cause) },
+        Pack(cause) => "canonical-paged-pack" { "cause" => Cause(cause) },
+        Capacity => "canonical-paged-capacity" {},
+        Construction(cause) => "canonical-paged-construction" { "cause" => Cause(cause.as_ref()) },
+    }
 }
 impl<E: std::fmt::Display> std::fmt::Display for CanonicalPagedError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

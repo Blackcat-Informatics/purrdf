@@ -68,6 +68,18 @@ pub enum PageFaultKind {
     InvalidData,
 }
 
+impl purrdf_hash::error::StructuredError for PageFaultKind {
+    purrdf_hash::error_visit! {
+        Provider => "page-fault-provider" {},
+        StaleGeneration { expected, actual } => "page-fault-stale-generation" {
+            "expected" => Unsigned(u128::from(expected.0)),
+            "actual" => Unsigned(u128::from(actual.0)),
+        },
+        Stopped(cause) => "page-fault-stopped" { "cause" => Record(cause) },
+        InvalidData => "page-fault-invalid-data" {},
+    }
+}
+
 impl PageFaultKind {
     /// A stable diagnostic label for this fault category.
     #[must_use]
@@ -90,6 +102,16 @@ pub struct PageFault {
     pub kind: PageFaultKind,
     /// Provider-supplied or contract-supplied diagnostic detail.
     pub message: String,
+}
+
+impl purrdf_hash::error::StructuredError for PageFault {
+    purrdf_hash::error_visit! {
+        @record self { page, kind, message } => "page-fault" {
+            "page" => Unsigned(u128::from(self.page.0)),
+            "kind" => Record(&self.kind),
+            "message" => Text(&self.message),
+        }
+    }
 }
 
 impl PageFault {

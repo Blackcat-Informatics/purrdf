@@ -608,6 +608,21 @@ fn freeze_refuses_non_quad_disjoint_pages() {
     let page1 = build_page(std::slice::from_ref(&shared)).expect("authored fixture");
     let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
     let err = PagedDataset::from_provider(provider).expect_err("overlapping pages must refuse");
+    let record = purrdf_testkit::error_capture::Capture::read(&err);
+    assert_eq!(record.code, "paged-freeze-quad-overlap");
+    let quad = record.child("quad");
+    assert_eq!(quad.code, "paged-quad-overlap");
+    assert_eq!(quad.child("table").code, "paged-table-primary");
+    let subject = quad.child("subject");
+    assert_eq!(subject.code, "rdf-term-iri");
+    assert!(matches!(
+        subject.field("iri"),
+        purrdf_hash::error::ErrorValue::Iri("http://example.org/s")
+    ));
+    assert!(matches!(
+        quad.field("graph"),
+        purrdf_hash::error::ErrorValue::Absent
+    ));
     match err {
         PagedFreezeError::QuadOverlap(o) => {
             assert_eq!(o.first_page, PageId(0), "the earlier page is named");

@@ -28,6 +28,13 @@ pub(crate) enum TranslationError {
     Storage(StorageError),
     Summary(SummaryDefect),
 }
+
+impl purrdf_hash::error::StructuredError for TranslationError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "page-translation-storage" { "cause" => Cause(cause) },
+        Summary(cause) => "page-translation-summary" { "cause" => Cause(cause) },
+    }
+}
 purrdf_lex::variant_from!(TranslationError { Storage(StorageError), Summary(SummaryDefect) });
 
 /// The local↔global term-id map for a single page of a

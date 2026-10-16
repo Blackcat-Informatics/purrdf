@@ -193,6 +193,49 @@ pub enum PagedQueryError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for PagedQueryError {
+    purrdf_hash::error_visit! {
+        PageCountMismatch { expected, actual } => "paged-query-page-count" {
+            "expected" => Unsigned(u128::from(*expected)),
+            "actual" => Unsigned(u128::from(*actual)),
+        },
+        SourceSnapshot { source, error } => "paged-query-source-snapshot" {
+            "source" => Unsigned(u128::from(*source)),
+            "cause" => Cause(error.as_ref()),
+        },
+        Provider { page, message } => "paged-query-provider" {
+            "page" => Unsigned(u128::from(page.0)),
+            "message" => Text(message),
+        },
+        StaleGeneration { page, expected, actual } => "paged-query-stale-generation" {
+            "page" => Value(page.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value.0)))),
+            "expected" => Unsigned(u128::from(expected.0)),
+            "actual" => Unsigned(u128::from(actual.0)),
+        },
+        PageBudgetExceeded { page, limit, consumed } => "paged-query-page-budget" {
+            "page" => Unsigned(u128::from(page.0)),
+            "limit" => Unsigned(u128::from(*limit)),
+            "consumed" => Unsigned(u128::from(*consumed)),
+        },
+        ByteBudgetExceeded { page, limit, consumed, page_bytes } => "paged-query-byte-budget" {
+            "page" => Unsigned(u128::from(page.0)),
+            "limit" => ByteCount(u128::from(*limit)),
+            "consumed" => ByteCount(u128::from(*consumed)),
+            "page_bytes" => ByteCount(u128::from(*page_bytes)),
+        },
+        Stopped { page, cause, message } => "paged-query-stopped" {
+            "page" => Unsigned(u128::from(page.0)),
+            "cause" => Record(cause),
+            "message" => Text(message),
+        },
+        InvalidData { page, message } => "paged-query-invalid-data" {
+            "page" => Unsigned(u128::from(page.0)),
+            "message" => Text(message),
+        },
+    }
+}
+
 impl From<PageFault> for PagedQueryError {
     fn from(fault: PageFault) -> Self {
         match fault.kind {

@@ -190,6 +190,27 @@ pub enum PagedFreezeError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for PagedFreezeError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "paged-freeze-storage" { "cause" => Cause(cause) },
+        Page(cause) => "paged-freeze-page" { "cause" => Cause(cause) },
+        LogicalCountExhausted => "paged-freeze-logical-count-exhausted" {},
+        GenerationMismatch { expected, actual } => "paged-freeze-generation" {
+            "expected" => Unsigned(u128::from(expected.0)),
+            "actual" => Unsigned(u128::from(actual.0)),
+        },
+        PageCountMismatch { metadata, provider } => "paged-freeze-page-count" {
+            "metadata" => Unsigned(u128::from(*metadata)),
+            "provider" => Unsigned(u128::from(*provider)),
+        },
+        QuadOverlap(quad) => "paged-freeze-quad-overlap" { "quad" => Record(quad.as_ref()) },
+        SummaryDrift { page, message } => "paged-freeze-summary-drift" {
+            "page" => Unsigned(u128::from(page.0)),
+            "message" => Text(message),
+        },
+    }
+}
+
 /// Which composed quad stream a [`PagedFreezeError::QuadOverlap`] refusal came from.
 /// The paged view exposes three cross-page streams that each assume disjoint pages and
 /// do NO cross-page dedup — the primary quads and the two RDF 1.2 side tables — so the
@@ -203,6 +224,14 @@ pub enum PagedQuadTable {
     Reifier,
     /// The annotation triples, surfaced by [`DatasetView::annotation_quads`].
     Annotation,
+}
+
+impl purrdf_hash::error::StructuredError for PagedQuadTable {
+    purrdf_hash::error_visit! {
+        Primary => "paged-table-primary" {},
+        Reifier => "paged-table-reifier" {},
+        Annotation => "paged-table-annotation" {},
+    }
 }
 
 impl PagedQuadTable {
@@ -235,6 +264,22 @@ pub struct PagedQuadOverlap {
     pub object: TermValue,
     /// The shared quad's graph value (`None` = the default graph).
     pub graph: Option<TermValue>,
+}
+
+impl purrdf_hash::error::StructuredError for PagedQuadOverlap {
+    purrdf_hash::error_visit! {
+        @record self { first_page, second_page, table, subject, predicate, object, graph }
+        => "paged-quad-overlap" {
+            "first_page" => Unsigned(u128::from(self.first_page.0)),
+            "second_page" => Unsigned(u128::from(self.second_page.0)),
+            "table" => Record(&self.table),
+            "subject" => Term(&self.subject),
+            "predicate" => Term(&self.predicate),
+            "object" => Term(&self.object),
+            "graph" => Value(self.graph.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Term(value))),
+        }
+    }
 }
 
 impl From<PageFault> for PagedFreezeError {

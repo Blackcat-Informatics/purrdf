@@ -439,6 +439,29 @@ pub enum TermValue {
     },
 }
 
+impl purrdf_hash::error::StructuredError for TermValue {
+    purrdf_hash::error_visit! {
+        Iri(iri) => "rdf-term-iri" { "iri" => Iri(iri) },
+        Blank { label, scope } => "rdf-term-blank" {
+            "label" => Text(label),
+            "scope" => Unsigned(u128::from(scope.ordinal())),
+        },
+        Literal { lexical_form, datatype, language, direction } => "rdf-term-literal" {
+            "lexical_form" => Text(lexical_form),
+            "datatype" => Iri(datatype),
+            "language" => Value(language.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                purrdf_hash::error::ErrorValue::Text)),
+            "direction" => Value(direction.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Code(value.as_str()))),
+        },
+        Triple { s, p, o } => "rdf-term-triple" {
+            "subject" => Term(&**s),
+            "predicate" => Term(&**p),
+            "object" => Term(&**o),
+        },
+    }
+}
+
 purrdf_lex::constructors! {
     impl TermValue {
         /// An IRI term from its full string.

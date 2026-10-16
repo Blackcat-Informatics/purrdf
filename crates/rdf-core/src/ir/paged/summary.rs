@@ -70,6 +70,12 @@ pub(crate) struct SummaryDefect {
     message: String,
 }
 
+impl purrdf_hash::error::StructuredError for SummaryDefect {
+    purrdf_hash::error_visit! {
+        @record self { message } => "page-summary-defect" { "message" => Text(&self.message) }
+    }
+}
+
 impl fmt::Display for SummaryDefect {
     /// Writes the diagnostic sentence [`SummaryDefect::message`] already carries,
     /// verbatim — the type never needs formatting beyond that one prepared string.

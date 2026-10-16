@@ -73,6 +73,14 @@ fn inclusive_limits_and_cache_accounting_are_exact() {
     let byte_limited = paged.query_view(PagedQueryLimits::new(2, 29));
     assert_eq!(byte_limited.quads().count(), 1);
     let (error, evidence) = failed_status(byte_limited.operation_status());
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "paged-query-byte-budget");
+    for (field, expected) in [("limit", 29), ("consumed", 10), ("page_bytes", 20)] {
+        assert!(matches!(
+            record.field(field),
+            purrdf_hash::error::ErrorValue::ByteCount(value) if value == expected
+        ));
+    }
     assert_eq!(
         error,
         PagedQueryError::ByteBudgetExceeded {
@@ -316,23 +324,33 @@ impl PageProvider for MutableGenerationProvider {
 
 #[test]
 fn generation_drift_is_refused_before_materialization() {
+    const EXPECTED: u64 = (1_u64 << 54) + 11;
+    const ACTUAL: u64 = EXPECTED + 1;
     let provider = Arc::new(MutableGenerationProvider {
         page: page("s", "o"),
-        generation: AtomicU64::new(11),
+        generation: AtomicU64::new(EXPECTED),
         calls: AtomicUsize::new(0),
     });
-    let paged = PagedDataset::from_provider(provider.clone()).expect("seal generation 11");
-    provider.generation.store(12, Ordering::Relaxed);
+    let paged = PagedDataset::from_provider(provider.clone()).expect("seal original generation");
+    provider.generation.store(ACTUAL, Ordering::Relaxed);
 
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     assert_eq!(view.quads().count(), 0);
     let (error, evidence) = failed_status(view.operation_status());
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "paged-query-stale-generation");
+    for (field, expected) in [("expected", EXPECTED), ("actual", ACTUAL)] {
+        assert!(matches!(
+            record.field(field),
+            purrdf_hash::error::ErrorValue::Unsigned(value) if value == u128::from(expected)
+        ));
+    }
     assert_eq!(
         error,
         PagedQueryError::StaleGeneration {
             page: Some(PageId(0)),
-            expected: PageGeneration(11),
-            actual: PageGeneration(12),
+            expected: PageGeneration(EXPECTED),
+            actual: PageGeneration(ACTUAL),
         }
     );
     assert_eq!(evidence.requested_pages, vec![PageId(0)]);
