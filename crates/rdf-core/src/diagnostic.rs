@@ -4,6 +4,8 @@
 use std::fmt;
 use std::hash::Hash;
 
+use purrdf_hash::error::{ErrorValue, StructuredError};
+
 pub use purrdf_lex::diagnostic::{
     DiagnosticParameter, DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue,
 };
@@ -43,6 +45,12 @@ impl fmt::Display for RdfSeverity {
     }
 }
 
+impl StructuredError for RdfSeverity {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visitor.variant(self.as_str());
+    }
+}
+
 /// Concrete or logical location attached to an RDF diagnostic.
 ///
 /// Every field is `Ord` (plain `Option<String>`/`Option<u32>`/`Option<u64>`),
@@ -77,6 +85,25 @@ pub struct RdfLocation {
 }
 
 purrdf_lex::resident_clone!(RdfLocation);
+
+impl StructuredError for RdfLocation {
+    purrdf_hash::error_visit! {
+        @record self { path, line, column, logical, subject, gts_term_id,
+            gts_quad_index, gts_reifier_id, gts_frame_index, gts_segment_index }
+        => "rdf-location" {
+            "path" => Value(self.path.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "line" => Value(self.line.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "column" => Value(self.column.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "logical" => Value(self.logical.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "subject" => Value(self.subject.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "gts_term_id" => Value(self.gts_term_id.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "gts_quad_index" => Value(self.gts_quad_index.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "gts_reifier_id" => Value(self.gts_reifier_id.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "gts_frame_index" => Value(self.gts_frame_index.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "gts_segment_index" => Value(self.gts_segment_index.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+        }
+    }
+}
 
 impl RdfLocation {
     /// Copy physical and logical locations without allocating ahead of admission.
@@ -277,6 +304,29 @@ pub struct RdfDiagnostic {
 struct DiagnosticAttachments {
     presentation: Option<DiagnosticPresentation>,
     storage: Option<purrdf_lex::allocation::StorageError>,
+}
+
+impl StructuredError for DiagnosticAttachments {
+    purrdf_hash::error_visit! {
+        @record self { presentation, storage } => "rdf-diagnostic-attachments" {
+            "presentation" => Value(self.presentation.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
+            "storage" => Value(self.storage.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Cause(value))),
+        }
+    }
+}
+
+impl StructuredError for RdfDiagnostic {
+    purrdf_hash::error_visit! {
+        @record self { severity, code, message, detail, location, attachments }
+        => "rdf-diagnostic" {
+            "severity" => Record(&self.severity),
+            "code" => Code(&self.code),
+            "message" => Text(&self.message),
+            "detail" => Value(self.detail.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "location" => Value(self.location.as_deref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
+            "attachments" => Value(self.attachments.as_deref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
+        }
+    }
 }
 
 // These fields were exposed by the original derives. Keep their names, order

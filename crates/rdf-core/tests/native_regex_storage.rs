@@ -729,6 +729,8 @@ fn diagnostic_retained_layout_includes_private_presentation_and_location() {
     use purrdf_core::{
         DiagnosticParameter, DiagnosticPresentation, DiagnosticValue, RdfDiagnostic, RdfLocation,
     };
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
     let window = CurrentThreadWindow::open();
     let presentation = DiagnosticPresentation::new(
         "query.failure",
@@ -746,7 +748,13 @@ fn diagnostic_retained_layout_includes_private_presentation_and_location() {
     .unwrap();
     let diagnostic = RdfDiagnostic::error("typed-failure", "")
         .with_presentation(presentation)
-        .with_location(RdfLocation::file("source.rdf").with_line(91).with_column(4))
+        .with_location(
+            RdfLocation::file("source.rdf")
+                .with_line(u64::MAX)
+                .with_column(u32::MAX)
+                .with_gts_term(u64::MAX)
+                .with_gts_quad((1 << 53) + 7),
+        )
         .with_detail("retained secondary text");
     let measured = window.close();
     assert_eq!(
@@ -754,6 +762,37 @@ fn diagnostic_retained_layout_includes_private_presentation_and_location() {
         diagnostic.retained_bytes().unwrap(),
         "all private arrays, boxes, presentation arguments and text remain covered"
     );
+
+    let events = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let record = Capture::read_with_buffer(&diagnostic, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(record.code, "rdf-diagnostic");
+    assert_eq!(record.child("severity").code, "error");
+    assert!(matches!(
+        record.field("code"),
+        ErrorValue::Code("typed-failure")
+    ));
+    let location = record.child("location");
+    assert!(matches!(
+        location.field("path"),
+        ErrorValue::Text("source.rdf")
+    ));
+    for (name, expected) in [
+        ("line", u128::from(u64::MAX)),
+        ("column", u128::from(u32::MAX)),
+        ("gts_term_id", u128::from(u64::MAX)),
+        ("gts_quad_index", (1_u128 << 53) + 7),
+    ] {
+        assert!(matches!(location.field(name), ErrorValue::Unsigned(value) if value == expected));
+    }
+    assert!(matches!(location.field("logical"), ErrorValue::Absent));
+    let attachments = record.child("attachments");
+    assert!(matches!(attachments.field("storage"), ErrorValue::Absent));
+    assert!(matches!(
+        attachments.child("presentation").field("message_id"),
+        ErrorValue::Code("query.failure")
+    ));
 
     struct Count(usize);
     impl std::fmt::Write for Count {
@@ -803,6 +842,21 @@ fn diagnostic_render_admits_code_and_message_before_each_real_allocation() {
         };
         let measured = window.close();
         assert_eq!(error, StorageError::AdmissionFailed);
+        let native = purrdf_core::NativeBuildError::Storage(error);
+        let native_record = purrdf_testkit::error_capture::Capture::read(&native);
+        assert_eq!(native_record.code, "native-build-storage");
+        assert_eq!(
+            native_record.child("cause").code,
+            "storage-admission-failed"
+        );
+        let diagnostic = RdfDiagnostic::from(error);
+        assert_eq!(
+            purrdf_testkit::error_capture::Capture::read(&diagnostic)
+                .child("attachments")
+                .child("storage")
+                .code,
+            "storage-admission-failed"
+        );
         assert!(account.refused.unwrap() > limit);
         assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
         assert_eq!(

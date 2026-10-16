@@ -789,6 +789,12 @@ pub enum NativeBuildError {
     /// The original RDF diagnostic; its producer's Memory retains its buffers.
     Diagnostic(RdfDiagnostic),
 }
+impl purrdf_hash::error::StructuredError for NativeBuildError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "native-build-storage" { "cause" => Cause(cause) },
+        Diagnostic(cause) => "native-build-diagnostic" { "cause" => Cause(cause) },
+    }
+}
 purrdf_lex::variant_from!(NativeBuildError { Storage(StorageError) });
 purrdf_lex::variant_from!(NativeBuildError { Diagnostic(RdfDiagnostic) });
 impl core::fmt::Display for NativeBuildError {
@@ -5290,10 +5296,20 @@ mod native_graph_birth_tests {
         builder
             .push_quad_with_memory(s, p, s, None, &mut memory)
             .expect("native invalid row");
-        let NativeBuildError::Diagnostic(diagnostic) = builder
+        let error = builder
             .freeze_with_memory(&mut memory)
-            .expect_err("RDF 1.2 rejects a literal subject")
-        else {
+            .expect_err("RDF 1.2 rejects a literal subject");
+        {
+            let record = purrdf_testkit::error_capture::Capture::read(&error);
+            assert_eq!(record.code, "native-build-diagnostic");
+            let diagnostic = record.child("cause");
+            assert_eq!(diagnostic.code, "rdf-diagnostic");
+            assert!(matches!(
+                diagnostic.field("code"),
+                purrdf_hash::error::ErrorValue::Code("rdf-ir-literal-subject")
+            ));
+        }
+        let NativeBuildError::Diagnostic(diagnostic) = error else {
             panic!("expected original structural diagnostic");
         };
         assert_eq!(diagnostic.code, "rdf-ir-literal-subject");
