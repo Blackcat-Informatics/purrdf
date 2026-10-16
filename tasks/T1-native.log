@@ -1,0 +1,54 @@
+    Blocking waiting for file lock on package cache
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/hash)
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/rdf-core)
+   Compiling libc v0.2.186
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/rdf-events)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/alloc-probe)
+   Compiling hashbrown v0.17.1
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling regex-automata v0.4.14
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/stack)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/deflate)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/xsd)
+   Compiling regex v1.12.4
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/cdt)
+    Finished `test` profile [optimized] target(s) in 2m 23s
+     Running unittests src/lib.rs (/opt/.cargo/00/9f597c26723c13/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 2 tests
+test ir::segmented::session::cache_control::scan_bookkeeping_and_pins_follow_blocks_across_all_streams ... FAILED
+test ir::segmented::session::cache_control::scan_block_boundary_keeps_the_first_fault_and_refuses_completion ... FAILED
+
+failures:
+
+---- ir::segmented::session::cache_control::scan_bookkeeping_and_pins_follow_blocks_across_all_streams stdout ----
+
+thread 'ir::segmented::session::cache_control::scan_bookkeeping_and_pins_follow_blocks_across_all_streams' (2805340) panicked at crates/rdf-core/src/ir/segmented/session/cache_control.rs:106:57:
+called `Result::unwrap()` on an `Err` value: ConstructionLimit
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- ir::segmented::session::cache_control::scan_block_boundary_keeps_the_first_fault_and_refuses_completion stdout ----
+
+thread 'ir::segmented::session::cache_control::scan_block_boundary_keeps_the_first_fault_and_refuses_completion' (2805339) panicked at crates/rdf-core/src/ir/segmented/session/cache_control.rs:117:14:
+called `Result::unwrap()` on an `Err` value: ConstructionLimit
+
+
+failures:
+    ir::segmented::session::cache_control::scan_block_boundary_keeps_the_first_fault_and_refuses_completion
+    ir::segmented::session::cache_control::scan_bookkeeping_and_pins_follow_blocks_across_all_streams
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1368 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`

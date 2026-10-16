@@ -1,0 +1,10 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 53.78s
+     Running unittests src/lib.rs (/opt/.cargo/00/9f597c26723c13/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 2 tests
+test ir::segmented::session::cache_control::scan_block_boundary_keeps_the_first_fault_and_refuses_completion ... ok
+test ir::segmented::session::cache_control::scan_bookkeeping_and_pins_follow_blocks_across_all_streams ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1368 filtered out; finished in 0.00s
+

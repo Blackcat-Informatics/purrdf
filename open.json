@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 563,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block",
+  "branch": "paudley/563-segmented-scans-fetch-their-block",
+  "slug": "segmented-scans-fetch-their-block",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/.stage/segmented-scans-fetch-their-block",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "fa0ccc4d629e35fd3241f3a418bbaeeeb514e057",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block",
+    "branch:paudley/563-segmented-scans-fetch-their-block",
+    "stage:/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/.stage/segmented-scans-fetch-their-block",
+    "issue:/home/paudley/Active/purrdf/.worktrees/563-segmented-scans-fetch-their-block/.stage/segmented-scans-fetch-their-block/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-16T16:30:45-0600"
+}

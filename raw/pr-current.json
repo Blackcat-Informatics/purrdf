@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "fa0ccc4d629e35fd3241f3a418bbaeeeb514e057",
+  "headRefName": "paudley/563-segmented-scans-fetch-their-block",
+  "headRefOid": "0735ac6d41a16902dcf6b61d98a3cfac2ec4e0ac",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 565,
+  "state": "OPEN",
+  "title": "Retain segmented scan blocks across rows",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/565"
+}

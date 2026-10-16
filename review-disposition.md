@@ -1,0 +1,6 @@
+The source review found no actionable defect in the current four-file change. Its two summary warnings have these dispositions:
+
+- The capacity-proof ledger updates are required. `crates/helper-census/src/capacity.rs::constructor_identity` binds the complete visible core module source domain, including the changed session and cache files. The original helper run rejects the stale binding. A fresh standard index and source review confirm all 40 rows retain their authority sources, sink, class, line and reason; only their constructor binding changes. The corrected helper run passes. The PR description now states that connection explicitly.
+- The default docstring percentage counts private test helpers and trait implementations. This change adds no public API. The iterator ownership, validated byte range, release-before-admission and cache eviction semantics have explicit comments, and existing public documentation remains intact. The repository's normal rustdoc and Clippy gates remain required. Adding boilerplate to private tests solely to meet an external percentage is declined; no source defect or missing public contract was identified.
+
+The standard scalar WASM run passes all 18 existing segmented tests. All 35 focused native controls, strict affected checking, helper hygiene and normal hooks/push pass. Final hosted checks remain pending.

@@ -1,0 +1,3 @@
+# Existing implementation
+
+Read session.rs, build::fixed_records, format::decode_quad and the existing segmented/cache tests. Existing Arc<CachedBlock> already retains its reservation, so no new allocator or owner abstraction is needed. fixed_records validates count, width and zero padding; keep it as the single decoder. summary_range handles subject narrowing and summary_matches prunes other coordinates. Keep both unchanged. The earlier row-address-only implementation allowed nested scans to evict payload; retaining the active block intentionally changes that lifetime and must be exercised by existing bounded consumer tests. Tool discovery found no prior branch or PR for this issue; its bounded search is recorded in prior-art.md.

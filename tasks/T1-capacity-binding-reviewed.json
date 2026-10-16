@@ -1,0 +1,12 @@
+{
+  "old_binding": "source:8d0b4c9328faf31c",
+  "new_binding": "source:9af56b88b7ba76de",
+  "proof_rows": 40,
+  "changed_constructor_sources": [
+    "crates/rdf-core/src/ir/segmented/session.rs",
+    "crates/rdf-core/src/ir/segmented/session/cache.rs"
+  ],
+  "authority_changes": [],
+  "other_proof_fields": "unchanged",
+  "source_review": "Only scan byte ownership and QUADS cache eviction change. No capacity authority, ID constructor, from_parts call, macro expansion or visible module is added or removed. All source paths already existed. The constructor module domain is unchanged."
+}

@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## What happens\n\n`QuadIter::next` (`crates/rdf-core/src/ir/segmented/session.rs`) returns one quad per call, and\neach call starts over: it checks `session.ready()` (the state mutex), fetches the current page\nagain through `session.block(page)` (a cache lookup, then `detach_cache_links` and\n`append_cache_links` to move the block to the front), and re-parses the block's record header\nwith `fixed_records`, before decoding the next row. A full scan therefore pays one locked cache\ntransaction per row, not per block.\n\n## Measured\n\nKatamari's persisted vault graph, 200,000 claims as two segmented layers (1.2 million rows),\nreopened from disk, `SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }`: 8.9-19 s (the in-memory graph\nover the same claims answers in about 9 s). `perf` over the queries, self time:\n\n| symbol | share |\n|---|---:|\n| `SegmentedSession::block` | 11.1% |\n| `State::detach_cache_links` | 10.6% |\n| `SegmentedSession::ready` | 9.9% |\n| `SegmentedOperation::ready` | 7.9% |\n| `SegmentedSession::summary` | 6.3% |\n| `SegmentedStackQuery::intern_source_term` | 5.9% |\n| `QuadIter::next` | 5.4% |\n| `SegmentedReservation::resize` | 3.3% |\n| `State::append_cache_links` | 2.0% |\n\nAbout 45% of the scan is the cache and readiness bookkeeping above, repeated per row.\n\n## Request\n\nHold the current block (its guard or `Arc`) and its parsed records in the iterator until its rows\nare exhausted, checking readiness once per block rather than once per row; the same for the\nreifier and annotation iterators if they share the shape. A scan would then cost one cache\ntransaction per block.\n\n## Evidence\n\nKatamari `docs/assessment/evidence/graph-layers-2026-10-15.md` (`graph-seed-compacted`), and\n`crates/katamari-unlock/tests/idle_cost.rs` `the_restart` with `KATAMARI_GRAPH_LAYERS=1`.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-16T21:29:03Z",
+  "labels": [],
+  "milestone": null,
+  "number": 563,
+  "state": "OPEN",
+  "title": "Segmented scans fetch their block through the cache once per row",
+  "updatedAt": "2026-10-16T21:29:03Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/563"
+}

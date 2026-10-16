@@ -1,0 +1,3 @@
+# Owner plan review
+
+The plan reaches all three physical streams through their shared iterator and retains existing decoding, ordering, snapshot and reservation homes. Acceptance must count provider snapshot calls (every block/cache path calls readiness) in addition to read requests; request misses alone cannot detect the reported defect. One-slot transition and early-drop tests must ensure the prior block is released. Retained immutable rows may be consumed until the next block boundary; first-fault publication must remain sticky. No independent agent review occurred: delegation is disabled. Hosted material review remains to be assessed before merge.

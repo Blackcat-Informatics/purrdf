@@ -1,0 +1,13 @@
+# Current acceptance
+
+Implementation: shared QuadIter retains the authenticated Arc and checked byte range across yields; fixed_records remains the single parser and decode_quad the single row decoder. All three RDF streams use this path. No source/build/cache/toolchain overrides or timing qualification.
+
+- Affected core library/tests cargo check: PASS, tasks/T1-check.log.
+- Strict affected Clippy: PASS after correcting a test lock-drop lint, tasks/T1-strict-corrected.log. Initial lint failure retained in T1-strict.log.
+- New deterministic block-work, single-slot ownership, early-drop and first-fault tests: PASS, two cases in tasks/T1-native-nested.log. Empty/full/tail blocks cover 0/31/67/257 rows in all streams. No readiness/cache lookup occurs between rows. Row cache eviction keeps live bytes unchanged; early iterator drop releases exactly the original block charge. Initial fixture construction/layout and counter-inspection failures are retained in the earlier logs.
+- Existing actual segmented consumers: PASS, all 18 session plus 15 layered tests in tasks/T1-consumers-nested.log. The first implementation failed two nested consumers because row ownership pinned cache slots. The correction allows QUADS entries to leave the cache while retaining their original live-byte account. Unchanged lexical-pin refusal, chronology/statistics and canonicalization controls pass. Final strict affected compilation passes in T1-strict-final.log.
+- Portable execution: PASS, all 18 existing segmented cases through the standard scalar WASM runner, tasks/T1-portable.log.
+- Helper hygiene: PASS, T1-helpers-corrected.log. Fresh index and T1-capacity-binding-reviewed.json confirm only session.rs/cache.rs change within the conservative constructor domain. All 40 authority sources, sinks, classes, lines and reasons are unchanged; only their global constructor binding is refreshed. No checker or exemption is relaxed. Normal commit/push hooks PASS, tasks/T1-commit.log and T1-push.log.
+- Published at 0735ac6d4 in PR #565. All 49 hosted checks PASS, with four expected skips, including the complete workflow 38978421375 and source/security review. Current merge brief reports pass. Hosted source review covers all four files with no actionable defect; its two summary warnings have posted, evidence-backed dispositions. There are no inline comments or unresolved threads. See review-debt.md and completion-audit.md. The source worktree is clean. Integration is clean, and main has not advanced from the assessed base; no additional local broad gate is needed.
+
+Owner plan review is in reviews/plan-review.md. No independent agent review occurred; agents are disabled. Hosted review will be assessed when the complete repair is published. Plan: plan.md.

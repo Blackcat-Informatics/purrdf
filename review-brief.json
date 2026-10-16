@@ -1,0 +1,19 @@
+{
+  "issue": 563,
+  "branch": "paudley/563-segmented-scans-fetch-their-block",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "0735ac6d41a16902dcf6b61d98a3cfac2ec4e0ac",
+      "subject": "Retain segmented scan blocks across rows without pinning cache slots",
+      "date": "2026-10-16"
+    }
+  ],
+  "files": [
+    "crates/rdf-core/src/ir/segmented/session.rs",
+    "crates/rdf-core/src/ir/segmented/session/cache.rs",
+    "crates/rdf-core/src/ir/segmented/session/cache_control.rs",
+    "helpers-ledger.toml"
+  ],
+  "adrs_touched": []
+}

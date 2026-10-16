@@ -1,0 +1,110 @@
+{
+  "paths": [
+    {
+      "ref": "crates/rdf-core/src/ir/segmented/session.rs",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/ir/segmented/session.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 2474,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "225e078da Keep optional routing growth from evicting admitted payloads",
+        "57a12dbd1 Run routing pressure regression through the portable public harness",
+        "ee13e8327 Keep admitted dictionary reads usable when routing hints cannot grow",
+        "2ac66bf40 Keep shared integration checks compatible with current Clippy",
+        "702235c70 Retain authenticated dictionary routing across payload eviction",
+        "4b031fbac fix(storage): pack segmented dictionaries to their byte bounds",
+        "839018278 Persist certified source statistics for segmented queries",
+        "f8cbba207 Restore keyed segmented statements and index block cache",
+        "39cae7092 fix(core): plan cache growth with the pending block layout",
+        "2def24ab9 fix(core): reclaim unused cache for reader buffer admission"
+      ]
+    },
+    {
+      "ref": "docs/assessment/evidence/graph-layers-2026-10-15.md",
+      "path": "/home/paudley/Active/purrdf/docs/assessment/evidence/graph-layers-2026-10-15.md",
+      "where": "not here; exists in sibling(s): katamari",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/katamari-unlock/tests/idle_cost.rs",
+      "path": "/home/paudley/Active/purrdf/crates/katamari-unlock/tests/idle_cost.rs",
+      "where": "not here; exists in sibling(s): katamari",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "QuadIter::next",
+      "files": 0
+    },
+    {
+      "name": "detach_cache_links",
+      "files": 1
+    },
+    {
+      "name": "append_cache_links",
+      "files": 1
+    },
+    {
+      "name": "fixed_records",
+      "files": 3
+    },
+    {
+      "name": "perf",
+      "files": 718
+    },
+    {
+      "name": "SegmentedSession::block",
+      "files": 0
+    },
+    {
+      "name": "State::detach_cache_links",
+      "files": 0
+    },
+    {
+      "name": "SegmentedSession::ready",
+      "files": 0
+    },
+    {
+      "name": "SegmentedOperation::ready",
+      "files": 0
+    },
+    {
+      "name": "SegmentedSession::summary",
+      "files": 0
+    },
+    {
+      "name": "SegmentedStackQuery::intern_source_term",
+      "files": 0
+    },
+    {
+      "name": "SegmentedReservation::resize",
+      "files": 0
+    },
+    {
+      "name": "State::append_cache_links",
+      "files": 0
+    },
+    {
+      "name": "Arc",
+      "files": 930
+    },
+    {
+      "name": "the_restart",
+      "files": 0
+    }
+  ],
+  "packages": [],
+  "urls": [],
+  "truncated": []
+}
