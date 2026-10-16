@@ -565,6 +565,53 @@ fn dictionary_artifact_refusals_keep_original_identity_header_and_utf8_values() 
     assert!(matches!(cause.field("actual"), ErrorValue::Bytes(value) if value == actual));
 }
 
+fn binding_configuration_failure_retains_both_semantic_configurations() {
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, verify_binding};
+    let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri("https://example.org/p")],
+        GraphSelector::Default,
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    let index = TextIndex::from_dataset(&dataset, &config).unwrap();
+    let supplied = config.clone().with_surface_index(false);
+    let error: EvalError = verify_binding(&index, &dataset, &supplied)
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-config-binding-mismatch");
+    let expected = cause.child("expected");
+    let supplied = cause.child("supplied");
+    assert!(matches!(
+        expected.field("surface"),
+        ErrorValue::Boolean(true)
+    ));
+    assert!(matches!(
+        supplied.field("surface"),
+        ErrorValue::Boolean(false)
+    ));
+    assert!(matches!(
+        expected.field("graph_scope"),
+        ErrorValue::Code("default")
+    ));
+    assert_eq!(expected.child("projection").code, "text-projection-lexical");
+    let identity = config.analyzer().fingerprint();
+    assert!(
+        matches!(expected.field("analyzer_identity"), ErrorValue::Bytes(value) if value == identity)
+    );
+    assert!(
+        matches!(supplied.field("analyzer_identity"), ErrorValue::Bytes(value) if value == identity)
+    );
+    assert!(
+        expected
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::BeginList(Some("predicates"), 1)))
+    );
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
@@ -583,4 +630,5 @@ purrdf_testkit::harness_main!(
     baseline_configuration_keeps_artifact_counts_hashes_and_missing_flags,
     dictionary_configuration_keeps_conflicting_costs_and_emoji_byte_range,
     dictionary_artifact_refusals_keep_original_identity_header_and_utf8_values,
+    binding_configuration_failure_retains_both_semantic_configurations,
 );

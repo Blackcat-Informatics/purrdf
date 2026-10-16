@@ -7,6 +7,13 @@ use crate::{fixed::Scaled, query_workspace::QueryString};
 
 #[derive(Debug)]
 pub(crate) enum DataRefusal {
+    SourceDigest {
+        expected: [u8; 32],
+        actual: [u8; 32],
+    },
+    MissingPredicates {
+        predicates: Vec<purrdf_core::TermValue>,
+    },
     ForeignTermId,
     ExplicitPopulations {
         fields: usize,
@@ -87,6 +94,8 @@ pub(crate) enum DataRefusal {
 
 impl purrdf_hash::error::StructuredError for DataRefusal {
     purrdf_hash::error_visit! {
+        SourceDigest { expected, actual } => "text-data-source-digest" { "expected" => Bytes(expected), "actual" => Bytes(actual) },
+        MissingPredicates { predicates } => "text-data-missing-predicates" { "count" => Unsigned(predicates.len() as u128), "predicates" => List(predicates.iter().map(|term| purrdf_hash::error::ErrorValue::Term(term))) },
         ForeignTermId => "text-data-foreign-term-id" {},
         ExplicitPopulations { fields } => "text-data-explicit-populations" { "fields" => Unsigned(*fields as u128) },
         PopulationMode { enabled, fields, populations } => "text-data-population-mode" {
@@ -123,6 +132,19 @@ impl purrdf_hash::error::StructuredError for DataRefusal {
 impl core::fmt::Display for DataRefusal {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
+            Self::SourceDigest { expected, actual } => return write!(f,
+                "this index was built over a different dataset: its source digest is {expected:02x?} \
+             and the supplied dataset digests to {actual:02x?}. Rebuild the index from the dataset \
+             the query runs against, or pair the query with the dataset the index was built from — \
+             an index joined to the wrong dataset returns no rows and reports nothing."),
+            Self::MissingPredicates { predicates } => return write!(f,
+                "this dataset holds statements but carries none under {} of this configuration's \
+             predicates: {predicates:?}. Each contributes no text, so the corpus is short by their \
+             share of it while every digest agrees. Check the spelling of those predicate IRIs and \
+             of the configured graph — a named graph the dataset does not hold leaves every \
+             configured predicate with nothing in scope. If the data is instead still arriving, \
+             read TextIndex::source_coverage rather than asking for this verdict: the index \
+             answers, and reports the corpus it has.", predicates.len()),
             Self::ForeignTermId => {
                 return core::fmt::Display::fmt(
                     &purrdf_core::TermLookupError::<core::convert::Infallible>::ForeignId,

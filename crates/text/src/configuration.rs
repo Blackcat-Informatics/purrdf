@@ -204,15 +204,19 @@ pub(crate) enum ConfigurationRefusal {
 
 impl ConfigurationRefusal {
     pub(crate) fn into_error(self) -> crate::TextError {
-        use purrdf_sparql_eval::{NativeDiagnostic, NativeDiagnosticKind, WorkspaceCapability};
-        match crate::query_workspace::admitted(NativeDiagnostic::render_cause(
-            NativeDiagnosticKind::Config,
-            self,
-            &WorkspaceCapability::resident(),
-        )) {
-            Ok(diagnostic) => crate::TextError::Config(diagnostic),
-            Err(error) => error,
-        }
+        error(self)
+    }
+}
+
+pub(crate) fn error<E: purrdf_hash::error::NativeError + 'static>(cause: E) -> crate::TextError {
+    use purrdf_sparql_eval::{NativeDiagnostic, NativeDiagnosticKind, WorkspaceCapability};
+    match crate::query_workspace::admitted(NativeDiagnostic::render_cause(
+        NativeDiagnosticKind::Config,
+        cause,
+        &WorkspaceCapability::resident(),
+    )) {
+        Ok(diagnostic) => crate::TextError::Config(diagnostic),
+        Err(error) => error,
     }
 }
 

@@ -1006,6 +1006,15 @@ fn a_mistyped_predicate_is_named_and_the_intended_configuration_is_clean() {
     );
     let error = verify_binding(&short, &*dataset, &mistyped)
         .expect_err("a corpus one predicate short is not the intended data");
+    let cause = purrdf_testkit::error_capture::Capture::read(&error)
+        .child("reason")
+        .child("cause");
+    assert_eq!(cause.code, "text-data-missing-predicates");
+    assert!(matches!(
+        cause.field("count"),
+        purrdf_hash::error::ErrorValue::Unsigned(1)
+    ));
+    assert!(cause.events.iter().any(|event| matches!(event, purrdf_testkit::error_capture::Event::Value(None, purrdf_hash::error::ErrorValue::Term(term)) if purrdf_testkit::error_capture::Capture::read(*term).code == "rdf-term-iri")));
     assert!(matches!(error, TextError::Data(_)), "got {error:?}");
     assert!(
         error.to_string().contains(MISTYPED_SUMMARY),

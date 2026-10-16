@@ -120,6 +120,88 @@ enum IndexProjection {
     Han,
 }
 
+impl purrdf_hash::error::StructuredError for IndexProjection {
+    purrdf_hash::error_visit! {
+        Lexical => "text-projection-lexical" {},
+        Han => "text-projection-han" {},
+    }
+}
+
+/// A refused binding retains the semantic coordinates of both configurations.
+/// Analyzer identity includes its profile and complete resolved dictionary law.
+#[derive(Debug)]
+struct BindingConfiguration {
+    predicates: Vec<TermValue>,
+    graph: Option<GraphSelector>,
+    projection: IndexProjection,
+    analyzer_identity: [u8; 32],
+    surface: bool,
+    corpus_profile: &'static str,
+}
+
+impl purrdf_hash::error::StructuredError for BindingConfiguration {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self {
+            predicates,
+            graph,
+            projection,
+            analyzer_identity,
+            surface,
+            corpus_profile,
+        } = self;
+        visitor.variant("text-binding-configuration");
+        visitor.value(Some("corpus_profile"), ErrorValue::Code(corpus_profile));
+        purrdf_hash::error::visit_list(
+            visitor,
+            Some("predicates"),
+            predicates.iter().map(|term| ErrorValue::Term(term)),
+        );
+        match graph {
+            None => {}
+            Some(GraphSelector::Any) => visitor.value(Some("graph_scope"), ErrorValue::Code("any")),
+            Some(GraphSelector::Default) => {
+                visitor.value(Some("graph_scope"), ErrorValue::Code("default"));
+            }
+            Some(GraphSelector::Named(name)) => {
+                visitor.value(Some("graph_scope"), ErrorValue::Code("named"));
+                visitor.value(Some("graph_name"), ErrorValue::Term(name));
+            }
+        }
+        visitor.value(Some("projection"), ErrorValue::Record(projection));
+        visitor.value(
+            Some("analyzer_identity"),
+            ErrorValue::Bytes(analyzer_identity),
+        );
+        visitor.value(Some("surface"), ErrorValue::Boolean(*surface));
+    }
+}
+
+#[derive(Debug)]
+struct BindingMismatch {
+    expected: BindingConfiguration,
+    supplied: BindingConfiguration,
+}
+
+impl purrdf_hash::error::StructuredError for BindingMismatch {
+    purrdf_hash::error_visit! {
+        @record self { expected, supplied } => "text-config-binding-mismatch" {
+            "expected" => Record(&self.expected), "supplied" => Record(&self.supplied),
+        }
+    }
+}
+
+impl core::fmt::Display for BindingMismatch {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(
+            "the configuration supplied to verify_binding is not the one this index was built \
+             under; the two would digest different rows, so the comparison would answer a \
+             different question than the one asked",
+        )
+    }
+}
+impl std::error::Error for BindingMismatch {}
+
 /// The caller's complete, dataset-independent statement of what to index.
 ///
 /// There is no [`Default`] implementation and there never will be one: a default
@@ -164,6 +246,21 @@ impl TextIndexConfig<GraphFree> {
 }
 
 impl<P: CorpusProfile> TextIndexConfig<P> {
+    pub(crate) fn binding_mismatch(&self, supplied: &Self) -> TextError {
+        let capture = |config: &Self| BindingConfiguration {
+            predicates: config.predicates.clone(),
+            graph: P::selector(&config.graph).cloned(),
+            projection: config.projection,
+            analyzer_identity: config.analyzer.fingerprint(),
+            surface: config.surface,
+            corpus_profile: P::ID,
+        };
+        crate::configuration::error(BindingMismatch {
+            expected: capture(self),
+            supplied: capture(supplied),
+        })
+    }
+
     /// A configuration over `predicates`, restricted to `graph`.
     ///
     /// The predicate list is sorted on the way in, so two callers who name the

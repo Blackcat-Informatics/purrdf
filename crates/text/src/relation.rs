@@ -2445,34 +2445,24 @@ where
     D::ReadError: purrdf_hash::error::StructuredError,
 {
     if config != index.config() {
-        return Err(TextError::config(
-            "the configuration supplied to verify_binding is not the one this index was built \
-             under; the two would digest different rows, so the comparison would answer a \
-             different question than the one asked",
-        ));
+        return Err(index.config().binding_mismatch(config));
     }
 
     let expected = index.source_fingerprint();
     let (actual, coverage) = source_digest(dataset, config)?;
     if expected != actual {
-        return Err(TextError::data(format!(
-            "this index was built over a different dataset: its source digest is {expected:02x?} \
-             and the supplied dataset digests to {actual:02x?}. Rebuild the index from the dataset \
-             the query runs against, or pair the query with the dataset the index was built from — \
-             an index joined to the wrong dataset returns no rows and reports nothing."
-        )));
+        return Err(crate::query_workspace::data_error(
+            crate::data_refusal::DataRefusal::SourceDigest { expected, actual },
+            None,
+        ));
     }
     if let Some(missing) = coverage.shortfall() {
-        return Err(TextError::data(format!(
-            "this dataset holds statements but carries none under {} of this configuration's \
-             predicates: {missing:?}. Each contributes no text, so the corpus is short by their \
-             share of it while every digest agrees. Check the spelling of those predicate IRIs and \
-             of the configured graph — a named graph the dataset does not hold leaves every \
-             configured predicate with nothing in scope. If the data is instead still arriving, \
-             read TextIndex::source_coverage rather than asking for this verdict: the index \
-             answers, and reports the corpus it has.",
-            missing.len()
-        )));
+        return Err(crate::query_workspace::data_error(
+            crate::data_refusal::DataRefusal::MissingPredicates {
+                predicates: missing.to_vec(),
+            },
+            None,
+        ));
     }
     Ok(())
 }
@@ -3906,6 +3896,18 @@ mod tests {
         let other = dataset_of(&[("a", "alpha beta", None), ("b", "delta", None)]);
         let error = verify_binding(&index, &*other, &config())
             .expect_err("a different corpus is a different digest");
+        let cause = purrdf_testkit::error_capture::Capture::read(&error)
+            .child("reason")
+            .child("cause");
+        assert_eq!(cause.code, "text-data-source-digest");
+        let expected = index.source_fingerprint();
+        let actual = crate::index::source_digest(&*other, &config()).unwrap().0;
+        assert!(
+            matches!(cause.field("expected"), purrdf_hash::error::ErrorValue::Bytes(value) if value == expected)
+        );
+        assert!(
+            matches!(cause.field("actual"), purrdf_hash::error::ErrorValue::Bytes(value) if value == actual)
+        );
         assert!(matches!(error, TextError::Data(_)), "got {error:?}");
         assert!(
             error.to_string().contains("different dataset"),
