@@ -29,6 +29,16 @@ enum Identity {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ShaclProfile(Identity);
 
+impl purrdf_hash::error::StructuredError for ShaclProfile {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visitor.variant(match self {
+            Self(Identity::Legacy) => "shacl-profile-legacy",
+            Self(Identity::Recommendation) => "shacl-profile-rec-2017-07-20",
+            Self(Identity::WorkingDraft) => "shacl-profile-wd-2026-09-18",
+        });
+    }
+}
+
 impl ShaclProfile {
     /// The existing compatibility law, including its frozen query restrictions.
     pub const LEGACY: Self = Self(Identity::Legacy);
@@ -207,6 +217,12 @@ impl fmt::Display for UnsupportedProfile {
 
 impl std::error::Error for UnsupportedProfile {}
 
+impl purrdf_hash::error::StructuredError for UnsupportedProfile {
+    purrdf_hash::error_visit! {
+        @record self { id } => "shacl-unsupported-profile" { "id" => Text(&self.id) }
+    }
+}
+
 /// An explicit regex override incompatible with the selected dated SHACL law.
 ///
 /// Changing finite limits within the required law is compatible. This error
@@ -252,6 +268,15 @@ impl fmt::Display for XPathProfileConflict {
 }
 
 impl std::error::Error for XPathProfileConflict {}
+
+impl purrdf_hash::error::StructuredError for XPathProfileConflict {
+    purrdf_hash::error_visit! {
+        @record self { profile, required, requested } => "shacl-xpath-profile-conflict" {
+            "profile" => Record(&self.profile), "required" => Record(&self.required),
+            "requested" => Record(&self.requested),
+        }
+    }
+}
 
 /// The admitted law, source occurrences and existing native execution home of
 /// one immutable preparation/binding. No request is allocated for Legacy's
@@ -389,6 +414,22 @@ pub enum QueryPurpose {
     ScalarExpression,
 }
 
+impl purrdf_hash::error::StructuredError for QueryPurpose {
+    purrdf_hash::error_visit! {
+        SelectConstraint => "shacl-query-select-constraint" {},
+        SelectValidator => "shacl-query-select-validator" {},
+        AskValidator => "shacl-query-ask-validator" {},
+        ConstructRule => "shacl-query-construct-rule" {},
+        GlobalConstructRule => "shacl-query-global-construct-rule" {},
+        Function => "shacl-query-function" {},
+        TargetType => "shacl-query-target-type" {},
+        SelectTarget => "shacl-query-select-target" {},
+        AskTarget => "shacl-query-ask-target" {},
+        SelectExpression => "shacl-query-select-expression" {},
+        ScalarExpression => "shacl-query-scalar-expression" {},
+    }
+}
+
 impl QueryPurpose {
     pub(crate) fn accepts(self, query: &Query) -> bool {
         match self {
@@ -439,6 +480,18 @@ pub enum AdmissionReason {
     SubqueryProjection,
     /// The algebra has the wrong query form for its declared purpose.
     QueryForm,
+}
+
+impl purrdf_hash::error::StructuredError for AdmissionReason {
+    purrdf_hash::error_visit! {
+        ContextualApplication => "shacl-admission-contextual-application" {},
+        Minus => "shacl-admission-minus" {},
+        Service => "shacl-admission-service" {},
+        Values => "shacl-admission-values" {},
+        Assignment => "shacl-admission-assignment" {},
+        SubqueryProjection => "shacl-admission-subquery-projection" {},
+        QueryForm => "shacl-admission-query-form" {},
+    }
 }
 
 /// A structured query-admission failure, separate from a data violation.
@@ -520,3 +573,14 @@ impl fmt::Display for AdmissionRefusal {
 }
 
 impl std::error::Error for AdmissionRefusal {}
+
+impl purrdf_hash::error::StructuredError for AdmissionRefusal {
+    purrdf_hash::error_visit! {
+        @record self { profile, purpose, reason, variable } => "shacl-admission-refusal" {
+            "profile" => Record(&self.profile), "purpose" => Record(&self.purpose),
+            "reason" => Record(&self.reason),
+            "variable" => Value(self.variable.as_deref().map_or(
+                purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+        }
+    }
+}

@@ -6,7 +6,7 @@
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 
-use super::{ErrorValue, StructuredError};
+use super::{ErrorValue, NativeError, StructuredError};
 
 struct Payload {
     kind: std::io::ErrorKind,
@@ -15,9 +15,6 @@ struct Payload {
     rendered: OnceLock<String>,
     original: std::io::Error,
 }
-
-trait NativeError: std::error::Error + StructuredError + Send + Sync {}
-impl<T: std::error::Error + StructuredError + Send + Sync> NativeError for T {}
 
 struct NativeIoCause {
     cause: Box<dyn NativeError>,

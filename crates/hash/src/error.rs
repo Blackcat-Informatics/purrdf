@@ -26,6 +26,12 @@ pub trait StructuredError {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>);
 }
 
+/// An original error whose typed fields survive shared or boxed type erasure.
+/// Standard error upcasting preserves downcasting and the source chain, while
+/// structured upcasting preserves borrowed fields without rendering a message.
+pub trait NativeError: std::error::Error + StructuredError + Send + Sync {}
+impl<T: std::error::Error + StructuredError + Send + Sync> NativeError for T {}
+
 impl StructuredError for core::convert::Infallible {
     fn visit<'error>(&'error self, _visitor: &mut dyn ErrorVisitor<'error>) {
         // Generic query errors can name Infallible without ever carrying one.

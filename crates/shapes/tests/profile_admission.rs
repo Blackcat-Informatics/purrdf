@@ -8,6 +8,31 @@ use purrdf_sparql_algebra::{Query, SparqlParser};
 
 const DATED: [ShaclProfile; 2] = [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918];
 
+#[test]
+fn actual_function_admission_cause_survives_erasure_with_its_private_fields() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_sparql_eval::UserFunctionRefusal;
+    use purrdf_testkit::error_capture::Capture;
+    let query =
+        parse("SELECT ?value WHERE { SERVICE <https://example.org/service> { ?s ?p ?value } }");
+    let original = ShaclProfile::REC_20170720
+        .admit_query(QueryPurpose::Function, &query, &[])
+        .unwrap_err();
+    let refusal = UserFunctionRefusal::new(original.clone());
+    let cause = Capture::read(&refusal).child("cause");
+    assert_eq!(cause.code, "shacl-admission-refusal");
+    assert_eq!(cause.child("profile").code, "shacl-profile-rec-2017-07-20");
+    assert_eq!(cause.child("purpose").code, "shacl-query-function");
+    assert_eq!(cause.child("reason").code, "shacl-admission-service");
+    assert!(matches!(cause.field("variable"), ErrorValue::Absent));
+    assert_eq!(
+        refusal
+            .cause()
+            .downcast_ref::<purrdf_shapes::AdmissionRefusal>(),
+        Some(&original)
+    );
+}
+
 fn parse(text: &str) -> Query {
     SparqlParser::new()
         .parse_query(text)
