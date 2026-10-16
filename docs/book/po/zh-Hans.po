@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-16T05:53:13-06:00\n"
+"POT-Creation-Date: 2026-10-16T06:28:14-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -18610,11 +18610,12 @@ msgid ""
 "base `validate --shapes` parses it under, so packing and direct validation "
 "cannot disagree about what a relative reference resolves to."
 msgstr ""
-"`--shapes` 指定一个**路径**；显式提供 `--base` 时，也可用 `-` 从标准输入读取。"
-"产物会记录其形状图解析时所用的基准，而标准输入没有可从中推导基准的检索 IRI；"
-"未提供 `--base` 时传入 `--shapes -` 属于用法错误。对于未显式提供 `--base` 的"
-"路径，会推导出文档自身的 `file://` 检索 IRI——即 `validate --shapes` 解析该文档时所用的同一基"
-"准，因此打包与直接验证在相对引用解析为何物这一问题上不可能出现分歧。"
+"`--shapes` 指定一个**路径**；显式提供 `--base` 时，也可用 `-` 从标准输入读"
+"取。产物会记录其形状图解析时所用的基准，而标准输入没有可从中推导基准的检索 "
+"IRI；未提供 `--base` 时传入 `--shapes -` 属于用法错误。对于未显式提供 `--"
+"base` 的路径，会推导出文档自身的 `file://` 检索 IRI——即 `validate --shapes` "
+"解析该文档时所用的同一基准，因此打包与直接验证在相对引用解析为何物这一问题上"
+"不可能出现分歧。"
 
 #: src/validation/shapes-products.md:58
 msgid ""
@@ -19865,9 +19866,9 @@ msgid ""
 "stderr as `shacl dimension <label>`. **The dimension is what you branch on; "
 "the message is what you read.** Matching on message text is not supported."
 msgstr ""
-"每次拒绝都带有二十二个稳定的 kebab-case 标签之一，以 `shacl dimension <label>` "
-"的形式打印到 stderr。**据以分支的是维度；供人阅读的是消息。** 不支持按消息文"
-"本进行匹配。"
+"每次拒绝都带有二十二个稳定的 kebab-case 标签之一，以 `shacl dimension "
+"<label>` 的形式打印到 stderr。**据以分支的是维度；供人阅读的是消息。** 不支持"
+"按消息文本进行匹配。"
 
 #: src/validation/shapes-products.md:697
 msgid ""
@@ -19887,10 +19888,10 @@ msgid ""
 "only one of the two can reach is not something the other quietly skips — it "
 "is a statement that verb never makes."
 msgstr ""
-"这二十二个维度按**哪个动词能够报告它们**分为两组，而这种划分并非分类学：它是该"
-"编解码器所围绕的成本决策。恢复是常用路径，不得对形状图的空节点进行规范化；认"
-"证是会进行规范化的冷路径。只有两者之一能够到达的维度，并不是另一方悄悄跳过的"
-"东西——而是表明该动词从不作出这一陈述。"
+"这二十二个维度按**哪个动词能够报告它们**分为两组，而这种划分并非分类学：它是"
+"该编解码器所围绕的成本决策。恢复是常用路径，不得对形状图的空节点进行规范化；"
+"认证是会进行规范化的冷路径。只有两者之一能够到达的维度，并不是另一方悄悄跳过"
+"的东西——而是表明该动词从不作出这一陈述。"
 
 #: src/validation/shapes-products.md:708
 msgid "Admit-time dimensions"
@@ -20335,7 +20336,8 @@ msgid ""
 "bad flags, `--shapes -` without `--base`, or a `--shapes-graph`/`--import` "
 "the shapes graph cannot resolve"
 msgstr ""
-"错误的标志、未提供 `--base` 时使用 `--shapes -`，或形状图无法解析的 `--shapes-graph`/`--import`"
+"错误的标志、未提供 `--base` 时使用 `--shapes -`，或形状图无法解析的 `--"
+"shapes-graph`/`--import`"
 
 #: src/validation/shapes-products.md:774
 msgid "`purrdf shacl verify [IN]`"
@@ -24317,14 +24319,14 @@ msgstr ""
 
 #: src/project/conformance.md:8
 msgid ""
-"Every PurRDF engine is gated by its official test suite. The suites are "
-"vendored and **byte-frozen** in-repo — never hand-edited, SHA-256-verified "
-"on every `make check` so a silent content edit fails the build. The full, "
-"live scoreboard is [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
-"Informatics/purrdf/blob/main/docs/CONFORMANCE.md); this chapter explains how "
-"the machine works."
+"PurRDF checks its engines against standards suites and first-party corpora. "
+"The suites are vendored and **byte-frozen** in-repo — never hand-edited, "
+"SHA-256-verified on every `make check` so a silent content edit fails the "
+"build. The full, live scoreboard is [`docs/CONFORMANCE.md`](https://"
+"github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md); this "
+"chapter explains how the machine works."
 msgstr ""
-"PurRDF 的每一个引擎都由其官方测试套件把关。这些套件随库固化于仓库中并**按字节"
+"PurRDF 使用标准测试套件和第一方语料检验各个引擎。这些套件随库固化于仓库中并**按字节"
 "冻结**——从不手工编辑，在每次 `make check` 时进行 SHA-256 校验，因此任何静默的"
 "内容修改都会使构建失败。完整的实时记分板见 [`docs/CONFORMANCE.md`](https://"
 "github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)；本章说"
@@ -24652,51 +24654,58 @@ msgstr "按构造即快速"
 
 #: src/project/performance.md:18
 msgid ""
-"The engine-level speed comes from the IR design ([The Interned Dataset IR]"
-"(../concepts/interned-dataset.md)): every term stored once in a string arena "
-"addressed by copyable `NonZeroU32` ids, fixed-key `FixedHasher` everywhere "
-"hot, frozen `Box<[QuadRow]>` quad tables with lazy ordinal permutation "
-"indexes (~4 bytes/quad per axis), and evaluation in `TermId` space so "
-"solution comparison is an integer compare."
+"The resident `RdfDataset` IR ([The Interned Dataset IR](../concepts/interned-"
+"dataset.md)) interns lexical text in a string arena and stores triple terms "
+"as component IDs. Its copyable `TermId` uses `NonZeroU32`; the separate "
+"global address space uses `NonZeroU64` in `GlobalTermId`. Hot maps use the "
+"fixed-key `FixedHasher`. Frozen quad rows have lazy ordinal permutation "
+"indexes (four bytes per quad for each populated permutation). The explicit "
+"graph-free `TripleDataset` has three-component rows and separate reifier and "
+"annotation tables. Evaluation works over interned IDs."
 msgstr ""
-"引擎层面的速度来自 IR 设计（[驻留数据集 IR](../concepts/interned-"
-"dataset.md)）：每个项在字符串存储区中只存储一次，由可复制的 `NonZeroU32` id "
-"寻址；所有热点处都使用固定密钥的 `FixedHasher`；冻结的 `Box<[QuadRow]>` 四元"
-"组表带有惰性构建的序数置换索引（每个轴约 4 字节/四元组）；求值在 `TermId` 空"
-"间中进行，因此解的比较就是整数比较。"
+"驻留的 `RdfDataset` IR（[驻留数据集 IR](../concepts/interned-dataset.md)）"
+"在字符串存储区中驻留词法文本，并以组成项 ID 存储三元组项。其可复制的 `TermId` "
+"使用 `NonZeroU32`；独立的全局地址空间在 `GlobalTermId` 中使用 `NonZeroU64`。"
+"热点映射使用固定密钥的 `FixedHasher`。冻结四元组行带有惰性序数置换索引"
+"（每个已构建的置换中，每个四元组占四个字节）。显式的不含图分量的 "
+"`TripleDataset` 具有三个组成项的行，以及独立的具体化节点和注解表。"
+"求值在驻留 ID 上进行。"
 
-#: src/project/performance.md:25
+#: src/project/performance.md:27
 msgid ""
-"Crucially, the _layout itself_ was chosen by benchmark: the `crates/rdf-core/"
-"benches/ir_layout.rs` bench suite measures array-of-structs vs. struct-of-"
-"arrays vs. predicate-adjacency layouts on allocation counts, high-water "
-"memory, and end-to-end latency — and the shipped layout is whichever wins."
+"Layout comparisons live in `crates/rdf-core/benches/ir_layout.rs`. The suite "
+"compares the resident quad-row store with structure-of-arrays and predicate-"
+"adjacency alternatives over the same frozen quads, reporting allocation "
+"counts, high-water memory and end-to-end latency. It also reports the graph-"
+"free carrier's physical row tables and populated ordinal indexes. Each "
+"result applies to its measured source, workload and host."
 msgstr ""
-"关键在于，*布局本身*是由基准测试选定的：`crates/rdf-core/benches/"
-"ir_layout.rs` 基准套件在分配次数、内存峰值与端到端延迟上测量结构体数组、数组"
-"结构体与谓词邻接三种布局——随库发布的布局就是胜出的那一种。"
+"布局比较位于 `crates/rdf-core/benches/ir_layout.rs`。该基准套件在同一组冻结"
+"四元组上，将驻留四元组行存储与数组结构体、谓词邻接两种备选布局进行比较，"
+"报告分配次数、内存高水位和端到端延迟。它还报告不含图分量的载体的物理行表"
+"与已构建的序数索引。每项结果都只适用于其测量时的源码、工作负载和宿主。"
 
-#: src/project/performance.md:31
+#: src/project/performance.md:34
 msgid "The two benchmark layers"
 msgstr "两层基准测试"
 
-#: src/project/performance.md:33
+#: src/project/performance.md:36
 msgid "Layer"
 msgstr "层"
 
-#: src/project/performance.md:33
+#: src/project/performance.md:36
 msgid "What it measures"
 msgstr "测量内容"
 
-#: src/project/performance.md:33
+#: src/project/performance.md:36
 msgid "How to run"
 msgstr "运行方式"
 
-#: src/project/performance.md:35
+#: src/project/performance.md:38
 msgid "**Rust bench suites**"
 msgstr "**Rust 基准套件**"
 
-#: src/project/performance.md:35
+#: src/project/performance.md:38
 msgid ""
 "Native engine hot paths — IR layout, copy-on-write mutation, pack index "
 "alternatives, codecs, graph/tabular/research-object projections, SPARQL "
@@ -24707,15 +24716,15 @@ msgstr ""
 "表格/Research Object 投影、SPARQL 词法分析/求值/规划、SHACL 验证、蕴涵 "
 "chase、GTS 编写、IRI 解析。"
 
-#: src/project/performance.md:35
+#: src/project/performance.md:38
 msgid "`make bench`"
 msgstr "`make bench`"
 
-#: src/project/performance.md:36
+#: src/project/performance.md:39
 msgid "**Python compat harness**"
 msgstr "**Python 兼容测试框架**"
 
-#: src/project/performance.md:36
+#: src/project/performance.md:39
 msgid ""
 "`purrdf.compat.rdflib` (the native-backed drop-in) vs. the real rdflib 7.x "
 "on parse, serialize, SPARQL, and triple-pattern iteration, over a "
@@ -24724,22 +24733,22 @@ msgstr ""
 "`purrdf.compat.rdflib`（由原生实现支撑的直接替换方案）对比真正的 rdflib 7.x，"
 "在确定性的 `example.org` 语料上测量解析、序列化、SPARQL 与三元组模式迭代。"
 
-#: src/project/performance.md:36
+#: src/project/performance.md:39
 msgid "`make bench-python`"
 msgstr "`make bench-python`"
 
-#: src/project/performance.md:38
+#: src/project/performance.md:41
 msgid ""
 "Both layers are report-only: they are never part of `make check`, and no "
 "test gate asserts a speedup."
 msgstr ""
 "两层都仅作报告用途：它们从不属于 `make check`，也没有任何测试关卡断言加速。"
 
-#: src/project/performance.md:41
+#: src/project/performance.md:44
 msgid "The discipline for changes"
 msgstr "变更的纪律"
 
-#: src/project/performance.md:43
+#: src/project/performance.md:46
 msgid ""
 "Any change claiming a performance win must **extend the benches** rather "
 "than asserting the speedup in prose. Where a planner or algorithm choice "
@@ -24754,7 +24763,7 @@ msgstr ""
 "关——例如，基于代价的 BGP 规划器优于已退役的结构性启发式方法，这一点由统计真实"
 "中间行数的单元测试以及一项差分语料测试来断言，而基准测试只负责监视性能回退。"
 
-#: src/project/performance.md:51
+#: src/project/performance.md:54
 msgid ""
 "`NativeSparqlEngine::explain_query` exposes the chosen BGP join order so "
 "planner decisions can be audited without running the query ([SPARQL: "
@@ -24763,11 +24772,11 @@ msgstr ""
 "`NativeSparqlEngine::explain_query` 公开所选的 BGP 连接顺序，因此无须运行查询"
 "即可审计规划器的决策（[SPARQL：查询](../sparql/querying.md)）。"
 
-#: src/project/performance.md:55
+#: src/project/performance.md:58
 msgid "Rust, LLVM and hardware paths"
 msgstr "Rust、LLVM 与硬件路径"
 
-#: src/project/performance.md:57
+#: src/project/performance.md:60
 msgid ""
 "The [Rust and SIMD optimization guide](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/design/purrdf-simd.md) explains the source "
@@ -24783,31 +24792,31 @@ msgstr ""
 "父节点批处理、流式状态、直接写入输出的方式以及内存分配下限。指南明确区分指令"
 "覆盖情况与在目标硬件上测得的吞吐量。"
 
-#: src/project/performance.md:64
+#: src/project/performance.md:67
 msgid "Reproducing locally"
 msgstr "在本地复现"
 
-#: src/project/performance.md:67
+#: src/project/performance.md:70
 msgid "# the default bench set\n"
 msgstr "# 默认的基准集合\n"
 
-#: src/project/performance.md:68
+#: src/project/performance.md:71
 msgid "# a single package's bench\n"
 msgstr "# 单个包的基准测试\n"
 
-#: src/project/performance.md:69
+#: src/project/performance.md:72
 msgid "# pack index experiment\n"
 msgstr "# 打包索引实验\n"
 
-#: src/project/performance.md:70
+#: src/project/performance.md:73
 msgid "# projection/carrier sample\n"
 msgstr "# 投影/载体样例\n"
 
-#: src/project/performance.md:71
+#: src/project/performance.md:74
 msgid "# the rdflib comparison harness\n"
 msgstr "# rdflib 对比测试框架\n"
 
-#: src/project/performance.md:74
+#: src/project/performance.md:77
 msgid ""
 "Benchmark on a quiet machine, and compare like with like: allocator, CPU "
 "scaling, and build flags all move the numbers."
@@ -27478,6 +27487,31 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid ""
+#~ "The engine-level speed comes from the IR design ([The Interned Dataset IR]"
+#~ "(../concepts/interned-dataset.md)): every term stored once in a string "
+#~ "arena addressed by copyable `NonZeroU32` ids, fixed-key `FixedHasher` "
+#~ "everywhere hot, frozen `Box<[QuadRow]>` quad tables with lazy ordinal "
+#~ "permutation indexes (~4 bytes/quad per axis), and evaluation in `TermId` "
+#~ "space so solution comparison is an integer compare."
+#~ msgstr ""
+#~ "引擎层面的速度来自 IR 设计（[驻留数据集 IR](../concepts/interned-"
+#~ "dataset.md)）：每个项在字符串存储区中只存储一次，由可复制的 `NonZeroU32` "
+#~ "id 寻址；所有热点处都使用固定密钥的 `FixedHasher`；冻结的 "
+#~ "`Box<[QuadRow]>` 四元组表带有惰性构建的序数置换索引（每个轴约 4 字节/四元"
+#~ "组）；求值在 `TermId` 空间中进行，因此解的比较就是整数比较。"
+
+#~ msgid ""
+#~ "Crucially, the _layout itself_ was chosen by benchmark: the `crates/rdf-"
+#~ "core/benches/ir_layout.rs` bench suite measures array-of-structs vs. "
+#~ "struct-of-arrays vs. predicate-adjacency layouts on allocation counts, "
+#~ "high-water memory, and end-to-end latency — and the shipped layout is "
+#~ "whichever wins."
+#~ msgstr ""
+#~ "关键在于，*布局本身*是由基准测试选定的：`crates/rdf-core/benches/"
+#~ "ir_layout.rs` 基准套件在分配次数、内存峰值与端到端延迟上测量结构体数组、数"
+#~ "组结构体与谓词邻接三种布局——随库发布的布局就是胜出的那一种。"
 
 #~ msgid "# Use make changelog only for history-generated notes.\n"
 #~ msgstr "# 仅对根据提交历史生成的说明使用 make changelog。\n"
