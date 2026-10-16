@@ -120,6 +120,15 @@ pub enum TermLookupError<ReadError = std::convert::Infallible> {
     Read(ReadError),
 }
 
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for TermLookupError<E>
+{
+    purrdf_hash::error_visit! {
+        ForeignId => "term-lookup-foreign-id" {},
+        Read(cause) => "term-lookup-read" { "cause" => Cause(cause) },
+    }
+}
+
 impl<E: core::fmt::Display> core::fmt::Display for TermLookupError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

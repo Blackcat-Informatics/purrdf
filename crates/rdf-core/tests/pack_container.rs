@@ -9,7 +9,9 @@
 //! rejecting a corrupted one (a flipped section byte, a flipped magic byte)
 //! fail-closed.
 
-use purrdf_core::term_fixture::{ProbeFault, RowBudget};
+use purrdf_core::term_fixture::RowBudget;
+use purrdf_hash::error::ErrorValue;
+use purrdf_testkit::error_capture::{CallerRefusal, Capture};
 use std::sync::Arc;
 
 use purrdf_core::ir::pack::container::{PackBuilder, PackCheckpoint, PackError, PackView};
@@ -597,7 +599,7 @@ impl BudgetedView {
 
 impl DatasetView for BudgetedView {
     type Id = TermId;
-    type ReadError = ProbeFault;
+    type ReadError = CallerRefusal;
     type TermGuard<'a>
         = TermRef<'a, Self::Id>
     where
@@ -605,7 +607,7 @@ impl DatasetView for BudgetedView {
     type ProbePlan = ();
 
     fn read_error(&self) -> Option<Self::ReadError> {
-        self.budget.read_error()
+        self.operation_status().error().copied()
     }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -655,11 +657,17 @@ impl DatasetView for BudgetedView {
 }
 
 impl FallibleDatasetView for BudgetedView {
-    type Error = ProbeFault;
+    type Error = CallerRefusal;
     type Evidence = usize;
 
-    fn operation_status(&self) -> ViewOperationStatus<ProbeFault, usize> {
-        self.budget.status()
+    fn operation_status(&self) -> ViewOperationStatus<CallerRefusal, usize> {
+        match self.budget.status() {
+            ViewOperationStatus::Ready { evidence } => ViewOperationStatus::Ready { evidence },
+            ViewOperationStatus::Failed { evidence, .. } => ViewOperationStatus::Failed {
+                error: CallerRefusal { limit: u128::MAX },
+                evidence,
+            },
+        }
     }
 }
 
@@ -680,6 +688,15 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
     ));
     let err = PackBuilder::build_view_bytes(&truncating)
         .expect_err("a truncated read must never be framed as a pack");
+    let record = Capture::read(&err);
+    assert_eq!(record.code, "pack-view-not-ready");
+    assert_eq!(record.child("checkpoint").code, "pack-after-rows");
+    let caller = record.child("cause").child("cause");
+    assert_eq!(caller.code, "caller-refused");
+    assert!(matches!(
+        caller.field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
     assert!(
         matches!(
             err,
@@ -696,6 +713,9 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
     assert_eq!(spent.quads().count(), 0, "the budget is already gone");
     let err = PackBuilder::build_view_bytes(&spent)
         .expect_err("an already-faulted view must never be framed as a pack");
+    let record = Capture::read(&err);
+    assert_eq!(record.child("checkpoint").code, "pack-before-rows");
+    assert_eq!(record.child("cause").child("cause").code, "caller-refused");
     assert!(
         matches!(
             err,
@@ -705,6 +725,24 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
             }
         ),
         "expected a before-rows refusal, got {err:?}"
+    );
+
+    let canonical = BudgetedView::new(Arc::clone(&dataset), rows - 1);
+    let err = purrdf_core::try_canonicalize_view(&canonical, purrdf_core::CanonHash::Sha256)
+        .expect_err("canonicalization cannot publish a truncated read");
+    let record = Capture::read(&err);
+    assert_eq!(record.code, "canonical-read");
+    assert!(matches!(
+        record.child("cause").field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+    assert_eq!(
+        std::error::Error::source(&err)
+            .unwrap()
+            .downcast_ref::<CallerRefusal>()
+            .unwrap()
+            .limit,
+        u128::MAX
     );
 
     // THE NEIGHBOUR: the same probe with budget to spare never faults, and its

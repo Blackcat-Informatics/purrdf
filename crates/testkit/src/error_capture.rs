@@ -5,6 +5,33 @@
 
 use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
 
+/// A caller-owned refusal whose native fields must survive without rendering.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CallerRefusal {
+    /// Original full-width admission boundary, independent of host pointer width.
+    pub limit: u128,
+}
+
+impl core::fmt::Display for CallerRefusal {
+    fn fmt(&self, _: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        panic!("the original caller refusal must not be formatted");
+    }
+}
+
+impl core::fmt::Debug for CallerRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl std::error::Error for CallerRefusal {}
+
+impl StructuredError for CallerRefusal {
+    purrdf_hash::error_visit! {
+        @record self { limit } => "caller-refused" { "limit" => Unsigned(self.limit) }
+    }
+}
+
 /// One original event, with list boundaries and unnamed entries preserved.
 #[derive(Clone, Copy, Debug)]
 pub enum Event<'error> {

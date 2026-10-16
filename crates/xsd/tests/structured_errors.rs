@@ -3,31 +3,9 @@
 
 //! Real XSD refusals consumed through the shared typed protocol alone.
 
-use purrdf_hash::error::{ErrorValue, StructuredError};
-use purrdf_testkit::error_capture::Capture;
+use purrdf_hash::error::ErrorValue;
+use purrdf_testkit::error_capture::{CallerRefusal, Capture};
 use purrdf_xsd::{XsdDatatype, parse};
-
-struct CallerRefusal {
-    limit: u128,
-}
-
-impl core::fmt::Display for CallerRefusal {
-    fn fmt(&self, _: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        panic!("the original caller refusal must not be formatted");
-    }
-}
-
-impl core::fmt::Debug for CallerRefusal {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Display::fmt(self, formatter)
-    }
-}
-
-impl StructuredError for CallerRefusal {
-    purrdf_hash::error_visit! {
-        @record self { limit } => "caller-refused" { "limit" => Unsigned(self.limit) }
-    }
-}
 
 #[test]
 fn xsd_parser_and_exact_division_retain_original_lexical_and_typed_cause() {

@@ -552,14 +552,17 @@ pub fn canonicalize_view<D: DatasetView<ReadError = Infallible>>(
 /// [`CanonError::ReservedVocabulary`] if any term of `view` is an IRI in
 /// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] if the n-degree search's
 /// call/permutation budget ([`RDFC_CALL_LIMIT`]) is exhausted first.
+/// [`CanonError::Read`] retains the original [`DatasetView::ReadError`] if either
+/// readiness check fails; no canonical result is published or cause formatted.
 pub fn try_canonicalize_view<D: DatasetView>(
     view: &D,
     hash: CanonHash,
-) -> Result<Canonicalized<D::Id>, CanonError> {
+) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     view.checked_read(|view| {
         CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run_fallible()
     })
-    .map_err(|error| CanonError::Read(error.to_string()))?
+    .map_err(CanonError::Read)?
+    .map_err(CanonError::with_read_error)
 }
 
 /// Canonicalize the subgraph of `view` asserted in the named graph `graph` (an IRI),
@@ -607,18 +610,21 @@ pub fn canonicalize_graph_view<D: DatasetView<ReadError = Infallible>>(
 /// ANOTHER graph does not refuse this one — the projection route has exactly that
 /// property, and a per-graph digest that refused on a neighbour's content would not be
 /// a function of `graph` alone.
+/// [`CanonError::Read`] retains a backing read failure unchanged, even when the
+/// read became incomplete during the graph-scoped computation.
 pub fn try_canonicalize_graph_view<D: DatasetView>(
     view: &D,
     graph: &str,
     hash: CanonHash,
-) -> Result<Canonicalized<D::Id>, CanonError> {
+) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     view.checked_read(|view| match graph_scope(view, graph) {
         Some(scope) => {
             CanonState::new(view, scope, CanonPresentation::Overlay, hash).run_fallible()
         }
         None => Ok(empty_canonicalized(CanonPresentation::Overlay)),
     })
-    .map_err(|error| CanonError::Read(error.to_string()))?
+    .map_err(CanonError::Read)?
+    .map_err(CanonError::with_read_error)
 }
 
 /// The SHA-256 [`ContentDigest`] of one named graph's canonical form — the value a
@@ -648,7 +654,7 @@ pub fn graph_digest_view<D: DatasetView<ReadError = Infallible>>(
 pub fn try_graph_digest_view<D: DatasetView>(
     view: &D,
     graph: &str,
-) -> Result<ContentDigest, CanonError> {
+) -> Result<ContentDigest, CanonError<D::ReadError>> {
     Ok(ContentDigest::of(
         try_canonicalize_graph_view(view, graph, CanonHash::Sha256)?
             .nquads
@@ -1927,6 +1933,14 @@ pub struct BudgetExceeded {
     pub blank_count: usize,
 }
 
+impl purrdf_hash::error::StructuredError for BudgetExceeded {
+    purrdf_hash::error_visit! {
+        @record self { blank_count } => "canonical-budget-exceeded" {
+            "blank_count" => Unsigned(self.blank_count as u128),
+        }
+    }
+}
+
 impl std::fmt::Display for BudgetExceeded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -1957,6 +1971,15 @@ pub enum TermPosition {
     Object,
     /// The graph slot.
     Graph,
+}
+
+impl purrdf_hash::error::StructuredError for TermPosition {
+    purrdf_hash::error_visit! {
+        Subject => "canonical-position-subject" {},
+        Predicate => "canonical-position-predicate" {},
+        Object => "canonical-position-object" {},
+        Graph => "canonical-position-graph" {},
+    }
 }
 
 impl std::fmt::Display for TermPosition {
@@ -1991,6 +2014,15 @@ pub struct ReservedVocabulary {
     pub position: TermPosition,
 }
 
+impl purrdf_hash::error::StructuredError for ReservedVocabulary {
+    purrdf_hash::error_visit! {
+        @record self { iri, position } => "canonical-reserved-vocabulary" {
+            "iri" => Iri(&self.iri),
+            "position" => Record(&self.position),
+        }
+    }
+}
+
 impl std::fmt::Display for ReservedVocabulary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -2014,9 +2046,12 @@ impl std::error::Error for ReservedVocabulary {}
 /// bounds, while a [`ReservedVocabulary`] dataset is one whose acceptance would have
 /// been an identity collision. A consumer auditing a rejection needs to tell those
 /// apart without parsing a message.
+///
+/// View entry points retain their backing reader's error type in `E`. Resident
+/// entry points use [`Infallible`], so their read-failure variant is uninhabited.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum CanonError {
+pub enum CanonError<E = Infallible> {
     /// The rewritten dataset could not be frozen with its original diagnostic.
     Invalid(crate::RdfDiagnostic),
     /// Logical capacity or physical storage refusal during the rewrite.
@@ -2026,10 +2061,20 @@ pub enum CanonError {
     /// The input carries an IRI in the profile's reserved namespace.
     ReservedVocabulary(ReservedVocabulary),
     /// The backing dataset could not be read completely. No canonical result is returned.
-    Read(String),
+    Read(E),
 }
 
-impl std::fmt::Display for CanonError {
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for CanonError<E> {
+    purrdf_hash::error_visit! {
+        Invalid(cause) => "canonical-invalid" { "cause" => Cause(cause) },
+        Storage(cause) => "canonical-storage" { "cause" => Cause(cause) },
+        BudgetExceeded(cause) => "canonical-budget" { "cause" => Cause(cause) },
+        ReservedVocabulary(cause) => "canonical-reserved" { "cause" => Cause(cause) },
+        Read(cause) => "canonical-read" { "cause" => Cause(cause) },
+    }
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(error) => error.fmt(f),
@@ -2041,32 +2086,36 @@ impl std::fmt::Display for CanonError {
     }
 }
 
-impl std::error::Error for CanonError {
+impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Invalid(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
-            Self::Read(_) => None,
+            Self::Read(error) => Some(error),
         }
     }
 }
 
-purrdf_lex::variant_from!(CanonError {
+purrdf_lex::variant_from!(impl<E> CanonError<E> {
     Storage(purrdf_lex::allocation::StorageError),
-    Invalid(crate::RdfDiagnostic)
+    Invalid(crate::RdfDiagnostic),
+    BudgetExceeded(BudgetExceeded),
+    ReservedVocabulary(ReservedVocabulary)
 });
 
-impl From<BudgetExceeded> for CanonError {
-    fn from(err: BudgetExceeded) -> Self {
-        Self::BudgetExceeded(err)
-    }
-}
-
-impl From<ReservedVocabulary> for CanonError {
-    fn from(err: ReservedVocabulary) -> Self {
-        Self::ReservedVocabulary(err)
+impl CanonError {
+    /// Preserve an algorithm refusal while selecting the backing reader's type.
+    /// The algorithm itself has no read fault to convert or format.
+    fn with_read_error<E>(self) -> CanonError<E> {
+        match self {
+            Self::Invalid(error) => CanonError::Invalid(error),
+            Self::Storage(error) => CanonError::Storage(error),
+            Self::BudgetExceeded(error) => CanonError::BudgetExceeded(error),
+            Self::ReservedVocabulary(error) => CanonError::ReservedVocabulary(error),
+            Self::Read(error) => match error {},
+        }
     }
 }
 

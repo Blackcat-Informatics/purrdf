@@ -547,6 +547,27 @@ fn cancellation_retains_the_exact_failed_request_and_refuses_partial_drains() {
     assert_eq!(record.code, "segmented-export-source");
     assert_eq!(record.child("cause").code, "segmented-stopped");
     assert_eq!(record.child("cause").child("cause").code, "stop-cancelled");
+    let error = purrdf_core::try_canonicalize_view(&read, purrdf_core::CanonHash::Sha256)
+        .expect_err("canonicalization cannot publish a cancelled source");
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "canonical-read");
+    assert_eq!(record.child("cause").code, "segmented-stopped");
+    assert_eq!(record.child("cause").child("cause").code, "stop-cancelled");
+    assert!(matches!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<SegmentedError>(),
+        Some(SegmentedError::Stopped(purrdf_core::StopCause::Cancelled))
+    ));
+    let error = purrdf_core::PackBuilder::build_view_bytes(&read)
+        .expect_err("packing cannot publish a cancelled source");
+    let record = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(record.code, "pack-view-not-ready");
+    assert_eq!(record.child("checkpoint").code, "pack-before-rows");
+    let cause = record.child("cause");
+    assert_eq!(cause.code, "term-lookup-read");
+    assert_eq!(cause.child("cause").code, "segmented-stopped");
+    assert_eq!(cause.child("cause").child("cause").code, "stop-cancelled");
 }
 
 fn charged_read_peak_covers_measured_allocations_including_streamed_output() {
