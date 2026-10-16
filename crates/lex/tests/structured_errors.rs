@@ -15,6 +15,49 @@ struct Fields<'error> {
 
 struct RefusingRead;
 
+purrdf_lex::message_error! {
+    /// Exercise the exported macro from a downstream crate without the accessor.
+    #[derive(Debug)]
+    struct CallerMessage;
+}
+purrdf_lex::message_error! {
+    /// Exercise the accessor arm and original Unicode/text preservation.
+    #[derive(Debug)]
+    struct DetailedCallerMessage, detail;
+}
+
+#[test]
+fn message_macro_and_debug_refusals_keep_original_borrowed_payloads() {
+    use purrdf_testkit::error_capture::Capture;
+
+    let plain = CallerMessage::new("a\n\"b\" 🐈");
+    let detailed = DetailedCallerMessage::new("caller context");
+    for (error, code, original) in [
+        (
+            &plain as &dyn StructuredError,
+            "message-CallerMessage",
+            "a\n\"b\" 🐈",
+        ),
+        (
+            &detailed as &dyn StructuredError,
+            "message-DetailedCallerMessage",
+            detailed.detail(),
+        ),
+    ] {
+        let captured = Capture::read(error);
+        assert_eq!(captured.code, code);
+        assert!(matches!(captured.field("detail"), ErrorValue::Text(text) if text == original));
+    }
+    let storage = purrdf_lex::walk::DebugWriteError::Storage(StorageError::SizeOverflow);
+    let captured = Capture::read(&storage);
+    assert_eq!(captured.code, "debug-storage");
+    assert_eq!(captured.child("cause").code, "storage-size-overflow");
+    let format = purrdf_lex::walk::DebugWriteError::Format(core::fmt::Error);
+    let captured = Capture::read(&format);
+    assert_eq!(captured.code, "debug-format");
+    assert_eq!(captured.child("cause").code, "std-format");
+}
+
 #[test]
 fn record_failures_keep_native_values_names_lists_and_external_messages() {
     use purrdf_lex::json::{

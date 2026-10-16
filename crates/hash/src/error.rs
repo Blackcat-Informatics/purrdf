@@ -31,6 +31,12 @@ impl StructuredError for core::convert::Infallible {
     }
 }
 
+impl StructuredError for core::fmt::Error {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("std-format");
+    }
+}
+
 impl StructuredError for std::io::ErrorKind {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
         // Public stable categories have portable names. The standard library

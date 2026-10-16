@@ -7,12 +7,14 @@
 /// Declare an error type whose whole content is one human-readable message.
 ///
 /// Many codecs refuse with a sentence and nothing else to match on. Each such
-/// type is the same four items — the struct holding the message, `new`, the
-/// `Display` that writes the message verbatim and the `Error` impl — so they are
-/// spelled once, here, and each type is one invocation. The attributes written
+/// declaration supplies the struct holding the message, `new`, verbatim
+/// `Display`, standard `Error` and borrowed structured inspection. These are
+/// spelled once, here; each type is one invocation. The attributes written
 /// on the struct (documentation, derives) are kept; `new` has the struct's
 /// visibility. Adding `detail` after the name also gives the type a
 /// `detail(&self) -> &str` accessor.
+/// Borrowed structured inspection exposes the original text payload; this does
+/// not turn a rendered native cause into structured fields at its producer.
 ///
 /// ```rust
 /// purrdf_lex::message_error! {
@@ -61,6 +63,17 @@ macro_rules! message_error {
         }
 
         impl ::core::error::Error for $name {}
+
+        impl $crate::error::StructuredError for $name {
+            fn visit<'error>(
+                &'error self,
+                visitor: &mut dyn $crate::error::ErrorVisitor<'error>,
+            ) {
+                let Self { detail } = self;
+                visitor.variant(concat!("message-", stringify!($name)));
+                visitor.value(Some("detail"), $crate::error::ErrorValue::Text(detail));
+            }
+        }
     };
 }
 

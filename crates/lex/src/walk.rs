@@ -797,6 +797,12 @@ pub enum DebugWriteError {
     /// Original work-list storage could not be grown.
     Storage(crate::allocation::StorageError),
 }
+impl crate::error::StructuredError for DebugWriteError {
+    purrdf_hash::error_visit! {
+        Format(cause) => "debug-format" { "cause" => Cause(cause) },
+        Storage(cause) => "debug-storage" { "cause" => Cause(cause) },
+    }
+}
 crate::variant_from!(DebugWriteError {
     Format(fmt::Error),
     Storage(crate::allocation::StorageError),
