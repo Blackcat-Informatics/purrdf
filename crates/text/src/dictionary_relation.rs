@@ -49,13 +49,19 @@ impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
     /// # Errors
     /// Refuses a predicate absent from the explicit index configuration.
     pub fn on_predicate(mut self, predicate: &TermValue) -> Result<Self, EvalError> {
-        let at = self
+        let Some(at) = self
             .index
             .config()
             .predicates()
             .iter()
             .position(|configured| configured == predicate)
-            .ok_or_else(|| EvalError::config("phrase predicate is not configured in the index"))?;
+        else {
+            let workspace = WorkspaceCapability::resident();
+            return Err(crate::relation::refusal::RelationRefusal::PhrasePredicate {
+                predicate: workspace.clone_term(predicate)?,
+            }
+            .into_eval(&workspace));
+        };
         self.predicate = Some(u32::try_from(at).map_err(|_| EvalError::WorkspaceBoundOverflow)?);
         Ok(self)
     }
@@ -195,19 +201,19 @@ fn plain_string(value: &TermValue) -> Option<&str> {
 }
 fn phrase<'a>(args: &PfArgs<'a>, workspace: &WorkspaceCapability) -> Result<&'a str, EvalError> {
     if args.arity() != PfArity::new(1, 4) {
-        return Err(purrdf_sparql_eval::NativeDiagnostic::error(
-            purrdf_sparql_eval::NativeDiagnosticKind::Function,
-            "phrase occurrence expects one subject and four object arguments",
-            workspace,
-        ));
+        return Err(crate::relation::refusal::RelationRefusal::PhraseArity {
+            supplied: args.arity(),
+        }
+        .into_eval(workspace));
     }
-    args.get(1).and_then(plain_string).ok_or_else(|| {
-        purrdf_sparql_eval::NativeDiagnostic::error(
-            purrdf_sparql_eval::NativeDiagnosticKind::Function,
-            "phrase occurrence requires a bound xsd:string phrase",
-            workspace,
-        )
-    })
+    if let Some(phrase) = args.get(1).and_then(plain_string) {
+        return Ok(phrase);
+    }
+    let value = args
+        .get(1)
+        .map(|value| workspace.clone_term(value))
+        .transpose()?;
+    Err(crate::relation::refusal::RelationRefusal::PhraseBinding { value }.into_eval(workspace))
 }
 #[derive(Debug)]
 struct Results<P: CorpusProfile> {

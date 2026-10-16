@@ -90,6 +90,14 @@ pub struct PfArity {
     pub object: usize,
 }
 
+impl purrdf_hash::error::StructuredError for PfArity {
+    purrdf_hash::error_visit! {
+        @record self { subject, object } => "property-function-arity" {
+            "subject" => Unsigned(self.subject as u128), "object" => Unsigned(self.object as u128),
+        }
+    }
+}
+
 impl PfArity {
     /// A declared arity of `subject` subject-side and `object` object-side arguments.
     #[must_use]
@@ -2548,15 +2556,17 @@ pub fn open_contained(
     )
     .and_then(WorkspaceCursor::into_resident)
     .map_err(|error| match error {
-        // This public resident boundary retains its documented legacy variants.
-        // Bounded execution calls the admitted checker directly and keeps its lease.
+        // Preserve native causes on the resident route as on bounded execution.
+        // Message-only diagnostics retain their documented legacy variants.
         EvalError::NativeDiagnostic(message)
-            if message.kind() == crate::NativeDiagnosticKind::Function =>
+            if message.kind() == crate::NativeDiagnosticKind::Function
+                && message.cause().is_none() =>
         {
             EvalError::function(message.message())
         }
         EvalError::NativeDiagnostic(message)
-            if message.kind() == crate::NativeDiagnosticKind::FunctionOperational =>
+            if message.kind() == crate::NativeDiagnosticKind::FunctionOperational
+                && message.cause().is_none() =>
         {
             EvalError::function_operational(message.message())
         }

@@ -227,11 +227,13 @@ impl Dictionary {
         workspace: &WorkspaceCapability,
     ) -> Result<DictionaryMatches<P>, EvalError> {
         if self.0.analyzer != index.analyzer_fingerprint() {
-            return Err(purrdf_sparql_eval::NativeDiagnostic::error(
-                purrdf_sparql_eval::NativeDiagnosticKind::Config,
-                "dictionary analyzer differs from index analyzer",
-                workspace,
-            ));
+            return Err(
+                crate::relation::refusal::RelationRefusal::DictionaryAnalyzer {
+                    expected: self.0.analyzer,
+                    actual: index.analyzer_fingerprint(),
+                }
+                .into_eval(workspace),
+            );
         }
         let mut result = DictionaryMatches {
             index,

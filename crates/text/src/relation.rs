@@ -39,7 +39,8 @@
 //! dataset are the same data, and that the configuration found that data rather
 //! than a misspelling of it — see [`verify_binding`].
 
-use crate::query_workspace::{QueryString, admitted, query_error};
+use crate::query_workspace::{QueryString, admitted};
+pub(crate) mod refusal;
 use crate::score::{
     CandidateSelection, distinct_terms_owned, matches_predicate, score_located_owned,
     select_counted_membership_owned,
@@ -48,6 +49,7 @@ use purrdf_sparql_eval::{
     AdmittedPfRow, AdmittedVec, NativeDiagnostic, NativeDiagnosticKind, WorkspaceCapability,
     WorkspaceCursor, WorkspaceTerm,
 };
+use refusal::{Invariant, RelationRefusal};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -155,24 +157,17 @@ fn needle_text_owned<'a>(
         {
             Ok(lexical_form)
         }
-        TermValue::Literal { datatype, .. } => Err(NativeDiagnostic::error(
-            NativeDiagnosticKind::Function,
-            format_args!(
-                "the needle at position {position} is a literal of datatype <{datatype}>; a text \
-             search reads a string, so the needle must be an xsd:string, rdf:langString or \
-             rdf:dirLangString"
-            ),
-            workspace,
-        )),
-        other => Err(NativeDiagnostic::error(
-            NativeDiagnosticKind::Function,
-            format_args!(
-                "the needle at position {position} is {}; only a literal carries text, so an \
-             IRI, a blank node or a triple term names nothing this relation can search for",
-                other.kind_description()
-            ),
-            workspace,
-        )),
+        TermValue::Literal { datatype, .. } => Err(RelationRefusal::NeedleDatatype {
+            position,
+            datatype: QueryString::copy(datatype, workspace)
+                .map_err(|error| error.into_eval_in(workspace))?,
+        }
+        .into_eval(workspace)),
+        other => Err(RelationRefusal::NeedleKind {
+            position,
+            value: workspace.clone_term(other)?,
+        }
+        .into_eval(workspace)),
     }
 }
 
@@ -197,16 +192,11 @@ fn language_constraint_owned<'a>(
         } else {
             Constraint::Exactly(lexical_form.as_str())
         }),
-        other => Err(NativeDiagnostic::error(
-            NativeDiagnosticKind::Function,
-            format_args!(
-                "the language at position {position} is {}; this relation emits an xsd:string \
-             there — the tag itself, or the empty string for an untagged document — so nothing \
-             else can name a language",
-                other.kind_description()
-            ),
-            workspace,
-        )),
+        other => Err(RelationRefusal::LanguageKind {
+            position,
+            value: workspace.clone_term(other)?,
+        }
+        .into_eval(workspace)),
     }
 }
 
@@ -265,47 +255,35 @@ fn rank_bound_owned(
         ..
     } = value
     else {
-        return Err(NativeDiagnostic::error(
-            NativeDiagnosticKind::Function,
-            format_args!(
-                "the rank at position {SEARCH_RANK} is {}; a rank is a 1-based position, which \
-             only an xsd:integer literal can name",
-                value.kind_description()
-            ),
-            workspace,
-        ));
+        return Err(RelationRefusal::RankKind {
+            value: workspace.clone_term(value)?,
+        }
+        .into_eval(workspace));
     };
     if datatype != XSD_INTEGER {
-        return Err(NativeDiagnostic::error(
-            NativeDiagnosticKind::Function,
-            format_args!(
-                "the rank at position {SEARCH_RANK} is a literal of datatype <{datatype}>; this \
-             relation emits an xsd:integer there, so only an xsd:integer can name a rank"
-            ),
-            workspace,
-        ));
+        return Err(RelationRefusal::RankDatatype {
+            datatype: QueryString::copy(datatype, workspace)
+                .map_err(|error| error.into_eval_in(workspace))?,
+        }
+        .into_eval(workspace));
     }
     let Some((negative, digits)) = xsd_integer_parts(lexical_form) else {
-        return Err(NativeDiagnostic::error(
-            NativeDiagnosticKind::Function,
-            format_args!(
-                "the rank at position {SEARCH_RANK} has lexical form {lexical_form:?}, which is not in \
-             the lexical space of xsd:integer (an optional sign followed by one or more digits)"
-            ),
-            workspace,
-        ));
+        return Err(RelationRefusal::RankLexical {
+            lexical: QueryString::copy(lexical_form, workspace)
+                .map_err(|error| error.into_eval_in(workspace))?,
+        }
+        .into_eval(workspace));
     };
     // `digits` has had its leading zeros stripped, so it is empty exactly when
     // the value is zero — whatever sign was written in front of it.
     if digits.is_empty() || negative {
-        return Err(NativeDiagnostic::error(
-            NativeDiagnosticKind::Function,
-            format_args!(
-                "the rank at position {SEARCH_RANK} is {lexical_form}; ranks are 1-based, so zero and \
-             every negative value are outside the domain rather than an empty answer within it"
-            ),
-            workspace,
-        ));
+        return Err(RelationRefusal::RankNonpositive {
+            lexical: QueryString::copy(lexical_form, workspace)
+                .map_err(|error| error.into_eval_in(workspace))?,
+            negative,
+            zero: digits.is_empty(),
+        }
+        .into_eval(workspace));
     }
     // Strictly positive from here, so the only question left is whether it names
     // a position an index can number. One that does not is a question the index
@@ -322,18 +300,19 @@ fn rank_bound_owned(
 fn check_arity_owned(
     args: &PfArgs<'_>,
     declared: PfArity,
-    what: &str,
+    what: &'static str,
     workspace: &WorkspaceCapability,
 ) -> Result<(), EvalError> {
     let supplied = args.arity();
     if supplied == declared {
         return Ok(());
     }
-    Err(NativeDiagnostic::error(
-        NativeDiagnosticKind::Function,
-        format_args!("the {what} relation expects {declared} argument(s), got {supplied}"),
-        workspace,
-    ))
+    Err(RelationRefusal::Arity {
+        relation: what,
+        declared,
+        supplied,
+    }
+    .into_eval(workspace))
 }
 
 fn bound_terms(
@@ -1169,12 +1148,17 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                 && matches_predicate(&self.index, document, terms.iter().copied(), predicate)?
             {
                 let partition = self.index.partition_ordinal_of(document).ok_or_else(|| {
-                    query_error(
-                        workspace,
+                    match admitted(NativeDiagnostic::render_cause(
                         NativeDiagnosticKind::Internal,
-                        format_args!("text index document {document} has no partition"),
-                    )
-                    .unwrap_or_else(|failure| failure)
+                        RelationRefusal::Invariant {
+                            reason: Invariant::DocumentPartition,
+                            document,
+                        },
+                        workspace,
+                    )) {
+                        Ok(diagnostic) => TextError::Diagnostic(diagnostic),
+                        Err(error) => error,
+                    }
                 })?;
                 admitted(held.push(Holding {
                     document,
@@ -1288,11 +1272,11 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                         return Ok(false);
                     }
                     let source = self.index.document(document).ok_or_else(|| {
-                        NativeDiagnostic::error(
-                            NativeDiagnosticKind::Internal,
-                            "text candidate is absent from its original index",
-                            workspace,
-                        )
+                        RelationRefusal::Invariant {
+                            reason: Invariant::CandidateDocument,
+                            document,
+                        }
+                        .into_eval(workspace)
                     })?;
                     let evidence = selection
                         .scope
@@ -1324,11 +1308,11 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                 .index
                 .partition_ordinal_of(row.document)
                 .ok_or_else(|| {
-                    NativeDiagnostic::error(
-                        NativeDiagnosticKind::Internal,
-                        "scoped text row lost its original partition",
-                        workspace,
-                    )
+                    RelationRefusal::Invariant {
+                        reason: Invariant::ScopedPartition,
+                        document: row.document,
+                    }
+                    .into_eval(workspace)
                 })?;
             if partition != Some(key) {
                 partition = Some(key);
@@ -1337,11 +1321,11 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
             let declaration = declarations
                 .binary_search_by_key(&row.document, |entry| entry.0)
                 .map_err(|_| {
-                    NativeDiagnostic::error(
-                        NativeDiagnosticKind::Internal,
-                        "scoped text row lost its original declaration",
-                        workspace,
-                    )
+                    RelationRefusal::Invariant {
+                        reason: Invariant::ScopedDeclaration,
+                        document: row.document,
+                    }
+                    .into_eval(workspace)
                 })?;
             let Some(evidence) = &declarations[declaration].1 else {
                 continue;
@@ -1397,18 +1381,12 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     ) -> Result<WorkspaceCursor, EvalError> {
         let to_eval = |error: TextError| error.into_eval_in(&workspace);
         check_arity_owned(args, self.arity(), "text search", &workspace)?;
-        let needle = args.get(SEARCH_NEEDLE).ok_or_else(|| NativeDiagnostic::error(NativeDiagnosticKind::Function,
-            format_args!("the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
-                for a needle and cannot enumerate needles for a document, which is why both of \
-                its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"), &workspace))?;
+        let needle = args
+            .get(SEARCH_NEEDLE)
+            .ok_or_else(|| RelationRefusal::SearchUnbound.into_eval(&workspace))?;
         let query = match needle {
-            TermValue::Triple { .. } => LexicalQuery::decode(needle).map_err(|error| {
-                NativeDiagnostic::error(
-                    NativeDiagnosticKind::Function,
-                    format_args!("{error}"),
-                    &workspace,
-                )
-            })?,
+            TermValue::Triple { .. } => LexicalQuery::decode(needle)
+                .map_err(|error| RelationRefusal::Scope(error).into_eval(&workspace))?,
             _ => LexicalQuery {
                 needle,
                 predicate: None,
@@ -1422,11 +1400,10 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                 .binary_search(predicate)
                 .is_err()
         {
-            return Err(NativeDiagnostic::error(
-                NativeDiagnosticKind::Function,
-                format_args!("field scope predicate is not selected by this text index"),
-                &workspace,
-            ));
+            return Err(RelationRefusal::FieldScope {
+                predicate: workspace.clone_term(predicate)?,
+            }
+            .into_eval(&workspace));
         }
         let text = needle_text_owned(query.needle, SEARCH_NEEDLE, &workspace)?;
         let rank = args
@@ -1467,11 +1444,11 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                     let mut selected = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
                     for holding in holdings {
                         let document = self.index.document(holding.document).ok_or_else(|| {
-                            NativeDiagnostic::error(
-                                NativeDiagnosticKind::Internal,
-                                "bound text holding lost its original document",
-                                &workspace,
-                            )
+                            RelationRefusal::Invariant {
+                                reason: Invariant::HoldingDocument,
+                                document: holding.document,
+                            }
+                            .into_eval(&workspace)
                         })?;
                         if let Some(evidence) = scope
                             .decide(document.subject(), &workspace)?
@@ -1803,14 +1780,10 @@ struct SearchCursor<P: CorpusProfile = GraphLanguage> {
 impl<P: CorpusProfile> SearchCursor<P> {
     fn build(&self, hit: &Hit) -> Result<AdmittedPfRow, EvalError> {
         let document = self.index.document(hit.document).ok_or_else(|| {
-            NativeDiagnostic::error(
-                NativeDiagnosticKind::Data,
-                format_args!(
-                    "a scored row named document {}, which the index does not hold",
-                    hit.document
-                ),
-                &self.workspace,
-            )
+            RelationRefusal::ScoredDocument {
+                document: hit.document,
+            }
+            .into_eval(&self.workspace)
         })?;
         let needle = self.bound[SEARCH_NEEDLE]
             .as_ref()
@@ -1833,18 +1806,18 @@ impl<P: CorpusProfile> SearchCursor<P> {
             .declarations
             .binary_search_by_key(&hit.document, |entry| entry.0)
             .map_err(|_| {
-                NativeDiagnostic::error(
-                    NativeDiagnosticKind::Internal,
-                    "text cursor lost its original scoped declaration",
-                    &self.workspace,
-                )
+                RelationRefusal::Invariant {
+                    reason: Invariant::CursorDeclaration,
+                    document: hit.document,
+                }
+                .into_eval(&self.workspace)
             })?;
         let evidence = self.declarations[declaration].1.as_ref().ok_or_else(|| {
-            NativeDiagnostic::error(
-                NativeDiagnosticKind::Internal,
-                "text cursor published a rejected scoped candidate",
-                &self.workspace,
-            )
+            RelationRefusal::Invariant {
+                reason: Invariant::RejectedCandidate,
+                document: hit.document,
+            }
+            .into_eval(&self.workspace)
         })?;
         Ok(row.with_evidence(evidence.clone()))
     }
@@ -2101,17 +2074,9 @@ impl<P: CorpusProfile> TermOccurrenceRelation<P> {
         workspace: WorkspaceCapability,
     ) -> Result<WorkspaceCursor, EvalError> {
         check_arity_owned(args, self.arity(), "term occurrence", &workspace)?;
-        let needle = args.get(OCCURRENCE_TERM).ok_or_else(|| {
-            NativeDiagnostic::error(
-                NativeDiagnosticKind::Function,
-                format_args!(
-                    "the term at position {OCCURRENCE_TERM} is free; this relation enumerates the \
-                occurrences of a term and cannot enumerate terms, which is why its only declared \
-                mode is `{OCCURRENCE_MODE}`"
-                ),
-                &workspace,
-            )
-        })?;
+        let needle = args
+            .get(OCCURRENCE_TERM)
+            .ok_or_else(|| RelationRefusal::OccurrenceUnbound.into_eval(&workspace))?;
         let text = needle_text_owned(needle, OCCURRENCE_TERM, &workspace)?;
         let language = args
             .get(OCCURRENCE_LANG)
@@ -2127,18 +2092,12 @@ impl<P: CorpusProfile> TermOccurrenceRelation<P> {
             .query_terms_owned(text, &workspace)
             .map_err(|error| error.into_eval_in(&workspace))?;
         if analyzed.len() > 1 {
-            return Err(NativeDiagnostic::error(
-                NativeDiagnosticKind::Function,
-                format_args!(
-                    "the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \
-                    {count} terms ({analyzed_terms:?}); this relation matches ONE term per invocation by \
-                    contract, so a multi-term needle is written as one call per term joined on the \
-                    document position",
-                    count = analyzed.len(),
-                    analyzed_terms = &*analyzed
-                ),
-                &workspace,
-            ));
+            return Err(RelationRefusal::OccurrenceTerms {
+                text: QueryString::copy(text, &workspace)
+                    .map_err(|error| error.into_eval_in(&workspace))?,
+                analyzed,
+            }
+            .into_eval(&workspace));
         }
         let mut partitions = AdmittedVec::new(&workspace);
         if analyzed.first().is_some_and(|term| !term.is_empty()) {
@@ -2308,11 +2267,7 @@ struct OccurrenceCursor<P: CorpusProfile = GraphLanguage> {
 impl<P: CorpusProfile> OccurrenceCursor<P> {
     fn build(&self, document: u32, position: u32) -> Result<AdmittedPfRow, EvalError> {
         let held = self.index.document(document).ok_or_else(|| {
-            NativeDiagnostic::error(
-                NativeDiagnosticKind::Data,
-                format_args!("a posting named document {document}, which the index does not hold"),
-                &self.workspace,
-            )
+            RelationRefusal::PostingDocument { document }.into_eval(&self.workspace)
         })?;
         let needle = self.bound[OCCURRENCE_TERM]
             .as_ref()

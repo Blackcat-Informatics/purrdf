@@ -640,6 +640,243 @@ fn search_input_refusals_keep_actual_cardinality_and_observed_scalar_limit() {
     assert!(index.substring_exhaustive("healthy").is_ok());
 }
 
+fn relation_failures_retain_native_terms_rank_flags_arities_and_query_owners() {
+    use purrdf_core::{RdfDatasetBuilder, TermValue, datatype::XSD_INTEGER};
+    use purrdf_sparql_eval::{PfArgs, PropertyFunction};
+    use purrdf_text::{
+        GraphSelector, TermOccurrenceRelation, TextIndex, TextIndexConfig, TextSearchRelation,
+    };
+    let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri("https://example.org/p")],
+        GraphSelector::Default,
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    let index = std::sync::Arc::new(TextIndex::from_dataset(&dataset, &config).unwrap());
+    let search = TextSearchRelation::new(index.clone());
+    let occurrence = TermOccurrenceRelation::new(index);
+    let fail = |relation: &dyn PropertyFunction, args: &[Option<&TermValue>]| {
+        let (subject, object) = args.split_at(1);
+        match relation.open(&PfArgs::new(subject, object), None) {
+            Err(error) => error,
+            Ok(_) => panic!("the invalid invocation must refuse"),
+        }
+    };
+    let integer = TermValue::typed_literal("3", XSD_INTEGER);
+    let iri = TermValue::iri("https://example.org/input");
+    let text = TermValue::simple_literal("alpha");
+    for (value, code) in [
+        (&integer, "text-call-needle-datatype"),
+        (&iri, "text-call-needle-kind"),
+    ] {
+        let error = fail(&search, &[None, Some(value), None, None, None, None]);
+        let cause = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(cause.code, code);
+        assert!(matches!(cause.field("position"), ErrorValue::Unsigned(1)));
+        if code == "text-call-needle-datatype" {
+            assert!(
+                matches!(cause.field("datatype"), ErrorValue::Iri(value) if value == XSD_INTEGER)
+            );
+        } else {
+            assert!(matches!(
+                cause.child("value").field("iri"),
+                ErrorValue::Iri("https://example.org/input")
+            ));
+        }
+    }
+    let rank = TermValue::typed_literal("-00042", XSD_INTEGER);
+    let error = fail(&search, &[None, Some(&text), None, Some(&rank), None, None]);
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-rank-nonpositive");
+    assert!(matches!(cause.field("lexical"), ErrorValue::Text("-00042")));
+    assert!(matches!(cause.field("negative"), ErrorValue::Boolean(true)));
+    assert!(matches!(cause.field("zero"), ErrorValue::Boolean(false)));
+    for (rank, code) in [
+        (iri.clone(), "text-call-rank-kind"),
+        (text.clone(), "text-call-rank-datatype"),
+        (
+            TermValue::typed_literal("1e3", XSD_INTEGER),
+            "text-call-rank-lexical",
+        ),
+        (
+            TermValue::typed_literal("-0", XSD_INTEGER),
+            "text-call-rank-nonpositive",
+        ),
+    ] {
+        let error = fail(&search, &[None, Some(&text), None, Some(&rank), None, None]);
+        let cause = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(cause.code, code);
+        assert!(matches!(cause.field("position"), ErrorValue::Unsigned(3)));
+        if code == "text-call-rank-nonpositive" {
+            assert!(matches!(cause.field("negative"), ErrorValue::Boolean(true)));
+            assert!(matches!(cause.field("zero"), ErrorValue::Boolean(true)));
+        }
+    }
+    let error = fail(&search, &[None, Some(&text), None, None, Some(&iri), None]);
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-language-kind");
+    assert!(matches!(cause.field("position"), ErrorValue::Unsigned(4)));
+    assert_eq!(cause.child("value").code, "rdf-term-iri");
+    for (relation, args, code) in [
+        (
+            &search as &dyn PropertyFunction,
+            vec![None; 6],
+            "text-call-search-unbound",
+        ),
+        (
+            &occurrence as &dyn PropertyFunction,
+            vec![None; 4],
+            "text-call-occurrence-unbound",
+        ),
+    ] {
+        let error = fail(relation, &args);
+        assert_eq!(
+            Capture::read(&error).child("cause").child("cause").code,
+            code
+        );
+    }
+    let error = fail(&search, &[None, Some(&text)]);
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-arity");
+    assert!(matches!(
+        cause.child("declared").field("object"),
+        ErrorValue::Unsigned(5)
+    ));
+    assert!(matches!(
+        cause.child("supplied").field("object"),
+        ErrorValue::Unsigned(1)
+    ));
+    let words = TermValue::simple_literal("ALPHA beta");
+    let error = fail(&occurrence, &[None, Some(&words), None, None]);
+    let clone = error.clone();
+    drop(error);
+    let cause = Capture::read(&clone).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-occurrence-terms");
+    assert!(matches!(
+        cause.field("text"),
+        ErrorValue::Text("ALPHA beta")
+    ));
+    assert!(matches!(cause.field("count"), ErrorValue::Unsigned(2)));
+    let terms: Vec<_> = cause
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Value(None, ErrorValue::Text(term)) => Some(*term),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(terms, ["alpha", "beta"]);
+    let scoped =
+        purrdf_core::query_scope::LexicalQuery::encode(text.clone(), Some(iri.clone())).unwrap();
+    let error = fail(&search, &[None, Some(&scoped), None, None, None, None]);
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-field-scope");
+    assert!(matches!(
+        cause.child("predicate").field("iri"),
+        ErrorValue::Iri("https://example.org/input")
+    ));
+    let malformed = TermValue::Triple {
+        s: purrdf_core::TermBox::new(iri.clone()),
+        p: purrdf_core::TermBox::new(iri.clone()),
+        o: purrdf_core::TermBox::new(text),
+    };
+    let error = fail(&search, &[None, Some(&malformed), None, None, None, None]);
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-lexical-scope");
+    assert_eq!(cause.child("cause").code, "lexical-scope-invalid-encoding");
+    let subject = [None];
+    let object = [Some(&iri), None, None, None, None];
+    let Err(error) = purrdf_sparql_eval::property_fn::open_contained(
+        &search,
+        "https://example.org/search",
+        &PfArgs::new(&subject, &object),
+        None,
+    ) else {
+        panic!("a nonliteral needle must refuse at the public contained boundary");
+    };
+    assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-needle-kind");
+    assert!(matches!(
+        cause.child("value").field("iri"),
+        ErrorValue::Iri("https://example.org/input")
+    ));
+}
+
+fn phrase_and_dictionary_refusals_keep_registration_input_and_analyzer_identities() {
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_sparql_eval::{PfArgs, PropertyFunction};
+    use purrdf_text::{
+        AccentFold, GraphSelector, PhraseOccurrenceRelation, TextIndex, TextIndexConfig,
+    };
+    let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let analyzer = Analyzer::empty_lexicon();
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri("https://example.org/p")],
+        GraphSelector::Default,
+        analyzer,
+    )
+    .unwrap();
+    let index = std::sync::Arc::new(TextIndex::from_dataset(&dataset, &config).unwrap());
+    let phrase = PhraseOccurrenceRelation::new(index.clone());
+    let iri = TermValue::iri("https://example.org/invalid");
+    let subject = [None];
+    for value in [None, Some(&iri)] {
+        let object = [value, None, None, None];
+        let error = phrase
+            .open(&PfArgs::new(&subject, &object), None)
+            .err()
+            .expect("a phrase requires a plain bound string");
+        let cause = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(cause.code, "text-call-phrase-binding");
+        if value.is_some() {
+            assert_eq!(cause.child("value").code, "rdf-term-iri");
+        } else {
+            assert!(matches!(cause.field("value"), ErrorValue::Absent));
+        }
+    }
+    let error = phrase
+        .open(&PfArgs::new(&subject, &[]), None)
+        .err()
+        .expect("the phrase arity is explicit");
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-phrase-arity");
+    assert!(matches!(
+        cause.child("supplied").field("object"),
+        ErrorValue::Unsigned(0)
+    ));
+    let error = phrase.on_predicate(&iri).unwrap_err();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-phrase-predicate");
+    assert!(matches!(
+        cause.child("predicate").field("iri"),
+        ErrorValue::Iri("https://example.org/invalid")
+    ));
+    let workspace = WorkspaceCapability::resident();
+    let dictionary = purrdf_text::dictionary::Dictionary::compile(&index, &[], &workspace).unwrap();
+    let other_config = TextIndexConfig::new(
+        config.predicates().to_vec(),
+        GraphSelector::Default,
+        Analyzer::with_profile(
+            AnalyzerProfile::empty_lexicon().with_accent_fold(AccentFold::Preserve),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let other = std::sync::Arc::new(TextIndex::from_dataset(&dataset, &other_config).unwrap());
+    let expected = config.analyzer().fingerprint();
+    let actual = other_config.analyzer().fingerprint();
+    assert_ne!(expected, actual);
+    let error = dictionary
+        .scan(other, None, &workspace)
+        .expect_err("even an empty dictionary retains its analyzer law");
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-call-dictionary-analyzer");
+    assert!(matches!(cause.field("expected"), ErrorValue::Bytes(value) if value == expected));
+    assert!(matches!(cause.field("actual"), ErrorValue::Bytes(value) if value == actual));
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
@@ -660,4 +897,6 @@ purrdf_testkit::harness_main!(
     dictionary_artifact_refusals_keep_original_identity_header_and_utf8_values,
     binding_configuration_failure_retains_both_semantic_configurations,
     search_input_refusals_keep_actual_cardinality_and_observed_scalar_limit,
+    relation_failures_retain_native_terms_rank_flags_arities_and_query_owners,
+    phrase_and_dictionary_refusals_keep_registration_input_and_analyzer_identities,
 );
