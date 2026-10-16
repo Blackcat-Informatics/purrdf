@@ -40,6 +40,7 @@
 //! home and return to [`Fixed`] under their prepared query's score certificate.
 //! Neither path wraps or saturates a score.
 
+use crate::arithmetic::ArithmeticRefusal;
 use crate::query_workspace::arithmetic_error;
 use purrdf_sparql_eval::WorkspaceCapability;
 use purrdf_xsd::{exact::Integer, wide::mul_div};
@@ -138,13 +139,7 @@ impl Fixed {
         i128::from(value)
             .checked_mul(SCALE)
             .map(Self)
-            .ok_or_else(|| {
-                arithmetic_error(
-                    false,
-                    format_args!("{value} does not fit the fixed-point range"),
-                    workspace,
-                )
-            })
+            .ok_or_else(|| arithmetic_error(ArithmeticRefusal::FromInteger { value }, workspace))
     }
 
     /// Reinterpret a raw integer as a fixed-point number: the result denotes
@@ -170,7 +165,13 @@ impl Fixed {
         workspace: Option<&WorkspaceCapability>,
     ) -> Result<Self, TextError> {
         self.0.checked_add(other.0).map(Self).ok_or_else(|| {
-            arithmetic_error(false, "addition left the fixed-point range", workspace)
+            arithmetic_error(
+                ArithmeticRefusal::Add {
+                    left: self.0,
+                    right: other.0,
+                },
+                workspace,
+            )
         })
     }
 
@@ -186,7 +187,13 @@ impl Fixed {
         workspace: Option<&WorkspaceCapability>,
     ) -> Result<Self, TextError> {
         self.0.checked_sub(other.0).map(Self).ok_or_else(|| {
-            arithmetic_error(false, "subtraction left the fixed-point range", workspace)
+            arithmetic_error(
+                ArithmeticRefusal::Subtract {
+                    left: self.0,
+                    right: other.0,
+                },
+                workspace,
+            )
         })
     }
 
@@ -208,8 +215,10 @@ impl Fixed {
     ) -> Result<Self, TextError> {
         product_ratio(self.0, other.0, SCALE).ok_or_else(|| {
             arithmetic_error(
-                false,
-                "multiplication left the fixed-point range",
+                ArithmeticRefusal::Multiply {
+                    left: self.0,
+                    right: other.0,
+                },
                 workspace,
             )
         })
@@ -233,10 +242,19 @@ impl Fixed {
         workspace: Option<&WorkspaceCapability>,
     ) -> Result<Self, TextError> {
         if other.0 == 0 {
-            return Err(arithmetic_error(true, "division by zero", workspace));
+            return Err(arithmetic_error(
+                ArithmeticRefusal::DivisionByZero,
+                workspace,
+            ));
         }
         product_ratio(self.0, SCALE, other.0).ok_or_else(|| {
-            arithmetic_error(false, "division left the fixed-point range", workspace)
+            arithmetic_error(
+                ArithmeticRefusal::Divide {
+                    left: self.0,
+                    right: other.0,
+                },
+                workspace,
+            )
         })
     }
 
@@ -273,11 +291,7 @@ impl Fixed {
     ) -> Result<Self, TextError> {
         if self.0 <= 0 {
             return Err(arithmetic_error(
-                true,
-                format_args!(
-                    "ln is undefined at {}, which is not positive",
-                    self.decimal_display()
-                ),
+                ArithmeticRefusal::LogDomain { raw: self.0 },
                 workspace,
             ));
         }
@@ -296,15 +310,23 @@ impl Fixed {
         };
         let mantissa_magnitude = mul_div(raw, numerator, denominator).ok_or_else(|| {
             arithmetic_error(
-                false,
-                "range reduction left the fixed-point range",
+                ArithmeticRefusal::RangeReduction {
+                    raw,
+                    numerator,
+                    denominator,
+                    mantissa: None,
+                },
                 workspace,
             )
         })?;
         let mantissa = i128::try_from(mantissa_magnitude).map_err(|_| {
             arithmetic_error(
-                false,
-                "range reduction left the fixed-point range",
+                ArithmeticRefusal::RangeReduction {
+                    raw,
+                    numerator,
+                    denominator,
+                    mantissa: Some(mantissa_magnitude),
+                },
                 workspace,
             )
         })?;
@@ -328,7 +350,14 @@ impl Fixed {
             .checked_mul(LN2_INTERNAL)
             .and_then(|scaled| scaled.checked_add(ln_mantissa))
             .ok_or_else(|| {
-                arithmetic_error(false, "logarithm left the fixed-point range", workspace)
+                arithmetic_error(
+                    ArithmeticRefusal::LogOverflow {
+                        raw: self.0,
+                        exponent,
+                        ln_mantissa,
+                    },
+                    workspace,
+                )
             })?;
 
         // The one and only rounding.
@@ -394,10 +423,19 @@ fn product_ratio(left: i128, right: i128, divisor: i128) -> Option<Fixed> {
 /// Ranking intermediates at the same scale as Fixed. The existing exact
 /// Integer owns the canonical i128/BigInt representation; this adapter supplies
 /// only the original scaling and rounding boundaries, not an integer engine.
+#[derive(Debug)]
 pub(crate) struct Scaled {
     value: Integer,
     // The numeric payload dies before its original destination grant.
     _allocation: Option<purrdf_sparql_eval::WorkspaceAllocation>,
+}
+
+impl purrdf_hash::error::StructuredError for Scaled {
+    purrdf_hash::error_visit! {
+        @record self { value, _allocation } => "text-scaled-integer" {
+            "raw" => Record(&self.value), "scale_digits" => Unsigned(u128::from(SCALE_DIGITS)),
+        }
+    }
 }
 
 impl Scaled {
@@ -496,7 +534,10 @@ impl Scaled {
         workspace: Option<&WorkspaceCapability>,
     ) -> Result<Self, TextError> {
         if other.value.is_zero() {
-            return Err(arithmetic_error(true, "division by zero", workspace));
+            return Err(arithmetic_error(
+                ArithmeticRefusal::DivisionByZero,
+                workspace,
+            ));
         }
         Self::quotient_product(
             &self.value,
@@ -510,10 +551,13 @@ impl Scaled {
         self,
         workspace: Option<&WorkspaceCapability>,
     ) -> Result<Fixed, TextError> {
-        self.value
-            .as_i128()
-            .map(Fixed::from_raw)
-            .ok_or_else(|| arithmetic_error(false, "result left the fixed-point range", workspace))
+        match self.value.as_i128() {
+            Some(raw) => Ok(Fixed::from_raw(raw)),
+            None => Err(arithmetic_error(
+                ArithmeticRefusal::Narrow { value: self },
+                workspace,
+            )),
+        }
     }
 
     /// Stay on the existing wide kernel when the rounded result fits, even if
@@ -552,8 +596,8 @@ impl Scaled {
                     purrdf_xsd::exact::ExactOperationError::Storage(error) => {
                         Self::storage_error(error)
                     }
-                    purrdf_xsd::exact::ExactOperationError::Value(_) => {
-                        arithmetic_error(true, "division by zero", workspace)
+                    purrdf_xsd::exact::ExactOperationError::Value(error) => {
+                        arithmetic_error(ArithmeticRefusal::Exact(error), workspace)
                     }
                 })?;
         drop(remainder);
@@ -609,6 +653,40 @@ impl Fixed {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn promoted_narrowing_failure_retains_the_original_integer_buffer() {
+        use super::*;
+        use purrdf_testkit::error_capture::{Capture, Event};
+        let maximum = Scaled::from_fixed(Fixed::from_raw(i128::MAX));
+        let product = maximum.mul(&maximum, None).unwrap();
+        let original = product.value.bigint_operand();
+        assert!(original.limbs().len() > 3);
+        let pointer = original.limbs().as_ptr();
+        let limbs = original.limbs().to_vec();
+        drop(original);
+        let TextError::Overflow(diagnostic) = product.into_fixed(None).unwrap_err() else {
+            panic!("narrowing overflow")
+        };
+        let native: &(dyn std::error::Error + 'static) = diagnostic.cause().unwrap();
+        let ArithmeticRefusal::Narrow { value } =
+            native.downcast_ref::<ArithmeticRefusal>().unwrap()
+        else {
+            panic!("original promoted value")
+        };
+        let retained = value.value.bigint_operand();
+        assert_eq!(pointer, retained.limbs().as_ptr());
+        assert_eq!(limbs, retained.limbs());
+        let clone = diagnostic.clone();
+        drop(diagnostic);
+        let captured = Capture::read(&clone)
+            .child("cause")
+            .child("value")
+            .child("raw")
+            .child("value");
+        assert!(
+            matches!(captured.events.get(1), Some(Event::BeginList(Some("limbs"), count)) if *count == limbs.len())
+        );
+    }
 
     use super::{Fixed, SCALE, SCALE_DIGITS, binade};
     use crate::error::TextError;

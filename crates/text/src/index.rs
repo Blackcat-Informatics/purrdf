@@ -973,8 +973,12 @@ impl<P: CorpusProfile> TextIndex<P> {
             input.term_frequency =
                 input.term_frequency.checked_add(frequency).ok_or_else(|| {
                     crate::query_workspace::arithmetic_error(
-                        false,
-                        "merged field term frequency exceeds u64",
+                        crate::arithmetic::ArithmeticRefusal::FieldFrequency {
+                            document,
+                            predicate,
+                            current: input.term_frequency,
+                            added: frequency,
+                        },
                         workspace,
                     )
                 })?;
@@ -1013,9 +1017,16 @@ impl<P: CorpusProfile> TextIndex<P> {
             let mut lengths = vec![0_u64; self.ranking.fields().len()];
             for &(predicate, length) in &document.predicate_lengths {
                 let field = self.predicate_fields[predicate as usize];
-                lengths[field] = lengths[field]
-                    .checked_add(length)
-                    .ok_or_else(|| TextError::overflow("merged field length exceeds u64"))?;
+                lengths[field] = lengths[field].checked_add(length).ok_or_else(|| {
+                    crate::query_workspace::arithmetic_error(
+                        crate::arithmetic::ArithmeticRefusal::FieldLength {
+                            field,
+                            current: lengths[field],
+                            added: length,
+                        },
+                        None,
+                    )
+                })?;
             }
             for ((total, population), &length) in self.field_totals[document.partition as usize]
                 .iter_mut()
@@ -1338,7 +1349,10 @@ impl<P: CorpusProfile> TextIndex<P> {
                 TextError::config("field scope predicate is not selected by this text index")
             })?;
         let ordinal = u32::try_from(ordinal).map_err(|_| {
-            TextError::overflow("field scope predicate ordinal exceeds index representation")
+            crate::query_workspace::arithmetic_error(
+                crate::arithmetic::ArithmeticRefusal::PredicateOrdinal { ordinal },
+                None,
+            )
         })?;
         Ok(self
             .document_posting(id, term)

@@ -180,26 +180,23 @@ pub(crate) fn data_error(
 }
 
 pub(crate) fn arithmetic_error(
-    domain: bool,
-    message: impl core::fmt::Display,
+    cause: crate::arithmetic::ArithmeticRefusal,
     workspace: Option<&WorkspaceCapability>,
 ) -> TextError {
-    let Some(workspace) = workspace else {
-        return if domain {
-            TextError::domain(message.to_string())
-        } else {
-            TextError::overflow(message.to_string())
-        };
-    };
-    let label = if domain {
-        "fixed-point domain error"
-    } else {
-        "fixed-point overflow"
-    };
-    query_error(
-        workspace,
+    let domain = cause.is_domain();
+    let resident = WorkspaceCapability::resident();
+    match admitted(purrdf_sparql_eval::NativeDiagnostic::render_cause(
         purrdf_sparql_eval::NativeDiagnosticKind::Function,
-        format_args!("{label}: {message}"),
-    )
-    .unwrap_or_else(|failure| failure)
+        cause,
+        workspace.unwrap_or(&resident),
+    )) {
+        Ok(diagnostic) => {
+            if domain {
+                TextError::Domain(diagnostic)
+            } else {
+                TextError::Overflow(diagnostic)
+            }
+        }
+        Err(error) => error,
+    }
 }

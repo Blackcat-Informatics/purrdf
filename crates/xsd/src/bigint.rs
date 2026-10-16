@@ -694,6 +694,15 @@ pub struct BigInt {
     magnitude: Mag,
 }
 
+impl purrdf_hash::error::StructuredError for BigInt {
+    purrdf_hash::error_visit! {
+        @record self { negative, magnitude } => "xsd-binary-integer" {
+            "negative" => Boolean(self.negative),
+            "limbs" => List(self.limbs().iter().map(|&limb| purrdf_hash::error::ErrorValue::Unsigned(u128::from(limb)))),
+        }
+    }
+}
+
 impl BigInt {
     /// The value zero.
     #[must_use]

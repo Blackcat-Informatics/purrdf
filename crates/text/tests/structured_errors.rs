@@ -149,9 +149,94 @@ fn wide_substring_fields_are_not_narrowed_by_native_cause_transport() {
     );
 }
 
+fn fixed_arithmetic_failures_keep_original_raw_operands_and_domain_values() {
+    use purrdf_text::Fixed;
+    let maximum = Fixed::from_raw(i128::MAX);
+    let minimum = Fixed::from_raw(i128::MIN);
+    for (result, code, left, right) in [
+        (
+            maximum.checked_add(Fixed::ONE),
+            "text-fixed-add-overflow",
+            i128::MAX,
+            Fixed::ONE.into_raw(),
+        ),
+        (
+            minimum.checked_sub(Fixed::ONE),
+            "text-fixed-subtract-overflow",
+            i128::MIN,
+            Fixed::ONE.into_raw(),
+        ),
+        (
+            maximum.checked_mul(maximum),
+            "text-fixed-multiply-overflow",
+            i128::MAX,
+            i128::MAX,
+        ),
+        (
+            maximum.checked_div(Fixed::from_raw(1)),
+            "text-fixed-divide-overflow",
+            i128::MAX,
+            1,
+        ),
+    ] {
+        let original = result.unwrap_err();
+        assert!(matches!(&original, TextError::Overflow(_)));
+        let error: EvalError = original.into();
+        let cause = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(cause.code, code);
+        assert!(matches!(cause.field("left_raw"), ErrorValue::Signed(value) if value == left));
+        assert!(matches!(cause.field("right_raw"), ErrorValue::Signed(value) if value == right));
+    }
+    for (result, code, field, raw) in [
+        (
+            Fixed::ONE.checked_div(Fixed::ZERO),
+            "text-fixed-division-by-zero",
+            "divisor_raw",
+            0,
+        ),
+        (minimum.ln(), "text-fixed-log-domain", "raw", i128::MIN),
+    ] {
+        let original = result.unwrap_err();
+        assert!(matches!(&original, TextError::Domain(_)));
+        let error: EvalError = original.into();
+        let cause = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(cause.code, code);
+        assert!(matches!(cause.field(field), ErrorValue::Signed(value) if value == raw));
+    }
+}
+
+fn exact_integer_records_preserve_all_binary_limbs_without_rendering() {
+    use purrdf_xsd::exact::Integer;
+    // (2^127 - 1)^2 = 2^254 - 2^128 + 1, in base 2^64.
+    let value = Integer::from_i128(i128::MAX)
+        .try_mul(&Integer::from_i128(i128::MAX))
+        .unwrap();
+    let big = Capture::read(&value).child("value");
+    assert_eq!(big.code, "xsd-binary-integer");
+    assert!(matches!(big.field("negative"), ErrorValue::Boolean(false)));
+    assert!(matches!(
+        big.events.get(1),
+        Some(Event::BeginList(Some("limbs"), 4))
+    ));
+    let limbs: Vec<_> = big
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Value(None, ErrorValue::Unsigned(value)) => Some(*value),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        limbs,
+        [1, 0, u128::from(u64::MAX), u128::from((1_u64 << 62) - 1)]
+    );
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
     html_native_diagnostic_list_preserves_standard_codes_and_original_ranges,
     wide_substring_fields_are_not_narrowed_by_native_cause_transport,
+    fixed_arithmetic_failures_keep_original_raw_operands_and_domain_values,
+    exact_integer_records_preserve_all_binary_limbs_without_rendering,
 );

@@ -58,12 +58,12 @@ pub enum TextError {
     /// construction, so an intermediate that does not fit is reported rather
     /// than wrapped or saturated: a wrapped score is a wrong ranking presented
     /// as a right one.
-    Overflow(String),
+    Overflow(purrdf_sparql_eval::NativeDiagnostic),
 
     /// A mathematical domain violation — the natural logarithm of a
     /// non-positive value, or a division whose divisor is zero. There is no
     /// value to return, so none is invented.
-    Domain(String),
+    Domain(purrdf_sparql_eval::NativeDiagnostic),
 }
 
 purrdf_lex::constructors! {
@@ -77,11 +77,6 @@ purrdf_lex::constructors! {
         /// Construct a fatal operational source refusal.
         pub fn source_read(what) -> Self::SourceRead;
 
-        /// Construct a [`TextError::Overflow`] from any displayable message.
-        pub fn overflow(what) -> Self::Overflow;
-
-        /// Construct a [`TextError::Domain`] from any displayable message.
-        pub fn domain(what) -> Self::Domain;
     }
 }
 
@@ -96,8 +91,9 @@ impl core::fmt::Display for TextError {
             Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
             Self::SourceRead(msg) => write!(f, "text-index source read error: {msg}"),
-            Self::Overflow(msg) => write!(f, "fixed-point overflow: {msg}"),
-            Self::Domain(msg) => write!(f, "fixed-point domain error: {msg}"),
+            Self::Overflow(diagnostic) | Self::Domain(diagnostic) => {
+                f.write_str(diagnostic.message())
+            }
         }
     }
 }
@@ -106,7 +102,7 @@ impl std::error::Error for TextError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Capacity(error) => Some(error),
-            Self::Diagnostic(error) => Some(error),
+            Self::Diagnostic(error) | Self::Overflow(error) | Self::Domain(error) => Some(error),
             Self::Substring(error) => Some(error),
             Self::Phonetic(error) => Some(error),
             _ => None,
@@ -124,8 +120,8 @@ impl purrdf_hash::error::StructuredError for TextError {
         Html(diagnostics) => "text-html" { "diagnostics" => List(diagnostics.iter().map(|diagnostic| purrdf_hash::error::ErrorValue::Record(diagnostic))) },
         Data(reason) => "text-data" { "reason" => Text(reason) },
         SourceRead(message) => "text-source-read" { "message" => Message(message) },
-        Overflow(reason) => "text-overflow" { "reason" => Text(reason) },
-        Domain(reason) => "text-domain" { "reason" => Text(reason) },
+        Overflow(reason) => "text-overflow" { "reason" => Cause(reason) },
+        Domain(reason) => "text-domain" { "reason" => Cause(reason) },
     }
 }
 
@@ -135,6 +131,41 @@ purrdf_lex::variant_from!(TextError {
 });
 
 impl TextError {
+    /// Preserve a caller-supplied overflow message. Native arithmetic producers
+    /// retain their own typed refusal instead of calling this constructor.
+    pub fn overflow(what: impl core::fmt::Display) -> Self {
+        Self::caller_arithmetic(what, false)
+    }
+
+    /// Preserve a caller-supplied domain message.
+    pub fn domain(what: impl core::fmt::Display) -> Self {
+        Self::caller_arithmetic(what, true)
+    }
+
+    fn caller_arithmetic(what: impl core::fmt::Display, domain: bool) -> Self {
+        let label = if domain {
+            "fixed-point domain error"
+        } else {
+            "fixed-point overflow"
+        };
+        let diagnostic =
+            crate::query_workspace::admitted(purrdf_sparql_eval::NativeDiagnostic::render(
+                purrdf_sparql_eval::NativeDiagnosticKind::Function,
+                format_args!("{label}: {what}"),
+                &purrdf_sparql_eval::WorkspaceCapability::resident(),
+            ));
+        match diagnostic {
+            Ok(diagnostic) => {
+                if domain {
+                    Self::Domain(diagnostic)
+                } else {
+                    Self::Overflow(diagnostic)
+                }
+            }
+            Err(error) => error,
+        }
+    }
+
     /// Reduce a text-index failure to the evaluator's own channel.
     ///
     /// The mapping is decided here and nowhere else:
@@ -163,12 +194,13 @@ impl TextError {
         use purrdf_sparql_eval::{EvalError, NativeDiagnostic, NativeDiagnosticKind};
         let kind = match self {
             Self::Capacity(failure) => return failure.into_eval(),
-            Self::Diagnostic(diagnostic) => return EvalError::NativeDiagnostic(diagnostic),
+            Self::Diagnostic(diagnostic)
+            | Self::Overflow(diagnostic)
+            | Self::Domain(diagnostic) => return EvalError::NativeDiagnostic(diagnostic),
             Self::Config(message) => return EvalError::config(message),
             Self::Data(message) => return EvalError::data(message),
             Self::SourceRead(message) => return EvalError::SourceRead(message),
             Self::Substring(_) | Self::Phonetic(_) | Self::Html(_) => NativeDiagnosticKind::Data,
-            Self::Overflow(_) | Self::Domain(_) => NativeDiagnosticKind::Function,
         };
         match NativeDiagnostic::render_cause(kind, self, workspace) {
             Ok(diagnostic) => EvalError::NativeDiagnostic(diagnostic),
@@ -201,15 +233,11 @@ mod tests {
             TextError::Data("x".to_owned()),
             "data() must build Data"
         );
-        assert_eq!(
-            TextError::overflow("x"),
-            TextError::Overflow("x".to_owned()),
-            "overflow() must build Overflow"
+        assert!(
+            matches!(TextError::overflow("x"), TextError::Overflow(diagnostic) if diagnostic.message() == "fixed-point overflow: x")
         );
-        assert_eq!(
-            TextError::domain("x"),
-            TextError::Domain("x".to_owned()),
-            "domain() must build Domain"
+        assert!(
+            matches!(TextError::domain("x"), TextError::Domain(diagnostic) if diagnostic.message() == "fixed-point domain error: x")
         );
     }
 
@@ -233,14 +261,13 @@ mod tests {
                 | TextError::Diagnostic(_) => {
                     unreachable!("test uses string diagnostic variants")
                 }
-                TextError::Config(m)
-                | TextError::SourceRead(m)
-                | TextError::Data(m)
-                | TextError::Overflow(m)
-                | TextError::Domain(m) => m.clone(),
+                TextError::Config(m) | TextError::SourceRead(m) | TextError::Data(m) => m.as_str(),
+                TextError::Overflow(diagnostic) | TextError::Domain(diagnostic) => {
+                    diagnostic.message()
+                }
             };
             assert!(
-                rendered.contains(&detail),
+                rendered.contains(detail),
                 "rendering `{rendered}` dropped the detail `{detail}`"
             );
         }
