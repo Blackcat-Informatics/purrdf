@@ -537,7 +537,7 @@ fn annotation_only_pages_demote_only_after_last_original_reifier_in_the_graph() 
 }
 
 #[test]
-fn new_reifiers_promote_older_primary_rows_only_in_the_matching_graph() {
+fn new_reifiers_preserve_older_primary_rows_in_every_graph() {
     let (first, _, annotation) = reifier_rows();
     let default = purrdf_core::QuadValues {
         g: None,
@@ -557,9 +557,9 @@ fn new_reifiers_promote_older_primary_rows_only_in_the_matching_graph() {
     let snapshot = stack.snapshot().unwrap();
     let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
     let predicate = view.term_id_by_value(&annotation.p).unwrap().unwrap();
-    statistics::assert_chronological_counts(&view, predicate, [2, 1, 1], true);
-    assert_eq!(view.quads().count(), 2);
-    assert_eq!(view.annotation_quads().count(), 1);
+    statistics::assert_chronological_counts(&view, predicate, [3, 1, 0], true);
+    assert_eq!(view.quads().count(), 3);
+    assert_eq!(view.annotation_quads().count(), 0);
     assert_eq!(
         surface(&view),
         BTreeSet::from([first, annotation, default, elsewhere])
@@ -1247,38 +1247,59 @@ fn cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open
 }
 
 #[test]
-fn declaration_probe_fault_suppresses_the_candidate_that_triggered_it() {
-    let ordinary = Arc::new(ProbeProvider::new(vec![page(&[row("r", "note")])], None));
-    let mut builder = RdfDatasetBuilder::new();
-    let r = builder.intern_value(&iri("r")).unwrap();
-    let triple = builder
-        .intern_value(&purrdf_core::term_fixture::triple_chain(1))
+fn declaration_faults_only_gate_rows_that_need_annotation_classification() {
+    for annotation in [false, true] {
+        let q = row("r", "note");
+        let candidate = if annotation {
+            typed_page(&[], std::slice::from_ref(&q))
+        } else {
+            page(std::slice::from_ref(&q))
+        };
+        let candidate = Arc::new(ProbeProvider::new(vec![candidate], None));
+        let mut builder = RdfDatasetBuilder::new();
+        let r = builder.intern_value(&iri("r")).unwrap();
+        let triple = builder
+            .intern_value(&purrdf_core::term_fixture::triple_chain(1))
+            .unwrap();
+        builder.push_reifier(r, triple).unwrap();
+        let declarations = Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None));
+        let snapshot = PagedStack::new(
+            vec![declarations.clone(), candidate]
+                .into_iter()
+                .map(|provider| Arc::new(PagedDataset::from_provider(provider).unwrap()))
+                .collect(),
+        )
+        .unwrap()
+        .snapshot()
         .unwrap();
-    builder.push_reifier(r, triple).unwrap();
-    let declarations = Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None));
-    let snapshot = PagedStack::new(
-        vec![ordinary, declarations.clone()]
-            .into_iter()
-            .map(|provider| Arc::new(PagedDataset::from_provider(provider).unwrap()))
-            .collect(),
-    )
-    .unwrap()
-    .snapshot()
-    .unwrap();
-    declarations.mode.store(1, Ordering::Relaxed);
-    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
-    assert_eq!(
-        view.quads().next(),
-        None,
-        "classification failure cannot yield its ordinary candidate"
-    );
-    assert_eq!(view.annotation_quads().next(), None);
-    assert_eq!(view.reifier_quads().next(), None);
-    assert!(matches!(
-        view.operation_status(),
-        ViewOperationStatus::Failed {
-            error: PagedQueryError::Provider { .. },
-            ..
+        declarations.mode.store(1, Ordering::Relaxed);
+        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+        let subject = view.term_id_by_value(&q.s).unwrap().unwrap();
+        let predicate = view.term_id_by_value(&q.p).unwrap().unwrap();
+        assert_eq!(
+            view.quads_for_pattern(Some(subject), Some(predicate), None, GraphMatch::Default)
+                .count(),
+            usize::from(!annotation),
+        );
+        if !annotation {
+            assert!(
+                view.read_error().is_none(),
+                "ordinary typing needs no declaration read"
+            );
+            assert_eq!(
+                declarations.reads.load(Ordering::Relaxed),
+                1,
+                "only the eager seal read declarations"
+            );
         }
-    ));
+        assert_eq!(view.annotation_quads().next(), None);
+        assert_eq!(view.reifier_quads().next(), None);
+        assert!(matches!(
+            view.operation_status(),
+            ViewOperationStatus::Failed {
+                error: PagedQueryError::Provider { .. },
+                ..
+            }
+        ));
+    }
 }

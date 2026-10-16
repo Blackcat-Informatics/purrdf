@@ -755,35 +755,6 @@ impl PagedStackQueryView<'_> {
             .any(|(page, row)| self.visible_at(page, row, prefix))
     }
 
-    fn external_declaration(
-        &self,
-        subject: GlobalTermId,
-        graph: Option<GlobalTermId>,
-        page: PageId,
-    ) -> bool {
-        let origin = self.snapshot.origins[page.0 as usize];
-        self.physical
-            .stream_pattern(
-                PageStream::Reifier,
-                Some(subject),
-                None,
-                None,
-                graph.map_or(GraphMatch::Default, GraphMatch::Named),
-            )
-            .any(|(other, row)| {
-                let other_origin = self.snapshot.origins[other.0 as usize];
-                let same_source = match (origin, other_origin) {
-                    (
-                        StackPageOrigin::Sealed { layer: a, .. },
-                        StackPageOrigin::Sealed { layer: b, .. },
-                    ) => a == b,
-                    (StackPageOrigin::Head, StackPageOrigin::Head) => true,
-                    _ => false,
-                };
-                !same_source && self.visible(other, row)
-            })
-    }
-
     fn logical_rows(
         &self,
         kind: StatementKind,
@@ -810,11 +781,8 @@ impl PagedStackQueryView<'_> {
                 if self.physical.failed() || !self.visible(page, row) || !seen.insert(row) {
                     return None;
                 }
-                let effective = if stream == PageStream::Base {
-                    self.external_declaration(row.s, row.g, page)
-                } else {
-                    self.declarations(row.s, row.g, self.snapshot.removals.len() - 1)
-                };
+                let effective = stream == PageStream::Annotation
+                    && self.declarations(row.s, row.g, self.snapshot.removals.len() - 1);
                 let original = stream == PageStream::Annotation
                     && self.declarations(row.s, row.g, self.layer_of(page));
                 let physical = if stream == PageStream::Base {
@@ -822,8 +790,8 @@ impl PagedStackQueryView<'_> {
                 } else {
                     StatementKind::Annotation
                 };
-                let classified = classify_statement(physical, true, original, effective);
-                (!self.physical.failed() && classified == Some(kind)).then_some(row)
+                let classified = classify_statement(physical, false, original, effective);
+                (!self.physical.failed() && classified == kind).then_some(row)
             })
     }
 
