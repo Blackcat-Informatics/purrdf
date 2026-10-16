@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-15T21:17:15-06:00\n"
+"POT-Creation-Date: 2026-10-15T22:40:07-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -250,28 +250,26 @@ msgid ""
 "a PostgreSQL instance running beside a triple store — ranked full-text "
 "search, spatial predicates, and vector similarity — are answered inside "
 "PurRDF: in-process, over the same dataset, from the same SPARQL query, with "
-"no second database and no sync job. Each answer is exact and deterministic, "
-"natively and on wasm32. This is not a projection: these query surfaces have "
-"already removed a whole PostgreSQL requirement from one RDF project. See "
-"[One engine instead of three databases](#one-engine-instead-of-three-"
-"databases) below."
+"no second database and no sync job. The numeric contracts are explicit: "
+"exact text scores, certified geographic results, and deterministic binary64 "
+"vector scores. See [One engine instead of three databases](#one-engine-"
+"instead-of-three-databases) below."
 msgstr ""
 "**它从架构中移除了什么。** 通常让一个 PostgreSQL 实例伴随三元组存储运行的三项"
 "工作——带排名的全文检索、空间谓词与向量相似度——都在 PurRDF 内部得到回答：进程"
-"内、同一数据集、同一条 SPARQL 查询，没有第二个数据库，也没有同步作业。每个答"
-"案都是精确且确定的，原生与 wasm32 上皆然。这不是一个设想：这些查询接口已经从"
-"一个 RDF 项目中移除了整个 PostgreSQL 依赖。见下文[一个引擎取代三个数据库](#一"
-"个引擎取代三个数据库)。"
+"内、同一数据集、同一条 SPARQL 查询，没有第二个数据库，也没有同步作业。数值契"
+"约是明确的：精确的文本得分、经过认证的地理结果，以及确定的 binary64 向量得"
+"分。见下文[一个引擎取代三个数据库](#一个引擎取代三个数据库)。"
 
-#: src/introduction.md:33
+#: src/introduction.md:32
 msgid "Why does PurRDF exist?"
 msgstr "PurRDF 为何存在？"
 
-#: src/introduction.md:35
+#: src/introduction.md:34
 msgid "RDF tooling fragments along two axes."
 msgstr "RDF 工具沿两条轴线碎片化。"
 
-#: src/introduction.md:37
+#: src/introduction.md:36
 msgid ""
 "**Across languages**: every ecosystem has its own parser, with its own bugs, "
 "its own corner-case interpretations, and its own subset of the spec. Move a "
@@ -282,7 +280,7 @@ msgstr ""
 "以及自己所实现的规范子集。把一张图从 Rust 服务搬到 Python 流水线再搬到浏览"
 "器，数据的含义就已被悄悄改变了三次。"
 
-#: src/introduction.md:42
+#: src/introduction.md:41
 msgid ""
 "**Across time**: RDF 1.2 — triple terms, reifiers, base-direction literals — "
 "is the current revision of the standard, and almost no incumbent library "
@@ -291,7 +289,7 @@ msgstr ""
 "**跨时间**：RDF 1.2——三元组项、具体化节点（reifier）、基础方向字面量——是标准"
 "的现行修订版，而几乎没有哪个现存的库承载它。"
 
-#: src/introduction.md:45
+#: src/introduction.md:44
 msgid ""
 "PurRDF exists so that a graph is **the same graph everywhere**. It is a from-"
 "scratch, dependency-light Rust core — parser to SPARQL engine to SHACL "
@@ -302,11 +300,11 @@ msgstr ""
 "现、依赖极简的 Rust 核心——从解析器到 SPARQL 引擎到 SHACL 验证器再到二进制传输"
 "——经由原生绑定公开，而不是逐语言重新实现。"
 
-#: src/introduction.md:50
+#: src/introduction.md:49
 msgid "What's inside"
 msgstr "里面有什么"
 
-#: src/introduction.md:52
+#: src/introduction.md:51
 msgid ""
 "**RDF 1.2 primitives** — an immutable, value-interned dataset IR (`TermId` "
 "space, string arena, copy-on-write mutation), with triple terms in object "
@@ -318,7 +316,7 @@ msgstr ""
 "table），以及基础方向字面量。参见[驻留数据集 IR](concepts/interned-"
 "dataset.md)。"
 
-#: src/introduction.md:56
+#: src/introduction.md:55
 msgid ""
 "**Native codecs** — first-party parsers/serializers for Turtle, TriG, N-"
 "Triples, N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD, "
@@ -333,7 +331,7 @@ msgstr ""
 "3986 层解析相对 IRI（国际化资源标识符）引用，而作用域内没有基准的相对引用是硬"
 "错误。参见[基准 IRI 与相对引用](concepts/base-iris.md)。"
 
-#: src/introduction.md:62
+#: src/introduction.md:61
 msgid ""
 "**Canonicalization** — W3C RDFC-1.0 on the RDF 1.1 subset; over RDF 1.2 "
 "constructs, either the flat form (RDFC-1.0 over `rdf:reifies` triples) or "
@@ -345,7 +343,7 @@ msgstr ""
 "profile 二者之一，以不同的名字区分——外加数据集 diff 与同构判定。参见[规范化"
 "与 Diff](concepts/canonicalization.md)。"
 
-#: src/introduction.md:66
+#: src/introduction.md:65
 msgid ""
 "**Projections & carriers** — deterministic LPG, CSVW, OBO Graphs, dataset-"
 "description, and research-object projections, each with a located loss "
@@ -356,7 +354,7 @@ msgstr ""
 "（RO）投影，每一种都带有定位到具体位置的损失台账。参见[图、表格与 Research "
 "Object 投影](concepts/projections.md)。"
 
-#: src/introduction.md:70
+#: src/introduction.md:69
 msgid ""
 "**SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator, with full "
 "Update, SEP-0002 temporal arithmetic, `LATERAL` (SEP-0006), the SEP-0008 "
@@ -386,7 +384,7 @@ msgstr ""
 "称失败，除非写作 `SILENT`——全部由 W3C 一致性套件把关。参见 [SPARQL](sparql/"
 "querying.md)。"
 
-#: src/introduction.md:85
+#: src/introduction.md:84
 msgid ""
 "**SPARQL extensions outside `purrdf-core`** — deterministic full-text search "
 "with exact fixed-point BM25 ([Full-Text Search](sparql/full-text.md)), exact "
@@ -401,7 +399,7 @@ msgstr ""
 "（[嵌入最近邻](sparql/embedding-knn.md)）——每一个都是扩展点（extension seam）"
 "的使用方，在调用方提供的 IRI 之下注册。"
 
-#: src/introduction.md:91
+#: src/introduction.md:90
 msgid ""
 "**SHACL and ShEx** — native validators for both shape languages; the SHACL "
 "engine implements SHACL 1.2 Core, SPARQL Extensions, Node Expressions and "
@@ -412,7 +410,7 @@ msgstr ""
 "Core、SPARQL 扩展、节点表达式与推理规则，以及 SPARQL 1.2 RL 规则语言。参见[验"
 "证](validation/shacl.md)。"
 
-#: src/introduction.md:95
+#: src/introduction.md:94
 msgid ""
 "**Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL "
 "rules implemented — rule-table coverage, distinct from entailment "
@@ -427,7 +425,7 @@ msgstr ""
 "以及 RIF-Core 规则，每次求推理闭包都附带推理报告。参见[蕴涵](entailment.md)，"
 "其求值基于 [Datalog 不动点引擎](datalog.md)。"
 
-#: src/introduction.md:101
+#: src/introduction.md:100
 msgid ""
 "**GTS graph transport** — a single-file, content-addressed, append-only "
 "container for RDF 1.2 graphs and binary payloads. See [GTS Graph Transport]"
@@ -436,7 +434,7 @@ msgstr ""
 "**GTS 图传输**——面向 RDF 1.2 图与二进制载荷的单文件、内容寻址、仅追加的容器。"
 "参见 [GTS 图传输](gts.md)。"
 
-#: src/introduction.md:104
+#: src/introduction.md:103
 msgid ""
 "**Slices, mappings, and provenance** — a slice catalog, an explicit RDF↔GTS "
 "loss ledger, SSSOM, and FnO. See [Slices, Mappings & Provenance](slices.md)."
@@ -444,11 +442,11 @@ msgstr ""
 "**切片、映射与溯源**——切片目录、显式的 RDF↔GTS 损失台账、SSSOM 与 FnO。参见"
 "[切片、映射与溯源](slices.md)。"
 
-#: src/introduction.md:107
+#: src/introduction.md:106
 msgid "One engine instead of three databases"
 msgstr "一个引擎取代三个数据库"
 
-#: src/introduction.md:109
+#: src/introduction.md:108
 msgid ""
 "An RDF project that needs ranked text search, spatial predicates, or nearest-"
 "neighbour search has usually run PostgreSQL beside its triple store for "
@@ -462,31 +460,31 @@ msgstr ""
 "通过求值器提供的、以调用方为键的扩展点，用 SPARQL 回答全部三项——下面每个页面"
 "都以「它的接口取代了什么、止步于何处」开篇。"
 
-#: src/introduction.md:115
+#: src/introduction.md:114
 msgid "You needed"
 msgstr "所需能力"
 
-#: src/introduction.md:115
+#: src/introduction.md:114
 msgid "Usually from"
 msgstr "通常来自"
 
-#: src/introduction.md:115
+#: src/introduction.md:114
 msgid "Now inside PurRDF"
 msgstr "如今在 PurRDF 之内"
 
-#: src/introduction.md:115
+#: src/introduction.md:114
 msgid "Where it stops"
 msgstr "止步于何处"
 
-#: src/introduction.md:117
+#: src/introduction.md:116
 msgid "Ranked full-text search"
 msgstr "带排名的全文检索"
 
-#: src/introduction.md:117
+#: src/introduction.md:116
 msgid "PostgreSQL `tsvector`/`tsquery`"
 msgstr "PostgreSQL `tsvector`/`tsquery`"
 
-#: src/introduction.md:117
+#: src/introduction.md:116
 msgid ""
 "[Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index "
 "over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no "
@@ -495,7 +493,7 @@ msgstr ""
 "[全文检索](sparql/full-text.md)：`purrdf-text`，一个覆盖 RDF 1.2 字面量的倒排"
 "索引，以精确的 `i128` 定点数做 BM25 排名，crate 内没有浮点。"
 
-#: src/introduction.md:117
+#: src/introduction.md:116
 msgid ""
 "Exact BM25F, explicit stemming/dictionaries and independent Han retrieval; "
 "no stop-word lists or query dialect; an in-memory index built once over a "
@@ -504,45 +502,42 @@ msgstr ""
 "精确 BM25F、显式词干提取与词典分析，以及独立的汉字检索；没有停用词表或查询方"
 "言；一个在冻结数据集上一次性构建的内存索引。"
 
-#: src/introduction.md:118
+#: src/introduction.md:117
 msgid "Spatial predicates"
 msgstr "空间谓词"
 
-#: src/introduction.md:118
+#: src/introduction.md:117
 msgid "PostGIS"
 msgstr "PostGIS"
 
-#: src/introduction.md:118
+#: src/introduction.md:117
 msgid ""
-"[GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and "
-"GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 "
-"relation over an exact DE-9IM; no GEOS, no PROJ."
+"[GeoSPARQL](sparql/geosparql.md): `purrdf-geo-kernel` through `purrdf-geo`, "
+"with exact WKT/GeoJSON coordinates, DE-9IM relations, geographic metrics, "
+"buffers and explicit coordinate operations; no GEOS or PROJ."
 msgstr ""
-"[GeoSPARQL](sparql/geosparql.md)：`purrdf-geo`，GeoSPARQL 1.1，WKT 与 "
-"GeoJSON 解析为精确有理数，Simple Features、Egenhofer 与 RCC8 的每一种关系都在"
-"精确的 DE-9IM 上判定；没有 GEOS，没有 PROJ。"
+"[GeoSPARQL](sparql/geosparql.md)：通过 `purrdf-geo` 使用 `purrdf-geo-"
+"kernel`，包括精确的 WKT/GeoJSON 坐标、DE-9IM 关系、地理度量、缓冲区及显式坐标"
+"操作；不依赖 GEOS 或 PROJ。"
+
+#: src/introduction.md:117
+msgid ""
+"References, units, operation chains, numerical limits and tolerances are "
+"explicit. No raster; concave hulls and overlay set operations remain named "
+"refusals. See the chapter's function coverage."
+msgstr ""
+"参考系、单位、操作链、数值上限及容差均须显式指定。不支持栅格；凹包及叠加集合"
+"运算仍按名称返回拒绝错误。具体函数覆盖范围见该章。"
 
 #: src/introduction.md:118
-msgid ""
-"Topological predicates, accessors and exactly computable measures over "
-"vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, "
-"no buffers, no concave hull, no overlay set operations, no raster — each "
-"unimplemented function hard-errors by name (`geof:convexHull` is "
-"implemented)."
-msgstr ""
-"是矢量几何上的拓扑谓词、访问器与可精确计算的度量，不是 PostGIS：没有 CRS 变"
-"换，没有椭球大地测量，没有缓冲区，没有凹包，没有叠加集合运算，没有栅格——每个"
-"未实现的函数都按名称硬错误（`geof:convexHull` 已实现）。"
-
-#: src/introduction.md:119
 msgid "Vector similarity"
 msgstr "向量相似度"
 
-#: src/introduction.md:119
+#: src/introduction.md:118
 msgid "pgvector"
 msgstr "pgvector"
 
-#: src/introduction.md:119
+#: src/introduction.md:118
 msgid ""
 "[Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a "
 "PURREMB embedding space, binary64 in a pinned accumulation order."
@@ -550,7 +545,7 @@ msgstr ""
 "[嵌入最近邻](sparql/embedding-knn.md)：在 PURREMB 嵌入空间上的精确 top-k，"
 "binary64 且累加顺序固定。"
 
-#: src/introduction.md:119
+#: src/introduction.md:118
 msgid ""
 "Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no "
 "approximate index; PurRDF computes no embeddings — the vectors come from a "
@@ -563,23 +558,24 @@ msgstr ""
 "（`EmbeddingBuilder`、`EmbeddingStreamWriter`；仅限 Rust），并以失败即关闭"
 "（fail-closed）的方式打开。"
 
-#: src/introduction.md:121
+#: src/introduction.md:120
 msgid ""
-"All three are pure functions of their input on every target — fixed point, "
-"exact rationals, or a pinned binary64 order, with canonical tie-breaks — and "
-"native Rust tests pin their numeric and serialized expectations. `make wasm` "
-"builds all three crates for `wasm32-unknown-unknown`; focused WASM tests "
-"exercise actual dispatch, SIMD kernels and host interfaces. They are Rust-"
-"host seams: a host registers an index or space under its own IRIs, and that "
-"host may itself be compiled to wasm32. The shipped npm package and Python "
-"wheel do not yet expose these three relations."
+"Text ranking uses exact fixed point; embedding search uses a pinned binary64 "
+"accumulation order and canonical tie-breaks. Geographic requests retain "
+"exact coordinate inputs and use explicit numerical certification. Native "
+"tests pin numeric and serialized expectations. `make wasm` builds their "
+"release crates for `wasm32-unknown-unknown`; focused portable tests exercise "
+"dispatch, kernels and hosts. Text indexes and embedding spaces use Rust-host "
+"registration seams under caller-supplied IRIs, including hosts compiled to "
+"wasm32. The packaged geographic host entries are documented in [GeoSPARQL]"
+"(sparql/geosparql.md)."
 msgstr ""
-"三者在每个目标上都是其输入的纯函数——定点数、精确有理数，或固定顺序的 "
-"binary64，外加规范的并列判定。原生 Rust 测试固定其数值与序列化的预期结果。"
-"`make wasm` 为 `wasm32-unknown-unknown` 构建三个 crate；WASM 测试只运行实际分"
-"派、SIMD 内核与宿主接口。它们是 Rust 宿主上的扩展点：宿主在自己的 IRI 之下注"
-"册一个索引或一个空间，而该宿主本身也可以编译到 wasm32。已发布的 npm 包与 "
-"Python wheel 尚未公开这三种关系。"
+"文本排名使用精确定点数；嵌入搜索使用固定的 binary64 累加顺序和规范的并列判"
+"定。地理请求保留精确的输入坐标，并采用显式数值认证。原生测试固定数值与序列化"
+"的预期结果。`make wasm` 为 `wasm32-unknown-unknown` 构建这些功能的发布 "
+"crate；针对性的可移植测试实际执行分派、内核与宿主接口。文本索引与嵌入空间通"
+"过 Rust 宿主的注册接缝接入，使用调用方提供的 IRI，宿主也可编译到 wasm32。打包"
+"后的地理宿主入口见 [GeoSPARQL](sparql/geosparql.md)。"
 
 #: src/introduction.md:129
 msgid "Two design rules worth knowing on day one"
@@ -587,27 +583,28 @@ msgstr "第一天就值得知道的两条设计规则"
 
 #: src/introduction.md:131
 msgid ""
-"**No feature flags — ever.** There are deliberately no Cargo feature flags "
-"anywhere in the workspace, and CI enforces this. A data carrier must not "
-"have optional behavior: optionality changes semantics per consumer, so every "
-"consumer gets the same byte-identical semantics instead."
+"**No semantic Cargo features.** Every consumer gets the same byte-identical "
+"semantics. The sole feature declaration is the empty `purrdf-capi:capi = []` "
+"compatibility marker required by `cargo-c`; it gates no code. CI refuses "
+"other features, optional dependencies and feature-gated behavior."
 msgstr ""
-"**没有 feature 标志——永远没有。** 整个工作区刻意不含任何 Cargo feature 标志，"
-"CI 强制执行这一点。数据载体不得有可选行为：可选性会让语义因使用方而异，因此每"
-"个使用方得到的是同样的、逐字节相同的语义。"
+"**没有语义性的 Cargo feature。** 每个使用方得到同样的、逐字节相同的语义。唯一"
+"的 feature 声明是 `cargo-c` 所需的空兼容性标记 `purrdf-capi:capi = []`；它不"
+"控制任何代码。CI 拒绝其他 feature、可选依赖及受 feature 控制的行为。"
 
 #: src/introduction.md:136
 msgid ""
-"**PurRDF is a toolkit, not an ontology — it mints no vocabulary IRIs.** "
-"Every vocabulary the library reads or writes is caller-supplied "
-"configuration with no fabricated default. A feature exercised without its "
-"vocabulary hard-errors or stays inactive; it never invents an IRI for you. "
-"(Test fixtures use `example.org`.)"
+"**Application vocabularies are explicit.** PurRDF is a toolkit, not an "
+"ontology. Structural Markdown and ordered JSON provide named standard "
+"profiles; callers select them deliberately or supply a vocabulary. Other "
+"application vocabularies are caller-supplied configuration with no "
+"fabricated default. A feature used without its vocabulary hard-errors or "
+"stays inactive. Test fixtures use `example.org`."
 msgstr ""
-"**PurRDF 是工具包，不是本体——它不生成任何词汇表 IRI。** 库所读写的每一个词汇"
-"表都是调用方提供的配置，没有任何杜撰的默认值。在缺少其词汇表的情况下使用某项"
-"功能，要么硬错误，要么保持未激活；它绝不会替调用方发明一个 IRI。（测试夹具使"
-"用 `example.org`。）"
+"**应用词汇表必须显式指定。** PurRDF 是工具包，不是本体。结构化 Markdown 与有"
+"序 JSON 提供具名的标准 profile；调用方须有意选择它们，或自行提供词汇表。其他"
+"应用词汇表均由调用方配置，没有杜撰的默认值。在缺少其词汇表的情况下使用某项功"
+"能，要么硬错误，要么保持未激活。测试夹具使用 `example.org`。"
 
 #: src/introduction.md:142
 msgid ""
@@ -7059,7 +7056,7 @@ msgstr ""
 "无损的 profile 得到空台账；写入时，命名图、非 profile/OWL 行以及无关的具体化"
 "节点或注解行都会被明确地逐一指出。"
 
-#: src/concepts/codecs.md:60 src/project/design-rules.md:39
+#: src/concepts/codecs.md:60 src/project/design-rules.md:42
 msgid "Byte determinism"
 msgstr "字节确定性"
 
@@ -24129,30 +24126,35 @@ msgstr ""
 "每个使用方得到的都是同样的、逐字节相同的语义。"
 
 #: src/project/design-rules.md:27
-msgid "PurRDF is NOT an ontology — it mints no vocabulary IRIs"
-msgstr "PurRDF 不是本体——它不生成任何词汇表 IRI"
+msgid "Explicit application vocabularies"
+msgstr "显式的应用词汇表"
 
 #: src/project/design-rules.md:29
 msgid ""
-"Every vocabulary the library reads or writes — slice manifests, statement-"
-"metadata downcast, box roles, SPARQL extension-function namespaces, JSON-"
-"Schema namespaces — is **caller-supplied configuration with no fabricated "
-"default**. A feature exercised without its vocabulary hard-errors or stays "
-"inactive. The library never hardcodes a vendor namespace (the GMEOW ontology "
-"is a _consumer_; the dependency arrow never points from purrdf to it), and "
-"test fixtures use `example.org`. Consumer-config types (`SliceVocab`, "
-"`Namespaces`, `StatementMetadataVocab`) are unified behind an "
-"`OntologyProfile` a downstream builds once."
+"PurRDF is not an ontology. Structural Markdown and ordered JSON offer named "
+"standard profiles and vocabularies under their shipped specifications; "
+"callers select a profile deliberately or supply a vocabulary. There is no "
+"implicit namespace fallback. Other application vocabularies — slice "
+"manifests, statement-metadata downcast, box roles, SPARQL extension-function "
+"namespaces, JSON-Schema namespaces — are **caller-supplied configuration "
+"with no fabricated default**. A feature exercised without its vocabulary "
+"hard-errors or stays inactive. The library never hardcodes a vendor "
+"namespace (the GMEOW ontology is a _consumer_; the dependency arrow never "
+"points from purrdf to it), and test fixtures use `example.org`. Consumer-"
+"config types (`SliceVocab`, `Namespaces`, `StatementMetadataVocab`) are "
+"unified behind an `OntologyProfile` a downstream builds once."
 msgstr ""
-"库所读写的每一个词汇表——切片清单、陈述元数据下行转换（downcast）、盒角色、"
-"SPARQL 扩展函数命名空间、JSON-Schema 命名空间——都是**调用方提供的配置，没有任"
-"何杜撰的默认值**。在缺少其词汇表的情况下使用某项功能，要么硬错误，要么保持未"
-"激活。库从不硬编码任何厂商命名空间（GMEOW 本体是一个*使用方*；依赖箭头从不由 "
-"PurRDF 指向它），测试夹具使用 `example.org`。使用方配置类型（`SliceVocab`、"
-"`Namespaces`、`StatementMetadataVocab`）统一在下游一次性构建的 "
-"`OntologyProfile` 之后。"
+"PurRDF 不是本体。结构化 Markdown 与有序 JSON 按各自已发布的规范提供具名的标"
+"准 profile 和词汇表；调用方须有意选择 profile，或自行提供词汇表。不存在隐式的"
+"命名空间回退。其他应用词汇表——切片清单、陈述元数据下行转换（downcast）、盒角"
+"色、SPARQL 扩展函数命名空间、JSON-Schema 命名空间——都是**调用方提供的配置，没"
+"有任何杜撰的默认值**。在缺少其词汇表的情况下使用某项功能，要么硬错误，要么保"
+"持未激活。库从不硬编码任何厂商命名空间（GMEOW 本体是一个*使用方*；依赖箭头从"
+"不由 PurRDF 指向它），测试夹具使用 `example.org`。使用方配置类型"
+"（`SliceVocab`、`Namespaces`、`StatementMetadataVocab`）统一在下游一次性构建"
+"的 `OntologyProfile` 之后。"
 
-#: src/project/design-rules.md:41
+#: src/project/design-rules.md:44
 msgid ""
 "Serializers and the GTS writer are byte-deterministic. No iteration-order, "
 "time, or RNG dependence is permitted in any output path; hot maps use fixed-"
@@ -24164,11 +24166,11 @@ msgstr ""
 "`FixedHasher`。改变输出字节的变更必须以可见的方式更新受影响的黄金文件"
 "（golden file）。"
 
-#: src/project/design-rules.md:46
+#: src/project/design-rules.md:49
 msgid "The kernel ring-fence"
 msgstr "内核隔离带"
 
-#: src/project/design-rules.md:48
+#: src/project/design-rules.md:51
 msgid ""
 "`purrdf-core` must never depend on PyO3, and a hygiene gate asserts the "
 "dependency tree. The root `purrdf-hash` keeps **zero runtime dependencies**, "
@@ -24184,11 +24186,11 @@ msgstr ""
 "的第一方 crate，不依赖任何第三方 crate。诊断在内核中保持结构化且不含 SARIF；"
 "SARIF 边界是 `purrdf-validate` 这个叶子 crate。"
 
-#: src/project/design-rules.md:55
+#: src/project/design-rules.md:58
 msgid "Everything is wasm-able"
 msgstr "一切皆可编译到 wasm"
 
-#: src/project/design-rules.md:57
+#: src/project/design-rules.md:60
 msgid ""
 "Every release crate must build for `wasm32-unknown-unknown`, and CI hard-"
 "fails otherwise. No dependency may drag in threads, the filesystem, C "
@@ -24201,15 +24203,15 @@ msgstr ""
 "密码学实现保持纯 Rust，正是出于这一原因。这正是 JavaScript 包之所以是*同一个"
 "引擎*、而不是移植版本的原因。"
 
-#: src/project/design-rules.md:63
+#: src/project/design-rules.md:66
 msgid "Hard-fail, never wrong"
 msgstr "宁可硬失败，绝不给错答案"
 
-#: src/project/design-rules.md:65
+#: src/project/design-rules.md:68
 msgid ""
 "Across the toolkit, out-of-scope input is a **typed error**, never a partial "
 "answer: malformed RDF is an `RdfDiagnostic`, an unsupported SPARQL builtin "
-"is `EvalError::Unsupported`, a malformed ShEx schema is a `ShexError`, a "
+"is `EvalError::Unsupported`, malformed ShEx syntax is a `ShexError`, a "
 "passed evaluation limit is `EntailError::Evaluate` rather than a truncated "
 "closure, and an unsupported results projection is a typed format error. "
 "Lossy-by-design projections are permitted but _loud_, via the [loss ledger]"
@@ -24217,12 +24219,12 @@ msgid ""
 msgstr ""
 "在整个工具包中，超出范围的输入是一个**带类型的错误**，绝不是部分答案：格式错"
 "误的 RDF 是 `RdfDiagnostic`，不支持的 SPARQL 内建函数是 "
-"`EvalError::Unsupported`，格式错误的 ShEx 模式是 `ShexError`，越过的求值上限"
-"是 `EntailError::Evaluate` 而不是被截断的推理闭包，不支持的结果投影是带类型的"
-"格式错误。按设计有损的投影是允许的，但必须*显式报告*，经由[损失台账](../"
+"`EvalError::Unsupported`，ShEx 语法错误是 `ShexError`，越过的求值上限是 "
+"`EntailError::Evaluate` 而不是被截断的推理闭包，不支持的结果投影是带类型的格"
+"式错误。按设计有损的投影是允许的，但必须*显式报告*，经由[损失台账](../"
 "slices.md#损失台账)。"
 
-#: src/project/design-rules.md:73
+#: src/project/design-rules.md:76
 msgid ""
 "A hard-fail is owed to input the toolkit cannot handle — never to a value "
 "its own signature accepts. `purrdf-entail::materialize` used to refuse `OWL-"
@@ -24239,7 +24241,7 @@ msgstr ""
 "`Materialization`，其中携带每种蕴涵机制自身的输入，因而不再有任何「不支持的蕴"
 "涵机制」错误可以指称。"
 
-#: src/project/design-rules.md:81
+#: src/project/design-rules.md:84
 msgid ""
 "The reasoning side adds a second discipline on top of hard-fail: where a run "
 "_succeeds_ but is bounded, it says so. `materialize` returns a "
@@ -24254,11 +24256,11 @@ msgstr ""
 "演算的契约哈希。静默交付一个正确但不完备的答案，与交付一个错误答案属于同一种"
 "失效模式。"
 
-#: src/project/design-rules.md:88
+#: src/project/design-rules.md:91
 msgid "Conformance corpora are the contract"
 msgstr "一致性语料就是契约"
 
-#: src/project/design-rules.md:90
+#: src/project/design-rules.md:93
 msgid ""
 "The W3C and community test suites are vendored, **byte-frozen**, and SHA-256-"
 "verified; harnesses assert exact counts and enforce XPASS discipline on "
@@ -24268,11 +24270,11 @@ msgstr ""
 "试框架断言精确的计数，并在其预期失败台账上执行 XPASS 纪律。参见[一致性与测试]"
 "(conformance.md)。"
 
-#: src/project/design-rules.md:95
+#: src/project/design-rules.md:98
 msgid "Supporting rules"
 msgstr "辅助规则"
 
-#: src/project/design-rules.md:97
+#: src/project/design-rules.md:100
 msgid ""
 "**Measured performance** — perf claims require a bench, not an adjective "
 "([Performance](performance.md))."
@@ -24280,7 +24282,7 @@ msgstr ""
 "**经过测量的性能**——性能声称需要一个基准测试，而不是一个形容词（[性能]"
 "(performance.md)）。"
 
-#: src/project/design-rules.md:99
+#: src/project/design-rules.md:102
 msgid ""
 "**One version, lockstep releases** — crates.io, PyPI, and npm ship one "
 "workspace version ([Versioning & Releases](releases.md))."
@@ -24288,7 +24290,7 @@ msgstr ""
 "**同一版本，同步发布**——crates.io、PyPI 与 npm 发布同一个工作区版本（[版本与"
 "发布](releases.md)）。"
 
-#: src/project/design-rules.md:101
+#: src/project/design-rules.md:104
 msgid ""
 "**Zero nightly features, stable MSRV** — there are no `#![feature(...)]` "
 "attributes anywhere in the workspace and the MSRV floor (currently 1.98, on "
@@ -24303,7 +24305,7 @@ msgstr ""
 "toolchain.toml` 中指定的*浮动* nightly，以获得更锐利的 clippy 与 rustdoc "
 "lint 以及更强的默认借用检查器；发布工件在 stable 上构建。"
 
-#: src/project/design-rules.md:107
+#: src/project/design-rules.md:110
 msgid ""
 "**Brand** — the project is **PurRDF** in prose and `purrdf` in identifiers "
 "([`docs/BRAND.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -24868,25 +24870,25 @@ msgstr ""
 msgid ""
 "The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](https://"
 "github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/"
-"purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently "
-"**0.10**), bumped on every exported-signature change, pinned by `crates/rdf-"
-"capi/tests/abi_signatures.rs`, and read back at runtime through "
-"`purrdf_abi_version`. It is versioned separately from the workspace and "
-"stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise "
-"about it."
+"purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`, declared in "
+"that generated header and bumped on every exported-signature change, pinned "
+"by `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime "
+"through `purrdf_abi_version`. It is versioned separately from the workspace "
+"and stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no "
+"promise about it."
 msgstr ""
 "唯一的例外是 C ABI。`libpurrdf` 的 [`purrdf.h`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h) 带有自己的 "
-"`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（目前为 **0.10**），每当导出签名变更时递"
-"增，由 `crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时通过 "
+"`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`，在该生成头文件中声明，每当导出签名变更时"
+"递增，由 `crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时通过 "
 "`purrdf_abi_version` 读回。它的版本独立于工作区，并保持在 `0.x`：它并未冻结，"
 "工作区的 1.0.0 对它不作任何承诺。"
 
-#: src/project/releases.md:38
+#: src/project/releases.md:39
 msgid "MSRV policy"
 msgstr "MSRV 策略"
 
-#: src/project/releases.md:40
+#: src/project/releases.md:41
 msgid ""
 "The supported minimum Rust is `rust-version` in the root `Cargo.toml` — "
 "currently **1.98** — on the **stable** channel, enforced by a dedicated CI "
@@ -24899,23 +24901,20 @@ msgstr ""
 "`RUSTUP_TOOLCHAIN`，并断言它所度量的编译器确实是 1.98。提高 MSRV 是一项记入变"
 "更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。"
 
-#: src/project/releases.md:46
+#: src/project/releases.md:47
 msgid ""
 "The MSRV is a promise to consumers; the development toolchain is a tool "
 "choice, and the two are orthogonal. `rust-toolchain.toml` names a **floating "
-"nightly** for local work and the CI gates, because nightly clippy and "
-"rustdoc carry lints stable lacks and its default borrow checker is the "
-"stronger one — but by policy the source uses zero nightly (unstable) "
-"features (no `#![feature(...)]` attributes, which the MSRV job proves on "
-"every change), and the release lanes build every published artifact on "
-"stable."
+"nightly** for local work and the CI gates to use its current clippy and "
+"rustdoc analysis. By policy the source uses zero nightly (unstable) features "
+"(no `#![feature(...)]` attributes, which the MSRV job proves on every "
+"change), and the release lanes build every published artifact on stable."
 msgstr ""
 "MSRV 是对使用方的承诺；开发工具链是一项工具选择，二者相互正交。`rust-"
-"toolchain.toml` 为本地工作与 CI 关卡指定了一个**浮动的 nightly**，因为 "
-"nightly 的 clippy 与 rustdoc 带有 stable 所缺少的 lint，且其默认借用检查器更"
-"强——但按照策略，源码不使用任何 nightly（不稳定）特性（没有任何 `#!"
-"[feature(...)]` 属性，MSRV 作业在每次变更时都会证明这一点），而发布通道在 "
-"stable 上构建每一个已发布的工件。"
+"toolchain.toml` 为本地工作与 CI 关卡指定了一个**浮动的 nightly**，以使用其当"
+"前的 clippy 与 rustdoc 分析。按照策略，源码不使用任何 nightly（不稳定）特性"
+"（没有任何 `#![feature(...)]` 属性，MSRV 作业在每次变更时都会证明这一点），而"
+"发布通道在 stable 上构建每一个已发布的工件。"
 
 #: src/project/releases.md:54
 msgid "Tag-driven trusted publishing"
@@ -24968,16 +24967,16 @@ msgstr "每个工作区 crate 的版本都必须与标签版本一致。"
 #: src/project/releases.md:70
 msgid ""
 "Every functional version of every crate in the 33-crate release set is "
-"published by that lane. Each existing crate record is locked on crates.io "
-"with _Require trusted publishing_ (`trustpub_only`), so an API token cannot "
-"publish a new version of any of them: crates.io answers with `403 Forbidden: "
-"New versions of this crate can only be published using Trusted Publishing`."
+"published by that lane. Functional publication requires the crate records to "
+"be locked with _Require trusted publishing_ (`trustpub_only`). That setting "
+"prevents an API token from publishing a new version: crates.io answers with "
+"`403 Forbidden: New versions of this crate can only be published using "
+"Trusted Publishing`."
 msgstr ""
-"33 个 crate 的发布集合中，每个 crate 的每个功能版本都由该通道发布。每个已有"
-"的 crate 记录都在 crates.io 上以 _Require trusted publishing_"
-"（`trustpub_only`）锁定，因此 API 令牌无法为其中任何一个发布新版本："
-"crates.io 会回应 `403 Forbidden: New versions of this crate can only be "
-"published using Trusted Publishing`。"
+"33 个 crate 的发布集合中，每个 crate 的每个功能版本都由该通道发布。功能发布要"
+"求 crate 记录以 _Require trusted publishing_（`trustpub_only`）锁定。该设置阻"
+"止 API 令牌发布新版本：crates.io 会回应 `403 Forbidden: New versions of this "
+"crate can only be published using Trusted Publishing`。"
 
 #: src/project/releases.md:76
 msgid ""
@@ -25063,48 +25062,57 @@ msgstr "切出一个发布"
 
 #: src/project/releases.md:116
 msgid ""
-"The coherent flow from `main` uses the `make` helpers so the three lanes can "
-"never drift:"
+"Prepare the release bump on an isolated branch, using the `make` helpers to "
+"keep the three lanes aligned. Merge the reviewed release changes before "
+"cutting tags from a clean, synchronized `main`:"
 msgstr ""
-"从 `main` 出发的连贯流程使用 `make` 辅助目标，因此三条通道永远不会出现偏差："
+"在隔离分支上准备版本递增，使用 `make` 辅助目标保持三个发布通道一致。先合并经"
+"过审阅的发布变更，再从干净且已同步的 `main` 创建标签："
 
 #: src/project/releases.md:120
 msgid ""
-"# 1. Bump all three version sources in lockstep (fails unless they end up "
-"equal).\n"
-msgstr "# 1. 同步递增全部三个版本来源（除非最终三者相等，否则失败）。\n"
+"Rename the changelog's Unreleased section to the release version and date, "
+"and write the reviewed short summary at `docs/releases/<version>.md`. Use "
+"`make changelog` only for history-generated notes."
+msgstr ""
+"将变更日志的 Unreleased 小节改为发布版本号和日期，并在 `docs/releases/"
+"<version>.md` 写入经过审阅的简短摘要。`make changelog` 仅用于依据提交历史生成"
+"的说明。"
 
-#: src/project/releases.md:122
+#: src/project/releases.md:125
+msgid ""
+"# 1. Bump the release versions in lockstep (fails unless they end up "
+"equal).\n"
+msgstr "# 1. 同步递增发布版本号（除非最终各版本号相等，否则失败）。\n"
+
+#: src/project/releases.md:127
 msgid ""
 "# 2. Regenerate the committed C-ABI header from the bumped crate version.\n"
 msgstr "# 2. 依据递增后的 crate 版本重新生成已提交的 C-ABI 头文件。\n"
 
-#: src/project/releases.md:125
+#: src/project/releases.md:130
 msgid ""
 "# 3. Complete the changelog and reviewed summary, preserving migration "
 "guidance.\n"
 msgstr "# 3. 完善变更日志与经过审阅的摘要，保留迁移指导。\n"
 
-#: src/project/releases.md:127
-msgid "# Use make changelog only for history-generated notes.\n"
-msgstr "# 仅对根据提交历史生成的说明使用 make changelog。\n"
-
-#: src/project/releases.md:130
-msgid ""
-"# 4. Review, then commit the bump, generated header, changelog and summary.\n"
-msgstr "# 4. 审阅后，提交版本递增、生成的头文件、变更日志与摘要。\n"
-
 #: src/project/releases.md:132
+msgid ""
+"# 4. Stage only the reviewed bump, header, changelog and summary, then "
+"commit.\n"
+msgstr "# 4. 仅暂存经过审阅的版本递增、头文件、变更日志与摘要，然后提交。\n"
+
+#: src/project/releases.md:134
 msgid "\"chore(release): 0.2.2\""
 msgstr "\"chore(release): 0.2.2\""
 
-#: src/project/releases.md:133
+#: src/project/releases.md:135
 msgid ""
-"# 5. From an up-to-date main, run every release gate, then push all three "
-"tags.\n"
-msgstr "# 5. 从最新的 main 出发，运行每一道发布关卡，然后推送全部三个标签。\n"
+"# 5. After merging the release PR, use up-to-date main for the gated tag "
+"push.\n"
+msgstr "# 5. 合并发布 PR 后，在最新的 main 上执行带关卡的标签推送。\n"
 
-#: src/project/releases.md:138
+#: src/project/releases.md:140
 msgid ""
 "`make release-tags` refuses to run unless the working tree is clean, the "
 "branch is `main` and synchronized with `origin/main`, the version and "
@@ -25118,19 +25126,19 @@ msgstr ""
 "`VERSION` 与工作树一致、完整的变更日志小节与通过验证且经过审阅的摘要均存在，"
 "且三个标签均未在本地或远程存在。随后它按以下顺序运行各项关卡："
 
-#: src/project/releases.md:145
+#: src/project/releases.md:147
 msgid "`make check`: the Rust and wasm workspace gate and repository hygiene."
 msgstr "`make check`：Rust 与 wasm 工作区关卡及仓库卫生检查。"
 
-#: src/project/releases.md:146
+#: src/project/releases.md:148
 msgid "`make capi-check`: the generated C-ABI/header check and linked C smoke."
 msgstr "`make capi-check`：生成的 C-ABI/头文件检查，以及链接后的 C 冒烟测试。"
 
-#: src/project/releases.md:147
+#: src/project/releases.md:149
 msgid "`make pytest`: the native Python binding suite."
 msgstr "`make pytest`：原生 Python 绑定测试套件。"
 
-#: src/project/releases.md:148
+#: src/project/releases.md:150
 msgid ""
 "`make python-release-check`: build and audit both Python wheel/sdist pairs, "
 "check them with the pinned publisher tools, and install them together."
@@ -25138,11 +25146,11 @@ msgstr ""
 "`make python-release-check`：构建并审计两个 Python 分发包各自的 wheel/sdist，"
 "使用固定版本的发布工具检查它们，并将它们一同安装。"
 
-#: src/project/releases.md:150
+#: src/project/releases.md:152
 msgid "`make wasm-pkg-test`: the optimized size-gated npm/wasm package tests."
 msgstr "`make wasm-pkg-test`：经过优化、带体积关卡的 npm/wasm 包测试。"
 
-#: src/project/releases.md:151
+#: src/project/releases.md:153
 msgid ""
 "`make capi-bundle`: build and audit the native C distribution, including "
 "recipient notices and relocated linked smoke."
@@ -25150,7 +25158,7 @@ msgstr ""
 "`make capi-bundle`：构建并审计原生 C 分发包，包括接收方许可声明与重定位后的链"
 "接冒烟测试。"
 
-#: src/project/releases.md:154
+#: src/project/releases.md:156
 msgid ""
 "Only after every surface passes does it recheck the clean synchronized state "
 "and atomically push the `rust-v`, `py-v`, and `npm-v` tags together. No tag "
@@ -25168,11 +25176,11 @@ msgstr ""
 "完整的变更日志。共享检查器会在打标签与发布之前验证精确的版本及 64 KiB 的 "
 "UTF-8 体积上限；发布说明不会被截断。"
 
-#: src/project/releases.md:162
+#: src/project/releases.md:164
 msgid "Citing PurRDF"
 msgstr "引用 PurRDF"
 
-#: src/project/releases.md:164
+#: src/project/releases.md:166
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -27470,6 +27478,47 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid "# Use make changelog only for history-generated notes.\n"
+#~ msgstr "# 仅对根据提交历史生成的说明使用 make changelog。\n"
+
+#~ msgid ""
+#~ "Topological predicates, accessors and exactly computable measures over "
+#~ "vector geometry, not a PostGIS: no CRS transform, no ellipsoidal "
+#~ "geodesic, no buffers, no concave hull, no overlay set operations, no "
+#~ "raster — each unimplemented function hard-errors by name "
+#~ "(`geof:convexHull` is implemented)."
+#~ msgstr ""
+#~ "是矢量几何上的拓扑谓词、访问器与可精确计算的度量，不是 PostGIS：没有 CRS "
+#~ "变换，没有椭球大地测量，没有缓冲区，没有凹包，没有叠加集合运算，没有栅格——"
+#~ "每个未实现的函数都按名称硬错误（`geof:convexHull` 已实现）。"
+
+#~ msgid ""
+#~ "**No feature flags — ever.** There are deliberately no Cargo feature "
+#~ "flags anywhere in the workspace, and CI enforces this. A data carrier "
+#~ "must not have optional behavior: optionality changes semantics per "
+#~ "consumer, so every consumer gets the same byte-identical semantics "
+#~ "instead."
+#~ msgstr ""
+#~ "**没有 feature 标志——永远没有。** 整个工作区刻意不含任何 Cargo feature 标"
+#~ "志，CI 强制执行这一点。数据载体不得有可选行为：可选性会让语义因使用方而"
+#~ "异，因此每个使用方得到的是同样的、逐字节相同的语义。"
+
+#~ msgid "PurRDF is NOT an ontology — it mints no vocabulary IRIs"
+#~ msgstr "PurRDF 不是本体——它不生成任何词汇表 IRI"
+
+#~ msgid ""
+#~ "The coherent flow from `main` uses the `make` helpers so the three lanes "
+#~ "can never drift:"
+#~ msgstr ""
+#~ "从 `main` 出发的连贯流程使用 `make` 辅助目标，因此三条通道永远不会出现偏"
+#~ "差："
+
+#~ msgid ""
+#~ "# 5. From an up-to-date main, run every release gate, then push all three "
+#~ "tags.\n"
+#~ msgstr ""
+#~ "# 5. 从最新的 main 出发，运行每一道发布关卡，然后推送全部三个标签。\n"
 
 #~ msgid ""
 #~ "// Discover every slice under the repository root from its manifest.ttl.\n"

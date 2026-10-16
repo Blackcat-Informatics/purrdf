@@ -24,11 +24,14 @@ that parse or serialize differently would defeat the whole point. No other
 `[features]`, no optional dependencies, and no feature-gated behavior. Every
 consumer gets the same byte-identical semantics.
 
-## PurRDF is NOT an ontology — it mints no vocabulary IRIs
+## Explicit application vocabularies
 
-Every vocabulary the library reads or writes — slice manifests,
+PurRDF is not an ontology. Structural Markdown and ordered JSON offer named
+standard profiles and vocabularies under their shipped specifications; callers
+select a profile deliberately or supply a vocabulary. There is no implicit
+namespace fallback. Other application vocabularies — slice manifests,
 statement-metadata downcast, box roles, SPARQL extension-function namespaces,
-JSON-Schema namespaces — is **caller-supplied configuration with no
+JSON-Schema namespaces — are **caller-supplied configuration with no
 fabricated default**. A feature exercised without its vocabulary hard-errors
 or stays inactive. The library never hardcodes a vendor namespace (the GMEOW
 ontology is a *consumer*; the dependency arrow never points from purrdf to
@@ -64,7 +67,7 @@ the *same engine* rather than a port.
 
 Across the toolkit, out-of-scope input is a **typed error**, never a partial
 answer: malformed RDF is an `RdfDiagnostic`, an unsupported SPARQL builtin is
-`EvalError::Unsupported`, a malformed ShEx schema is a `ShexError`, a passed
+`EvalError::Unsupported`, malformed ShEx syntax is a `ShexError`, a passed
 evaluation limit is `EntailError::Evaluate` rather than a truncated closure, and
 an unsupported results projection is a typed format error. Lossy-by-design
 projections are permitted but *loud*, via the

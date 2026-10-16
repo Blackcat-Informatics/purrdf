@@ -24,9 +24,8 @@ MIT OR Apache-2.0 OR MulanPSL-2.0.
 PostgreSQL instance running beside a triple store — ranked full-text search,
 spatial predicates, and vector similarity — are answered inside PurRDF:
 in-process, over the same dataset, from the same SPARQL query, with no second
-database and no sync job. Each answer is exact and deterministic, natively and
-on wasm32. This is not a projection: these query surfaces have already removed
-a whole PostgreSQL requirement from one RDF project. See
+database and no sync job. The numeric contracts are explicit: exact text scores,
+certified geographic results, and deterministic binary64 vector scores. See
 [One engine instead of three databases](#one-engine-instead-of-three-databases)
 below.
 
@@ -115,29 +114,30 @@ dataset already in memory, through the evaluator's caller-keyed extension seams
 | You needed | Usually from | Now inside PurRDF | Where it stops |
 | --- | --- | --- | --- |
 | Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no floating point in the crate. | Exact BM25F, explicit stemming/dictionaries and independent Han retrieval; no stop-word lists or query dialect; an in-memory index built once over a frozen dataset. |
-| Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM; no GEOS, no PROJ. | Topological predicates, accessors and exactly computable measures over vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, no buffers, no concave hull, no overlay set operations, no raster — each unimplemented function hard-errors by name (`geof:convexHull` is implemented). |
+| Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo-kernel` through `purrdf-geo`, with exact WKT/GeoJSON coordinates, DE-9IM relations, geographic metrics, buffers and explicit coordinate operations; no GEOS or PROJ. | References, units, operation chains, numerical limits and tolerances are explicit. No raster; concave hulls and overlay set operations remain named refusals. See the chapter's function coverage. |
 | Vector similarity | pgvector | [Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a PURREMB embedding space, binary64 in a pinned accumulation order. | Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no approximate index; PurRDF computes no embeddings — the vectors come from a PURREMB artifact the caller fills, which PurRDF itself writes (`EmbeddingBuilder`, `EmbeddingStreamWriter`; Rust only) and opens fail-closed. |
 
-All three are pure functions of their input on every target — fixed point,
-exact rationals, or a pinned binary64 order, with canonical tie-breaks — and
-native Rust tests pin their numeric and serialized expectations. `make wasm`
-builds all three crates for `wasm32-unknown-unknown`; focused WASM tests exercise
-actual dispatch, SIMD kernels and host interfaces. They are Rust-host seams: a host registers an index or space under its own IRIs, and
-that host may itself be compiled to wasm32. The shipped npm package and Python
-wheel do not yet expose these three relations.
+Text ranking uses exact fixed point; embedding search uses a pinned binary64
+accumulation order and canonical tie-breaks. Geographic requests retain exact
+coordinate inputs and use explicit numerical certification. Native tests pin
+numeric and serialized expectations. `make wasm` builds their release crates
+for `wasm32-unknown-unknown`; focused portable tests exercise dispatch, kernels
+and hosts. Text indexes and embedding spaces use Rust-host registration seams
+under caller-supplied IRIs, including hosts compiled to wasm32. The packaged
+geographic host entries are documented in [GeoSPARQL](sparql/geosparql.md).
 
 ## Two design rules worth knowing on day one
 
-**No feature flags — ever.** There are deliberately no Cargo feature flags
-anywhere in the workspace, and CI enforces this. A data carrier must not have
-optional behavior: optionality changes semantics per consumer, so every
-consumer gets the same byte-identical semantics instead.
+**No semantic Cargo features.** Every consumer gets the same byte-identical
+semantics. The sole feature declaration is the empty `purrdf-capi:capi = []`
+compatibility marker required by `cargo-c`; it gates no code. CI refuses other
+features, optional dependencies and feature-gated behavior.
 
-**PurRDF is a toolkit, not an ontology — it mints no vocabulary IRIs.** Every
-vocabulary the library reads or writes is caller-supplied configuration with no
-fabricated default. A feature exercised without its vocabulary hard-errors or
-stays inactive; it never invents an IRI for you. (Test fixtures use
-`example.org`.)
+**Application vocabularies are explicit.** PurRDF is a toolkit, not an ontology.
+Structural Markdown and ordered JSON provide named standard profiles; callers
+select them deliberately or supply a vocabulary. Other application vocabularies
+are caller-supplied configuration with no fabricated default. A feature used
+without its vocabulary hard-errors or stays inactive. Test fixtures use `example.org`.
 
 The full invariant list is in
 [Design Rules & Invariants](project/design-rules.md).

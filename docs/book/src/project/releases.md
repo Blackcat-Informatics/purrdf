@@ -29,7 +29,8 @@ version-coherence check in CI fails the build if the version sources
 
 The one exception is the C ABI. `libpurrdf`'s
 [`purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h)
-carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.10**), bumped
+carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`, declared in that generated
+header and bumped
 on every exported-signature change, pinned by
 `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through
 `purrdf_abi_version`. It is versioned separately from the workspace and stays
@@ -45,9 +46,8 @@ changelog; it rides a **minor** bump and never ships in a patch release.
 
 The MSRV is a promise to consumers; the development toolchain is a tool
 choice, and the two are orthogonal. `rust-toolchain.toml` names a **floating
-nightly** for local work and the CI gates, because nightly clippy and rustdoc
-carry lints stable lacks and its default borrow checker is the stronger one —
-but by policy the source uses zero nightly (unstable) features (no
+nightly** for local work and the CI gates to use its current clippy and rustdoc
+analysis. By policy the source uses zero nightly (unstable) features (no
 `#![feature(...)]` attributes, which the MSRV job proves on every change), and the release lanes build every
 published artifact on stable.
 
@@ -68,9 +68,9 @@ cargo lane:
 - every workspace crate version must match the tag version.
 
 Every functional version of every crate in the 33-crate release set is
-published by that lane. Each existing crate record is locked on crates.io with
-*Require trusted publishing* (`trustpub_only`), so an API token cannot publish
-a new version of any of them: crates.io answers with
+published by that lane. Functional publication requires the crate records to be
+locked with *Require trusted publishing* (`trustpub_only`). That setting prevents
+an API token from publishing a new version: crates.io answers with
 `403 Forbidden: New versions of this crate can only be published using Trusted Publishing`.
 
 Set up new crate records **before tagging**. A token creates each missing
@@ -113,25 +113,27 @@ dev-dependencies too.
 
 ## Cutting a release
 
-The coherent flow from `main` uses the `make` helpers so the three lanes can
-never drift:
+Prepare the release bump on an isolated branch, using the `make` helpers to
+keep the three lanes aligned. Merge the reviewed release changes before cutting
+tags from a clean, synchronized `main`:
+
+Rename the changelog's Unreleased section to the release version and date, and
+write the reviewed short summary at `docs/releases/<version>.md`. Use
+`make changelog` only for history-generated notes.
 
 ```sh
-# 1. Bump all three version sources in lockstep (fails unless they end up equal).
+# 1. Bump the release versions in lockstep (fails unless they end up equal).
 make bump VERSION=0.2.2
 
 # 2. Regenerate the committed C-ABI header from the bumped crate version.
 make capi-header
 
 # 3. Complete the changelog and reviewed summary, preserving migration guidance.
-# Rename the Unreleased section to the bumped version and release date.
-# Use make changelog only for history-generated notes.
-# Add the reviewed short summary at docs/releases/<version>.md.
 
-# 4. Review, then commit the bump, generated header, changelog and summary.
-git add -A && git commit -m "chore(release): 0.2.2"
+# 4. Stage only the reviewed bump, header, changelog and summary, then commit.
+git commit -m "chore(release): 0.2.2"
 
-# 5. From an up-to-date main, run every release gate, then push all three tags.
+# 5. After merging the release PR, use up-to-date main for the gated tag push.
 make release-tags VERSION=0.2.2
 ```
 
