@@ -211,7 +211,7 @@ exact requirement and the bound), or whose storage the host refused to allocate
 each row, and zero withholds a resource completely.
 
 Every `xpath-*` code is **operational**. It is never a syntax verdict and never a
-non-match: an invalid pattern or flag (FORX0001), an empty-matching replacement
+non-match: invalid flags (FORX0001), an invalid pattern (FORX0002), an empty-matching replacement
 pattern (FORX0003) or invalid replacement text (FORX0004) is the host's ordinary
 invalid-pattern outcome instead, which is a SPARQL expression error, a SHACL
 finding or a failed ShEx facet. A refusal fails the whole operation. A query
