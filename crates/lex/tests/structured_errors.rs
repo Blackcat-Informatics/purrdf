@@ -15,6 +15,86 @@ struct Fields<'error> {
 
 struct RefusingRead;
 
+#[test]
+fn record_failures_keep_native_values_names_lists_and_external_messages() {
+    use purrdf_lex::json::{
+        Value,
+        record::{DecodeError, FromJson, Within},
+    };
+    use purrdf_testkit::error_capture::{Capture, Event};
+
+    let original = Value::String("a\n\"b".to_owned());
+    let error = bool::from_json(&original)
+        .expect_err("a string is not a boolean")
+        .within("a/b~c");
+    let record = Capture::read(&error);
+    assert!(matches!(
+        record.field("pointer"),
+        ErrorValue::Text("/a~1b~0c")
+    ));
+    assert!(matches!(
+        record.field("external_message"),
+        ErrorValue::Absent
+    ));
+    let cause = record.child("cause");
+    assert_eq!(cause.code, "json-record-invalid-type");
+    assert!(matches!(
+        cause.field("expected"),
+        ErrorValue::Text("a boolean")
+    ));
+    let found = cause.child("found");
+    assert_eq!(found.code, "json-record-found-string");
+    assert!(matches!(found.field("value"), ErrorValue::Text("a\n\"b")));
+
+    let error = DecodeError::unknown_variant("unlisted", &["first", "second", "third"]);
+    let cause = Capture::read(&error).child("cause");
+    assert_eq!(cause.code, "json-record-unknown-variant");
+    assert!(matches!(
+        cause.events.as_slice(),
+        [
+            Event::Value(Some("variant"), ErrorValue::Text("unlisted")),
+            Event::BeginList(Some("expected"), 3),
+            Event::Value(None, ErrorValue::Text("first")),
+            Event::Value(None, ErrorValue::Text("second")),
+            Event::Value(None, ErrorValue::Text("third")),
+            Event::EndList,
+        ]
+    ));
+    let empty = DecodeError::unknown_field("extra", &[]);
+    assert!(matches!(
+        Capture::read(&empty).child("cause").events.as_slice(),
+        [
+            Event::Value(Some("field"), ErrorValue::Text("extra")),
+            Event::BeginList(Some("expected"), 0),
+            Event::EndList,
+        ]
+    ));
+    let external = DecodeError::custom("a genuine external message");
+    assert!(matches!(
+        Capture::read(&external).field("external_message"),
+        ErrorValue::Message("a genuine external message")
+    ));
+}
+
+#[test]
+fn record_json_transport_keeps_original_parser_cause_and_offset() {
+    use purrdf_lex::json::{self, record};
+    use purrdf_testkit::error_capture::Capture;
+
+    let input = b"\"\\uDEAD\"";
+    let original = json::read_slice(input, json::Limits::DEFAULT).expect_err("unpaired surrogate");
+    let error = record::from_slice::<String>(input).expect_err("the original document is invalid");
+    let parser = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(parser.code, "json-document");
+    assert!(
+        matches!(parser.field("offset"), ErrorValue::ByteCount(offset) if offset == original.offset() as u128)
+    );
+    assert_eq!(
+        parser.child("kind").child("cause").code,
+        "json-escape-unpaired-low"
+    );
+}
+
 impl std::io::Read for RefusingRead {
     fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
         Err(std::io::ErrorKind::PermissionDenied.into())

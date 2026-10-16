@@ -49,6 +49,116 @@ impl Admission for Account {
 }
 
 #[test]
+fn native_record_diagnostic_retains_only_original_admitted_storage_and_refunds_failures() {
+    use purrdf_lex::allocation::Memory;
+    use purrdf_lex::json::record::{DecodeError, RecordAllocation, RecordMemory};
+    use purrdf_testkit::error_capture::Capture;
+    use std::cell::RefCell;
+
+    let expected = ["declared"; 100];
+    let mut account = Account::new(1_000_000);
+    let memory = RefCell::new(Memory::new(&mut account));
+    let allocation = RecordMemory::new(&memory);
+    let window = CurrentThreadWindow::open();
+    let error = DecodeError::unknown_variant_native("offered", &expected, Some(&allocation));
+    let measured = window.close();
+    assert_eq!(error.storage_error(), None);
+    let retained = memory.borrow().admitted_bytes();
+    assert_eq!(retained, usize::try_from(measured.retained_bytes).unwrap());
+    let events = Vec::with_capacity(expected.len() + 3);
+    let window = CurrentThreadWindow::open();
+    let record = Capture::read_with_buffer(&error, events);
+    let purrdf_hash::error::ErrorValue::Cause(cause) = record.field("cause") else {
+        panic!("the original record failure must remain typed");
+    };
+    let cause = Capture::read_with_buffer(cause, record.events);
+    let inspected = window.close();
+    assert_eq!(inspected.allocations, 0);
+    assert_eq!(cause.code, "json-record-unknown-variant");
+    drop(cause);
+    allocation.release_diagnostic(error).unwrap();
+    assert_eq!(memory.borrow().admitted_bytes(), 0);
+    assert_eq!(account.live, 0);
+
+    for limit in [0, 32, 1024, retained - 1] {
+        let mut account = Account::new(limit);
+        let memory = RefCell::new(Memory::new(&mut account));
+        let allocation = RecordMemory::new(&memory);
+        let window = CurrentThreadWindow::open();
+        let error = DecodeError::unknown_variant_native("offered", &expected, Some(&allocation));
+        let measured = window.close();
+        assert_eq!(error.storage_error(), Some(StorageError::AdmissionFailed));
+        assert_eq!(memory.borrow().admitted_bytes(), 0);
+        assert_eq!(measured.retained_bytes, 0);
+        drop(error);
+        assert_eq!(account.live, 0);
+        assert!(account.refused.unwrap() > limit);
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
+    }
+}
+
+#[test]
+fn native_record_pointer_refusal_disposes_the_replaced_diagnostic_before_refund() {
+    use purrdf_lex::allocation::Memory;
+    use purrdf_lex::json::record::{DecodeError, RecordMemory, Within};
+    use std::cell::RefCell;
+
+    for mode in 0..3 {
+        let mut account = Account::new(1_000_000);
+        let memory = RefCell::new(Memory::new(&mut account));
+        let allocation = RecordMemory::new(&memory);
+        let error =
+            DecodeError::unknown_variant_native("offered", &["declared"], Some(&allocation))
+                .within_native("already", Some(&allocation));
+        assert_eq!(error.storage_error(), None);
+        let live = memory.borrow().admitted_bytes();
+        memory.borrow_mut().admission_mut().limit = live + if mode == 2 { 8 } else { 0 };
+        let error = if mode == 0 {
+            error.within_native("next", Some(&allocation))
+        } else {
+            error.within_index_native(1, Some(&allocation))
+        };
+        assert_eq!(error.storage_error(), Some(StorageError::AdmissionFailed));
+        assert_eq!(memory.borrow().admitted_bytes(), 0);
+        assert_eq!(account.live, 0);
+    }
+}
+
+#[test]
+fn native_record_json_storage_transport_keeps_the_reader_offset_without_allocating() {
+    use purrdf_lex::allocation::Memory;
+    use purrdf_lex::json::{Limits, Reader, record::DecodeError};
+    use purrdf_testkit::error_capture::Capture;
+    let mut account = Account::new(0);
+    let mut memory = Memory::new(&mut account);
+    let original = Reader::new("\n  {\"name\":\"value\"}", Limits::DEFAULT)
+        .read_value_with_memory(&mut memory)
+        .expect_err("the original grant refuses");
+    let offset = original.offset();
+    assert!(
+        offset > 0,
+        "the leading whitespace precedes the actual refusal"
+    );
+    let window = CurrentThreadWindow::open();
+    let error = DecodeError::from(original);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(error.storage_error(), Some(StorageError::AdmissionFailed));
+    let cause = Capture::read(&error).child("cause");
+    assert_eq!(cause.code, "json-record-json");
+    let parser = cause.child("cause");
+    assert_eq!(parser.code, "json-document");
+    assert!(
+        matches!(parser.field("offset"), purrdf_hash::error::ErrorValue::ByteCount(value) if value == offset as u128)
+    );
+    assert_eq!(
+        parser.child("kind").child("cause").code,
+        "storage-admission-failed"
+    );
+    assert_eq!(memory.admitted_bytes(), 0);
+}
+
+#[test]
 fn reifier_target_order_uses_original_admission_and_warmed_probes_allocate_nothing() {
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_lex::allocation::Memory;

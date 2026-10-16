@@ -1409,7 +1409,7 @@ names = ['^(emit_structured_error_list|visit_structured_error_list)$']
 [[job]]
 id = "structured-error-capture"
 summary = "A generic test consumer retaining original error fields, unnamed entries and list boundaries without formatting or native enum mirrors"
-home = "purrdf_testkit::error_capture::Capture::read"
+home = "purrdf_testkit::error_capture::Capture::read_with_buffer"
 entry_points = []
 spec = "purrdf_hash::error event protocol; one borrowed producer capture, with explicit variant identity and ordered typed/list events"
 vectors = []

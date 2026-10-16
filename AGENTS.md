@@ -147,7 +147,7 @@ order, with the home each names. Call the home; never write a second body.
 | `constant-time-byte-comparison` | `purrdf_ed25519::constant_time_eq` |
 | `prefixed-name` | `purrdf_iri::contract_where` |
 | `structured-error-list` | `purrdf_hash::error::visit_list` |
-| `structured-error-capture` | `purrdf_testkit::error_capture::Capture::read` |
+| `structured-error-capture` | `purrdf_testkit::error_capture::Capture::read_with_buffer` |
 
 ### Shared structures and constructors
 

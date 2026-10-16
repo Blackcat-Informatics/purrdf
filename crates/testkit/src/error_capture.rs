@@ -32,7 +32,20 @@ impl<'error> Capture<'error> {
     /// # Panics
     /// Fails a producer that omits or repeats its variant identity.
     pub fn read(error: &'error dyn StructuredError) -> Self {
-        let mut sink = Sink::default();
+        Self::read_with_buffer(error, Vec::new())
+    }
+
+    /// Inspect using a reusable event buffer, preserving its existing capacity.
+    /// This lets allocation controls exclude the consumer's own destination.
+    ///
+    /// # Panics
+    /// Fails a producer that omits or repeats its variant identity.
+    pub fn read_with_buffer(
+        error: &'error dyn StructuredError,
+        mut events: Vec<Event<'error>>,
+    ) -> Self {
+        events.clear();
+        let mut sink = Sink { code: None, events };
         error.visit(&mut sink);
         Self {
             code: sink.code.expect("the producer must report its variant"),
