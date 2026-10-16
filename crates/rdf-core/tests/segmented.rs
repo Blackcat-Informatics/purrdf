@@ -44,6 +44,91 @@ fn session(image: &SegmentedImage, cache: u32) -> SegmentedSession {
     .unwrap()
 }
 
+fn construction_limits_grow_on_input_instead_of_reserving_their_ceilings() {
+    let values = [
+        TermValue::iri("https://example.org/subject"),
+        TermValue::iri("https://example.org/predicate"),
+        TermValue::iri("https://example.org/object"),
+    ];
+    let first = (1_u64 << 54) + 7;
+    let mut observations = Vec::new();
+    let mut images = Vec::new();
+    for limits in [
+        SegmentedBuildLimits::new(16, 4096, 3, 1024, 4).unwrap(),
+        SegmentedBuildLimits::new(u32::MAX - 1, u32::MAX, u32::MAX, 1024, 4).unwrap(),
+    ] {
+        let limits = limits.with_first_term_index(first).unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let mut builder = SegmentedBuilder::new(limits).unwrap();
+        let empty = window.close();
+        assert_eq!(empty.allocations, 0);
+        assert_eq!(empty.retained_bytes, 0);
+        let mut ids = Vec::with_capacity(values.len());
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        for &object in &ids {
+            builder
+                .push_quad(QuadIds {
+                    s: ids[0],
+                    p: ids[1],
+                    o: object,
+                    g: None,
+                })
+                .unwrap();
+        }
+        let grown = window.close();
+        observations.push((
+            grown.allocations,
+            grown.retained_bytes,
+            grown.peak_working_bytes,
+        ));
+        let image = builder.seal().unwrap();
+        let read = session(&image, 2);
+        assert_eq!(read.term_count(), 3);
+        assert_eq!(read.quads().count(), 3);
+        for (value, id) in values.iter().zip(ids) {
+            assert!(id.index() > (1_u64 << 53));
+            assert_eq!(read.term_value(id).unwrap(), *value);
+        }
+        images.push(image);
+    }
+    assert_eq!(observations[0], observations[1]);
+    assert_eq!(images[0].bytes(), images[1].bytes());
+}
+
+fn demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic() {
+    let mut builder =
+        SegmentedBuilder::new(SegmentedBuildLimits::new(2, 4096, 1, 1024, 4).unwrap()).unwrap();
+    let values = [
+        TermValue::iri("https://example.org/s"),
+        TermValue::iri("https://example.org/p"),
+    ];
+    let mut ids = Vec::new();
+    builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+    assert!(matches!(
+        builder.intern_batch(
+            &[TermValue::iri("https://example.org/refused")],
+            |_, _| panic!("refused term must not be published")
+        ),
+        Err(SegmentedError::ConstructionLimit)
+    ));
+    let quad = QuadIds {
+        s: ids[0],
+        p: ids[1],
+        o: ids[0],
+        g: None,
+    };
+    builder.push_quad(quad).unwrap();
+    assert!(matches!(
+        builder.push_quad(quad),
+        Err(SegmentedError::ConstructionLimit)
+    ));
+    let image = builder.seal().unwrap();
+    let read = session(&image, 2);
+    assert_eq!(read.term_count(), 2);
+    assert_eq!(read.quads().count(), 1);
+}
+
 fn indexed_reopen_preserves_high_ids_and_bidirectional_batches() {
     let values: Vec<_> = (0..37)
         .map(|n| TermValue::iri(format!("http://example.org/中文/long/{n:04}")))
@@ -604,6 +689,8 @@ fn composite_lexical_blank_references_keep_their_scoped_dictionary_closure() {
 }
 
 purrdf_testkit::harness_main!(
+    construction_limits_grow_on_input_instead_of_reserving_their_ceilings,
+    demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic,
     indexed_reopen_preserves_high_ids_and_bidirectional_batches,
     live_pins_are_charged_and_cannot_be_evicted,
     exact_evidence_and_workspace_refuse_before_unbounded_growth,

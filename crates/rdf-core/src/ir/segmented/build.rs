@@ -29,7 +29,7 @@ pub struct SegmentedBuildLimits {
     first_term_index: u64,
 }
 impl SegmentedBuildLimits {
-    /// Choose all resident capacities and the persisted block layout explicitly.
+    /// Choose resident construction limits and the persisted block layout explicitly.
     ///
     /// # Errors
     /// Refuses invalid block sizes or zero/oversized dictionary block counts.
@@ -70,7 +70,7 @@ impl SegmentedBuildLimits {
     }
 }
 
-/// Small resident construction path with pre-admitted term/string/row capacities.
+/// Resident construction with explicit limits and storage grown as input arrives.
 /// The ordinary validated IR builder owns RDF normalization and positional checks.
 /// This constructor's bounded IDs are translated arithmetically, without a global
 /// per-page translation vector.
@@ -83,16 +83,10 @@ pub struct SegmentedBuilder {
     admitted_rows: u64,
 }
 impl SegmentedBuilder {
-    /// Reserve the resident fixture capacities before accepting input.
+    /// Start an empty resident builder without allocating its declared ceilings.
     pub fn new(limits: SegmentedBuildLimits) -> Result<Self, SegmentedError> {
-        let mut builder = RdfDatasetBuilder::new();
-        builder.reserve_for_replay(
-            usize::try_from(limits.terms).expect("u32 capacity fits supported pointer widths"),
-            usize::try_from(limits.term_bytes).expect("u32 capacity fits supported pointer widths"),
-            usize::try_from(limits.rows).expect("u32 capacity fits supported pointer widths"),
-        )?;
         Ok(Self {
-            builder,
+            builder: RdfDatasetBuilder::new(),
             limits,
             admitted_terms: 0,
             admitted_bytes: 0,
@@ -128,7 +122,7 @@ impl SegmentedBuilder {
     ///
     /// # Errors
     /// Refuses before interning when conservative referenced-term/string bounds
-    /// would exceed the pre-reserved resident capacities.
+    /// would exceed the declared resident construction limits.
     pub fn intern_batch(
         &mut self,
         values: &[TermValue],
