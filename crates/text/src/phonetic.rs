@@ -119,7 +119,12 @@ impl DoubleMetaphone {
     /// Returns a configuration error for a bound outside that interval.
     pub fn new(max_code_len: usize) -> Result<Self, TextError> {
         if !(1..=MAX_CODE_LENGTH).contains(&max_code_len) {
-            return Err(TextError::config("phonetic code length must be in 1..=64"));
+            return Err(
+                crate::configuration::ConfigurationRefusal::PhoneticCodeLength {
+                    requested: max_code_len,
+                }
+                .into_error(),
+            );
         }
         Ok(Self { max_code_len })
     }
@@ -805,9 +810,10 @@ impl PreparedDistance {
 
 fn validate_threshold(threshold: usize) -> Result<(), TextError> {
     if threshold > MAX_EDIT_DISTANCE {
-        Err(TextError::config(
-            "edit-distance threshold must be in 0..=64",
-        ))
+        Err(crate::configuration::ConfigurationRefusal::EditThreshold {
+            requested: threshold,
+        }
+        .into_error())
     } else {
         Ok(())
     }

@@ -2783,7 +2783,8 @@ mod tests {
             )
             .expect_err("three partitions have no one ranked order");
         match error {
-            TextError::Config(message) => {
+            TextError::Config(diagnostic) => {
+                let message = diagnostic.message();
                 assert!(message.contains("rank is computed within one"), "{message}");
                 assert!(message.contains("GraphSelector"), "{message}");
             }

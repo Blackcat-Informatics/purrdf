@@ -183,25 +183,25 @@ impl<P: CorpusProfile> TextIndexConfig<P> {
         analyzer: Analyzer,
     ) -> Result<Self, TextError> {
         if predicates.is_empty() {
-            return Err(TextError::config(
-                "no indexed predicates supplied; PurRDF mints no vocabulary, so there is no \
-                 default predicate set to fall back on",
-            ));
+            return Err(crate::configuration::ConfigurationRefusal::NoPredicates.into_error());
         }
         for predicate in &predicates {
             if !matches!(predicate, TermValue::Iri(_)) {
-                return Err(TextError::config(format!(
-                    "indexed predicate {predicate:?} is not an IRI; only an IRI can occupy the \
-                     predicate position of an RDF statement"
-                )));
+                return Err(
+                    crate::configuration::ConfigurationRefusal::IndexedPredicate {
+                        predicate: predicate.clone(),
+                    }
+                    .into_error(),
+                );
             }
         }
         if let Some(GraphSelector::Named(name)) = P::selector(&graph)
             && !matches!(name, TermValue::Iri(_))
         {
-            return Err(TextError::config(format!(
-                "named graph selector {name:?} is not an IRI"
-            )));
+            return Err(crate::configuration::ConfigurationRefusal::NamedGraph {
+                graph: name.clone(),
+            }
+            .into_error());
         }
 
         let mut predicates = predicates;
@@ -211,9 +211,12 @@ impl<P: CorpusProfile> TextIndexConfig<P> {
                 unreachable!("windows(2) yields pairs")
             };
             if left == right {
-                return Err(TextError::config(format!(
-                    "indexed predicate {left:?} is listed more than once"
-                )));
+                return Err(
+                    crate::configuration::ConfigurationRefusal::DuplicatePredicate {
+                        predicate: left.clone(),
+                    }
+                    .into_error(),
+                );
             }
         }
 
@@ -1346,7 +1349,10 @@ impl<P: CorpusProfile> TextIndex<P> {
             .predicates
             .binary_search(predicate)
             .map_err(|_| {
-                TextError::config("field scope predicate is not selected by this text index")
+                crate::configuration::ConfigurationRefusal::ScopePredicate {
+                    predicate: predicate.clone(),
+                }
+                .into_error()
             })?;
         let ordinal = u32::try_from(ordinal).map_err(|_| {
             crate::query_workspace::arithmetic_error(
@@ -1804,9 +1810,7 @@ fn collect_rows<D: DatasetView, P: CorpusProfile>(
     config: &TextIndexConfig<P>,
 ) -> Result<(Vec<SourceRow<P>>, SourceCoverage), TextError> {
     if P::GRAPH_FREE && dataset.supports_named_graphs() {
-        return Err(TextError::config(
-            "the graph-free text profile requires a graph-free source",
-        ));
+        return Err(crate::configuration::ConfigurationRefusal::GraphFreeSource.into_error());
     }
     dataset
         .checked_read(|dataset| {

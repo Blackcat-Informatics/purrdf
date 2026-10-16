@@ -441,9 +441,10 @@ pub(crate) fn select_scoped_counted<P: CorpusProfile>(
     let terms = distinct_terms(needle);
     for scope in scopes {
         if terms.binary_search(&scope.term).is_err() {
-            return Err(TextError::config(
-                "field scope token is outside the analyzed query needle",
-            ));
+            return Err(crate::configuration::ConfigurationRefusal::ScopeToken {
+                token: scope.term.to_owned(),
+            }
+            .into_error());
         }
         if index
             .config()
@@ -451,9 +452,10 @@ pub(crate) fn select_scoped_counted<P: CorpusProfile>(
             .binary_search(scope.predicate)
             .is_err()
         {
-            return Err(TextError::config(
-                "field scope predicate is not selected by this text index",
-            ));
+            return Err(crate::configuration::ConfigurationRefusal::ScopePredicate {
+                predicate: scope.predicate.clone(),
+            }
+            .into_error());
         }
     }
     select_counted_with_membership(

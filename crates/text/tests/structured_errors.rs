@@ -232,6 +232,100 @@ fn exact_integer_records_preserve_all_binary_limbs_without_rendering() {
     );
 }
 
+fn configuration_bounds_keep_the_requested_value_and_native_limit() {
+    use purrdf_text::phonetic::PreparedDistance;
+    let requested = usize::MAX;
+    for (error, code, maximum) in [
+        (
+            AnalyzerProfile::new(requested).unwrap_err(),
+            "text-config-token-bound",
+            1024,
+        ),
+        (
+            DoubleMetaphone::new(requested).unwrap_err(),
+            "text-config-phonetic-code-length",
+            64,
+        ),
+        (
+            AnalyzerProfile::standard()
+                .with_phonetics(4, requested)
+                .unwrap_err(),
+            "text-config-phonetic-distance",
+            64,
+        ),
+        (
+            PreparedDistance::new("a", requested).unwrap_err(),
+            "text-config-edit-threshold",
+            64,
+        ),
+    ] {
+        assert!(matches!(&error, TextError::Config(_)));
+        let error: EvalError = error.into();
+        let cause = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(cause.code, code);
+        assert!(
+            matches!(cause.field("requested"), ErrorValue::Unsigned(value) if value == requested as u128)
+        );
+        assert!(matches!(cause.field("maximum"), ErrorValue::Unsigned(value) if value == maximum));
+    }
+}
+
+fn configuration_ranking_keeps_signed_values_and_field_indices() {
+    use purrdf_text::{Fixed, RankingField, RankingProfile};
+    let error = RankingField::new("title", Fixed::from_raw(i128::MIN), Fixed::ZERO).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid text-index configuration: a field needs a name and a nonnegative weight"
+    );
+    let error: EvalError = error.into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-config-field-name-or-weight");
+    assert!(matches!(cause.field("name"), ErrorValue::Text("title")));
+    assert!(matches!(
+        cause.field("weight_raw"),
+        ErrorValue::Signed(i128::MIN)
+    ));
+    let field = RankingField::new("body", Fixed::ONE, Fixed::ZERO).unwrap();
+    let error: EvalError = RankingProfile::new(vec![field], Vec::new(), Some(usize::MAX))
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-config-unclassified-field");
+    assert!(
+        matches!(cause.field("field"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    assert!(matches!(cause.field("fields"), ErrorValue::Unsigned(1)));
+}
+
+fn configuration_predicates_keep_terms_and_original_iri_causes() {
+    use purrdf_core::TermValue;
+    use purrdf_text::{GraphSelector, RankingProfile, TextIndexConfig};
+    let error: EvalError = TextIndexConfig::new(
+        vec![TermValue::iri("https://example.org/p")],
+        GraphSelector::Named(TermValue::Blank {
+            label: "graph".to_owned(),
+            scope: purrdf_core::BlankScope(7),
+        }),
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap_err()
+    .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-config-named-graph");
+    assert!(matches!(cause.field("graph"), ErrorValue::Term(_)));
+    let error: EvalError = RankingProfile::single_field()
+        .field_for(&TermValue::iri("https://example.org/a b"))
+        .unwrap_err()
+        .into();
+    let cause = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(cause.code, "text-config-ranking-iri");
+    assert!(matches!(
+        cause.field("iri"),
+        ErrorValue::Iri("https://example.org/a b")
+    ));
+    assert!(matches!(cause.field("cause"), ErrorValue::Cause(_)));
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
@@ -239,4 +333,7 @@ purrdf_testkit::harness_main!(
     wide_substring_fields_are_not_narrowed_by_native_cause_transport,
     fixed_arithmetic_failures_keep_original_raw_operands_and_domain_values,
     exact_integer_records_preserve_all_binary_limbs_without_rendering,
+    configuration_bounds_keep_the_requested_value_and_native_limit,
+    configuration_ranking_keeps_signed_values_and_field_indices,
+    configuration_predicates_keep_terms_and_original_iri_causes,
 );

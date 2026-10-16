@@ -34,7 +34,9 @@ pub enum TextError {
     ///
     /// Field parameters and predicate routing are validated by the immutable
     /// [`crate::RankingProfile`], whose identity carries every scoring choice.
-    Config(String),
+    /// Native validation retains its original typed values and cause through
+    /// this shared diagnostic; caller-supplied messages remain available.
+    Config(purrdf_sparql_eval::NativeDiagnostic),
     /// Strict HTML character-reference parse errors with original source ranges.
     Html(Vec<purrdf_lex::html::Diagnostic>),
 
@@ -68,9 +70,6 @@ pub enum TextError {
 
 purrdf_lex::constructors! {
     impl TextError {
-        /// Construct a [`TextError::Config`] from any displayable message.
-        pub fn config(what) -> Self::Config;
-
         /// Construct a [`TextError::Data`] from any displayable message.
         pub fn data(what) -> Self::Data;
 
@@ -88,7 +87,11 @@ impl core::fmt::Display for TextError {
             Self::Substring(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Phonetic(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Html(diagnostics) => write!(f, "HTML reference errors: {diagnostics:?}"),
-            Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
+            Self::Config(diagnostic) => write!(
+                f,
+                "invalid text-index configuration: {}",
+                diagnostic.message()
+            ),
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
             Self::SourceRead(msg) => write!(f, "text-index source read error: {msg}"),
             Self::Overflow(diagnostic) | Self::Domain(diagnostic) => {
@@ -102,7 +105,10 @@ impl std::error::Error for TextError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Capacity(error) => Some(error),
-            Self::Diagnostic(error) | Self::Overflow(error) | Self::Domain(error) => Some(error),
+            Self::Diagnostic(error)
+            | Self::Config(error)
+            | Self::Overflow(error)
+            | Self::Domain(error) => Some(error),
             Self::Substring(error) => Some(error),
             Self::Phonetic(error) => Some(error),
             _ => None,
@@ -116,7 +122,7 @@ impl purrdf_hash::error::StructuredError for TextError {
         Diagnostic(error) => "text-diagnostic" { "cause" => Cause(error) },
         Substring(error) => "text-substring" { "cause" => Cause(error) },
         Phonetic(error) => "text-phonetic" { "cause" => Cause(error) },
-        Config(reason) => "text-config" { "reason" => Text(reason) },
+        Config(reason) => "text-config" { "reason" => Cause(reason) },
         Html(diagnostics) => "text-html" { "diagnostics" => List(diagnostics.iter().map(|diagnostic| purrdf_hash::error::ErrorValue::Record(diagnostic))) },
         Data(reason) => "text-data" { "reason" => Text(reason) },
         SourceRead(message) => "text-source-read" { "message" => Message(message) },
@@ -131,6 +137,19 @@ purrdf_lex::variant_from!(TextError {
 });
 
 impl TextError {
+    /// Preserve a caller-supplied configuration message. Native validation
+    /// retains its original values through the same diagnostic owner.
+    pub fn config(what: impl core::fmt::Display) -> Self {
+        match crate::query_workspace::admitted(purrdf_sparql_eval::NativeDiagnostic::render(
+            purrdf_sparql_eval::NativeDiagnosticKind::Config,
+            what,
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )) {
+            Ok(diagnostic) => Self::Config(diagnostic),
+            Err(error) => error,
+        }
+    }
+
     /// Preserve a caller-supplied overflow message. Native arithmetic producers
     /// retain their own typed refusal instead of calling this constructor.
     pub fn overflow(what: impl core::fmt::Display) -> Self {
@@ -170,9 +189,9 @@ impl TextError {
     ///
     /// The mapping is decided here and nowhere else:
     ///
-    /// * [`TextError::Config`] is the caller's evaluation configuration, which
-    ///   is exactly what [`EvalError::Config`](purrdf_sparql_eval::EvalError::Config)
-    ///   names;
+    /// * [`TextError::Config`] retains its original diagnostic with
+    ///   [`NativeDiagnosticKind::Config`](purrdf_sparql_eval::NativeDiagnosticKind::Config)
+    ///   classification;
     /// * [`TextError::Data`] is the dataset failing to answer a well-formed
     ///   question, which is
     ///   [`EvalError::Data`](purrdf_sparql_eval::EvalError::Data);
@@ -195,9 +214,9 @@ impl TextError {
         let kind = match self {
             Self::Capacity(failure) => return failure.into_eval(),
             Self::Diagnostic(diagnostic)
+            | Self::Config(diagnostic)
             | Self::Overflow(diagnostic)
             | Self::Domain(diagnostic) => return EvalError::NativeDiagnostic(diagnostic),
-            Self::Config(message) => return EvalError::config(message),
             Self::Data(message) => return EvalError::data(message),
             Self::SourceRead(message) => return EvalError::SourceRead(message),
             Self::Substring(_) | Self::Phonetic(_) | Self::Html(_) => NativeDiagnosticKind::Data,
@@ -223,10 +242,8 @@ mod tests {
 
     #[test]
     fn each_constructor_builds_its_own_variant() {
-        assert_eq!(
-            TextError::config("x"),
-            TextError::Config("x".to_owned()),
-            "config() must build Config"
+        assert!(
+            matches!(TextError::config("x"), TextError::Config(diagnostic) if diagnostic.message() == "x")
         );
         assert_eq!(
             TextError::data("x"),
@@ -261,10 +278,10 @@ mod tests {
                 | TextError::Diagnostic(_) => {
                     unreachable!("test uses string diagnostic variants")
                 }
-                TextError::Config(m) | TextError::SourceRead(m) | TextError::Data(m) => m.as_str(),
-                TextError::Overflow(diagnostic) | TextError::Domain(diagnostic) => {
-                    diagnostic.message()
-                }
+                TextError::SourceRead(m) | TextError::Data(m) => m.as_str(),
+                TextError::Config(diagnostic)
+                | TextError::Overflow(diagnostic)
+                | TextError::Domain(diagnostic) => diagnostic.message(),
             };
             assert!(
                 rendered.contains(detail),
@@ -277,8 +294,8 @@ mod tests {
     fn conversion_maps_config_and_data_to_their_namesakes() {
         let config: EvalError = TextError::config("no IRI").into();
         assert!(
-            matches!(config, EvalError::Config(_)),
-            "Config must map to EvalError::Config, got {config:?}"
+            matches!(&config, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == purrdf_sparql_eval::NativeDiagnosticKind::Config),
+            "Config must retain its native configuration diagnostic, got {config:?}"
         );
 
         let data: EvalError = TextError::data("absent predicate").into();
