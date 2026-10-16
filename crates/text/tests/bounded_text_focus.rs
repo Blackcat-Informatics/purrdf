@@ -103,6 +103,57 @@ fn native_text_search_occurrence_and_focus_keep_exact_answers_and_original_owner
     }
 }
 
+#[test]
+fn native_query_error_copies_keep_the_original_cause_account_until_last_drop() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    let (image, _, index) = fixture(false);
+    let mut relations = PropertyFunctionRegistry::new();
+    relations.register(SEARCH.to_owned(), Arc::new(TextSearchRelation::new(index)));
+    let env = ExtensionEnv::over_relations(relations).unwrap();
+    let options = QueryOptions::new().with_env(&env);
+    let source = image
+        .open_session(SegmentedReadLimits::new(CEILING, 2, 16_384, 20_000_000, 8))
+        .unwrap();
+    let baseline = non_cache_live(&source);
+    let engine = NativeSparqlEngine::new();
+    let query = format!("SELECT ?doc WHERE {{ ?doc <{SEARCH}> (42 ?score ?rank ?lang ?matched) }}");
+    let failure = engine
+        .query_fallible_view(
+            &source,
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            options,
+        )
+        .unwrap_err();
+    assert!(source.read_error().is_none());
+    let diagnostic = failure
+        .diagnostic()
+        .expect("a semantic refusal leaves the source ready")
+        .clone();
+    drop(failure);
+    drop(engine);
+    drop(env);
+    let live = non_cache_live(&source);
+    assert!(live > baseline);
+    let clone = diagnostic.clone();
+    drop(diagnostic);
+    assert_eq!(non_cache_live(&source), live);
+    let cause = Capture::read(&clone)
+        .child("attachments")
+        .child("native_cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(cause.code, "text-call-needle-datatype");
+    assert!(matches!(cause.field("position"), ErrorValue::Unsigned(1)));
+    drop(clone);
+    assert_eq!(non_cache_live(&source), baseline);
+    assert!(source.evidence().peak_bytes() <= CEILING);
+}
+
 fn run_text_focus(wide: bool) {
     let (image, resident, index) = fixture(wide);
     let mut relations = PropertyFunctionRegistry::new();

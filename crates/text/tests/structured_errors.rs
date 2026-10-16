@@ -877,6 +877,76 @@ fn phrase_and_dictionary_refusals_keep_registration_input_and_analyzer_identitie
     assert!(matches!(cause.field("actual"), ErrorValue::Bytes(value) if value == actual));
 }
 
+fn native_query_diagnostics_keep_the_original_relation_cause_on_both_public_routes() {
+    use purrdf_core::{
+        RdfDatasetBuilder, RdfDiagnostic, SparqlRequest, TermValue, datatype::XSD_INTEGER,
+    };
+    use purrdf_sparql_eval::{
+        ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+    };
+    use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
+    let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri("https://example.org/p")],
+        GraphSelector::Default,
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    let index = std::sync::Arc::new(TextIndex::from_dataset(&dataset, &config).unwrap());
+    let mut relations = PropertyFunctionRegistry::new();
+    relations.register(
+        "https://example.org/search".to_owned(),
+        std::sync::Arc::new(TextSearchRelation::new(index)),
+    );
+    let env = ExtensionEnv::over_relations(relations).unwrap();
+    let options = QueryOptions::new().with_env(&env);
+    let query =
+        "SELECT ?doc WHERE { ?doc <https://example.org/search> (42 ?score ?rank ?lang ?matched) }";
+    let request = || SparqlRequest {
+        query,
+        base_iri: None,
+        substitutions: &[],
+    };
+    let engine = NativeSparqlEngine::new();
+    let inspect = |diagnostic: &RdfDiagnostic| {
+        assert!(diagnostic.native_cause().is_some(), "{diagnostic}");
+        let cause = Capture::read(diagnostic)
+            .child("attachments")
+            .child("native_cause")
+            .child("cause")
+            .child("cause");
+        assert_eq!(cause.code, "text-call-needle-datatype");
+        assert!(matches!(cause.field("position"), ErrorValue::Unsigned(1)));
+        assert!(matches!(cause.field("datatype"), ErrorValue::Iri(value) if value == XSD_INTEGER));
+        assert!(
+            std::error::Error::source(diagnostic)
+                .unwrap()
+                .downcast_ref::<EvalError>()
+                .is_some()
+        );
+    };
+    let diagnostic = engine
+        .query_with_options_view(&dataset, request(), options)
+        .unwrap_err();
+    inspect(&diagnostic);
+    let copy = diagnostic.clone();
+    assert_eq!(copy, diagnostic);
+    assert!(core::ptr::eq(
+        diagnostic.native_cause().unwrap(),
+        copy.native_cause().unwrap()
+    ));
+    drop(diagnostic);
+    inspect(&copy);
+    let failure = engine
+        .query_fallible_view(&dataset, request(), options)
+        .unwrap_err();
+    inspect(
+        failure
+            .diagnostic()
+            .expect("the source remains operational"),
+    );
+}
+
 purrdf_testkit::harness_main!(
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
@@ -899,4 +969,5 @@ purrdf_testkit::harness_main!(
     search_input_refusals_keep_actual_cardinality_and_observed_scalar_limit,
     relation_failures_retain_native_terms_rank_flags_arities_and_query_owners,
     phrase_and_dictionary_refusals_keep_registration_input_and_analyzer_identities,
+    native_query_diagnostics_keep_the_original_relation_cause_on_both_public_routes,
 );

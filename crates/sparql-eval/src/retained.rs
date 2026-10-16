@@ -446,6 +446,49 @@ pub struct RetainedDiagnostic {
 }
 
 impl RetainedDiagnostic {
+    /// Retain the original evaluator failure independently of the rendered
+    /// diagnostic. Explicit resident copies keep that original cause grant.
+    pub(crate) fn from_evaluation(
+        error: EvalError,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        use purrdf_core::diagnostic::DiagnosticCause;
+        let mut cause_frame = crate::workspace::LexicalFrame::new(workspace);
+        let cause = purrdf_lex::allocation::Memory::new(&mut cause_frame)
+            .boxed(error)
+            .map_err(|error| cause_frame.storage_error(error, "query diagnostic cause"))?;
+        let total = cause_frame
+            .admitted_bytes()
+            .checked_add(DiagnosticCause::allocation_layout::<crate::WorkspaceAllocation>().size())
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        cause_frame.resize_live(total)?;
+        let mut report_frame = crate::workspace::LexicalFrame::new(workspace);
+        let diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
+            crate::engine::eval_diagnostic_code(&cause, "native-sparql-query-eval"),
+            &cause,
+            &mut purrdf_lex::allocation::Memory::new(&mut report_frame),
+        )
+        .map_err(|error| report_frame.storage_error(error, "query diagnostic text"))?;
+        let allocation = cause_frame
+            .into_allocation()
+            .expect("native cause control has an original grant");
+        let cause: Box<dyn purrdf_hash::error::NativeError> = cause;
+        let cause = DiagnosticCause::try_from_admitted(cause, allocation).map_err(|_| {
+            EvalError::AllocationFailed {
+                construct: "query diagnostic cause owner",
+            }
+        })?;
+        let admitted = report_frame.admitted_bytes();
+        let diagnostic = diagnostic
+            .with_native_cause(
+                cause,
+                &mut purrdf_lex::allocation::Memory::resume(&mut report_frame, admitted),
+            )
+            .map_err(|error| report_frame.storage_error(error, "query diagnostic attachment"))?;
+        let mut diagnostic = Some(diagnostic);
+        report_frame.finish_diagnostic(&mut diagnostic)
+    }
+
     /// Transfer a diagnostic whose complete heap layout is already covered by
     /// allocation. The grant must also cover the concrete Shared control layout
     /// before invoking this allocation-first publication.
@@ -540,3 +583,77 @@ impl PartialEq for RetainedDiagnostic {
     }
 }
 impl Eq for RetainedDiagnostic {}
+
+#[cfg(test)]
+mod query_cause_tests {
+    use super::RetainedDiagnostic;
+    use crate::EvalError;
+    use crate::workspace::owned_row_regressions::account;
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn query_cause_survives_resident_copy_after_report_and_query_are_dropped() {
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let report = RetainedDiagnostic::from_evaluation(
+            EvalError::AllocationFailed {
+                construct: "original native allocation",
+            },
+            &capability,
+        )
+        .unwrap();
+        let measured = window.close();
+        let complete = ledger.live.load(Ordering::Relaxed);
+        assert_eq!(
+            measured.retained_bytes,
+            i64::try_from(complete - base).unwrap()
+        );
+        assert!(complete > base);
+        let copy = report.diagnostic().clone();
+        let clone = copy.clone();
+        assert_eq!(copy, *report.diagnostic());
+        drop(report);
+        let cause_only = ledger.live.load(Ordering::Relaxed);
+        assert!(cause_only > base && cause_only < complete);
+        drop(workspace);
+        drop(capability);
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), cause_only);
+        let cause = Capture::read(&clone)
+            .child("attachments")
+            .child("native_cause");
+        assert_eq!(cause.code, "sparql-eval-allocation-failed");
+        assert!(matches!(
+            cause.field("construct"),
+            ErrorValue::Text("original native allocation")
+        ));
+        drop(clone);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn query_cause_refuses_before_allocating_without_headroom() {
+        let (initial, _, base) = account(65_536);
+        drop(initial);
+        let (workspace, ledger, _) = account(base);
+        let capability = workspace.capability();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = RetainedDiagnostic::from_evaluation(
+            EvalError::AllocationFailed {
+                construct: "original native allocation",
+            },
+            &capability,
+        )
+        .unwrap_err();
+        assert_eq!(window.close().allocations, 0);
+        assert!(matches!(error, EvalError::WorkspaceStopped));
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(workspace.take_failure().unwrap().identity, 7);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+}

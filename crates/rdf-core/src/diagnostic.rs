@@ -281,7 +281,6 @@ impl fmt::Display for RdfLocation {
 ///     message: "failure".to_owned(), detail: None, location: None,
 /// };
 /// ```
-#[derive(PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RdfDiagnostic {
     /// The diagnostic severity level.
@@ -300,17 +299,24 @@ pub struct RdfDiagnostic {
 /// Cold reporting payloads share one owner so ordinary diagnostics retain the
 /// original single optional pointer. Native ingress carries StorageError inline
 /// until this reporting boundary; no attachment is allocated on successful work.
-#[derive(PartialEq, Eq)]
 struct DiagnosticAttachments {
     presentation: Option<DiagnosticPresentation>,
     storage: Option<purrdf_lex::allocation::StorageError>,
+    cause: Option<DiagnosticCause>,
 }
+
+/// An immutable native cause retaining its independently admitted original owner.
+/// Its grant covers both the erased error box and this shared control; clones
+/// retain that same grant rather than charging or copying the original payload.
+pub type DiagnosticCause =
+    purrdf_lex::allocation::SharedOwned<Box<dyn purrdf_hash::error::NativeError>>;
 
 impl StructuredError for DiagnosticAttachments {
     purrdf_hash::error_visit! {
-        @record self { presentation, storage } => "rdf-diagnostic-attachments" {
+        @record self { presentation, storage, cause } => "rdf-diagnostic-attachments" {
             "presentation" => Value(self.presentation.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
             "storage" => Value(self.storage.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Cause(value))),
+            "native_cause" => Value(self.cause.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Cause(&***value))),
         }
     }
 }
@@ -361,6 +367,22 @@ impl Hash for RdfDiagnostic {
     }
 }
 
+// Native causes have no generic value equality. Keep the established diagnostic
+// equality/hash over its compatibility fields and typed presentation/storage,
+// independently of supplemental provenance and private attachment allocation.
+impl PartialEq for RdfDiagnostic {
+    fn eq(&self, other: &Self) -> bool {
+        self.severity == other.severity
+            && self.code == other.code
+            && self.message == other.message
+            && self.detail == other.detail
+            && self.location == other.location
+            && self.presentation() == other.presentation()
+            && self.storage_error() == other.storage_error()
+    }
+}
+impl Eq for RdfDiagnostic {}
+
 purrdf_lex::resident_clone!(RdfDiagnostic);
 
 impl RdfDiagnostic {
@@ -402,6 +424,7 @@ impl RdfDiagnostic {
                     memory.boxed(DiagnosticAttachments {
                         presentation,
                         storage: attachments.storage,
+                        cause: attachments.cause.clone(),
                     })
                 })
                 .transpose()?,
@@ -410,6 +433,7 @@ impl RdfDiagnostic {
 
     /// Exact concrete heap capacity, excluding the outer diagnostic value.
     /// Location and attachment boxes, spare arrays and all owned text count.
+    /// Shared native causes retain independent grants and are not charged again.
     #[must_use]
     pub fn retained_bytes(&self) -> Option<usize> {
         let mut bytes = self
@@ -487,6 +511,41 @@ impl RdfDiagnostic {
         }
     }
 
+    /// Borrow the original native error, without formatting or copying it.
+    #[must_use]
+    pub fn native_cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
+        self.attachments
+            .as_ref()?
+            .cause
+            .as_ref()
+            .map(|cause| &***cause)
+    }
+
+    /// Attach an already admitted native cause through this diagnostic's owner.
+    /// The cause's independent grant survives copies of the diagnostic.
+    /// Existing diagnostic buffers must already belong to this memory account;
+    /// this operation admits only a new attachment box when one is needed.
+    ///
+    /// # Errors
+    /// Returns admission or allocation refusal before allocating an attachment.
+    pub fn with_native_cause<S: purrdf_lex::allocation::Admission + ?Sized>(
+        mut self,
+        cause: DiagnosticCause,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        match &mut self.attachments {
+            Some(attachments) => attachments.cause = Some(cause),
+            None => {
+                self.attachments = Some(memory.boxed(DiagnosticAttachments {
+                    presentation: None,
+                    storage: None,
+                    cause: Some(cause),
+                })?);
+            }
+        }
+        Ok(self)
+    }
+
     /// Attach validated presentation data and render its compatibility English.
     #[must_use]
     pub fn with_presentation(mut self, presentation: DiagnosticPresentation) -> Self {
@@ -500,6 +559,7 @@ impl RdfDiagnostic {
                 self.attachments = Some(Box::new(DiagnosticAttachments {
                     presentation: Some(presentation),
                     storage: None,
+                    cause: None,
                 }));
             }
         }
@@ -607,6 +667,7 @@ impl From<purrdf_lex::allocation::StorageError> for RdfDiagnostic {
         diagnostic.attachments = Some(Box::new(DiagnosticAttachments {
             presentation: None,
             storage: Some(error),
+            cause: None,
         }));
         diagnostic
     }
@@ -621,6 +682,9 @@ impl From<purrdf_iri::IriReadError> for RdfDiagnostic {
 }
 impl std::error::Error for RdfDiagnostic {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        if let Some(cause) = self.native_cause() {
+            return Some(cause);
+        }
         self.attachments
             .as_ref()
             .and_then(|attachments| attachments.storage.as_ref())

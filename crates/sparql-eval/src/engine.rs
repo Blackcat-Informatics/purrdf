@@ -5077,10 +5077,13 @@ impl EvaluationFailure {
         match self {
             Self::Diagnostic(diagnostic) => diagnostic,
             Self::RetainedDiagnostic(diagnostic) => diagnostic.diagnostic().clone(),
-            Self::Evaluation(error) => RdfDiagnostic::error(
-                eval_diagnostic_code(&error, "native-sparql-query-eval"),
-                error.to_string(),
-            ),
+            Self::Evaluation(error) => crate::RetainedDiagnostic::from_evaluation(
+                error,
+                &crate::WorkspaceCapability::resident(),
+            )
+            .expect("resident query diagnostic allocation failed")
+            .diagnostic()
+            .clone(),
         }
     }
 }
@@ -5190,15 +5193,12 @@ where
                     "raw query diagnostic without its original producer grant",
                 )),
                 EvaluationFailure::Evaluation(error) => match workspace {
-                    Some(owner) => crate::RetainedDiagnostic::render(
-                        eval_diagnostic_code(&error, "native-sparql-query-eval"),
-                        &error,
-                        &owner.capability(),
-                    ),
+                    Some(owner) => {
+                        crate::RetainedDiagnostic::from_evaluation(error, &owner.capability())
+                    }
                     None if dataset.storage_live_budget().is_none() => {
-                        crate::RetainedDiagnostic::render(
-                            eval_diagnostic_code(&error, "native-sparql-query-eval"),
-                            &error,
+                        crate::RetainedDiagnostic::from_evaluation(
+                            error,
                             &crate::WorkspaceCapability::default(),
                         )
                     }
