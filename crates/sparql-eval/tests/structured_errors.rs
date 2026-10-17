@@ -1858,7 +1858,340 @@ fn shacl_prebinding_keeps_the_original_retained_diagnostic() {
     }
 }
 
+fn function_execution_refusals_keep_original_fields_and_operational_classes() {
+    use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
+    use purrdf_sparql_eval::{
+        Arity, ExtensionEnv, NativeSparqlEngine, NodeKind, TypeConstraint, UserFnBody, UserFnParam,
+        UserFunction, UserFunctionRegistry, Volatility,
+    };
+    use purrdf_xsd::datatype::{XSD_INTEGER, XSD_STRING};
+
+    let iri = "https://example.org/函数";
+    for (case, expected, argument) in [
+        ("node-kind", "shacl-function-parameter-node-kind", "1"),
+        ("datatype", "shacl-function-parameter-datatype", "\"bad\""),
+        ("shacl-arity", "shacl-function-arity", ""),
+        ("native-arity", "native-function-arity", "1"),
+        ("expr-arity", "expression-function-arity", ""),
+        ("focus", "expression-function-focus-graph", ""),
+        ("depth", "expression-function-depth", ""),
+        ("native-panic", "native-function-panic", ""),
+        ("expr-panic", "expression-function-panic", ""),
+    ] {
+        // An aborting Rust panic cannot return through catch_unwind. These two
+        // production branches execute on unwind builds; the WASM harness itself
+        // documents that a Rust panic traps its module instead.
+        if cfg!(panic = "abort") && matches!(case, "native-panic" | "expr-panic") {
+            continue;
+        }
+        let dataset = support::empty_dataset();
+        let mut functions = UserFunctionRegistry::default();
+        let bomb = || -> Result<Option<purrdf_core::TermValue>, EvalError> {
+            panic!("private host panic payload")
+        };
+        match case {
+            "node-kind" | "datatype" | "shacl-arity" => {
+                functions.insert(
+                    iri,
+                    UserFunction {
+                        params: vec![UserFnParam {
+                            var: "名".into(),
+                            constraint: TypeConstraint {
+                                node_kind: (case == "node-kind").then_some(NodeKind::Iri),
+                                datatype: (case == "datatype").then(|| XSD_INTEGER.into()),
+                            },
+                        }],
+                        required: 1,
+                        body: "ASK {}".into(),
+                        kind: UserFnBody::Ask,
+                        return_constraint: TypeConstraint::default(),
+                    },
+                );
+            }
+            "native-arity" | "native-panic" => functions.register_native(
+                iri,
+                Arity::Exact(if case == "native-arity" { 2 } else { 0 }),
+                Volatility::Stable,
+                std::sync::Arc::new(move |_| bomb()),
+            ),
+            _ => functions.register_expr(
+                iri,
+                Arity::Exact(usize::from(case == "expr-arity")),
+                std::sync::Arc::new(move |_| bomb()),
+            ),
+        }
+        let functions = NativeSparqlEngine::new()
+            .bind_functions(functions, ExtensionEnv::empty())
+            .unwrap();
+        let query = SparqlParser::new()
+            .parse_query(&format!(
+                "SELECT (<{iri}>({argument}) AS ?value) WHERE {{}}"
+            ))
+            .unwrap();
+        let mut ctx = EvalCtx::new(&dataset).with_user_functions(&functions);
+        if matches!(case, "depth" | "expr-panic") {
+            ctx = ctx.with_focus_graph(&dataset);
+        }
+        if case == "depth" {
+            ctx = ctx.with_call_depth(u32::MAX);
+        }
+        let original = evaluate_query(&query, &mut ctx).unwrap_err();
+        drop(ctx);
+        drop(functions);
+        drop(dataset);
+        let retained = original.clone();
+        drop(original);
+        let fields = Capture::read(&retained).child("cause").child("cause");
+        assert_eq!(fields.code, expected, "{case}");
+        assert!(matches!(fields.field("iri"), ErrorValue::Iri(value) if value == iri));
+        match case {
+            "node-kind" | "datatype" => {
+                assert!(matches!(fields.field("parameter"), ErrorValue::Text("名")));
+                let ErrorValue::Term(term) = fields.field("actual") else {
+                    panic!("original term is missing")
+                };
+                let buffer = Vec::with_capacity(8);
+                let window = CurrentThreadWindow::open();
+                let actual = Capture::read_with_buffer(term, buffer);
+                assert_eq!(window.close().allocations, 0);
+                assert_eq!(actual.code, "rdf-term-literal");
+                if case == "node-kind" {
+                    assert_eq!(fields.child("expected").code, "shacl-node-kind-iri");
+                    assert!(matches!(
+                        actual.field("lexical_form"),
+                        ErrorValue::Text("1")
+                    ));
+                    assert!(matches!(
+                        actual.field("datatype"),
+                        ErrorValue::Iri(XSD_INTEGER)
+                    ));
+                    assert_eq!(
+                        retained.to_string(),
+                        format!(
+                            "host function error: SHACL-AF function <{iri}> parameter ?名 violates its sh:nodeKind constraint"
+                        )
+                    );
+                } else {
+                    assert!(matches!(
+                        fields.field("expected"),
+                        ErrorValue::Iri(XSD_INTEGER)
+                    ));
+                    assert!(matches!(
+                        actual.field("lexical_form"),
+                        ErrorValue::Text("bad")
+                    ));
+                    assert!(matches!(
+                        actual.field("datatype"),
+                        ErrorValue::Iri(XSD_STRING)
+                    ));
+                    assert_eq!(
+                        retained.to_string(),
+                        format!(
+                            "host function error: SHACL-AF function <{iri}> parameter ?名 is not a literal of datatype <{XSD_INTEGER}>"
+                        )
+                    );
+                }
+            }
+            "shacl-arity" => {
+                assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(0)));
+                let arity = fields.child("expected");
+                assert_eq!(arity.code, "function-arity-range");
+                assert!(matches!(arity.field("minimum"), ErrorValue::Unsigned(1)));
+                assert!(matches!(arity.field("maximum"), ErrorValue::Unsigned(1)));
+                assert_eq!(
+                    retained.to_string(),
+                    format!(
+                        "host function error: SHACL-AF function <{iri}> expects 1..=1 argument(s), got 0"
+                    )
+                );
+            }
+            "native-arity" | "expr-arity" => {
+                let native = case == "native-arity";
+                let arity = fields.child("expected");
+                assert_eq!(arity.code, "function-arity-exact");
+                assert!(
+                    matches!(arity.field("count"), ErrorValue::Unsigned(value) if value == if native { 2 } else { 1 })
+                );
+                assert!(
+                    matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == u128::from(native))
+                );
+                let kind = if native {
+                    "native"
+                } else {
+                    "expression-bodied"
+                };
+                let count = if native { 2 } else { 1 };
+                let actual = usize::from(native);
+                assert_eq!(
+                    retained.to_string(),
+                    format!(
+                        "host function error: {kind} function <{iri}> expects exactly {count} argument(s), got {actual}"
+                    )
+                );
+            }
+            "depth" => {
+                assert!(
+                    matches!(fields.field("depth"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+                );
+                assert!(matches!(fields.field("limit"), ErrorValue::Unsigned(32)));
+                assert_eq!(
+                    retained.to_string(),
+                    format!(
+                        "host function error: expression-bodied function <{iri}> recursion exceeded the depth bound of 32"
+                    )
+                );
+            }
+            "focus" => assert_eq!(
+                retained.to_string(),
+                format!(
+                    "host function error: expression-bodied function <{iri}> needs the focus graph its body is evaluated against, and this query supplied none (QueryOptions::focus_graph); the call is refused rather than answered from a graph it never read"
+                )
+            ),
+            _ => {
+                let kind = if case == "native-panic" {
+                    "native"
+                } else {
+                    "expression-bodied"
+                };
+                assert_eq!(
+                    retained.to_string(),
+                    format!("host function error: {kind} function <{iri}> panicked")
+                );
+                assert_eq!(
+                    fields.events.len(),
+                    1,
+                    "panic payload is not an error field"
+                );
+            }
+        }
+        if matches!(case, "depth" | "native-panic" | "expr-panic") {
+            assert_eq!(
+                retained.diagnostic_code(),
+                Some(EvalError::FUNCTION_OPERATIONAL_CODE)
+            );
+        } else {
+            assert!(retained.diagnostic_code().is_none());
+        }
+        let buffer = Vec::with_capacity(4);
+        let window = CurrentThreadWindow::open();
+        let _capture = Capture::read_with_buffer(&retained, buffer);
+        assert_eq!(window.close().allocations, 0);
+    }
+}
+
+fn standard_function_interception_keeps_original_configuration_fields() {
+    use purrdf_iri::vocab::ogc;
+    use purrdf_sparql_algebra::{
+        Expression, Function, GraphPattern, ParserOptions, PurrdfCall, PurrdfFn, Query,
+    };
+    use purrdf_sparql_eval::{
+        Arity, ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFunctionRegistry, Volatility,
+    };
+
+    for (case, expected, wording) in [
+        (
+            "registry",
+            "standard-function-registry-interception",
+            "caller registration conflicts with",
+        ),
+        (
+            "parser",
+            "standard-function-parser-interception",
+            "extension parser namespace intercepts",
+        ),
+        (
+            "algebra",
+            "standard-function-algebra-interception",
+            "closed function annotation intercepts",
+        ),
+    ] {
+        let engine = NativeSparqlEngine::new();
+        let original = match case {
+            "registry" => {
+                let mut functions = UserFunctionRegistry::default();
+                functions.register_native(
+                    ogc::geof::IS_EMPTY,
+                    Arity::Exact(1),
+                    Volatility::Stable,
+                    std::sync::Arc::new(|_| panic!("an immutable function is never shadowed")),
+                );
+                engine
+                    .bind_functions(functions, ExtensionEnv::empty())
+                    .unwrap_err()
+            }
+            "parser" => {
+                let env = ExtensionEnv::over_options(ParserOptions {
+                    extension_fn_namespaces: vec![ogc::geof::IS_EMPTY.into()],
+                    ..ParserOptions::default()
+                })
+                .unwrap();
+                engine
+                    .prepare_query_with_options(
+                        "not valid SPARQL",
+                        None,
+                        QueryOptions::EMPTY.with_env(&env),
+                    )
+                    .unwrap_err()
+            }
+            _ => {
+                let mut query = SparqlParser::new()
+                    .parse_query("SELECT * WHERE {}")
+                    .unwrap();
+                let Query::Select { pattern, .. } = &mut query else {
+                    unreachable!()
+                };
+                *pattern = GraphPattern::Filter {
+                    inner: GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    }
+                    .into(),
+                    expr: Expression::FunctionCall(
+                        Function::Purrdf(PurrdfCall {
+                            fn_kind: PurrdfFn::ListLength,
+                            iri: ogc::geof::IS_EMPTY.into(),
+                        }),
+                        Vec::new().into(),
+                    ),
+                };
+                engine
+                    .prepare_algebra(query, QueryOptions::EMPTY)
+                    .unwrap_err()
+            }
+        };
+        drop(engine);
+        let retained = original.clone();
+        drop(original);
+        assert_eq!(retained.code, "native-sparql-standard-function-conflict");
+        let cause = retained.native_cause().unwrap();
+        let fields = Capture::read(cause).child("cause").child("cause");
+        assert_eq!(fields.code, expected);
+        assert!(matches!(
+            fields.field("iri"),
+            ErrorValue::Iri(ogc::geof::IS_EMPTY)
+        ));
+        if case == "parser" {
+            assert!(matches!(
+                fields.field("namespace"),
+                ErrorValue::Text(ogc::geof::IS_EMPTY)
+            ));
+        }
+        assert_eq!(
+            cause.to_string(),
+            format!(
+                "standard scalar function conflict: {wording} immutable standard function <{}>",
+                ogc::geof::IS_EMPTY
+            )
+        );
+        let buffer = Vec::with_capacity(4);
+        let window = CurrentThreadWindow::open();
+        let _capture = Capture::read_with_buffer(cause, buffer);
+        assert_eq!(window.close().allocations, 0);
+    }
+}
+
 purrdf_testkit::harness_main!(
+    standard_function_interception_keeps_original_configuration_fields,
+    function_execution_refusals_keep_original_fields_and_operational_classes,
     shacl_prebinding_keeps_the_original_retained_diagnostic,
     shacl_select_result_refusals_keep_original_iri_and_counts,
     raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers,

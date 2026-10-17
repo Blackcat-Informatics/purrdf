@@ -80,9 +80,60 @@ pub enum UserFnBody {
     Ask,
 }
 
-/// A SELECT function body cannot supply one unambiguous return value.
+/// Original native function execution refusals, before presentation.
 #[derive(Debug)]
-enum SelectResultRefusal {
+enum FunctionRefusal {
+    ParserInterception {
+        iri: purrdf_lex::allocation::SharedText,
+        namespace: purrdf_lex::allocation::SharedText,
+    },
+    AlgebraInterception {
+        iri: purrdf_lex::allocation::SharedText,
+    },
+    RegistryInterception {
+        iri: purrdf_lex::allocation::SharedText,
+    },
+    ShaclArity {
+        iri: purrdf_lex::allocation::SharedText,
+        expected: Arity,
+        actual: usize,
+    },
+    NativeArity {
+        iri: purrdf_lex::allocation::SharedText,
+        expected: Arity,
+        actual: usize,
+    },
+    ExprArity {
+        iri: purrdf_lex::allocation::SharedText,
+        expected: Arity,
+        actual: usize,
+    },
+    ParameterNodeKind {
+        iri: purrdf_lex::allocation::SharedText,
+        parameter: purrdf_lex::allocation::SharedText,
+        expected: NodeKind,
+        actual: WorkspaceTerm,
+    },
+    ParameterDatatype {
+        iri: purrdf_lex::allocation::SharedText,
+        parameter: purrdf_lex::allocation::SharedText,
+        expected: purrdf_lex::allocation::SharedText,
+        actual: WorkspaceTerm,
+    },
+    ExprFocusGraph {
+        iri: purrdf_lex::allocation::SharedText,
+    },
+    ExprDepth {
+        iri: purrdf_lex::allocation::SharedText,
+        depth: u32,
+        limit: u32,
+    },
+    NativePanic {
+        iri: purrdf_lex::allocation::SharedText,
+    },
+    ExprPanic {
+        iri: purrdf_lex::allocation::SharedText,
+    },
     Columns {
         iri: purrdf_lex::allocation::SharedText,
         actual: usize,
@@ -93,8 +144,36 @@ enum SelectResultRefusal {
     },
 }
 
-impl purrdf_hash::error::StructuredError for SelectResultRefusal {
+impl purrdf_hash::error::StructuredError for FunctionRefusal {
     purrdf_hash::error_visit! {
+        ParserInterception { iri, namespace } => "standard-function-parser-interception" {
+            "iri" => Iri(iri.as_str()), "namespace" => Text(namespace.as_str()),
+        },
+        AlgebraInterception { iri } => "standard-function-algebra-interception" { "iri" => Iri(iri.as_str()) },
+        RegistryInterception { iri } => "standard-function-registry-interception" { "iri" => Iri(iri.as_str()) },
+        ShaclArity { iri, expected, actual } => "shacl-function-arity" {
+            "iri" => Iri(iri.as_str()), "expected" => Record(expected), "actual" => Unsigned(*actual as u128),
+        },
+        NativeArity { iri, expected, actual } => "native-function-arity" {
+            "iri" => Iri(iri.as_str()), "expected" => Record(expected), "actual" => Unsigned(*actual as u128),
+        },
+        ExprArity { iri, expected, actual } => "expression-function-arity" {
+            "iri" => Iri(iri.as_str()), "expected" => Record(expected), "actual" => Unsigned(*actual as u128),
+        },
+        ParameterNodeKind { iri, parameter, expected, actual } => "shacl-function-parameter-node-kind" {
+            "iri" => Iri(iri.as_str()), "parameter" => Text(parameter.as_str()),
+            "expected" => Record(expected), "actual" => Term(&**actual),
+        },
+        ParameterDatatype { iri, parameter, expected, actual } => "shacl-function-parameter-datatype" {
+            "iri" => Iri(iri.as_str()), "parameter" => Text(parameter.as_str()),
+            "expected" => Iri(expected.as_str()), "actual" => Term(&**actual),
+        },
+        ExprFocusGraph { iri } => "expression-function-focus-graph" { "iri" => Iri(iri.as_str()) },
+        ExprDepth { iri, depth, limit } => "expression-function-depth" {
+            "iri" => Iri(iri.as_str()), "depth" => Unsigned(u128::from(*depth)), "limit" => Unsigned(u128::from(*limit)),
+        },
+        NativePanic { iri } => "native-function-panic" { "iri" => Iri(iri.as_str()) },
+        ExprPanic { iri } => "expression-function-panic" { "iri" => Iri(iri.as_str()) },
         Columns { iri, actual } => "shacl-function-select-columns" {
             "iri" => Iri(iri.as_str()),
             "actual" => Unsigned(*actual as u128),
@@ -108,9 +187,72 @@ impl purrdf_hash::error::StructuredError for SelectResultRefusal {
     }
 }
 
-impl core::fmt::Display for SelectResultRefusal {
+impl core::fmt::Display for FunctionRefusal {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::ParserInterception { iri, .. } => write!(
+                formatter,
+                "extension parser namespace intercepts immutable standard function <{iri}>"
+            ),
+            Self::AlgebraInterception { iri } => write!(
+                formatter,
+                "closed function annotation intercepts immutable standard function <{iri}>"
+            ),
+            Self::RegistryInterception { iri } => write!(
+                formatter,
+                "caller registration conflicts with immutable standard function <{iri}>"
+            ),
+            Self::ShaclArity {
+                iri,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "SHACL-AF function <{iri}> expects {expected} argument(s), got {actual}"
+            ),
+            Self::NativeArity {
+                iri,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "native function <{iri}> expects {expected} argument(s), got {actual}"
+            ),
+            Self::ExprArity {
+                iri,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "expression-bodied function <{iri}> expects {expected} argument(s), got {actual}"
+            ),
+            Self::ParameterNodeKind { iri, parameter, .. } => write!(
+                formatter,
+                "SHACL-AF function <{iri}> parameter ?{parameter} violates its sh:nodeKind constraint"
+            ),
+            Self::ParameterDatatype {
+                iri,
+                parameter,
+                expected,
+                ..
+            } => write!(
+                formatter,
+                "SHACL-AF function <{iri}> parameter ?{parameter} is not a literal of datatype <{expected}>"
+            ),
+            Self::ExprFocusGraph { iri } => write!(
+                formatter,
+                "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
+                 against, and this query supplied none (QueryOptions::focus_graph); the call is \
+                 refused rather than answered from a graph it never read"
+            ),
+            Self::ExprDepth { iri, limit, .. } => write!(
+                formatter,
+                "expression-bodied function <{iri}> recursion exceeded the depth bound of {limit}"
+            ),
+            Self::NativePanic { iri } => write!(formatter, "native function <{iri}> panicked"),
+            Self::ExprPanic { iri } => {
+                write!(formatter, "expression-bodied function <{iri}> panicked")
+            }
             Self::Columns { iri, actual } => write!(
                 formatter,
                 "SHACL-AF function <{iri}> SELECT body must project exactly one variable, got {actual}"
@@ -125,7 +267,7 @@ impl core::fmt::Display for SelectResultRefusal {
     }
 }
 
-impl std::error::Error for SelectResultRefusal {}
+impl std::error::Error for FunctionRefusal {}
 
 /// The `sh:nodeKind` of a parameter or return value, when constrained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +286,17 @@ pub enum NodeKind {
     IriOrLiteral,
 }
 
+impl purrdf_hash::error::StructuredError for NodeKind {
+    purrdf_hash::error_visit! {
+        Iri => "shacl-node-kind-iri" {},
+        BlankNode => "shacl-node-kind-blank-node" {},
+        Literal => "shacl-node-kind-literal" {},
+        BlankNodeOrIri => "shacl-node-kind-blank-node-or-iri" {},
+        BlankNodeOrLiteral => "shacl-node-kind-blank-node-or-literal" {},
+        IriOrLiteral => "shacl-node-kind-iri-or-literal" {},
+    }
+}
+
 /// The optional `sh:datatype`/`sh:nodeKind` type constraint on a parameter or the
 /// return value. An empty constraint (`None`/`None`) accepts any term.
 #[derive(Debug, Clone, Default)]
@@ -160,25 +313,44 @@ impl TypeConstraint {
         self.datatype.is_none() && self.node_kind.is_none()
     }
 
-    /// Validate `value` against this constraint. `role` names the position
-    /// (`parameter ?var` / `return value`) for the error message.
-    fn check(&self, iri: &str, role: &str, value: &TermValue) -> Result<(), EvalError> {
+    /// Validate the original parameter value against its declared constraint.
+    fn check(
+        &self,
+        iri: &str,
+        parameter: &str,
+        value: &TermValue,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(), EvalError> {
         if self.is_any() {
             return Ok(());
         }
         if let Some(nk) = self.node_kind
             && !matches_node_kind(value, nk)
         {
-            return Err(EvalError::function(format!(
-                "SHACL-AF function <{iri}> {role} violates its sh:nodeKind constraint"
-            )));
+            return Err(NativeDiagnostic::error_cause(
+                NativeDiagnosticKind::Function,
+                FunctionRefusal::ParameterNodeKind {
+                    iri: workspace.authored_text(iri)?,
+                    parameter: workspace.authored_text(parameter)?,
+                    expected: nk,
+                    actual: workspace.clone_term(value)?,
+                },
+                workspace,
+            ));
         }
         if let Some(dt) = &self.datatype {
             let ok = matches!(value, TermValue::Literal { datatype, .. } if datatype == dt);
             if !ok {
-                return Err(EvalError::function(format!(
-                    "SHACL-AF function <{iri}> {role} is not a literal of datatype <{dt}>"
-                )));
+                return Err(NativeDiagnostic::error_cause(
+                    NativeDiagnosticKind::Function,
+                    FunctionRefusal::ParameterDatatype {
+                        iri: workspace.authored_text(iri)?,
+                        parameter: workspace.authored_text(parameter)?,
+                        expected: workspace.authored_text(dt)?,
+                        actual: workspace.clone_term(value)?,
+                    },
+                    workspace,
+                ));
             }
         }
         Ok(())
@@ -803,6 +975,16 @@ pub enum Arity {
     AtLeast(usize),
 }
 
+impl purrdf_hash::error::StructuredError for Arity {
+    purrdf_hash::error_visit! {
+        Exact(count) => "function-arity-exact" { "count" => Unsigned(*count as u128) },
+        Range { min, max } => "function-arity-range" {
+            "minimum" => Unsigned(*min as u128), "maximum" => Unsigned(*max as u128),
+        },
+        AtLeast(minimum) => "function-arity-at-least" { "minimum" => Unsigned(*minimum as u128) },
+    }
+}
+
 impl Arity {
     /// Whether `count` arguments satisfies this declared arity.
     ///
@@ -901,7 +1083,7 @@ pub(crate) fn validate_standard_parser(
     options: &purrdf_sparql_algebra::ParserOptions,
     workspace: &WorkspaceCapability,
 ) -> Result<(), EvalError> {
-    let mut conflict: Option<&str> = None;
+    let mut conflict: Option<(&str, &str)> = None;
     for function in crate::geo::functions::GeofFunction::ALL {
         // A namespace may end within either the official prefix or local name;
         // compare the borrowed split spelling without constructing a String.
@@ -911,18 +1093,19 @@ pub(crate) fn validate_standard_parser(
                 || namespace
                     .strip_prefix(prefix)
                     .is_some_and(|suffix| function.local_name().starts_with(suffix));
-            if intercepts && conflict.is_none_or(|old| function.local_name() < old) {
-                conflict = Some(function.local_name());
+            if intercepts && conflict.is_none_or(|(old, _)| function.local_name() < old) {
+                conflict = Some((function.local_name(), namespace));
             }
         }
     }
-    if let Some(local) = conflict {
-        return Err(NativeDiagnostic::error(
+    if let Some((local, namespace)) = conflict {
+        return Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::StandardFunctionConflict,
-            format_args!(
-                "extension parser namespace intercepts immutable standard function <{}{local}>",
-                purrdf_iri::vocab::ogc::geof::NS
-            ),
+            FunctionRefusal::ParserInterception {
+                iri: workspace
+                    .authored_text(&format_args!("{}{local}", purrdf_iri::vocab::ogc::geof::NS))?,
+                namespace: workspace.authored_text(namespace)?,
+            },
             workspace,
         ));
     }
@@ -957,12 +1140,13 @@ pub(crate) fn validate_standard_algebra_with_memory(
     // The shared walk's temporary grant must cover the work-list until it dies.
     // Its owner callback is the lower Memory scope, not a post-traversal fee.
     if let Some(iri) = conflict {
-        return Err(NativeDiagnostic::error(
+        let workspace = memory.admission_mut().workspace();
+        return Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::StandardFunctionConflict,
-            format_args!(
-                "closed function annotation intercepts immutable standard function <{iri}>"
-            ),
-            memory.admission_mut().workspace(),
+            FunctionRefusal::AlgebraInterception {
+                iri: workspace.authored_text(iri)?,
+            },
+            workspace,
         ));
     }
     Ok(())
@@ -1183,11 +1367,11 @@ impl UserFunctionRegistry {
                 .then_some(iri)
         });
         if let Some(iri) = nonnative.chain(native).min() {
-            return Err(NativeDiagnostic::error(
+            return Err(NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::StandardFunctionConflict,
-                format_args!(
-                    "caller registration conflicts with immutable standard function <{iri}>"
-                ),
+                FunctionRefusal::RegistryInterception {
+                    iri: workspace.authored_text(iri)?,
+                },
                 workspace,
             ));
         }
@@ -1785,12 +1969,18 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
 ) -> Result<Option<TermValue>, EvalError> {
     *evidence = None;
     if args.len() < func.required || args.len() > func.params.len() {
-        return Err(EvalError::function(format!(
-            "SHACL-AF function <{iri}> expects {}..={} argument(s), got {}",
-            func.required,
-            func.params.len(),
-            args.len()
-        )));
+        return Err(NativeDiagnostic::error_cause(
+            NativeDiagnosticKind::Function,
+            FunctionRefusal::ShaclArity {
+                iri: ctx.growth.authored_text(iri)?,
+                expected: Arity::Range {
+                    min: func.required,
+                    max: func.params.len(),
+                },
+                actual: args.len(),
+            },
+            &ctx.growth,
+        ));
     }
 
     // Bind each supplied argument to its parameter variable, type-checking as we go.
@@ -1803,7 +1993,7 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
             Some(value) => {
                 param
                     .constraint
-                    .check(iri, &format!("parameter ?{}", param.var), value)?;
+                    .check(iri, &param.var, value, &ctx.growth)?;
                 substitutions.push((param.var.clone(), value.clone()));
             }
             None if idx < func.required => return Ok(None),
@@ -1903,7 +2093,7 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
             if variables.len() != 1 {
                 return Err(NativeDiagnostic::error_cause(
                     NativeDiagnosticKind::Function,
-                    SelectResultRefusal::Columns {
+                    FunctionRefusal::Columns {
                         iri: child.growth.authored_text(iri)?,
                         actual: variables.len(),
                     },
@@ -1920,7 +2110,7 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
             if rows.len() > 1 {
                 return Err(NativeDiagnostic::error_cause(
                     NativeDiagnosticKind::Function,
-                    SelectResultRefusal::Solutions {
+                    FunctionRefusal::Solutions {
                         iri: child.growth.authored_text(iri)?,
                         actual: rows.len(),
                     },
@@ -1999,13 +2189,13 @@ pub(crate) fn eval_native_function<D: DatasetView + Sync>(
     // Fail-fast: a wrong-count call never reaches the host closure with a short
     // or long slice.
     if !native.arity.accepts(args.len()) {
-        return Err(NativeDiagnostic::error(
+        return Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::Function,
-            format_args!(
-                "native function <{iri}> expects {} argument(s), got {}",
-                native.arity,
-                args.len()
-            ),
+            FunctionRefusal::NativeArity {
+                iri: workspace.authored_text(iri)?,
+                expected: native.arity,
+                actual: args.len(),
+            },
             workspace,
         ));
     }
@@ -2078,9 +2268,11 @@ pub(crate) fn eval_native_function<D: DatasetView + Sync>(
     }
     match result {
         Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(NativeDiagnostic::error(
+        Err(_) => Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::FunctionOperational,
-            format_args!("native function <{iri}> panicked"),
+            FunctionRefusal::NativePanic {
+                iri: workspace.authored_text(iri)?,
+            },
             workspace,
         )),
     }
@@ -2128,35 +2320,34 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
 ) -> Result<Option<WorkspaceTerm>, EvalError> {
     let workspace = ctx.workspace.capability();
     if !func.arity.accepts(args.len()) {
-        return Err(NativeDiagnostic::error(
+        return Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::Function,
-            format_args!(
-                "expression-bodied function <{iri}> expects {} argument(s), got {}",
-                func.arity,
-                args.len()
-            ),
+            FunctionRefusal::ExprArity {
+                iri: workspace.authored_text(iri)?,
+                expected: func.arity,
+                actual: args.len(),
+            },
             &workspace,
         ));
     }
     let Some(focus_graph) = ctx.focus_graph else {
-        return Err(NativeDiagnostic::error(
+        return Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::Function,
-            format_args!(
-                "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
-             against, and this query supplied none (QueryOptions::focus_graph); the call is \
-             refused rather than answered from a graph it never read"
-            ),
+            FunctionRefusal::ExprFocusGraph {
+                iri: workspace.authored_text(iri)?,
+            },
             &workspace,
         ));
     };
     let depth = ctx.udf_depth.saturating_add(1);
     if depth > crate::eval::MAX_UDF_DEPTH {
-        return Err(NativeDiagnostic::error(
+        return Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::FunctionOperational,
-            format_args!(
-                "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
-                crate::eval::MAX_UDF_DEPTH
-            ),
+            FunctionRefusal::ExprDepth {
+                iri: workspace.authored_text(iri)?,
+                depth,
+                limit: crate::eval::MAX_UDF_DEPTH,
+            },
             &workspace,
         ));
     }
@@ -2181,9 +2372,11 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
         ExprBody::Admitted(body) => body(&call, &workspace),
     })) {
         Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(NativeDiagnostic::error(
+        Err(_) => Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::FunctionOperational,
-            format_args!("expression-bodied function <{iri}> panicked"),
+            FunctionRefusal::ExprPanic {
+                iri: workspace.authored_text(iri)?,
+            },
             &workspace,
         )),
     };

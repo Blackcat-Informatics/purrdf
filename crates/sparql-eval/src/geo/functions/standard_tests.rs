@@ -440,6 +440,18 @@ fn every_overlay_kind_refuses_standard_shadow_before_parsing_a_body() {
             .bind_functions(declarations, crate::ExtensionEnv::empty())
             .expect_err("sealed function conflict outranks body parsing");
         assert_eq!(error.code, "native-sparql-standard-function-conflict");
+        let fields = purrdf_testkit::error_capture::Capture::read(
+            error
+                .native_cause()
+                .expect("original standard-function refusal"),
+        )
+        .child("cause")
+        .child("cause");
+        assert_eq!(fields.code, "standard-function-registry-interception");
+        assert!(matches!(
+            fields.field("iri"),
+            purrdf_hash::error::ErrorValue::Iri(ogc::geof::IS_EMPTY)
+        ));
     }
 }
 
@@ -607,6 +619,21 @@ fn a_parser_namespace_cannot_intercept_a_standard_function() {
         )
         .expect_err("namespace collision precedes parsing");
     assert_eq!(error.code, "native-sparql-standard-function-conflict");
+    let fields = purrdf_testkit::error_capture::Capture::read(
+        error
+            .native_cause()
+            .expect("original parser namespace refusal"),
+    )
+    .child("cause")
+    .child("cause");
+    assert_eq!(fields.code, "standard-function-parser-interception");
+    assert!(matches!(
+        fields.field("namespace"),
+        purrdf_hash::error::ErrorValue::Text(ogc::geof::NS)
+    ));
+    assert!(
+        matches!(fields.field("iri"), purrdf_hash::error::ErrorValue::Iri(value) if value.starts_with(ogc::geof::NS))
+    );
 }
 
 #[test]
@@ -634,6 +661,14 @@ fn forged_closed_function_annotations_refuse_before_plan_admission() {
         matches!(error,crate::EvalError::NativeDiagnostic(ref message)
         if message.message().contains(ogc::geof::IS_EMPTY))
     );
+    let fields = purrdf_testkit::error_capture::Capture::read(&error)
+        .child("cause")
+        .child("cause");
+    assert_eq!(fields.code, "standard-function-algebra-interception");
+    assert!(matches!(
+        fields.field("iri"),
+        purrdf_hash::error::ErrorValue::Iri(ogc::geof::IS_EMPTY)
+    ));
 }
 
 #[test]

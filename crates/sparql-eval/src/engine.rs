@@ -6484,7 +6484,7 @@ fn parse_diagnostic(
 }
 
 /// Admit `query`'s structure: its height against the stack left here, for the recursive
-/// passes that walk it next ([`crate::stack::height::admit_query`]), then
+/// passes that walk it next ([`crate::stack::height::admit_query_with_memory`]), then
 /// [`purrdf_sparql_algebra::Query::validate`]'s invariants.
 ///
 /// # Errors
@@ -6612,18 +6612,12 @@ fn admit_structure(query: &Query) -> Result<(), RdfDiagnostic> {
 }
 
 fn admit_structure_with<const CONTEXTUAL: bool>(query: &Query) -> Result<(), RdfDiagnostic> {
-    crate::stack::height::admit_query(query).map_err(|error| {
-        RdfDiagnostic::error(
-            eval_diagnostic_code(&error, "native-sparql-algebra"),
-            error.to_string(),
-        )
-    })?;
-    (if CONTEXTUAL {
-        query.validate()
-    } else {
-        query.validate_ordinary()
-    })
-    .map_err(|error| RdfDiagnostic::error("native-sparql-algebra", error.to_string()))
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+    let result = admit_structure_with_memory::<CONTEXTUAL>(
+        query,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    );
+    result.map_err(EvaluationFailure::into_diagnostic)
 }
 
 /// The **options-dependent** half of [`check_plan_matches_relations`]: the plan must

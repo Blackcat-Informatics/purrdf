@@ -189,14 +189,8 @@ pub(crate) fn admit_pattern_with_memory(
     admit_with_memory([NodeRef::Pattern(pattern)], memory)
 }
 
-/// Admit query pattern and template trees, preserving the original root order.
-pub(crate) fn admit_query(query: &Query) -> Result<(), EvalError> {
-    let capability = crate::WorkspaceCapability::default();
-    let mut frame = crate::workspace::LexicalFrame::new(&capability);
-    admit_query_with_memory(query, &mut purrdf_lex::allocation::Memory::new(&mut frame))
-}
-
-/// The same query depth law with native before-growth physical admission.
+/// Admit query pattern and template trees in their original root order, with
+/// native before-growth physical admission.
 pub(crate) fn admit_query_with_memory(
     query: &Query,
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
