@@ -1,0 +1,9 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/590-sparql-expose-borrowed-native-value/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2.05s
+     Running tests/numeric_wasm_determinism.rs (/opt/.cargo/42/3d1d0662d08d57/debug/build/purrdf-sparql-eval/8ea4f0ac3efe4e92/out/numeric_wasm_determinism-8ea4f0ac3efe4e92)
+
+running 1 test
+test borrowed_value_equality_matches_the_query_operator_on_this_target ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+

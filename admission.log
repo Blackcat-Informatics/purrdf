@@ -1,0 +1,9 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/590-sparql-expose-borrowed-native-value/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 40s
+     Running unittests src/lib.rs (/opt/.cargo/42/3d1d0662d08d57/debug/build/purrdf-sparql-eval/9f026b8538eb2a0c/out/purrdf_sparql_eval-9f026b8538eb2a0c)
+
+running 1 test
+test workspace::owned_row_regressions::borrowed_value_equality_keeps_the_original_allocation_refusal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1635 filtered out; finished in 0.00s
+

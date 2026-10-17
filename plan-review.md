@@ -1,0 +1,1 @@
+Self-review, not independent. Plan maps API, typed/error semantics, native query parity, portable execution, strict tooling, publication and downstream consumer. Existing user merge/pending-CI authority applies. No corpus production or host probing. Native API is a prerequisite only; failing downstream regression remains owned. No silent required-scope cut identified.

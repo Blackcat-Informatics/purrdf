@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 590,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/590-sparql-expose-borrowed-native-value",
+  "branch": "paudley/590-sparql-expose-borrowed-native-value",
+  "slug": "sparql-expose-borrowed-native-value",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/590-sparql-expose-borrowed-native-value/.stage/sparql-expose-borrowed-native-value",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "9f70e55e92abb747df771372c9b270e202b39b9a",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/590-sparql-expose-borrowed-native-value",
+    "branch:paudley/590-sparql-expose-borrowed-native-value",
+    "stage:/home/paudley/Active/purrdf/.worktrees/590-sparql-expose-borrowed-native-value/.stage/sparql-expose-borrowed-native-value",
+    "issue:/home/paudley/Active/purrdf/.worktrees/590-sparql-expose-borrowed-native-value/.stage/sparql-expose-borrowed-native-value/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-17T12:36:05-0600"
+}

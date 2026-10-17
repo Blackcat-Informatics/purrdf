@@ -1,0 +1,16 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 3,
+      "rules": [
+        "modal"
+      ],
+      "text": "The downstream authored-integrity runtime must evaluate canonical equality/distinctness over original RDF values. Its actual source-to-enactment regression joins two distinct IRI metadata values but emits no violation, because the compiler currently treats termDistinct as stored data. ORDER BY compare_values is explicitly the wrong semantic relation. Copying the SPARQL equality implementation or rendering values into query text would duplicate authority and degrade the dataflow.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}
