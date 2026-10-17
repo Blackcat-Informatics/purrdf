@@ -55,6 +55,9 @@ use core::arch::x86_64::{
     _mm512_xor_si512,
 };
 
+// Keep each named kernel observable even when its ISA is enabled for the
+// whole target. The assembly audit binds both output widths to these paths.
+#[inline(never)]
 #[target_feature(enable = "ssse3")]
 pub(super) unsafe fn single<const OUTPUT: usize>(
     cv: [u32; 8],
@@ -152,6 +155,7 @@ pub(super) unsafe fn single<const OUTPUT: usize>(
     out
 }
 
+#[inline(never)]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub(super) unsafe fn single_avx512<const OUTPUT: usize>(
     cv: [u32; 8],
@@ -239,6 +243,7 @@ pub(super) unsafe fn single_avx512<const OUTPUT: usize>(
     out
 }
 
+#[inline(never)]
 #[target_feature(enable = "avx2")]
 pub(super) unsafe fn single_avx2<const OUTPUT: usize>(
     cv: [u32; 8],

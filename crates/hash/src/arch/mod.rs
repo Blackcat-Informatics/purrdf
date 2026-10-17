@@ -16,6 +16,8 @@
 //! `#[target_feature]` kernel is otherwise inlined into its safe wrapper, and
 //! the asm audit (`scripts/simd-asm-manifest.toml`) measures each kernel at
 //! its own path on every build.
+//! The BLAKE3 single-block kernels also retain named boundaries when the
+//! whole target already enables their ISA, for both output-word widths.
 //!
 //! The other exception is the fixed hasher's AES `Block`, which exists only
 //! in builds whose target enables `aes` at compile time: such a build has one
