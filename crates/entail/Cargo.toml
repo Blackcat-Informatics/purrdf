@@ -78,6 +78,10 @@ purrdf-testkit = { workspace = true }
 purrdf-alloc-probe = { workspace = true }
 
 [[test]]
+name = "recorded_stop"
+harness = false
+
+[[test]]
 # The same complete role-chain production fixtures execute natively and on wasm32.
 name = "regular_role_chains"
 harness = false

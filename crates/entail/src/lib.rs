@@ -160,7 +160,7 @@ pub use owl_dl::proof::{
     MergeLicence, MergeReplay, MergeStep, NodeRef, PartialReplay, ProofAlternative, ProofAnswer,
     ProofFact, ProofGround, ProofRole, RefutationReplay, ReservedRef,
     TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, ontology_identity,
-    prove_consistency, try_ontology_identity,
+    prove_consistency, try_ontology_identity, try_ontology_identity_with_stop,
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
