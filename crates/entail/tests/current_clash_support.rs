@@ -278,10 +278,71 @@ fn current_clash_replays_equality_before_observing_role_premises() {
     }
 }
 
+/// Borrowing checks the independent consumer snapshot repeatedly and leaves it reusable.
+fn current_clash_borrows_the_independent_prepared_consumer() {
+    for blank in [false, true] {
+        let dataset = derived(blank);
+        let producer = Reasoner::with_proofs(&dataset).unwrap();
+        let answer = producer.consistency();
+        let proof = answer.proof().unwrap();
+        let consumer = Reasoner::with_proofs(&dataset).unwrap();
+        let owned = Reasoner::with_proofs(&dataset)
+            .unwrap()
+            .proof_context()
+            .unwrap();
+        {
+            let borrowed = consumer.borrowed_proof_context().unwrap();
+            assert_eq!(borrowed.input(), owned.input());
+            assert_eq!(borrowed.contract(), owned.contract());
+            let reference = proof
+                .verify(
+                    &dataset,
+                    &Question::Consistency,
+                    Some(answer.certificate()),
+                    &owned,
+                )
+                .unwrap();
+            for _ in 0..3 {
+                assert_eq!(
+                    proof
+                        .verify_prepared(
+                            &Question::Consistency,
+                            Some(answer.certificate()),
+                            &borrowed
+                        )
+                        .unwrap(),
+                    reference
+                );
+            }
+        }
+        assert_eq!(consumer.consistency().certificate(), answer.certificate());
+        let later = consumer.borrowed_proof_context().unwrap();
+        let other = Fixture::default().freeze();
+        assert!(
+            proof
+                .verify(
+                    &other,
+                    &Question::Consistency,
+                    Some(answer.certificate()),
+                    &later
+                )
+                .is_err()
+        );
+        let wrong_consumer = Reasoner::with_proofs(&other).unwrap();
+        let wrong = wrong_consumer.borrowed_proof_context().unwrap();
+        assert!(
+            proof
+                .verify_prepared(&Question::Consistency, Some(answer.certificate()), &wrong)
+                .is_err()
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,
     current_clash_replays_generated_existential_witnesses,
     current_clash_checks_fresh_refutation_assumptions_without_a_source_name,
     current_clash_replays_equality_before_observing_role_premises,
+    current_clash_borrows_the_independent_prepared_consumer,
 );

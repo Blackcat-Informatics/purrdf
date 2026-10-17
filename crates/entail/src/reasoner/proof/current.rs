@@ -14,7 +14,7 @@ use purrdf_core::TermValue;
 pub(super) fn check_run(
     proof: &ServiceProof,
     index: usize,
-    ctx: &DlProofContext,
+    ctx: &DlProofContext<'_>,
 ) -> Result<(), DlProofError> {
     let assumptions = &proof.runs[index].assumptions;
     if index == 0 && bare(assumptions) {

@@ -738,6 +738,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				current_clash_replays_generated_existential_witnesses \
 				current_clash_checks_fresh_refutation_assumptions_without_a_source_name \
 				current_clash_replays_equality_before_observing_role_premises \
+				current_clash_borrows_the_independent_prepared_consumer \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test recorded_stop -- --exact \
 				recorded_stop_preserves_complete_decisions_and_proof_identity \
