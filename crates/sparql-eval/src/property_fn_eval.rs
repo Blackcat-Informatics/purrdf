@@ -93,7 +93,7 @@ use purrdf_sparql_algebra::{
 
 #[cfg(test)]
 use crate::DetHashMap;
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Truncation};
@@ -968,7 +968,7 @@ fn eval_call_over<D: DatasetView + Sync>(
                 .as_mut()
                 .and_then(|frames| frames.as_mut_slice().last_mut())
                 .ok_or_else(|| {
-                    EvalError::internal("lossy producer has no original invocation search scope")
+                    EvalError::Invariant(EvaluatorInvariant::ProducerInvocationScopeMissing)
                 })?;
             *search = search.combine(
                 &evidence,

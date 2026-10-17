@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use purrdf_core::{TargetId, TargetSetView, TermValue};
 use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_INTEGER};
 
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 use crate::property_fn::{IndexGeneration, PfArgs, PfArity, PfCursor, PfRow};
 
 use super::{KnnGuard, Ranked};
@@ -318,7 +318,7 @@ impl AdmittedKnnInvocation {
                 // Membership has no ranked depth. Decide before the pairwise
                 // read while preserving the same physical distance kernel.
                 let candidate = source.term(row).ok_or_else(|| {
-                    EvalError::internal("native membership candidate lost its term")
+                    EvalError::Invariant(EvaluatorInvariant::MembershipTermMissing)
                 })?;
                 let decision = scope.decide(candidate, workspace)?;
                 let mut ranked = crate::AdmittedVec::new(workspace);
@@ -347,7 +347,7 @@ impl AdmittedKnnInvocation {
         let mut established = 0usize;
         for (position, scored) in candidates.into_iter().enumerate() {
             let candidate = source.term(scored.row).ok_or_else(|| {
-                EvalError::internal("native scoped ranking candidate lost its term")
+                EvalError::Invariant(EvaluatorInvariant::RankedCandidateTermMissing)
             })?;
             let Some(evidence) = scope
                 .decide(candidate, workspace)?
@@ -922,7 +922,7 @@ impl<S: RankSource> RankedCursor<S> {
             let position = declarations
                 .binary_search_by_key(&scored.row, |entry| entry.0)
                 .map_err(|_| {
-                    EvalError::internal("native scoped row lost its original declaration")
+                    EvalError::Invariant(EvaluatorInvariant::ScopedRowDeclarationMissing)
                 })?;
             Ok(row.with_evidence(declarations[position].1.clone()))
         } else {

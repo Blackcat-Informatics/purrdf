@@ -2490,9 +2490,23 @@ mod tests {
             &q(&format!("{all} OPTIONAL {{ SERVICE ?e {{ ?s ?p ?x }} }}")),
         )
         .expect_err("a failing endpoint fails a non-silent SERVICE");
-        assert!(
-            matches!(&error, EvalError::Remote(m) if m.contains("http://example.org/down")),
-            "{error}"
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.code, "sparql-eval-retained-service");
+        let failure = captured.child("cause");
+        assert!(matches!(
+            failure.field("endpoint"),
+            purrdf_hash::error::ErrorValue::Iri("http://example.org/down")
+        ));
+        let transport = failure.child("cause").child("cause");
+        assert_eq!(transport.code, "service-transport");
+        assert!(matches!(
+            transport.field("message"),
+            purrdf_hash::error::ErrorValue::Message("connection refused")
+        ));
+        assert_eq!(error.code(), Some(EvalError::SERVICE_FAILED_CODE));
+        assert_eq!(
+            error.to_string(),
+            "SERVICE federation error: SERVICE <http://example.org/down>: transport: connection refused"
         );
     }
 
@@ -2523,7 +2537,14 @@ mod tests {
         // Without SILENT the failing endpoint is an error.
         let source = Endpoints::default();
         let error = run(&source, &q(&only_down.replace("SILENT ", ""))).expect_err("fails");
-        assert!(matches!(error, EvalError::Remote(_)), "{error}");
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.code, "sparql-eval-retained-service");
+        let transport = captured.child("cause").child("cause").child("cause");
+        assert_eq!(transport.code, "service-transport");
+        assert!(matches!(
+            transport.field("message"),
+            purrdf_hash::error::ErrorValue::Message("connection refused")
+        ));
     }
 
     #[test]

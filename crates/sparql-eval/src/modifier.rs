@@ -121,7 +121,7 @@ use purrdf_xsd::datatype::XSD_STRING;
 
 use crate::agg_fn::AggregateAccumulator as _;
 use crate::convert::ground_term_to_workspace_value;
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 use crate::eval::{EvalCtx, eval_evaluated};
 #[cfg(test)]
 use crate::expr::xsd_of;
@@ -3621,9 +3621,8 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
         // for that unencodable invariant (never observed by any test or
         // conformance case — see this function's own dispatch order).
         AggregateFunction::Custom(_) => {
-            return Err(EvalError::internal(
-                "AggregateFunction::Custom reached the built-in dispatch arm; the Custom \
-                 short-circuit at the top of eval_aggregate should have already handled it",
+            return Err(EvalError::Invariant(
+                EvaluatorInvariant::CustomAggregateInBuiltinDispatch,
             ));
         }
         // Unreachable for exactly the same reason `Custom` is: `FOLD` was
@@ -3633,9 +3632,8 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
         // folding a `FOLD` over a survivor list its own semantics never built, so
         // it is a typed internal error rather than a silently wrong answer.
         AggregateFunction::Fold => {
-            return Err(EvalError::internal(
-                "AggregateFunction::Fold reached the built-in dispatch arm; the FOLD \
-                 short-circuit at the top of eval_aggregate should have already handled it",
+            return Err(EvalError::Invariant(
+                EvaluatorInvariant::FoldAggregateInBuiltinDispatch,
             ));
         }
     };

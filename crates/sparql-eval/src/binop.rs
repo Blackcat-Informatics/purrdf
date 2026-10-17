@@ -23,7 +23,7 @@ use std::sync::Arc;
 use purrdf_core::{DatasetView, TermId, ViewTermId};
 use purrdf_sparql_algebra::{Expression, GraphPattern, Variable};
 
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 use crate::eval::{EvalCtx, ResidentAbort, ResidentPending, eval_evaluated};
 use crate::governor::lift::{DetachedLift, Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
@@ -1278,7 +1278,8 @@ fn enter_lateral_child<D: DatasetView + Sync>(
         placeholders = deferral.into_placeholders(&ctx.growth)?;
         copy = Some(next);
     }
-    let body = copy.ok_or_else(|| EvalError::internal("layered LATERAL has no copied body"))?;
+    let body =
+        copy.ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::LayeredLateralBodyMissing))?;
     let owner = crate::expr::PreparedPattern::new(body, &ctx.growth)?;
     let guard = ctx.enter_substituted_exists(None, placeholders)?;
     Ok(LateralPending {
@@ -1358,8 +1359,8 @@ pub(crate) fn begin_lateral<D: DatasetView + Sync>(
         .and_then(crate::deferred_exists::Deferred::lateral)
         .cloned();
     if deferred.is_none() && crate::deferred_exists::is_lateral_placeholder(right) {
-        return Err(EvalError::internal(
-            "a nested LATERAL placeholder was evaluated outside the substituted copy that left it",
+        return Err(EvalError::Invariant(
+            EvaluatorInvariant::LateralPlaceholderOutsideCopy,
         ));
     }
     let per_row = crate::AdmittedVec::with_capacity(left.rows.len(), &ctx.growth)?;
@@ -2783,8 +2784,8 @@ fn parallel_seeded_optional<D: DatasetView + Sync>(
                 pad_unmatched,
             } = seeded_optional_block(node, unit, right, None, plan, bgp, child)?;
             let Evaluated::Complete(block) = evaluated else {
-                return Err(EvalError::internal(
-                    "an ungoverned uncapped BGP driver unexpectedly truncated",
+                return Err(EvalError::Invariant(
+                    EvaluatorInvariant::UngovernedBgpTruncated,
                 ));
             };
             let mut output = RowsBuilder::new(&child.growth);
@@ -2797,8 +2798,8 @@ fn parallel_seeded_optional<D: DatasetView + Sync>(
                 None,
                 child,
             )? {
-                return Err(EvalError::internal(
-                    "an ungoverned uncapped BGP driver unexpectedly reached a cap",
+                return Err(EvalError::Invariant(
+                    EvaluatorInvariant::UngovernedBgpCapped,
                 ));
             }
             rows.extend(output.finish()?);

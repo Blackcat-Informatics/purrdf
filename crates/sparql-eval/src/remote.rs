@@ -85,7 +85,7 @@ use std::sync::Arc;
 use purrdf_core::{DatasetView, RdfDataset, TermValue, TrippedGovernor, ViewTermId};
 use purrdf_sparql_algebra::{GraphPattern, GroundTerm, NamedNodePattern, TriplePattern, Variable};
 
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 #[cfg(test)]
 use crate::eval::materialize_solutions;
 use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome};
@@ -2221,7 +2221,7 @@ fn ingest_admitted<D: DatasetView + Sync>(
                 .as_mut()
                 .and_then(|frames| frames.as_mut_slice().last_mut())
                 .ok_or_else(|| {
-                    EvalError::internal("SERVICE has no original evidence search frame")
+                    EvalError::Invariant(EvaluatorInvariant::ServiceEvidenceFrameMissing)
                 })?;
             *search = search.combine(
                 &scope,

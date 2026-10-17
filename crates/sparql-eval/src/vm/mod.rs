@@ -55,7 +55,7 @@ use purrdf_sparql_algebra::{Expression, Function, GraphPattern};
 pub(crate) use compile::ExprProgram;
 use compile::{Cmp, Op, StrPred};
 
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant, StackExpectation};
 use crate::eval::EvalCtx;
 use crate::expr as helpers;
 use crate::scratch::SolutionTerm;
@@ -313,11 +313,10 @@ impl ExistsSites<'_> {
         site: u32,
         expression: Option<&Expression>,
     ) -> Result<&'a GraphPattern, EvalError> {
-        let site = self.sites.get(site as usize).ok_or_else(|| {
-            EvalError::internal(
-                "an EXISTS instruction was run by a link that holds no pattern for it",
-            )
-        })?;
+        let site = self
+            .sites
+            .get(site as usize)
+            .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing))?;
         let mut node = self.owner.expression(expression)?;
         for &index in &site.steps {
             let mut child = None;
@@ -328,13 +327,12 @@ impl ExistsSites<'_> {
                 }
                 at += 1;
             });
-            node = child.ok_or_else(|| {
-                EvalError::internal("an EXISTS site no longer names its linked expression")
-            })?;
+            node = child
+                .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsExpressionMissing))?;
         }
         let Expression::Exists(pattern) = node else {
-            return Err(EvalError::internal(
-                "an EXISTS site no longer names its linked expression",
+            return Err(EvalError::Invariant(
+                EvaluatorInvariant::ExistsExpressionMissing,
             ));
         };
         Ok(pattern)
@@ -360,11 +358,11 @@ impl ExpressionOwner<'_> {
             Self::Borrowed(expression) => *expression,
             Self::Copied { pattern, steps, .. } => {
                 let node = NodeRef::Pattern(pattern).at_path(steps).ok_or_else(|| {
-                    EvalError::internal("copied expression path no longer names a child")
+                    EvalError::Invariant(EvaluatorInvariant::CopiedExpressionChildMissing)
                 })?;
                 let NodeRef::Expr(expression) = node else {
-                    return Err(EvalError::internal(
-                        "copied expression path no longer names an expression",
+                    return Err(EvalError::Invariant(
+                        EvaluatorInvariant::CopiedExpressionMissing,
                     ));
                 };
                 expression
@@ -373,13 +371,13 @@ impl ExpressionOwner<'_> {
         if let Some(supplied) = supplied
             && !std::ptr::eq(supplied, expression)
         {
-            return Err(EvalError::internal(
-                "an EXISTS link was run with a different expression owner",
+            return Err(EvalError::Invariant(
+                EvaluatorInvariant::ExistsExpressionOwnerChanged,
             ));
         }
         if supplied.is_none() && matches!(self, Self::Borrowed(_)) {
-            return Err(EvalError::internal(
-                "an EXISTS link was run without its expression owner",
+            return Err(EvalError::Invariant(
+                EvaluatorInvariant::ExistsExpressionOwnerMissing,
             ));
         }
         Ok(expression)
@@ -591,11 +589,11 @@ impl<'e, I: purrdf_core::ViewTermId> FilterRowFrame<'e, I> {
         ),
         EvalError,
     > {
-        let sites = self.linked.exists.as_deref().ok_or_else(|| {
-            EvalError::internal(
-                "an EXISTS instruction was run by a link that holds no pattern for it",
-            )
-        })?;
+        let sites = self
+            .linked
+            .exists
+            .as_deref()
+            .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing))?;
         let pattern = sites.pattern(site, Some(expression))?;
         let mut record = ctx
             .may_have_evidence()
@@ -724,7 +722,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
     ) -> Result<Linked<'static, I>, EvalError> {
         let (steps, allocation) = if program.has_exists() {
             copied_expression_path(&pattern, expr, &ctx.growth)?.ok_or_else(|| {
-                EvalError::internal("a copied FILTER expression is absent from its owner")
+                EvalError::Invariant(EvaluatorInvariant::CopiedFilterExpressionMissing)
             })?
         } else {
             (Vec::new(), None)
@@ -1203,7 +1201,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                     let mut value = Some(!or);
                     for entry in stack.drain(start..) {
                         let Val::Ebv(operand) = entry else {
-                            return Err(mistyped("an effective boolean value"));
+                            return Err(mistyped(StackExpectation::Boolean));
                         };
                         value = if or {
                             helpers::kleene_or(value, operand)
@@ -1290,7 +1288,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                         saw_error,
                     }) = stack.last_mut()
                     else {
-                        return Err(mistyped("an open IN"));
+                        return Err(mistyped(StackExpectation::OpenIn));
                     };
                     let matched = match candidate {
                         None => {
@@ -1316,7 +1314,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                 }
                 Op::InEnd => {
                     let Some(Val::In { saw_error, .. }) = stack.pop() else {
-                        return Err(mistyped("an open IN"));
+                        return Err(mistyped(StackExpectation::OpenIn));
                     };
                     stack.push(Val::Term(if saw_error {
                         None
@@ -1353,10 +1351,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                         .as_ref()
                         .and_then(|sites| sites.sites.get(site as usize))
                         .ok_or_else(|| {
-                            EvalError::internal(
-                                "an EXISTS instruction was run by a link that holds no pattern \
-                             for it",
-                            )
+                            EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing)
                         })?;
                     if let Some(records) = &mut records {
                         records.suspend(record);
@@ -1391,7 +1386,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                             term.map(|t| helpers::owned_value_of(ctx, t)).transpose()?
                         }
                         Some(Val::Value(value)) => value,
-                        Some(_) => return Err(mistyped("a term or a triple term value")),
+                        Some(_) => return Err(mistyped(StackExpectation::TermOrTriple)),
                         None => return Err(underflow()),
                     };
                     let predicate = pop_term(stack)?
@@ -1529,9 +1524,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
         drop(records);
         let value = pop_term(stack)?;
         if !stack.is_empty() {
-            return Err(EvalError::internal(
-                "an expression program left more than its value on the stack",
-            ));
+            return Err(EvalError::Invariant(EvaluatorInvariant::VmExtraStackValues));
         }
         Ok(VmStep::Value(value))
     }
@@ -1572,8 +1565,8 @@ fn call_custom<'d, D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'d, D>,
 ) -> Result<VmStep<'d, D::Id>, EvalError> {
     let Function::Custom(iri) = &program.calls[call as usize] else {
-        return Err(EvalError::internal(
-            "a custom-call instruction names a built-in function",
+        return Err(EvalError::Invariant(
+            EvaluatorInvariant::CustomInstructionBuiltinFunction,
         ));
     };
     let registry: &'d crate::user_fn::BoundFunctionRegistry = ctx.user_functions;
@@ -1605,11 +1598,8 @@ fn resolve<D: DatasetView + Sync>(
 ) -> Result<Resolved<D::Id>, EvalError> {
     match suspend {
         Suspend::Exists(site) => {
-            let sites = exists.ok_or_else(|| {
-                EvalError::internal(
-                    "an EXISTS instruction was run by a link that holds no pattern for it",
-                )
-            })?;
+            let sites = exists
+                .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing))?;
             let pattern = sites.pattern(site, expression)?;
             if ctx.may_have_evidence() {
                 let (found, record) = helpers::exists_evidence(pattern, row, schema, ctx)?;
@@ -1626,8 +1616,8 @@ fn resolve<D: DatasetView + Sync>(
             vals,
         } => {
             let Function::Custom(iri) = &program.calls[call as usize] else {
-                return Err(EvalError::internal(
-                    "a suspended function call names a built-in function",
+                return Err(EvalError::Invariant(
+                    EvaluatorInvariant::SuspendedCallBuiltinFunction,
                 ));
             };
             let mut evidence = None;
@@ -1651,7 +1641,7 @@ fn resolve<D: DatasetView + Sync>(
 }
 
 fn evidence_poisoned() -> EvalError {
-    EvalError::internal("poisoned original VM evidence records")
+    EvalError::Invariant(EvaluatorInvariant::VmEvidencePoisoned)
 }
 
 /// Pop `argc` terms and materialize their values into `vals`, in argument order,
@@ -1669,7 +1659,7 @@ fn pop_values<D: DatasetView + Sync>(
     vals.clear();
     for entry in stack.drain(start..) {
         let Val::Term(term) = entry else {
-            return Err(mistyped("a term"));
+            return Err(mistyped(StackExpectation::Term));
         };
         vals.push(term.map(|t| helpers::owned_value_of(ctx, t)).transpose()?)?;
     }
@@ -1679,7 +1669,7 @@ fn pop_values<D: DatasetView + Sync>(
 fn pop_term<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<SolutionTerm<I>>, EvalError> {
     match stack.pop() {
         Some(Val::Term(term)) => Ok(term),
-        Some(_) => Err(mistyped("a term")),
+        Some(_) => Err(mistyped(StackExpectation::Term)),
         None => Err(underflow()),
     }
 }
@@ -1687,7 +1677,7 @@ fn pop_term<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<SolutionTerm<I>>,
 fn pop_ebv<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<bool>, EvalError> {
     match stack.pop() {
         Some(Val::Ebv(value)) => Ok(value),
-        Some(_) => Err(mistyped("an effective boolean value")),
+        Some(_) => Err(mistyped(StackExpectation::Boolean)),
         None => Err(underflow()),
     }
 }
@@ -1718,19 +1708,17 @@ fn pop_str<'p, I: Copy>(
     match stack.pop() {
         Some(Val::Str(value)) => Ok(value.map(StrArg::Owned)),
         Some(Val::StrConst(k)) => Ok(Some(StrArg::Borrowed(&strs[k as usize]))),
-        Some(_) => Err(mistyped("a string argument")),
+        Some(_) => Err(mistyped(StackExpectation::String)),
         None => Err(underflow()),
     }
 }
 
 fn underflow() -> EvalError {
-    EvalError::internal("an expression program popped an empty stack")
+    EvalError::Invariant(EvaluatorInvariant::VmStackUnderflow)
 }
 
-fn mistyped(expected: &str) -> EvalError {
-    EvalError::internal(format!(
-        "an expression program found a stack entry that is not {expected}"
-    ))
+fn mistyped(expected: StackExpectation) -> EvalError {
+    EvalError::Invariant(EvaluatorInvariant::UnexpectedStackValue { expected })
 }
 
 /// A recorder of every charge call, in order, for tests that compare two evaluations'

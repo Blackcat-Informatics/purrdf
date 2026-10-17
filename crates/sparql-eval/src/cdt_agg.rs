@@ -94,7 +94,7 @@ use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{AggregateExpression, OrderExpression};
 
 use crate::agg_fn::AggregateAccumulator;
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
 use crate::modifier::{compare_keys_admitted, fold_builtin_admitted, project_admitted};
@@ -385,10 +385,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         [first] => (first, None),
         [first, second, ..] => (first, Some(second)),
         [] => {
-            return Err(EvalError::internal(
-                "FOLD reached evaluation with an empty exprlist; AggregateExpression::new \
-                 admits only one argument (the cdt:List form) or two (the cdt:Map form)",
-            ));
+            return Err(EvalError::Invariant(EvaluatorInvariant::EmptyFoldArguments));
         }
     };
     let order_by: &[OrderExpression] = agg.order_by();

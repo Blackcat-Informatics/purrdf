@@ -56,7 +56,7 @@ use purrdf_xsd::{parse_by_iri, value_cmp};
 use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
 
 use crate::DetHashSet;
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 use crate::eval::{
     EvalCtx, LanguageStringEquality, ResidentAbort, ResidentPending, eval_evaluated,
 };
@@ -472,7 +472,9 @@ fn begin_filter_sequence<'e, D: DatasetView + Sync>(
     let mut linked = match owner {
         FilterLink::Borrowed(expression) => {
             if !std::ptr::eq(expression, expr) {
-                return Err(EvalError::internal("FILTER changed its expression owner"));
+                return Err(EvalError::Invariant(
+                    EvaluatorInvariant::FilterExpressionOwnerChanged,
+                ));
             }
             crate::vm::Linked::link_filter_admitted(program, expression, &schema, ctx)?
         }
@@ -2640,8 +2642,8 @@ impl<I: ViewTermId> ExistsChild<I> {
                 let crate::eval::PreparedExists::Pattern { normalized, .. } =
                     site.prepared.as_ref()
                 else {
-                    return Err(EvalError::internal(
-                        "a probe child lost its prepared pattern",
+                    return Err(EvalError::Invariant(
+                        EvaluatorInvariant::ProbePatternMissing,
                     ));
                 };
                 let owner = normalized.clone();
@@ -2668,8 +2670,8 @@ impl<I: ViewTermId> ExistsChild<I> {
                     ..
                 } = site.prepared.as_ref()
                 else {
-                    return Err(EvalError::internal(
-                        "a definition child lost its prepared pattern",
+                    return Err(EvalError::Invariant(
+                        EvaluatorInvariant::DefinitionPatternMissing,
                     ));
                 };
                 let (to_evaluate, sites) = if first_witness {
@@ -2736,8 +2738,8 @@ impl<I: ViewTermId> ExistsChild<I> {
                     ..
                 } = site.prepared.as_ref()
                 else {
-                    return Err(EvalError::internal(
-                        "a deferred child lost its prepared pattern",
+                    return Err(EvalError::Invariant(
+                        EvaluatorInvariant::DeferredPatternMissing,
                     ));
                 };
                 let (to_evaluate, sites) = if first_witness {
@@ -5541,8 +5543,8 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         | Function::StrStarts
         | Function::StrEnds
         | Function::Regex
-        | Function::LangMatches => Err(EvalError::internal(
-            "a string predicate was applied to evaluated argument values",
+        | Function::LangMatches => Err(EvalError::Invariant(
+            EvaluatorInvariant::StringPredicateAfterEvaluation,
         )),
         Function::Concat => eval_concat(ctx, vals),
         Function::SubStr => eval_substr(ctx, vals),
@@ -15177,7 +15179,7 @@ impl PreparedPatternCursor {
                 selected
             })
             .map(Self)
-            .ok_or_else(|| EvalError::internal("a copied node's child is absent from its owner"))
+            .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::CopiedPatternChildMissing))
     }
 }
 

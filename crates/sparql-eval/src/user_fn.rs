@@ -59,7 +59,7 @@ use std::sync::Arc;
 use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
 
 use crate::DetHashMap;
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
 use crate::eval::{
     EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
@@ -2157,8 +2157,8 @@ fn function_body_evidence<D: DatasetView + Sync>(
     };
     let Some(rows) = rows else {
         return if child.evidence_input.is_some() {
-            Err(EvalError::internal(
-                "SPARQL function lost its original evidence rows",
+            Err(EvalError::Invariant(
+                EvaluatorInvariant::FunctionEvidenceRowsMissing,
             ))
         } else {
             Ok(None)

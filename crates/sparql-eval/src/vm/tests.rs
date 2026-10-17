@@ -1315,10 +1315,46 @@ fn exists_link_refuses_a_different_expression_owner() {
         linked.ebv(Some(&expr), &[], &schema, &mut ctx).unwrap(),
         Some(true)
     );
-    assert!(matches!(
-        linked.ebv(Some(&other), &[], &schema, &mut ctx),
-        Err(EvalError::Internal(_))
-    ));
+    let error = linked
+        .ebv(Some(&other), &[], &schema, &mut ctx)
+        .unwrap_err();
+    let captured = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(
+        captured.child("cause").code,
+        "eval-invariant-exists-expression-owner-changed"
+    );
+    assert_eq!(error.code(), Some(EvalError::INTERNAL_CODE));
+    assert_eq!(
+        error.to_string(),
+        "internal evaluator error: an EXISTS link was run with a different expression owner"
+    );
+}
+
+#[test]
+fn native_stack_refusals_keep_the_original_expected_category() {
+    use purrdf_testkit::error_capture::Capture;
+    let mut stack: super::ValStack<purrdf_core::TermId> = vec![super::Val::Ebv(Some(true))];
+    let error = super::pop_term(&mut stack).unwrap_err();
+    let captured = Capture::read(&error);
+    assert_eq!(
+        captured.child("cause").child("expected").code,
+        "vm-stack-term"
+    );
+    assert_eq!(
+        error.to_string(),
+        "internal evaluator error: an expression program found a stack entry that is not a term"
+    );
+    let underflow = super::pop_term(&mut stack).unwrap_err();
+    assert_eq!(
+        Capture::read(&underflow).child("cause").code,
+        "eval-invariant-vm-stack-underflow"
+    );
+    let mut stack: super::ValStack<purrdf_core::TermId> = vec![super::Val::Term(None)];
+    let error = super::pop_ebv(&mut stack).unwrap_err();
+    assert_eq!(
+        Capture::read(&error).child("cause").child("expected").code,
+        "vm-stack-boolean"
+    );
 }
 
 #[test]
@@ -1351,7 +1387,9 @@ fn copied_filter_exists_resolves_through_its_retained_pattern_owner() {
     let other = expr.clone();
     assert!(matches!(
         linked.ebv(Some(&other), &[], &schema, &mut ctx),
-        Err(EvalError::Internal(_))
+        Err(EvalError::Invariant(
+            crate::EvaluatorInvariant::ExistsExpressionOwnerChanged
+        ))
     ));
 }
 

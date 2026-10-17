@@ -33,7 +33,7 @@ use purrdf_sparql_algebra::{
 
 use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant};
 use crate::governor::GovernorState;
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::lift::{Evaluated, ExpressionBarrier, Truncation};
@@ -3456,7 +3456,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         let mut owner = self
             .native_evidence
             .lock()
-            .map_err(|_| EvalError::internal("poisoned native evidence owner"))?;
+            .map_err(|_| EvalError::Invariant(EvaluatorInvariant::EvidenceOwnerPoisoned))?;
         if owner.is_none() {
             *owner = Some(crate::evidence_exec::EvidenceOwner::new(
                 self.candidate_scope
@@ -3480,7 +3480,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         } else {
             self.native_evidence
                 .lock()
-                .map_err(|_| EvalError::internal("poisoned native evidence owner"))?
+                .map_err(|_| EvalError::Invariant(EvaluatorInvariant::EvidenceOwnerPoisoned))?
                 .clone()
         };
         Ok(std::sync::Mutex::new(owner))
@@ -3700,8 +3700,8 @@ impl OrdinaryPosition<'_> {
 
     fn copied_child(&self, child: &GraphPattern) -> Result<Self, EvalError> {
         match self {
-            Self::Borrowed(_) => Err(EvalError::internal(
-                "a borrowed child needs its original owner",
+            Self::Borrowed(_) => Err(EvalError::Invariant(
+                EvaluatorInvariant::BorrowedChildOwnerMissing,
             )),
             Self::Copied(cursor) => cursor.child(child).map(Self::Copied),
         }
@@ -3821,7 +3821,9 @@ impl<'a, D: DatasetView + Sync> OrdinaryRunner<'a, '_, '_, D> {
         if !sequence.has_row() {
             let crate::binop::LateralStep::Complete(done) = sequence.step(node, right, self.ctx)?
             else {
-                return Err(EvalError::internal("completed LATERAL entered another row"));
+                return Err(EvalError::Invariant(
+                    EvaluatorInvariant::CompletedLateralReentered,
+                ));
             };
             return Ok(OrdinaryLateralSchedule::Complete(done));
         }
@@ -4135,7 +4137,9 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                 let pattern = position.pattern();
                 let result = (|| {
                     let GraphPattern::Filter { expr, .. } = pattern else {
-                        return Err(EvalError::internal("EXISTS parent lost its FILTER"));
+                        return Err(EvalError::Invariant(
+                            EvaluatorInvariant::ExistsFilterMissing,
+                        ));
                     };
                     let found = answer?;
                     state.sequence.resume(
@@ -4157,9 +4161,9 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                             pattern,
                             result.and_then(|done| match done {
                                 OrdinaryAdvance::Complete(done) => Ok(done),
-                                OrdinaryAdvance::Descend(_) => {
-                                    Err(EvalError::internal("missing FILTER completion"))
-                                }
+                                OrdinaryAdvance::Descend(_) => Err(EvalError::Invariant(
+                                    EvaluatorInvariant::FilterCompletionMissing,
+                                )),
                             }),
                         );
                         continue;
@@ -4180,7 +4184,9 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                 let pattern = position.pattern();
                 let result = (|| {
                     let GraphPattern::Lateral { right, .. } = pattern else {
-                        return Err(EvalError::internal("LATERAL parent lost its pattern"));
+                        return Err(EvalError::Invariant(
+                            EvaluatorInvariant::LateralParentPatternMissing,
+                        ));
                     };
                     let sequence = state.sequence.take().expect("one LATERAL sequence");
                     let sequence = sequence.resume(pattern, evaluated?, runner.ctx)?;
@@ -4198,9 +4204,9 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                             pattern,
                             result.and_then(|outcome| match outcome {
                                 OrdinaryLateralSchedule::Complete(done) => Ok(done),
-                                OrdinaryLateralSchedule::Descend(_) => {
-                                    Err(EvalError::internal("missing LATERAL completion"))
-                                }
+                                OrdinaryLateralSchedule::Descend(_) => Err(EvalError::Invariant(
+                                    EvaluatorInvariant::LateralCompletionMissing,
+                                )),
                             }),
                         );
                         continue;
@@ -4215,7 +4221,9 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                         right, expression, ..
                     } = pattern
                     else {
-                        return Err(EvalError::internal("OPTIONAL frame lost its pattern"));
+                        return Err(EvalError::Invariant(
+                            EvaluatorInvariant::OptionalPatternMissing,
+                        ));
                     };
                     crate::binop::finish_left_join(
                         pattern,
@@ -4231,13 +4239,15 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                         expr: expression, ..
                     } = pattern
                     else {
-                        return Err(EvalError::internal("FILTER frame lost its pattern"));
+                        return Err(EvalError::Invariant(
+                            EvaluatorInvariant::FilterPatternMissing,
+                        ));
                     };
                     let owner = match &position {
                         OrdinaryPosition::Borrowed(parent) => {
                             let GraphPattern::Filter { expr, .. } = parent else {
-                                return Err(EvalError::internal(
-                                    "borrowed FILTER frame lost its expression",
+                                return Err(EvalError::Invariant(
+                                    EvaluatorInvariant::BorrowedFilterExpressionMissing,
                                 ));
                             };
                             crate::expr::FilterLink::Borrowed(expr)
@@ -4277,7 +4287,9 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                     .map(Some),
                 (OrdinaryAfter::LateralLeft { lift }, Ok(child)) => (|| {
                     let GraphPattern::Lateral { right, .. } = pattern else {
-                        return Err(EvalError::internal("LATERAL frame lost its pattern"));
+                        return Err(EvalError::Invariant(
+                            EvaluatorInvariant::LateralPatternMissing,
+                        ));
                     };
                     match crate::binop::begin_lateral(pattern, right, lift, child, runner.ctx)? {
                         crate::binop::LateralStart::Complete(done) => Ok(Some(done)),
@@ -4313,7 +4325,9 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
                         &mut *runner.ctx,
                         pattern,
                         result.and_then(|done| {
-                            done.ok_or_else(|| EvalError::internal("missing ordinary completion"))
+                            done.ok_or_else(|| {
+                                EvalError::Invariant(EvaluatorInvariant::CompletionMissing)
+                            })
                         }),
                     );
                 }
@@ -4368,8 +4382,8 @@ pub(crate) fn positive_input<I: ViewTermId>(
     rows: SolutionSeq<I>,
 ) -> Result<PositiveInput<'static, I>, EvalError> {
     if !plan.contains(producer) {
-        return Err(EvalError::internal(
-            "a native join seed was not produced by its positive plan",
+        return Err(EvalError::Invariant(
+            EvaluatorInvariant::JoinSeedOutsidePlan,
         ));
     }
     Ok(PositiveInput {
@@ -4386,8 +4400,8 @@ pub(crate) fn eval_positive_evaluated<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     if !plan.contains(pattern) {
-        return Err(EvalError::internal(
-            "a seeded relation is outside its positive plan",
+        return Err(EvalError::Invariant(
+            EvaluatorInvariant::SeededRelationOutsidePlan,
         ));
     }
     eval_evaluated_with(pattern, ctx, |ctx| match pattern {
@@ -4414,7 +4428,7 @@ pub(crate) fn eval_cached_bgp_evaluated<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let GraphPattern::Bgp { patterns } = pattern else {
-        return Err(EvalError::internal("a retained BGP must be a BGP leaf"));
+        return Err(EvalError::Invariant(EvaluatorInvariant::RetainedBgpNotLeaf));
     };
     eval_evaluated_with(pattern, ctx, |ctx| {
         crate::bgp::eval_bgp_seeded_cached(patterns, input, cache, ctx).map(Evaluated::Complete)
@@ -4549,8 +4563,9 @@ impl NodeBoundary {
             return Err(EvalError::source_read(error));
         }
         if tracking_search {
-            let search = search
-                .ok_or_else(|| EvalError::internal("original evidence search frame disappeared"))?;
+            let search = search.ok_or_else(|| {
+                EvalError::Invariant(EvaluatorInvariant::EvidenceSearchFrameMissing)
+            })?;
             if let Ok(outcome) = &mut evaluated {
                 let search = outcome.rows().rows.search_evidence().combine(
                     &search,
@@ -4916,7 +4931,7 @@ pub(crate) fn eval_answer_pattern<D: DatasetView + Sync>(
     let request = ctx
         .evidence_input
         .as_ref()
-        .ok_or_else(|| EvalError::internal("verdict lost its original evidence source"))?
+        .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::VerdictEvidenceSourceMissing))?
         .answer_request(request)?;
     let workspace = ctx.growth.clone();
     with_native_answer(request, &workspace, |answer| {

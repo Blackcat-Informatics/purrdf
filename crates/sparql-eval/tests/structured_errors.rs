@@ -1305,7 +1305,60 @@ fn scalar_native_view_evidence_keeps_its_original_unsigned_width() {
     );
 }
 
+fn native_invariant_layout() {
+    assert!(size_of::<purrdf_sparql_eval::EvaluatorInvariant>() <= size_of::<String>());
+    // The original error measured 112 bytes on this 64-bit host. Pointer-width
+    // changes are not representation regressions on portable 32-bit targets.
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(size_of::<EvalError>(), 112);
+}
+
+fn native_invariants_keep_original_diagnostics_without_allocating_text() {
+    use purrdf_sparql_eval::{EvaluatorInvariant, StackExpectation};
+    let events = Vec::with_capacity(2);
+    let window = CurrentThreadWindow::open();
+    let error = EvalError::Invariant(EvaluatorInvariant::EvidenceOwnerPoisoned);
+    let captured = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(
+        captured.child("cause").code,
+        "eval-invariant-evidence-owner-poisoned"
+    );
+    assert_eq!(error.code(), Some(EvalError::INTERNAL_CODE));
+    assert_eq!(
+        error.to_string(),
+        "internal evaluator error: poisoned native evidence owner"
+    );
+    assert_eq!(
+        purrdf_sparql_eval::protocol::FailureCode::from(&error).code(),
+        "native-sparql-evaluation"
+    );
+    assert_eq!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<EvaluatorInvariant>(),
+        Some(&EvaluatorInvariant::EvidenceOwnerPoisoned)
+    );
+    let events = Vec::with_capacity(2);
+    let window = CurrentThreadWindow::open();
+    let error = EvalError::Invariant(EvaluatorInvariant::UnexpectedStackValue {
+        expected: StackExpectation::String,
+    });
+    let captured = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(
+        captured.child("cause").child("expected").code,
+        "vm-stack-string"
+    );
+    assert_eq!(
+        error.to_string(),
+        "internal evaluator error: an expression program found a stack entry that is not a string argument"
+    );
+}
+
 purrdf_testkit::harness_main!(
+    native_invariants_keep_original_diagnostics_without_allocating_text,
+    native_invariant_layout,
     segmented_stack_query_failure_retains_complete_snapshot_metadata,
     paged_stack_failure_exposes_sources_head_removals_and_qualified_requests,
     scalar_native_view_evidence_keeps_its_original_unsigned_width,
