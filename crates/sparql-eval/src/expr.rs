@@ -1401,7 +1401,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     if term_is_triple(ctx, ta)? && term_is_triple(ctx, tb)? {
         let av = owned_value_of(ctx, ta)?;
         let bv = owned_value_of(ctx, tb)?;
-        return rdf_equal_in_admitted(&av, &bv, ctx.language_strings, &ctx.growth)?
+        return equal_values(&av, &bv, ctx.language_strings, &ctx.growth)?
             .map(|eq| intern_boolean(ctx, eq))
             .transpose();
     }
@@ -1461,7 +1461,7 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
     {
         return Ok(None);
     }
-    rdf_equal_in_admitted(target_value, &cv, ctx.language_strings, &ctx.growth)
+    equal_values(target_value, &cv, ctx.language_strings, &ctx.growth)
 }
 
 /// Whether `value` is anything but a literal, or a literal whose lexical form is
@@ -1518,7 +1518,7 @@ fn rdf_equal_in(
     b: &TermValue,
     language_strings: LanguageStringEquality,
 ) -> Option<bool> {
-    rdf_equal_in_admitted(
+    equal_values(
         a,
         b,
         language_strings,
@@ -1527,7 +1527,19 @@ fn rdf_equal_in(
     .expect("resident term equality allocation")
 }
 
-fn rdf_equal_in_admitted(
+/// Compare borrowed native values under SPARQL `=` semantics.
+///
+/// This is the value-level equality used by expression evaluation, including
+/// numeric promotion, NaN, scoped blanks, RDF 1.2 triple components and SEP-0009
+/// composite values. It neither renders operands nor constructs a query/store.
+/// `language_strings` explicitly selects the core rule or its disjoint extension;
+/// `workspace` retains the caller's allocation admission.
+///
+/// `Ok(None)` is a SPARQL expression error, distinct from a boolean answer.
+///
+/// # Errors
+/// Returns the original operational or allocation refusal from the comparison.
+pub fn equal_values(
     a: &TermValue,
     b: &TermValue,
     language_strings: LanguageStringEquality,

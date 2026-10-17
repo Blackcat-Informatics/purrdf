@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 144 named cases in 25 integration targets,
-with 149 executions across 29 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 145 named cases in 25 integration targets,
+with 150 executions across 29 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
@@ -105,6 +105,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of a seeded transcript of every tower operation over operands from one digit to hundreds. |
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_oracle_vectors_replay_on_this_target` | Replays the 7,164 oracle-generated `xsd:integer`/`xsd:decimal` operator, division, comparison, conversion and canonical-form records through the `XsdValue` operators, byte for byte. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_hand_answers_are_reproduced_on_this_target` | Reproduces hand-checked query answers past `i128`, under two division policies, and the F&O code of an absorbed error. |
+| `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `borrowed_value_equality_matches_the_query_operator_on_this_target` | Compares original borrowed RDF values against actual query equality, preserving numeric, scope, language/direction, triple/composite and expression-error distinctions. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `any_uri_casts_keep_their_primitive_domain_on_this_target` | Preserves native URI whitespace collapse and string/self casts while refusing casts into unrelated primitive domains through the governed query entry point. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_numeric_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of every numeric query result (arithmetic, all division policies, casts, `ORDER BY`, aggregates, functions, absorbed F&O codes) and the governor's fuel and scratch-byte refusals beside their answering neighbours. |
 | `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `selected_backend_is_reported` | Asserts Simd128 selection with simd128 and Portable selection without it. |

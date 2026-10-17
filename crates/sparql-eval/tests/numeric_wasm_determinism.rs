@@ -323,7 +323,136 @@ fn any_uri_casts_keep_their_primitive_domain_on_this_target() {
 }
 
 purrdf_testkit::harness_main!(
+    borrowed_value_equality_matches_the_query_operator_on_this_target,
     any_uri_casts_keep_their_primitive_domain_on_this_target,
     the_hand_answers_are_reproduced_on_this_target,
     the_numeric_transcript_digest_is_reproduced_on_this_target,
 );
+
+/// Borrowed equality preserves the actual query operator's three-valued answer.
+fn borrowed_value_equality_matches_the_query_operator_on_this_target() {
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, TermBox, TermFactory, TermValue};
+    use purrdf_sparql_eval::{LanguageStringEquality, WorkspaceCapability, equal_values};
+    use purrdf_xsd::datatype::{XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
+    let integer = || TermValue::typed_literal("1", XSD_INTEGER);
+    let decimal = || TermValue::typed_literal("1.0", XSD_DECIMAL);
+    let blank = |scope| TermValue::Blank {
+        label: "same".into(),
+        scope: BlankScope(scope),
+    };
+    let triple = |object| TermValue::Triple {
+        s: TermBox::new(TermValue::iri("urn:s")),
+        p: TermBox::new(TermValue::iri("urn:p")),
+        o: TermBox::new(object),
+    };
+    let language =
+        |language: &str, direction: Option<purrdf_core::RdfTextDirection>| TermValue::Literal {
+            lexical_form: "value".into(),
+            datatype: purrdf_iri::vocab::language_datatype_iri(direction.is_some()).into(),
+            language: Some(language.into()),
+            direction,
+        };
+    let cases = [
+        (
+            TermValue::iri("urn:a"),
+            TermValue::iri("urn:b"),
+            Some(false),
+        ),
+        (TermValue::iri("urn:a"), TermValue::iri("urn:a"), Some(true)),
+        (blank(1), blank(2), Some(false)),
+        (blank(1), blank(1), Some(true)),
+        (integer(), decimal(), Some(true)),
+        (
+            TermValue::typed_literal("NaN", XSD_DOUBLE),
+            TermValue::typed_literal("NaN", XSD_DOUBLE),
+            Some(false),
+        ),
+        (
+            TermValue::typed_literal("invalid", XSD_INTEGER),
+            integer(),
+            None,
+        ),
+        (
+            TermValue::typed_literal("a", "urn:unknown"),
+            TermValue::typed_literal("b", "urn:unknown"),
+            None,
+        ),
+        (
+            TermValue::typed_literal("a", "urn:unknown"),
+            TermValue::typed_literal("a", "urn:unknown"),
+            Some(true),
+        ),
+        (language("en", None), language("fr", None), Some(false)),
+        (
+            language("en", Some(purrdf_core::RdfTextDirection::Ltr)),
+            language("en", Some(purrdf_core::RdfTextDirection::Rtl)),
+            Some(false),
+        ),
+        (triple(integer()), triple(decimal()), Some(true)),
+        (
+            triple(TermValue::iri("urn:a")),
+            triple(TermValue::iri("urn:b")),
+            Some(false),
+        ),
+        (
+            TermValue::typed_literal("[1]", purrdf_cdt::CDT_LIST),
+            TermValue::typed_literal("[1.0]", purrdf_cdt::CDT_LIST),
+            Some(true),
+        ),
+    ];
+    let workspace = WorkspaceCapability::resident();
+    for (left, right, expected) in cases {
+        assert_eq!(
+            equal_values(&left, &right, LanguageStringEquality::Core, &workspace).unwrap(),
+            expected
+        );
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("urn:pair").unwrap();
+        let l = builder.intern_iri("urn:left").unwrap();
+        let r = builder.intern_iri("urn:right").unwrap();
+        let left = builder.intern_value(&left).unwrap();
+        let right = builder.intern_value(&right).unwrap();
+        builder.push_quad(subject, l, left, None).unwrap();
+        builder.push_quad(subject, r, right, None).unwrap();
+        let dataset = std::sync::Arc::new(builder.freeze().unwrap());
+        let outcome = NativeSparqlEngine::new().query_governed(&dataset, SparqlRequest {
+            query: "SELECT (?l = ?r AS ?answer) WHERE { <urn:pair> <urn:left> ?l ; <urn:right> ?r }",
+            base_iri: None, substitutions: &[],
+        }, QueryOptions::EMPTY, &QueryGovernors::METERED).unwrap();
+        let GovernedOutcome::Complete {
+            result: SparqlResult::Solutions { rows, .. },
+            ..
+        } = outcome
+        else {
+            panic!("complete equality solution required")
+        };
+        assert_eq!(rows.len(), 1);
+        let answer = rows[0][0].as_ref().map(|value| {
+            let TermValue::Literal { lexical_form, .. } = value else {
+                panic!("boolean answer")
+            };
+            match lexical_form.as_str() {
+                "true" => true,
+                "false" => false,
+                other => panic!("non-boolean {other}"),
+            }
+        });
+        assert_eq!(answer, expected);
+    }
+    let lang = language("en", None);
+    let unknown = TermValue::typed_literal("value", "urn:unknown");
+    assert_eq!(
+        equal_values(&lang, &unknown, LanguageStringEquality::Core, &workspace).unwrap(),
+        None
+    );
+    assert_eq!(
+        equal_values(
+            &lang,
+            &unknown,
+            LanguageStringEquality::Disjoint,
+            &workspace
+        )
+        .unwrap(),
+        Some(false)
+    );
+}
