@@ -122,7 +122,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** pass as approved · 0 ledgered |
-| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **583 / 591** pass as approved · 6 non-canonical expected decimals (graded by the XSD 1.1 canonical spelling) · 0 ledgered, of the 591 an upstream manifest lists; 592 discovered: 213 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer`, 209 SPARQL 1.2 RL |
+| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **585 / 591** pass as approved · 6 non-canonical expected decimals (graded by the XSD 1.1 canonical spelling) · 0 ledgered, of the 591 an upstream manifest lists; 592 discovered: 213 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer`, 209 SPARQL 1.2 RL |
 | SHACL 1.2 unlisted vendored files | the 1 files of `vectors/shacl12/tests/` no upstream manifest includes | **1 / 1** graded apart from the approved suite: 1 exactly as written · 0 with a proven delta |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **73 / 73** frozen expected reports |
 | Community SHACL dated profiles | `corpora/community/` (64 cases) | **115 / 115** applicable dated executions (REC 2017: 57, WD 2026: 58) over 535 route observations · 0 unsupported · 0 ledgered |
@@ -673,7 +673,7 @@ way the matrix stays honest:
 
 - **SHACL 1.2** — the harness discovers all **592** entries of the vendored W3C
   `shacl12-test-suite`. Of the **591** an upstream manifest lists, it passes
-  **583 / 591** as approved, with **6 non-canonical expected decimals** counted
+  **585 / 591** as approved, with **6 non-canonical expected decimals** counted
   apart, and an empty expected-failure ledger. The 592 are 213
   `sht:Validate` (graded like the SHACL 1.0 suite), 143
   `sht:EvalNodeExpr` (output compared term for term, in order unless the entry
@@ -686,9 +686,7 @@ way the matrix stays honest:
   against. One vendored file
   that no upstream manifest includes (`inference-rules/rdfs/rdfs1.ttl`) is
   graded exactly as written by a test of its own and reported apart from the
-  approved suite, never counted among its passes. Two approved entries do
-  not pass:
-  `sparql-rl/stratification/manifest#test_13` and `#test_14`. `core/property/reifierShape-001` and `-002` are
+  approved suite, never counted among its passes. `core/property/reifierShape-001` and `-002` are
   graded as approved: §7.8.5's textual definition names both the triple term
   and the reifier `t`, and PurRDF follows the approved tests' reading, the value
   node as `sh:value`. In six node-expression entries the approved result spells a
@@ -700,7 +698,11 @@ way the matrix stays honest:
   `ceil01`/`floor01`/`round01`/`seconds` tests also expect, and grades these six
   by substituting the canonical spelling for the expected one; for these six that
   equals value comparison. They are counted on their own line, **non-canonical
-  expected decimals**, not among the passes. SPARQL 1.2 RL grammar
+  expected decimals**, not among the passes. A rule whose head
+  templates a triple term containing a variable is a run-once rule (SPARQL 1.2
+  RL, "Elements of the Abstract Syntax"), so the stratification tests whose head feeds its own body through
+  such a template (`stratification-bad-06` and `-07`) are refused as
+  unstratifiable. SPARQL 1.2 RL grammar
   rule [2] is implemented as written. Beside the suite,
   `crates/shapes/tests/vocabulary_import_invariance.rs` proves that merging the
   W3C SHACL 1.2 vocabularies into a shapes graph changes no report of three

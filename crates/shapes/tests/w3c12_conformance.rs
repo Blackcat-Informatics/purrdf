@@ -472,7 +472,7 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
 ///
 /// A positive entry must be ACCEPTED at the [`srl::CheckLevel`] its type asks about: a
 /// positive syntax test at [`srl::CheckLevel::Syntax`] (the suite: "regardless of
-/// well-formedness and stratification" — fourteen of them are not stratifiable, and one is
+/// well-formedness and stratification" — sixteen of them are not stratifiable, and one is
 /// not well formed), a positive well-formedness test at [`srl::CheckLevel::WellFormed`] (two
 /// are not stratifiable), a positive stratification test at [`srl::CheckLevel::Stratified`].
 /// A negative entry must be REFUSED at the full [`srl::CheckLevel::Stratified`] check, by

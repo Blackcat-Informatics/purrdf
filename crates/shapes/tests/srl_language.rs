@@ -516,6 +516,42 @@ fn triple_term_dependencies_are_exact() {
     assert!(matches!(error, SrlError::Stratification { .. }), "{error}");
 }
 
+/// A rule whose head templates a triple term with a variable is a run-once rule, so a
+/// positive dependency of it on itself, or around a cycle, is a closed one: refused. The
+/// neighbours that cannot loop back (a constant triple term; a body that cannot match what
+/// the head builds; an acyclic chain) are accepted and evaluate.
+fn a_variable_triple_term_head_is_run_once() {
+    let refused = |text: &str| {
+        let error = srl::parse_and_check(&rules(text), None).expect_err("a closed cycle");
+        assert!(matches!(error, SrlError::Stratification { .. }), "{error}");
+    };
+    refused("RULE { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }");
+    refused(
+        "RULE { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :q ?y } RULE { ?a :q ?b } WHERE { ?a :p ?b }",
+    );
+    // The same head over a body that cannot match a triple with a triple-term object.
+    let inferred = infer(
+        "RULE { ?x :p <<( ?x :q ?y )>> } WHERE { ?x :q ?y }",
+        ":a :q :b .",
+    )
+    .expect("the head builds a triple term no body pattern reads");
+    assert_eq!(inferred.len(), 1, "{inferred:?}");
+    // A constant triple term makes no run-once rule, so the open self-dependency stands.
+    let inferred = infer(
+        "RULE { ?x :p <<( :x :p 1 )>> } WHERE { ?x :p 1 }",
+        ":a :p 1 .",
+    )
+    .expect("an open self-dependency over a constant triple term");
+    assert_eq!(inferred.len(), 1, "{inferred:?}");
+    // An acyclic chain through a run-once rule evaluates: the reader sits above it.
+    let inferred = infer(
+        "RULE { ?x :p <<( ?x :q ?y )>> } WHERE { ?x :q ?y } RULE { ?x :r :z } WHERE { ?x :p ?t }",
+        ":a :q :b .",
+    )
+    .expect("an acyclic chain");
+    assert_eq!(inferred.len(), 2, "{inferred:?}");
+}
+
 single_inferred_case! {
     /// `RULE {} WHERE { … }` generates nothing, and a neighbouring rule still runs.
     an_empty_head_generates_nothing,
@@ -734,51 +770,27 @@ fn numeric_and_boolean_terms() {
 
 // ── rule-evaluation limits ────────────────────────────────────────────────────────
 
-/// A general rule that nests the triple term it matched inside a new one every round
-/// never terminates. Under a caller's round limit it is refused with the typed
-/// [`SrlError::LimitExceeded`], naming the limit, the numbers and the rule by its
-/// document position; under the defaults it is refused too, by name, never as
-/// "divergent".
-fn a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit() {
-    let document = srl::parse_and_check(
-        &rules("RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }"),
-        None,
-    )
-    .expect("checks");
-    let fixed = srl::infer(
-        &document,
-        &data(":a :p :b ."),
-        &InferOptions::default().with_max_term_generating_rounds(8),
-    )
-    .expect_err("past the stated limit");
-    let SrlError::LimitExceeded(limit) = &fixed else {
-        panic!("expected a typed limit refusal, got {fixed}");
+/// A rule that nests the triple term it matched inside a new one is a run-once rule that
+/// reads its own output, so it is refused by the stratification stage, before any round
+/// runs and whatever limits the caller states; its neighbour that reads a predicate its
+/// head does not write evaluates.
+fn a_rule_nesting_triple_terms_every_round_is_refused_by_stratification() {
+    let nest = rules("RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }");
+    let error = srl::parse_and_check(&nest, None).expect_err("a closed self-dependency");
+    let SrlError::Stratification {
+        rule, depends_on, ..
+    } = &error
+    else {
+        panic!("expected a stratification refusal, got {error}");
     };
-    assert_eq!(
-        limit.limit(),
-        purrdf_shapes::RuleLimit::TermGeneratingRounds
-    );
-    assert_eq!(limit.observed(), 9);
-    assert_eq!(limit.permitted(), 8);
-    assert!(limit.stated());
-    assert_eq!(limit.rules().len(), 1);
-    assert!(
-        limit.rules()[0].starts_with(&format!("rule <{EX}nest>")),
-        "{limit}"
-    );
-    assert!(
-        fixed
-            .to_string()
-            .ends_with("raise the limit with InferOptions::with_max_term_generating_rounds"),
-        "{fixed}"
-    );
-    let default = infer(
-        "RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }",
-        ":a :p :b .",
+    assert!(rule.starts_with(&format!("rule <{EX}nest>")), "{error}");
+    assert_eq!(rule, depends_on);
+    let inferred = infer(
+        "RULE :nest { ?x :p <<( ?x :q ?y )>> } WHERE { ?x :q ?y }",
+        ":a :q :b .",
     )
-    .expect_err("the nesting never ends");
-    assert!(!default.to_string().contains("diverge"), "{default}");
-    assert!(default.to_string().contains("exceeded the"), "{default}");
+    .expect("reads a predicate the head does not write");
+    assert_eq!(inferred.len(), 1, "{inferred:?}");
 }
 
 /// The neighbour: a recursive rule over a long chain infers no term the store did not
@@ -818,12 +830,13 @@ purrdf_testkit::harness_main!(
     data_block_blank_nodes_are_standardized_apart,
     a_non_rdf_head_instantiation_is_refused,
     triple_term_dependencies_are_exact,
+    a_variable_triple_term_head_is_run_once,
     an_empty_head_generates_nothing,
     stages_are_typed,
     imports_resolve_through_the_callers_resolver,
     check_answers_each_level_and_refuses_by_stage,
     check_resolves_imports_from_the_table,
     numeric_and_boolean_terms,
-    a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit,
+    a_rule_nesting_triple_terms_every_round_is_refused_by_stratification,
     a_closure_deeper_than_the_floor_completes,
 );

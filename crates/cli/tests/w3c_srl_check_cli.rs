@@ -16,9 +16,9 @@
 //! level to stdout. A negative entry must exit 1 under bare `--check`, refused by the
 //! stage its type names, and write nothing to stdout.
 //!
-//! The level is observable, not decoration: fourteen positive syntax entries are not
+//! The level is observable, not decoration: sixteen positive syntax entries are not
 //! stratifiable and one is not well formed, so bare `--check` refuses exactly those
-//! fifteen — by a later stage, never the grammar — while `--check=syntax` accepts them.
+//! seventeen — by a later stage, never the grammar — while `--check=syntax` accepts them.
 
 use purrdf_shapes::shacl_corpora;
 
@@ -39,9 +39,9 @@ const EXPECTED: [(SrlKind, usize); 7] = [
     (SrlKind::Eval, 46),
 ];
 
-/// The positive syntax entries bare `--check` refuses: not stratifiable (fourteen) or not
+/// The positive syntax entries bare `--check` refuses: not stratifiable (sixteen) or not
 /// well formed (one).
-const SYNTAX_ONLY: usize = 15;
+const SYNTAX_ONLY: usize = 17;
 
 fn check(case: &SrlCase, level: Option<&str>) -> Result<Output, String> {
     let file = case.ruleset.to_str().ok_or("a non-UTF-8 corpus path")?;
