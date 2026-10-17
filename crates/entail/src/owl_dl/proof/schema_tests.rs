@@ -9,6 +9,7 @@ use crate::reasoner::{Reasoner, Verdict};
 use purrdf_alloc_probe::CurrentThreadWindow;
 use purrdf_iri::vocab::rdfs;
 
+/// Build a derived cardinality clash together with its owning prepared context.
 fn derived() -> (DlProof, DlProofContext<'static>) {
     let mut fixture = Fixture::default();
     let class = fixture.name("A");

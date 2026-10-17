@@ -2713,6 +2713,7 @@ pub(crate) enum ProofKnowledgeBase<'kb> {
 impl std::ops::Deref for ProofKnowledgeBase<'_> {
     type Target = Kb;
 
+    /// Read the prepared knowledge base through either immutable storage choice.
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Owned(kb) => kb,
