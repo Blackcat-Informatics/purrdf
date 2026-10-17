@@ -1,0 +1,8 @@
+{
+  "repository": "BLAKE3-team/BLAKE3",
+  "commit": "f55849f89cd85083c1c9daa2c5de20766f309c00",
+  "vector_path": "test_vectors/test_vectors.json",
+  "download_url": "https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/f55849f89cd85083c1c9daa2c5de20766f309c00/test_vectors/test_vectors.json",
+  "frozen_original": "crates/hash-conformance/tests/vectors/blake3_official_test_vectors.json",
+  "projection": "blake3_official_vectors.txt preserves all 35 input lengths and full hash/keyed_hash/derive_key answers in VectorFile format; no implementation source imported"
+}

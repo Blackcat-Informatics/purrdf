@@ -1,0 +1,33 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/alloc-probe)
+    Checking hybrid-array v0.4.15
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/testkit)
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/hash-conformance)
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+   --> crates/hash-conformance/tests/blake3.rs:403:13
+    |
+403 |             drop(stream);
+    |             ^^^^^^^^^^^^
+    |
+note: argument has type `purrdf_hash::blake3::Streaming<16384>`
+   --> crates/hash-conformance/tests/blake3.rs:403:18
+    |
+403 |             drop(stream);
+    |                  ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+    = note: `-D clippy::drop-non-drop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::drop_non_drop)]`
+
+error: could not compile `purrdf-hash-conformance` (test "blake3") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

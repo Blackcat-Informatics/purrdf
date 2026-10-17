@@ -1,0 +1,27 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 40,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- The three modes against the official BLAKE3 test vectors (`test_vectors.json`: `hash`,",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 43,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- No new dependency; same dispatch as the unkeyed path.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}

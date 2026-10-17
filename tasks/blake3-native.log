@@ -1,0 +1,21 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/hash)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/testkit)
+   Compiling purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/hash-conformance)
+    Finished `test` profile [optimized] target(s) in 23.94s
+     Running tests/blake3.rs (/opt/.cargo/d7/42b0f1791410ba/debug/build/purrdf-hash-conformance/2f695e1d5df26b3c/out/blake3-2f695e1d5df26b3c)
+
+running 9 tests
+test required_backends_are_available ... ok
+test official_modes_and_extended_output ... ok
+test streaming_boundary_answers ... ok
+test xof_large_output_and_seek_boundaries ... ok
+test frozen_answers_match ... ok
+test snapshots_and_reset_preserve_message_boundaries ... ok
+test caller_scheduled_trees_match_frozen_answers ... ok
+test streaming_answers_match ... ok
+test random_inputs_cover_irregular_trees_and_alignment ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.88s
+

@@ -1,0 +1,183 @@
+[
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 566,
+    "state": "OPEN",
+    "title": "Unify native graph projection across default and named RDF worlds"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 564,
+    "state": "OPEN",
+    "title": "SegmentedBuilder: build an image in memory bounded by its blocks, not its rows"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 562,
+    "state": "OPEN",
+    "title": "purrdf-hash: BLAKE3 keyed_hash, derive_key and extendable output"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 558,
+    "state": "OPEN",
+    "title": "Structured access to error variants and fields, so consumers never render errors to text"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 538,
+    "state": "OPEN",
+    "title": "purrdf-text: update a TextIndex by delta instead of rebuilding it per snapshot"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 509,
+    "state": "OPEN",
+    "title": "datalog: magic-sets demand transformation with subsumptive keying, for bound queries over large rule outputs"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 501,
+    "state": "OPEN",
+    "title": "Entailment: reusable snapshot-bound proof and justification query sessions"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 498,
+    "state": "OPEN",
+    "title": "Datalog chase: scalable JA/RJA termination certificates and source-bound specialization"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 496,
+    "state": "OPEN",
+    "title": "Benchmarks: measured evidence at 10^8-10^9 triples, including a reifier-heavy RDF 1.2 claims workload"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 494,
+    "state": "OPEN",
+    "title": "Evaluate at caller-supplied coordinates: host-supplied NOW(), as-of snapshots of a PagedStack, and range scans on annotation values"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 493,
+    "state": "OPEN",
+    "title": "datalog: incremental maintenance of a materialized model under insertions and retractions (Z-set weights already compile)"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 489,
+    "state": "OPEN",
+    "title": "Make the RDFC call limit and SPARQL UDF depth removable, and stop canonicalize from panicking on exhaustion"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 488,
+    "state": "OPEN",
+    "title": "Datalog, chase and entailment: certified partial models and resumable evaluation instead of total refusal"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 487,
+    "state": "OPEN",
+    "title": "sparql-eval: vectorized execution over batches of term ids with selection vectors"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 486,
+    "state": "OPEN",
+    "title": "One measured memory budget for every allocation, with spill to a host-provided seam instead of refusal"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 485,
+    "state": "OPEN",
+    "title": "sparql-eval: merge joins over sorted inputs as the default, and push build-side id ranges into probe-side scans"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 483,
+    "state": "OPEN",
+    "title": "sparql-eval: never materialize a cross product (factorized components) and give every plan a guaranteed output bound"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 481,
+    "state": "OPEN",
+    "title": "perf(sparql-eval): reduce grouped-output buffer traffic through fallible admission"
+  },
+  {
+    "closedAt": null,
+    "labels": [
+      {
+        "id": "LA_kwDOTKq-Ms8AAAACpxmCHQ",
+        "name": "performance",
+        "description": "Performance and size budgets",
+        "color": "D93F0B"
+      }
+    ],
+    "number": 443,
+    "state": "OPEN",
+    "title": "Optimize the exact numeric tower: small-value parity and subquadratic large-value arithmetic"
+  },
+  {
+    "closedAt": null,
+    "labels": [
+      {
+        "id": "LA_kwDOTKq-Ms8AAAACpuNxAw",
+        "name": "enhancement",
+        "description": "New feature or request",
+        "color": "a2eeef"
+      },
+      {
+        "id": "LA_kwDOTKq-Ms8AAAACpxmCAw",
+        "name": "conformance",
+        "description": "W3C / external test-suite conformance",
+        "color": "0E8A16"
+      }
+    ],
+    "number": 384,
+    "state": "OPEN",
+    "title": "Build a portable adversarial SHACL suite and contribute missing W3C tests"
+  },
+  {
+    "closedAt": null,
+    "labels": [],
+    "number": 367,
+    "state": "OPEN",
+    "title": "perf(hash): native SHA-2 that beats the sha2 crate \u2014 multi-buffer RDFC hashing and wide-schedule SHA-512"
+  },
+  {
+    "closedAt": null,
+    "labels": [
+      {
+        "id": "LA_kwDOTKq-Ms8AAAACpuNxAw",
+        "name": "enhancement",
+        "description": "New feature or request",
+        "color": "a2eeef"
+      }
+    ],
+    "number": 261,
+    "state": "OPEN",
+    "title": "Chinese translation phases 2\u20134: SPARQL extensions, Python API guide, remainder of the book"
+  }
+]

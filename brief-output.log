@@ -1,0 +1,14 @@
+issue      /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/.stage/purrdf-hash-blake3-keyed-hash-derive/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/.stage/purrdf-hash-blake3-keyed-hash-derive/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/.stage/purrdf-hash-blake3-keyed-hash-derive/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/.stage/purrdf-hash-blake3-keyed-hash-derive/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/.stage/purrdf-hash-blake3-keyed-hash-derive/brief.json  (+ requirements.json, references.json)
+
+  - issue #562 + 0 comment(s) via github
+  - link crawl: no `#N` references in the issue or its comments
+  - forge search on ['purrdf-hash:', 'BLAKE3', 'keyed_hash,']: 0 other item(s)
+  - GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #562 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #562: 0
+  - requirement candidates: 2 line(s); 0 comment(s) matched no rule
+  - referenced artifacts: 1 path(s) (0 on disk), 11 identifier(s), 2 workspace package(s), 0 URL(s)

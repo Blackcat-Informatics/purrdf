@@ -1,0 +1,12 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/hash)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/testkit)
+   Compiling purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/hash-conformance)
+    Finished `test` profile [optimized] target(s) in 6.84s
+     Running tests/blake3.rs (/opt/.cargo/d7/42b0f1791410ba/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/fc74ca7f0c1e12da/out/blake3-fc74ca7f0c1e12da.wasm)
+
+running 2 tests
+test derived_context_trees_match_across_backends ... ok
+test official_modes_and_extended_output ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.09s
+

@@ -1,0 +1,66 @@
+{
+  "paths": [
+    {
+      "ref": "test_vectors.json",
+      "path": "/home/paudley/Active/purrdf/test_vectors.json",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "purrdf_hash::blake3",
+      "files": 57
+    },
+    {
+      "name": "blake3",
+      "files": 208
+    },
+    {
+      "name": "KEYED_HASH",
+      "files": 0
+    },
+    {
+      "name": "DERIVE_KEY_CONTEXT",
+      "files": 0
+    },
+    {
+      "name": "DERIVE_KEY_MATERIAL",
+      "files": 0
+    },
+    {
+      "name": "set_position",
+      "files": 0
+    },
+    {
+      "name": "Streaming",
+      "files": 40
+    },
+    {
+      "name": "update",
+      "files": 608
+    },
+    {
+      "name": "hash",
+      "files": 1117
+    },
+    {
+      "name": "keyed_hash",
+      "files": 0
+    },
+    {
+      "name": "derive_key",
+      "files": 1
+    }
+  ],
+  "packages": [
+    "purrdf",
+    "purrdf-hash"
+  ],
+  "urls": [],
+  "truncated": []
+}

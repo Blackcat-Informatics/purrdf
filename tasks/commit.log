@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 4507f0995037 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/562-purrdf-hash-blake3-keyed-hash-derive f3c5b1677] Add BLAKE3 keyed modes and seekable extended output
+ 15 files changed, 1069 insertions(+), 202 deletions(-)
+ create mode 100644 crates/hash-conformance/tests/vectors/blake3_official_test_vectors.json
+ create mode 100644 crates/hash-conformance/tests/vectors/blake3_official_vectors.txt

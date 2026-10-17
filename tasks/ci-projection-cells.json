@@ -1,0 +1,32 @@
+[
+  {
+    "site": "blake3.hash-many-dispatch",
+    "configuration": "x86_64",
+    "previous": "sse2 chunks v2520·f0·r0·req✓<br>avx2 chunks v2477·f0·r0·req✓<br>avx512 tree v584·f0·r0·req✓<br>avx512 chunks v605·f0·r0·req✓<br>avx512 narrow chunks v1267·f0·r0·req✓<br>avx512 four complete chunks v227·f0·r0·req✓<br>avx512vl two parents v239·f0·r0·req✓",
+    "measured": "sse2 chunks v2538·f0·r0·req✓<br>avx2 chunks v2477·f0·r0·req✓<br>avx512 tree v588·f0·r0·req✓<br>avx512 chunks v605·f0·r0·req✓<br>avx512 narrow chunks v1267·f0·r0·req✓<br>avx512 four complete chunks v227·f0·r0·req✓<br>avx512vl two parents v240·f0·r0·req✓"
+  },
+  {
+    "site": "blake3.single-block",
+    "configuration": "x86_64",
+    "previous": "sse2 v437·f0·r0<br>ssse3 v390·f0·r0<br>avx2 v367·f0·r0<br>avx512 v217·f0·r0<br>scalar rotation v0·f0·r0·req✓",
+    "measured": "sse2 v437·f0·r0<br>ssse3 v388·f0·r0<br>avx2 v367·f0·r0<br>avx512 v217·f0·r0<br>scalar rotation v0·f0·r0·req✓"
+  },
+  {
+    "site": "blake3.hash-many-dispatch",
+    "configuration": "x86_64-v3",
+    "previous": "avx512 tree v584·f0·r0·req✓<br>avx2 tree v2259·f0·r0·req✓<br>avx512 chunks v605·f0·r0·req✓<br>avx512 narrow chunks v1259·f0·r0·req✓<br>avx512 four complete chunks v227·f0·r0·req✓<br>avx512vl two parents v226·f0·r0·req✓",
+    "measured": "avx512 tree v588·f0·r0·req✓<br>avx2 tree v2261·f0·r0·req✓<br>avx512 chunks v605·f0·r0·req✓<br>avx512 narrow chunks v1259·f0·r0·req✓<br>avx512 four complete chunks v227·f0·r0·req✓<br>avx512vl two parents v227·f0·r0·req✓"
+  },
+  {
+    "site": "blake3.hash-many-dispatch",
+    "configuration": "x86_64-v4",
+    "previous": "avx512 tree v584·f0·r0·req✓<br>avx512 chunks v605·f0·r0·req✓<br>avx512 partial chunks v633·f0·r0·req✓<br>avx512 four complete chunks v233·f0·r0·req✓<br>avx512vl two parents v229·f0·r0·req✓",
+    "measured": "avx512 tree v588·f0·r0·req✓<br>avx512 chunks v605·f0·r0·req✓<br>avx512 partial chunks v633·f0·r0·req✓<br>avx512 four complete chunks v233·f0·r0·req✓<br>avx512vl two parents v230·f0·r0·req✓"
+  },
+  {
+    "site": "blake3.hash-many-dispatch",
+    "configuration": "wasm32-simd128",
+    "previous": "simd128 chunks v2141·f0·r0·req✓",
+    "measured": "simd128 chunks v2147·f0·r0·req✓"
+  }
+]

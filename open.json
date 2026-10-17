@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 562,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive",
+  "branch": "paudley/562-purrdf-hash-blake3-keyed-hash-derive",
+  "slug": "purrdf-hash-blake3-keyed-hash-derive",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/.stage/purrdf-hash-blake3-keyed-hash-derive",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "4507f099503725007914f0a243eb9ff8a66b922e",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive",
+    "branch:paudley/562-purrdf-hash-blake3-keyed-hash-derive",
+    "stage:/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/.stage/purrdf-hash-blake3-keyed-hash-derive",
+    "issue:/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/.stage/purrdf-hash-blake3-keyed-hash-derive/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-16T21:38:19-0600"
+}

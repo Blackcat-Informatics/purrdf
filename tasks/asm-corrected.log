@@ -1,0 +1,7 @@
+== x86_64: 8 Cargo jobs
+== x86_64 graph 0: /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/target/simd-asm/contexts/b10c6a0aafeb814f5811bb32584eec5d2487ed17088c59438f5edc644e836543/cargo.graph-0.stderr.log
+== x86_64 graph 1: /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/target/simd-asm/contexts/b10c6a0aafeb814f5811bb32584eec5d2487ed17088c59438f5edc644e836543/cargo.graph-1.stderr.log
+== x86_64-v3: 8 Cargo jobs
+== x86_64-v3 graph 0: /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/target/simd-asm/contexts/4ebc41ac8e0d9ba61802453359406152282ca8dadac44bafd5200b0f22e3e3e8/cargo.graph-0.stderr.log
+== x86_64-v3 graph 1: /home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/target/simd-asm/contexts/4ebc41ac8e0d9ba61802453359406152282ca8dadac44bafd5200b0f22e3e3e8/cargo.graph-1.stderr.log
+FAIL: assembly run interrupted

@@ -1,0 +1,424 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/hash)
+error: expected expression, found `,`
+   --> crates/hash/src/arch/mod.rs:425:84
+    |
+425 |         Some(unsafe { blake3_parents2::parents(&blake3_rows::chunks(bytes, counter,, mode mode)) })
+    |                                                                                    ^ expected expression
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/arch/blake3_x86.rs:351:42
+    |
+340 |   macro_rules! wide {
+...
+351 |               v[8 + i] = _mm512_set1_epi32(mode.key[i] as i32);
+    |                                            ^^^^ not found in this scope
+...
+455 |           cv = wide!(
+    |  ______________-
+456 | |             cv,
+457 | |             m,
+458 | |             low,
+...   |
+467 | |             }),
+468 | |         );
+    | |_________- in this macro invocation
+    |
+help: an identifier with the same name exists, but is not accessible due to macro hygiene
+   --> crates/hash/src/arch/blake3_x86.rs:403:1
+    |
+403 | mode: crate::blake3::Mode) -> [core::arch::x86_64::__m512i; 8] {
+    | ^^^^
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/arch/blake3_x86.rs:351:42
+    |
+340 |   macro_rules! wide {
+...
+351 |               v[8 + i] = _mm512_set1_epi32(mode.key[i] as i32);
+    |                                            ^^^^ not found in this scope
+...
+488 |           cv = wide!(
+    |  ______________-
+489 | |             initial,
+490 | |             m,
+491 | |             _mm512_setzero_si512(),
+...   |
+494 | |             _mm512_set1_epi32((4 | mode.flags) as i32),
+495 | |         );
+    | |_________- in this macro invocation
+    |
+help: an identifier with the same name exists, but is not accessible due to macro hygiene
+   --> crates/hash/src/arch/blake3_x86.rs:474:63
+    |
+474 | unsafe fn subtree_16(bytes: &[u8], counter: u64, height: u32, mode: crate::blake3::Mode) -> [u32; 8] {
+    |                                                               ^^^^
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/arch/blake3_x86.rs:351:42
+    |
+340 | macro_rules! wide {
+...
+351 |             v[8 + i] = _mm512_set1_epi32(mode.key[i] as i32);
+    |                                          ^^^^ not found in this scope
+...
+587 |         let mut next = wide!(cv, m, low, high, length, flags);
+    |                        -------------------------------------- in this macro invocation
+    |
+help: an identifier with the same name exists, but is not accessible due to macro hygiene
+   --> crates/hash/src/arch/blake3_x86.rs:514:52
+    |
+514 | unsafe fn small_parent(bytes: &[u8], counter: u64, mode: crate::blake3::Mode) -> [u32; 16] {
+    |                                                    ^^^^
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/arch/blake3_x86.rs:351:42
+    |
+340 |   macro_rules! wide {
+...
+351 |               v[8 + i] = _mm512_set1_epi32(mode.key[i] as i32);
+    |                                            ^^^^ not found in this scope
+...
+603 |           let mut next = wide!(
+    |  ________________________-
+604 | |             initial,
+605 | |             m,
+606 | |             _mm512_setzero_si512(),
+...   |
+609 | |             _mm512_set1_epi32((4 | mode.flags) as i32)
+610 | |         );
+    | |_________- in this macro invocation
+    |
+help: an identifier with the same name exists, but is not accessible due to macro hygiene
+   --> crates/hash/src/arch/blake3_x86.rs:514:52
+    |
+514 | unsafe fn small_parent(bytes: &[u8], counter: u64, mode: crate::blake3::Mode) -> [u32; 16] {
+    |                                                    ^^^^
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/arch/blake3_x86.rs:351:42
+    |
+340 |   macro_rules! wide {
+...
+351 |               v[8 + i] = _mm512_set1_epi32(mode.key[i] as i32);
+    |                                            ^^^^ not found in this scope
+...
+700 |       let cv = wide!(
+    |  ______________-
+701 | |         initial,
+702 | |         m,
+703 | |         _mm512_setzero_si512(),
+...   |
+706 | |         _mm512_set1_epi32((4 | mode.flags) as i32)
+707 | |     );
+    | |_____- in this macro invocation
+    |
+help: an identifier with the same name exists, but is not accessible due to macro hygiene
+   --> crates/hash/src/arch/blake3_x86.rs:669:54
+    |
+669 | unsafe fn parents16_inner(children: &[[u32; 8]; 32], mode: crate::blake3::Mode) -> [[u32; 8]; 16] {
+    |                                                      ^^^^
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/arch/blake3_lanes.rs:22:41
+    |
+ 11 | /         macro_rules! lane_compress {
+ 12 | |             ($cv:expr,$m:expr,$low:expr,$high:expr,$length:expr,$flags:expr) => {{
+ 13 | |                 let cv = $cv;
+ 14 | |                 let m = $m;
+...   |
+ 22 | |                     v[8 + i] = V::splat(mode.key[i]);
+    | |                                         ^^^^ not found in this scope
+...   |
+ 65 | |             }};
+ 66 | |         }
+    | |_________- this error originates in the macro `lane_compress` which comes from the expansion of the macro `super::blake3_lanes::blake3_lanes`
+    |
+   ::: crates/hash/src/arch/blake3_sse2.rs:111:1
+    |
+111 |   super::blake3_lanes::blake3_lanes!("sse2", 4);
+    |   --------------------------------------------- in this macro invocation
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/arch/blake3_lanes.rs:22:41
+    |
+ 11 | /         macro_rules! lane_compress {
+ 12 | |             ($cv:expr,$m:expr,$low:expr,$high:expr,$length:expr,$flags:expr) => {{
+ 13 | |                 let cv = $cv;
+ 14 | |                 let m = $m;
+...   |
+ 22 | |                     v[8 + i] = V::splat(mode.key[i]);
+    | |                                         ^^^^ not found in this scope
+...   |
+ 65 | |             }};
+ 66 | |         }
+    | |_________- this error originates in the macro `lane_compress` which comes from the expansion of the macro `super::super::blake3_lanes::blake3_lanes`
+    |
+   ::: crates/hash/src/arch/blake3_sse2.rs:145:5
+    |
+145 |       super::super::blake3_lanes::blake3_lanes!("avx512f,avx512vl", 4);
+    |       ---------------------------------------------------------------- in this macro invocation
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/arch/blake3_lanes.rs:22:41
+    |
+ 11 | /         macro_rules! lane_compress {
+ 12 | |             ($cv:expr,$m:expr,$low:expr,$high:expr,$length:expr,$flags:expr) => {{
+ 13 | |                 let cv = $cv;
+ 14 | |                 let m = $m;
+...   |
+ 22 | |                     v[8 + i] = V::splat(mode.key[i]);
+    | |                                         ^^^^ not found in this scope
+...   |
+ 65 | |             }};
+ 66 | |         }
+    | |_________- this error originates in the macro `lane_compress` which comes from the expansion of the macro `super::blake3_lanes::blake3_lanes`
+    |
+   ::: crates/hash/src/arch/blake3_avx2.rs:118:1
+    |
+118 |   super::blake3_lanes::blake3_lanes!("avx2", 8);
+    |   --------------------------------------------- in this macro invocation
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:666:54
+    |
+666 |     for (group, bytes) in data.chunks(lanes * CHUNK, mode).enumerate() {
+    |                                                      ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:671:90
+    |
+671 |             let batch = crate::arch::blake3_x86::chunks16(bytes, counter + start as u64, mode)
+    |                                                                                          ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:678:88
+    |
+678 |             let batch = crate::arch::blake3_four_avx512(bytes, counter + start as u64, mode)
+    |                                                                                        ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:684:82
+    |
+684 |             let batch = crate::arch::blake3_eight(bytes, counter + start as u64, mode)
+    |                                                                                  ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:689:73
+    |
+689 |                 crate::arch::blake3_four(bytes, counter + start as u64, mode).expect("available backend");
+    |                                                                         ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:703:17
+    |
+703 |                 mode)
+    |                 ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:714:70
+    |
+714 |                 let parents = crate::arch::blake3_parents8(children, mode).expect("available backend");
+    |                                                                      ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:718:70
+    |
+718 |                 let parents = crate::arch::blake3_parents4(children, mode).expect("available backend");
+    |                                                                      ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:730:63
+    |
+730 |                 crate::arch::blake3_parents4_avx512(children, mode)
+    |                                                               ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:737:68
+    |
+737 |                 .or_else(|| crate::arch::blake3_parents4(children, mode))
+    |                                                                    ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:745:73
+    |
+745 |             let parents = crate::arch::blake3_parents2_avx512(children, mode).expect("available backend");
+    |                                                                         ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:755:57
+    |
+755 |             cvs[i] = parent(cvs[2 * i], cvs[2 * i + 1], mode).chaining(short);
+    |                                                         ^^^^ not found in this scope
+
+error[E0425]: cannot find value `mode` in this scope
+   --> crates/hash/src/blake3.rs:763:28
+    |
+763 |     parent(cvs[0], cvs[1], mode)
+    |                            ^^^^ not found in this scope
+
+error: unused import: `IV`
+   --> crates/hash/src/arch/blake3_lanes.rs:9:29
+    |
+  7 | macro_rules! blake3_lanes {
+  8 |     ($feature:literal, $lanes:literal) => {
+  9 |         use crate::blake3::{IV, SCHEDULE};
+    |                             ^^
+    |
+   ::: crates/hash/src/arch/blake3_sse2.rs:145:5
+    |
+145 |     super::super::blake3_lanes::blake3_lanes!("avx512f,avx512vl", 4);
+    |     ---------------------------------------------------------------- in this macro invocation
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused import: `IV`
+   --> crates/hash/src/arch/blake3_lanes.rs:9:29
+    |
+  7 | macro_rules! blake3_lanes {
+  8 |     ($feature:literal, $lanes:literal) => {
+  9 |         use crate::blake3::{IV, SCHEDULE};
+    |                             ^^
+    |
+   ::: crates/hash/src/arch/blake3_avx2.rs:118:1
+    |
+118 | super::blake3_lanes::blake3_lanes!("avx2", 8);
+    | --------------------------------------------- in this macro invocation
+
+error: unnecessary qualification
+   --> crates/hash/src/blake3.rs:265:50
+    |
+265 | fn parent(left: [u32; 8], right: [u32; 8], mode: crate::blake3::Mode) -> Output {
+    |                                                  ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+265 - fn parent(left: [u32; 8], right: [u32; 8], mode: crate::blake3::Mode) -> Output {
+265 + fn parent(left: [u32; 8], right: [u32; 8], mode: Mode) -> Output {
+    |
+
+error: unnecessary qualification
+   --> crates/hash/src/blake3.rs:277:62
+    |
+277 | fn chunk(bytes: &[u8], counter: u64, backend: Backend, mode: crate::blake3::Mode) -> Output {
+    |                                                              ^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+277 - fn chunk(bytes: &[u8], counter: u64, backend: Backend, mode: crate::blake3::Mode) -> Output {
+277 + fn chunk(bytes: &[u8], counter: u64, backend: Backend, mode: Mode) -> Output {
+    |
+
+error: unnecessary qualification
+   --> crates/hash/src/blake3.rs:605:67
+    |
+605 | fn tree_output(data: &[u8], counter: u64, backend: Backend, mode: crate::blake3::Mode) -> Output {
+    |                                                                   ^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+605 - fn tree_output(data: &[u8], counter: u64, backend: Backend, mode: crate::blake3::Mode) -> Output {
+605 + fn tree_output(data: &[u8], counter: u64, backend: Backend, mode: Mode) -> Output {
+    |
+
+error: unnecessary qualification
+   --> crates/hash/src/blake3.rs:647:63
+    |
+647 | fn tree_cv(data: &[u8], counter: u64, backend: Backend, mode: crate::blake3::Mode) -> [u32; 8] {
+    |                                                               ^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+647 - fn tree_cv(data: &[u8], counter: u64, backend: Backend, mode: crate::blake3::Mode) -> [u32; 8] {
+647 + fn tree_cv(data: &[u8], counter: u64, backend: Backend, mode: Mode) -> [u32; 8] {
+    |
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+   --> crates/hash/src/arch/mod.rs:425:23
+    |
+425 |         Some(unsafe { blake3_parents2::parents(&blake3_rows::chunks(bytes, counter,, mode mode)) })
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^-------------------------------------------------- argument #2 of type `Mode` is missing
+    |
+note: function defined here
+   --> crates/hash/src/arch/blake3_parents2.rs:55:15
+    |
+ 55 | pub(crate) fn parents(children: &[[u32; 8]; 4], mode: crate::blake3::Mode) -> [[u32; 8]; 2] {
+    |               ^^^^^^^                           -------------------------
+help: provide the argument
+    |
+425 |         Some(unsafe { blake3_parents2::parents(&blake3_rows::chunks(bytes, counter,, mode mode), /* Mode */) })
+    |                                                                                                ++++++++++++
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+   --> crates/hash/src/blake3.rs:619:16
+    |
+619 |         return narrow_output::<4>(data, counter, backend, mode);
+    |                ^^^^^^^^^^^^^^^^^^                         ---- unexpected argument #4 of type `Mode`
+    |
+note: function defined here
+   --> crates/hash/src/blake3.rs:658:4
+    |
+658 | fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Backend) -> Output {
+    |    ^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+619 -         return narrow_output::<4>(data, counter, backend, mode);
+619 +         return narrow_output::<4>(data, counter, backend);
+    |
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+   --> crates/hash/src/blake3.rs:636:16
+    |
+636 |         return narrow_output::<256>(data, counter, backend, mode);
+    |                ^^^^^^^^^^^^^^^^^^^^                         ---- unexpected argument #4 of type `Mode`
+    |
+note: function defined here
+   --> crates/hash/src/blake3.rs:658:4
+    |
+658 | fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Backend) -> Output {
+    |    ^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+636 -         return narrow_output::<256>(data, counter, backend, mode);
+636 +         return narrow_output::<256>(data, counter, backend);
+    |
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+   --> crates/hash/src/blake3.rs:639:16
+    |
+639 |         return narrow_output::<64>(data, counter, backend, mode);
+    |                ^^^^^^^^^^^^^^^^^^^                         ---- unexpected argument #4 of type `Mode`
+    |
+note: function defined here
+   --> crates/hash/src/blake3.rs:658:4
+    |
+658 | fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Backend) -> Output {
+    |    ^^^^^^^^^^^^^
+help: remove the extra argument
+    |
+639 -         return narrow_output::<64>(data, counter, backend, mode);
+639 +         return narrow_output::<64>(data, counter, backend);
+    |
+
+error[E0061]: this method takes 1 argument but 2 arguments were supplied
+    --> crates/hash/src/blake3.rs:666:32
+     |
+ 666 |     for (group, bytes) in data.chunks(lanes * CHUNK, mode).enumerate() {
+     |                                ^^^^^^                ---- unexpected argument #2
+     |
+note: method defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-10-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/mod.rs:1156:18
+     |
+1156 |     pub const fn chunks(&self, chunk_size: usize) -> Chunks<'_, T> {
+     |                  ^^^^^^
+help: remove the extra argument
+     |
+ 666 -     for (group, bytes) in data.chunks(lanes * CHUNK, mode).enumerate() {
+ 666 +     for (group, bytes) in data.chunks(lanes * CHUNK).enumerate() {
+     |
+
+Some errors have detailed explanations: E0061, E0425.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-hash` (lib) due to 39 previous errors

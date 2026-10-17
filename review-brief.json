@@ -1,0 +1,30 @@
+{
+  "issue": 562,
+  "branch": "paudley/562-purrdf-hash-blake3-keyed-hash-derive",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "f3c5b1677a6d7b51e0dc305659f3bc894a296193",
+      "subject": "Add BLAKE3 keyed modes and seekable extended output",
+      "date": "2026-10-16"
+    }
+  ],
+  "files": [
+    "CHANGELOG.md",
+    "Makefile",
+    "crates/hash-conformance/tests/blake3.rs",
+    "crates/hash-conformance/tests/vectors/blake3_official_test_vectors.json",
+    "crates/hash-conformance/tests/vectors/blake3_official_vectors.txt",
+    "crates/hash/PROVENANCE.md",
+    "crates/hash/README.md",
+    "crates/hash/src/arch/blake3_lanes.rs",
+    "crates/hash/src/arch/blake3_parents2.rs",
+    "crates/hash/src/arch/blake3_rows.rs",
+    "crates/hash/src/arch/blake3_x86.rs",
+    "crates/hash/src/arch/mod.rs",
+    "crates/hash/src/blake3.rs",
+    "crates/hash/src/lib.rs",
+    "helpers-ledger.toml"
+  ],
+  "adrs_touched": []
+}

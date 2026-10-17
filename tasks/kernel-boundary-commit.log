@@ -1,0 +1,3 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 4507f0995037 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/562-purrdf-hash-blake3-keyed-hash-derive 2c9c08dc5] Retain BLAKE3 kernel boundaries on enabled targets
+ 2 files changed, 7 insertions(+)

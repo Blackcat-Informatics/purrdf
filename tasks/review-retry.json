@@ -1,0 +1,5 @@
+{
+  "observed_at": "2026-10-17T05:00:28.191762+00:00",
+  "retry_after": "2026-10-17T05:09:28.191776+00:00",
+  "reason": "CodeRabbit spending cap; next included review reported in 9 minutes. Status check success is not a completed review."
+}

@@ -1,0 +1,34 @@
+{
+  "issue": 562,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "purrdf-hash: BLAKE3 keyed_hash, derive_key and extendable output",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [],
+  "defect_classes": {
+    "performance": 3,
+    "none": 19,
+    "correctness": 1,
+    "bug": 2,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/562-purrdf-hash-blake3-keyed-hash-derive"
+  },
+  "coverage": [
+    "issue #562 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['purrdf-hash:', 'BLAKE3', 'keyed_hash,']: 0 other item(s)",
+    "GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #562 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #562: 0",
+    "requirement candidates: 2 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 1 path(s) (0 on disk), 11 identifier(s), 2 workspace package(s), 0 URL(s)"
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "baseRefName": "main",
+  "body": "Adds native BLAKE3 keyed hashing, context-separated key derivation and extendable\noutput through the existing portable and SIMD kernels, without adding a dependency.\nBoth streaming buffer sizes support keyed and derived input. An owned output reader\nfills caller storage and seeks without rehashing input; ordinary digests remain\nthe first 32 output bytes. Reset preserves the selected mode.\n\nCloses #562.\n\nValidation completed: all 35 official full-length mode vectors, all available\nnative backends and both stream buffers; real scalar/SIMD WASM replay; long Unicode\ncontexts, megabyte output, counter/seek boundaries and atomic range refusal;\nexisting frozen unkeyed/tree controls; strict affected-package compilation and\nhelper hygiene and normal metadata regeneration. Default context hashing uses\nthe ordinary dispatcher; explicitly forced streams retain their named backend.\n\nBefore merge: finish the seven-configuration assembly projection, commit its\ngenerated count changes, and satisfy hosted qualification (including real\nArm/NEON execution) and source review. No timing measurements were run.\n",
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABc1Qn_A",
+      "author": {
+        "login": "coderabbitai"
+      },
+      "authorAssociation": "NONE",
+      "body": "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> [!WARNING]\n> ## Review limit reached\n> \n> Your organization has reached its usage spending cap. Adjust your spending cap in the [billing tab](https://app.coderabbit.ai/settings/billing?tab=usage&orgId=b268aba6-a194-4fd6-8ca5-f1a13a313209).\n> \n> **Next included review available in 9 minutes.**\n> \n> [Check out review usage here](https://app.coderabbit.ai/dashboard/review-capacity?orgId=b268aba6-a194-4fd6-8ca5-f1a13a313209).\n> \n> <details>\n> <summary><strong>View limit details</strong></summary>\n> <dl>\n> <dd>\n> \n> **Limit details:** You\u2019ve used all 2 included reviews currently available. Your 81 included PR review attempts over the past 7 days set your current allowance at 2 reviews per hour.\n> \n> [Learn how review limits work](https://docs.coderabbit.ai/management/rate-limits).\n> \n> **Review configuration:**\n> \n> <details>\n> <summary><strong>\u2699\ufe0f Run configuration</strong></summary>\n> <dl>\n> <dd>\n> \n> - **Configuration used**: defaults\n> - **Review profile**: CHILL\n> - **Plan**: Team\n> - **Run ID**: `0d3df693-cfcb-473e-bc11-52f1f0054890`\n> \n> </dd>\n> </dl>\n> </details>\n> \n> <details>\n> <summary><strong>\ud83d\udce5 Commits</strong></summary>\n> <dl>\n> <dd>\n> \n> Reviewing files that changed from the base of the PR and between 4507f099503725007914f0a243eb9ff8a66b922e and f3c5b1677a6d7b51e0dc305659f3bc894a296193.\n> \n> </dd>\n> </dl>\n> </details>\n> \n> <details>\n> <summary><strong>\ud83d\udcd2 Files selected for processing: 15</strong></summary>\n> <dl>\n> <dd>\n> \n> * `CHANGELOG.md`\n> * `Makefile`\n> * `crates/hash-conformance/tests/blake3.rs`\n> * `crates/hash-conformance/tests/vectors/blake3_official_test_vectors.json`\n> * `crates/hash-conformance/tests/vectors/blake3_official_vectors.txt`\n> * `crates/hash/PROVENANCE.md`\n> * `crates/hash/README.md`\n> * `crates/hash/src/arch/blake3_lanes.rs`\n> * `crates/hash/src/arch/blake3_parents2.rs`\n> * `crates/hash/src/arch/blake3_rows.rs`\n> * `crates/hash/src/arch/blake3_x86.rs`\n> * `crates/hash/src/arch/mod.rs`\n> * `crates/hash/src/blake3.rs`\n> * `crates/hash/src/lib.rs`\n> * `helpers-ledger.toml`\n> \n> </dd>\n> </dl>\n> </details>\n> \n> </dd>\n> </dl>\n> </details>\n\n<!-- end of auto-generated comment: rate limited by coderabbit.ai -->\n\n<!-- autopilot:start -->\n- [ ] <!-- {\"checkboxId\":\"2708ad07-9f24-4260-9c11-7dc76a49f2e3\"} --> <strong title=\"Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts\">Autofix</strong> \u00b7 Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts\n<!-- autopilot:end -->\n<!-- tips_start -->\n\n\n\n\n\n\n<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>\n\n<!-- tips_end -->",
+      "createdAt": "2026-10-17T04:54:03Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/568#issuecomment-6229862396",
+      "viewerDidAuthor": false
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABc1RISw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# BLAKE3 modes and extendable output\n\nComplete keyed hashing, two-stage context derivation, extended output and their\nstreaming forms without adding dependencies or a second compression algorithm.\nThe existing unkeyed tree, short-input policy and hardware dispatch remain the\nproduction path for every mode. Repository law requires portable deterministic\nbytes, one implementation per job, normal hooks and protected integration.\n\n## Task 1: Implement and qualify the complete modes\n\nThread one key/flags value through existing chunks, parents and all batched\nkernels. Extend each existing single-block kernel to emit either eight chaining\nwords or all sixteen output words, specializing away unused output operations.\nExpose keyed_hash, derive_key, hash_xof and keyed/derived XOF functions; streaming\nconstructors preserve mode across reset. An owned seekable output reader retains\nroot inputs and fills caller storage without allocation or rehashing input.\n\nFreeze the official full-length vectors with provenance. Replay every input in\nall three modes on every available backend, both stream buffer sizes, unrelated\nupdate boundaries, reset/clone and seek/read boundaries. Check the first 32 bytes\nagainst digest APIs and megabyte output against independent block/partition\ncontrols. Retain existing frozen unkeyed and tree-counter controls. Execute native\nand installed portable/SIMD WASM paths, and applicable architecture checks. No\nelapsed-time or throughput measurements. Run strict affected compilation and\nhygiene during development; run the required final gate on settled source.\n\n## Task 2: Publish and integrate\n\nPublish the implemented behavior after focused checks and normal hooks, while\nassembly projections finish. This starts hosted qualification promptly; it does\nnot waive any merge requirement. Commit the generated assembly projection when\nits complete run finishes. The final hosted matrix and review must cover the\nresulting candidate before integration.\n\nReview the complete issue against source and recorded results; resolve material\nfindings. Commit through normal hooks, push and open the closing PR. Resolve\nactual hosted review and CI, merge only through ghprsq, verify closure/mirror and\nremove the delivered branch and worktree. Update the portfolio tracker.\n\n## Review and prior art\n\nThe existing original compression and SIMD batch implementations are the only\nalgorithm homes; official specification and frozen answers provide the oracle,\nnot upstream implementation bodies. Brief found no prior attempt, no comments\nand no linked PR. Its narrow title search does not establish global recurrence.\nNo subagents are permitted. Owner analysis is not independent approval; hosted\nsource review will provide independent review before integration. Generic pool\nor external consumer migrations would expand scope and are excluded. Seekable\noutput is included because it avoids rehashing megabyte masks and fits the same\nretained root object. No new dependency, timing gate or fallback kernel is added.\n",
+      "createdAt": "2026-10-17T04:55:07Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/568#issuecomment-6229870667",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABc1ZbRA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "@coderabbitai review\n",
+      "createdAt": "2026-10-17T05:11:07Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/568#issuecomment-6230006596",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-10-17T04:53:50Z",
+  "headRefName": "paudley/562-purrdf-hash-blake3-keyed-hash-derive",
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 568,
+  "reviews": [],
+  "state": "OPEN",
+  "title": "Add BLAKE3 keyed hashing, key derivation and extended output",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/568"
+}

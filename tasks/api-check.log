@@ -1,0 +1,105 @@
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/alloc-probe)
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/562-purrdf-hash-blake3-keyed-hash-derive/crates/hash)
+error[E0284]: type annotations needed
+    --> crates/hash/src/blake3.rs:1162:25
+     |
+1162 |                         crate::arch::blake3_compress4(cv, &words, counter, len, flags)
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer the value of the const parameter `OUTPUT` declared on the function `blake3_compress4`
+     |
+note: required by a const generic parameter in `blake3_compress4`
+    --> crates/hash/src/arch/mod.rs:235:32
+     |
+ 235 | pub(crate) fn blake3_compress4<const OUTPUT: usize>(
+     |                                ^^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `blake3_compress4`
+help: consider specifying a const for the const parameter `OUTPUT`
+     |
+1162 |                         crate::arch::blake3_compress4::</* CONST */>(cv, &words, counter, len, flags)
+     |                                                      +++++++++++++++
+
+error[E0284]: type annotations needed
+    --> crates/hash/src/blake3.rs:1162:25
+     |
+1162 |                         crate::arch::blake3_compress4(cv, &words, counter, len, flags)
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer the value of the const parameter `OUTPUT` declared on the function `blake3_compress4`
+1163 |                     {
+1164 |                         assert_eq!(actual, compress_portable(cv, &words, counter, len, flags));
+     |                                            -------------------------------------------------- type must be known at this point
+     |
+note: required by a const generic parameter in `blake3::compress_portable`
+    --> crates/hash/src/blake3.rs:214:33
+     |
+ 214 | pub(crate) fn compress_portable<const OUTPUT: usize>(
+     |                                 ^^^^^^^^^^^^^^^^^^^ required by this const generic parameter in `compress_portable`
+help: consider specifying a const for the const parameter `OUTPUT`
+     |
+1162 |                         crate::arch::blake3_compress4::</* CONST */>(cv, &words, counter, len, flags)
+     |                                                      +++++++++++++++
+
+error[E0284]: type annotations needed
+    --> crates/hash/src/blake3.rs:1162:25
+     |
+1162 |                         crate::arch::blake3_compress4(cv, &words, counter, len, flags)
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer the value of the const parameter `OUTPUT` declared on the function `blake3_compress4`
+1163 |                     {
+1164 |                         assert_eq!(actual, compress_portable(cv, &words, counter, len, flags));
+     |                         ---------------------------------------------------------------------- type must be known at this point
+     |
+     = note: required for `[u32; _]` to implement `PartialEq`
+help: consider specifying a const for the const parameter `OUTPUT`
+     |
+1162 |                         crate::arch::blake3_compress4::</* CONST */>(cv, &words, counter, len, flags)
+     |                                                      +++++++++++++++
+
+error[E0284]: type annotations needed
+    --> crates/hash/src/blake3.rs:1162:25
+     |
+1162 |                         crate::arch::blake3_compress4(cv, &words, counter, len, flags)
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer the value of the const parameter `OUTPUT` declared on the function `blake3_compress4`
+1163 |                     {
+1164 |                         assert_eq!(actual, compress_portable(cv, &words, counter, len, flags));
+     |                         ----------------------------------------------------------------------
+     |                         |
+     |                         type must be known at this point
+     |                         required by a bound introduced by this call
+     |
+     = note: required for `[u32; _]` to implement `Debug`
+note: required by a bound in `core::panicking::assert_failed`
+    --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/core/src/panicking.rs:404:8
+     |
+ 397 | pub fn assert_failed<T, U>(
+...
+ 404 |     T: fmt::Debug + ?Sized,
+     |        ^^^^^^^^^^ required by this bound in `assert_failed`
+help: consider specifying a const for the const parameter `OUTPUT`
+     |
+1162 |                         crate::arch::blake3_compress4::</* CONST */>(cv, &words, counter, len, flags)
+     |                                                      +++++++++++++++
+
+error[E0284]: type annotations needed
+    --> crates/hash/src/blake3.rs:1162:25
+     |
+1162 |                         crate::arch::blake3_compress4(cv, &words, counter, len, flags)
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer the value of the const parameter `OUTPUT` declared on the function `blake3_compress4`
+1163 |                     {
+1164 |                         assert_eq!(actual, compress_portable(cv, &words, counter, len, flags));
+     |                         ----------------------------------------------------------------------
+     |                         |
+     |                         type must be known at this point
+     |                         required by a bound introduced by this call
+     |
+     = note: required for `[u32; _]` to implement `Debug`
+note: required by a bound in `core::panicking::assert_failed`
+    --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/core/src/panicking.rs:405:8
+     |
+ 397 | pub fn assert_failed<T, U>(
+...
+ 405 |     U: fmt::Debug + ?Sized,
+     |        ^^^^^^^^^^ required by this bound in `assert_failed`
+help: consider specifying a const for the const parameter `OUTPUT`
+     |
+1162 |                         crate::arch::blake3_compress4::</* CONST */>(cv, &words, counter, len, flags)
+     |                                                      +++++++++++++++
+
+For more information about this error, try `rustc --explain E0284`.
+error: could not compile `purrdf-hash` (lib test) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
