@@ -1,0 +1,21 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 128dda6bfa9926c3bab6ab9e19c148182ee9fec7
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 573
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/573
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 410a927d9e97d8485711d98b535158ed3e4ce059
+GhpRsq-Head-Ref: paudley/572-model-the-xsd-anyuri-value-space-in-the
+GhpRsq-Head-OID: 128dda6bfa9926c3bab6ab9e19c148182ee9fec7
+GhpRsq-Result-Tree: bc13dfb30b5a5162c78b146d0ada5ffdca9c23c1
+GhpRsq-Result-Commit: aa4ae5c133bb10203203fe98f061649cf31ed055
+GhpRsq-Parent-Hashes: 128dda6bfa9926c3bab6ab9e19c148182ee9fec7
+GhpRsq-Squash-Notes-SHA256: f674093d4dd63668918fb56d0f06bf322b29b8abb34c5f39c7a483b35905cd51
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Tree: 5f4f6efc20c82b2c2050917cb560d3abf1040a60
+GhpRsq-Stage-Ref: refs/ghprsq/pr/573/stage
+GhpRsq-Stage-Files: 17
