@@ -590,7 +590,7 @@ impl Construct {
                  complemented one is empty is an automaton product construction, and \
                  rdf:langRange constrains rdf:langString's value space rather than an XSD one. \
                  SECOND, a datatype outside the modelled value space — owl:real, owl:rational, \
-                 xsd:anyURI, a caller's own rdfs:Datatype — or a value beyond the representable \
+                 a caller's own rdfs:Datatype — or a value beyond the representable \
                  domain: an unmodelled value space may OVERLAP a modelled one (every \
                  xsd:decimal value is an owl:real value), so it cannot be assumed disjoint \
                  either. THIRD, the TEMPORAL value spaces beyond what a listed set of values \
