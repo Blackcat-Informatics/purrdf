@@ -1865,7 +1865,12 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
         copied,
         crate::substitute::Prebindings::Owned(&substitutions),
     )
-    .map_err(|d| EvalError::function(d.to_string()))?;
+    .map_err(|failure| match failure {
+        crate::substitute::GroundFailure::Diagnostic(cause) => {
+            NativeDiagnostic::error_cause(NativeDiagnosticKind::Function, cause, &child.growth)
+        }
+        crate::substitute::GroundFailure::Operational(error) => error,
+    })?;
     let outcome = match evaluate_query_evaluated(&substituted, &mut child)? {
         EvaluatedOutcome::Complete(outcome) => outcome,
         EvaluatedOutcome::Truncated { certificate, .. } => {

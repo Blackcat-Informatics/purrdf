@@ -1729,7 +1729,92 @@ fn shacl_select_result_refusals_keep_original_iri_and_counts() {
     }
 }
 
+fn shacl_prebinding_keeps_the_original_retained_diagnostic() {
+    use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
+    use purrdf_sparql_eval::{
+        ExtensionEnv, NativeSparqlEngine, TypeConstraint, UserFnBody, UserFnParam, UserFunction,
+        UserFunctionRegistry,
+    };
+
+    let dataset = support::empty_dataset();
+    let mut functions = UserFunctionRegistry::default();
+    functions.insert(
+        "https://example.org/function",
+        UserFunction {
+            params: vec![UserFnParam {
+                var: "x".into(),
+                constraint: TypeConstraint::default(),
+            }],
+            required: 1,
+            body: "SELECT ?x WHERE {}".into(),
+            kind: UserFnBody::Select,
+            return_constraint: TypeConstraint::default(),
+        },
+    );
+    functions.register_native(
+        "https://example.org/host-value",
+        purrdf_sparql_eval::Arity::Exact(0),
+        purrdf_sparql_eval::Volatility::Stable,
+        std::sync::Arc::new(|_| Ok(Some(purrdf_core::TermValue::Iri("relative".into())))),
+    );
+    let functions = NativeSparqlEngine::new()
+        .bind_functions(functions, ExtensionEnv::empty())
+        .unwrap();
+    let query = SparqlParser::new().parse_query("SELECT (<https://example.org/function>(<https://example.org/host-value>()) AS ?value) WHERE {}").unwrap();
+    let mut ctx = EvalCtx::new(&dataset).with_user_functions(&functions);
+    let original = evaluate_query(&query, &mut ctx).unwrap_err();
+    drop(ctx);
+    drop(functions);
+    drop(dataset);
+    let source = std::ptr::from_ref(
+        std::error::Error::source(&original)
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<RetainedDiagnostic>()
+            .unwrap()
+            .diagnostic(),
+    );
+    let retained = original.clone();
+    drop(original);
+    let original_diagnostic = std::error::Error::source(&retained)
+        .unwrap()
+        .source()
+        .unwrap()
+        .downcast_ref::<RetainedDiagnostic>()
+        .unwrap();
+    assert!(std::ptr::eq(source, original_diagnostic.diagnostic()));
+    let diagnostic = Capture::read(&retained)
+        .child("cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(diagnostic.code, "rdf-diagnostic");
+    assert!(matches!(
+        diagnostic.field("code"),
+        ErrorValue::Code("native-sparql-subst-iri")
+    ));
+    assert_eq!(diagnostic.child("severity").code, "error");
+    assert!(matches!(diagnostic.field("location"), ErrorValue::Absent));
+    assert!(matches!(diagnostic.field("detail"), ErrorValue::Absent));
+    assert!(matches!(
+        diagnostic.field("message"),
+        ErrorValue::Text(
+            "invalid IRI \"relative\" in term position: relative IRI reference in term position (no scheme)"
+        )
+    ));
+    let buffer = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let _capture = Capture::read_with_buffer(&retained, buffer);
+    assert_eq!(window.close().allocations, 0);
+    assert!(retained.diagnostic_code().is_none());
+    assert_eq!(
+        retained.to_string(),
+        "host function error: error native-sparql-subst-iri: invalid IRI \"relative\" in term position: relative IRI reference in term position (no scheme)"
+    );
+}
+
 purrdf_testkit::harness_main!(
+    shacl_prebinding_keeps_the_original_retained_diagnostic,
     shacl_select_result_refusals_keep_original_iri_and_counts,
     raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers,
     raw_completion_refusals_retain_original_governor_certificates,

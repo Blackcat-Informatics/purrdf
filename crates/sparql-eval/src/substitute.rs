@@ -1165,11 +1165,10 @@ pub(crate) fn term_pattern_from_ground_with_memory<
 pub(crate) fn apply_shacl_prebinding(
     query: Query,
     substitutions: Prebindings<'_>,
-) -> Result<Query, RdfDiagnostic> {
+) -> Result<Query, GroundFailure> {
     let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
     let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
     apply_shacl_prebinding_with_memory(query, substitutions, &mut memory)
-        .map_err(GroundFailure::into_resident_diagnostic)
 }
 
 /// [`apply_shacl_prebinding`]'s rewrite, over probes that are already grounded and
