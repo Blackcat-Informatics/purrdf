@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-16T06:28:14-06:00\n"
+"POT-Creation-Date: 2026-10-17T00:04:45-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -794,7 +794,7 @@ msgid "// Serialize to any native codec and parse back, losslessly.\n"
 msgstr "// 序列化为任一原生编解码器的格式并解析回来，不丢失信息。\n"
 
 #: src/getting-started/rust.md:43 src/getting-started/rust.md:44
-#: src/getting-started/rust.md:60 src/getting-started/c.md:45
+#: src/getting-started/rust.md:62 src/getting-started/c.md:45
 #: src/concepts/projections.md:419 src/concepts/codecs.md:35
 msgid "\"text/turtle\""
 msgstr "\"text/turtle\""
@@ -804,19 +804,21 @@ msgid ""
 "The builder→freeze split is the heart of the API: you intern terms and push "
 "quads on a mutable `RdfDatasetBuilder`, then `freeze()` into an immutable, "
 "indexed `RdfDataset` that every engine (SPARQL, SHACL, ShEx, entailment) "
-"evaluates over. See [The Interned Dataset IR](../concepts/interned-"
-"dataset.md)."
+"evaluates over. Interning and insertion return typed storage failures; "
+"propagate those errors in application code rather than ignoring them. See "
+"[The Interned Dataset IR](../concepts/interned-dataset.md)."
 msgstr ""
 "构建器→冻结的拆分是这套 API 的核心：在可变的 `RdfDatasetBuilder` 上驻留项并推"
 "入四元组，然后 `freeze()` 为一个不可变、带索引的 `RdfDataset`，每个引擎"
-"（SPARQL、SHACL、ShEx、蕴涵）都在其上求值。参见[驻留数据集 IR](../concepts/"
-"interned-dataset.md)。"
+"（SPARQL、SHACL、ShEx、蕴涵）都在其上求值。项驻留与插入会返回带类型的存储失"
+"败；应用代码应向上传递这些错误，而不是忽略它们。参见[驻留数据集 IR](../"
+"concepts/interned-dataset.md)。"
 
-#: src/getting-started/rust.md:53
+#: src/getting-started/rust.md:55
 msgid "Parsing text directly"
 msgstr "直接解析文本"
 
-#: src/getting-started/rust.md:56
+#: src/getting-started/rust.md:58
 msgid ""
 "r#\"\n"
 "    @prefix ex: <https://example.org/> .\n"
@@ -828,11 +830,11 @@ msgstr ""
 "    ex:cat ex:says \"meow\" .\n"
 "\"#"
 
-#: src/getting-started/rust.md:61 src/concepts/codecs.md:35
+#: src/getting-started/rust.md:63 src/concepts/codecs.md:35
 msgid "\"valid Turtle\""
 msgstr "\"valid Turtle\""
 
-#: src/getting-started/rust.md:65
+#: src/getting-started/rust.md:67
 msgid ""
 "Malformed input is a typed `RdfDiagnostic` with a source location where the "
 "codec can provide one — never a silent partial parse."
@@ -840,40 +842,40 @@ msgstr ""
 "格式错误的输入会得到一个带类型的 `RdfDiagnostic`，并在编解码器能够提供时附带"
 "源位置——绝不会是静默的部分解析。"
 
-#: src/getting-started/rust.md:68
+#: src/getting-started/rust.md:70
 msgid "Reaching the other engines"
 msgstr "到达其他引擎"
 
-#: src/getting-started/rust.md:70
+#: src/getting-started/rust.md:72
 msgid ""
 "Every engine hangs off the same facade. For example, the IRI layer, which "
 "has no third-party dependency, and the ShEx schema layer:"
 msgstr ""
-"每个引擎都挂在同一个门面之下。例如，没有任何第三方依赖的 IRI 层与 ShEx 模式"
-"层："
+"每个引擎都挂在同一个门面之下。例如，IRI 层（不依赖任何第三方包）与 ShEx "
+"模式层："
 
-#: src/getting-started/rust.md:74 src/getting-started/rust.md:75
+#: src/getting-started/rust.md:76 src/getting-started/rust.md:77
 #: src/concepts/interned-dataset.md:33 src/sparql/querying.md:31
 msgid "\"https://example.org/cat\""
 msgstr "\"https://example.org/cat\""
 
-#: src/getting-started/rust.md:74
+#: src/getting-started/rust.md:76
 msgid "\"valid IRI\""
 msgstr "\"valid IRI\""
 
-#: src/getting-started/rust.md:78
+#: src/getting-started/rust.md:80
 msgid "\"PREFIX ex: <https://example.org/>\\nex:Cat { ex:says . }\""
 msgstr "\"PREFIX ex: <https://example.org/>\\nex:Cat { ex:says . }\""
 
-#: src/getting-started/rust.md:80
+#: src/getting-started/rust.md:82
 msgid "\"valid ShExC\""
 msgstr "\"valid ShExC\""
 
-#: src/getting-started/rust.md:83
+#: src/getting-started/rust.md:85
 msgid "When to depend on a sub-crate instead"
 msgstr "何时应改为依赖子 crate"
 
-#: src/getting-started/rust.md:85
+#: src/getting-started/rust.md:87
 msgid ""
 "Most applications should stop at `purrdf`. The sub-crates (`purrdf-core`, "
 "`purrdf-rdf`, `purrdf-columnar`, `purrdf-sparql-algebra`, `purrdf-sparql-"
@@ -897,7 +899,7 @@ msgstr ""
 "的依赖是第一方词法层 `purrdf-lex` 与零依赖的 `purrdf-hash`。crate 一览见[仓"
 "库 README](https://github.com/Blackcat-Informatics/purrdf#crate-map)。"
 
-#: src/getting-started/rust.md:97
+#: src/getting-started/rust.md:99
 msgid ""
 "Every release crate builds cleanly for `wasm32-unknown-unknown`, so the same "
 "Rust code paths work in native and wasm hosts."
@@ -905,11 +907,11 @@ msgstr ""
 "每个发布的 crate 都能干净地构建到 `wasm32-unknown-unknown`，因此同样的 Rust "
 "代码路径在原生宿主与 wasm 宿主中都能工作。"
 
-#: src/getting-started/rust.md:100 src/getting-started/python.md:139
+#: src/getting-started/rust.md:102 src/getting-started/python.md:139
 msgid "Next steps"
 msgstr "后续步骤"
 
-#: src/getting-started/rust.md:102
+#: src/getting-started/rust.md:104
 msgid ""
 "[The Interned Dataset IR](../concepts/interned-dataset.md) — how the IR "
 "works and why it is fast."
@@ -917,7 +919,7 @@ msgstr ""
 "[驻留数据集 IR](../concepts/interned-dataset.md)——IR 如何工作，以及它为何快"
 "速。"
 
-#: src/getting-started/rust.md:104
+#: src/getting-started/rust.md:106
 msgid ""
 "[Graph, Tabular & Research-Object Projections](../concepts/projections.md) — "
 "deterministic LPG, CSVW, OBO Graphs, SKOS, and research-object carriers "
@@ -926,13 +928,13 @@ msgstr ""
 "[图、表格与 Research Object 投影](../concepts/projections.md)——通过总括 "
 "crate 获得确定性的 LPG、CSVW、OBO Graphs、SKOS 与 Research Object 载体。"
 
-#: src/getting-started/rust.md:106
+#: src/getting-started/rust.md:108
 msgid ""
 "[SPARQL: Querying](../sparql/querying.md) — running queries over a frozen "
 "dataset."
 msgstr "[SPARQL：查询](../sparql/querying.md)——在冻结的数据集上运行查询。"
 
-#: src/getting-started/rust.md:108
+#: src/getting-started/rust.md:110
 msgid "[docs.rs/purrdf](https://docs.rs/purrdf) — the full API reference."
 msgstr "[docs.rs/purrdf](https://docs.rs/purrdf)——完整的 API 参考。"
 
@@ -4600,14 +4602,17 @@ msgstr "ABI 契约"
 
 #: src/getting-started/c.md:82
 msgid ""
-"**No unwinding across the boundary.** Every function runs inside "
-"`catch_unwind`; a caught panic becomes `PURRDF_STATUS_PANIC`, never a "
-"process abort across FFI."
+"**No unwinding across the boundary.** Fallible entry points use "
+"`catch_unwind`; a caught unwinding panic becomes `PURRDF_STATUS_PANIC`. "
+"Entry points without an error channel return their guard's default value "
+"after a caught panic. Aborting panics and other process aborts cannot be "
+"converted into status codes."
 msgstr ""
-"**不跨越边界展开栈。** 每个函数都在 `catch_unwind` 内运行；捕获到的 panic 成"
-"为 `PURRDF_STATUS_PANIC`，绝不会跨 FFI 导致进程中止。"
+"**不跨越边界展开栈。** 可失败的入口使用 `catch_unwind`；捕获到的栈展开式 "
+"panic 成为 `PURRDF_STATUS_PANIC`。没有错误通道的入口在捕获 panic 后返回其保护"
+"器的默认值。中止式 panic 和其他进程中止无法转换为状态码。"
 
-#: src/getting-started/c.md:85
+#: src/getting-started/c.md:87
 msgid ""
 "**`int32_t` status + out-params.** Fallible functions return a "
 "`PurrdfStatus` value and write results through out-pointers. "
@@ -4617,7 +4622,7 @@ msgstr ""
 "通过输出指针写出结果。`PURRDF_STATUS_CURSOR_EXHAUSTED` 是（非错误的）行结束信"
 "号。"
 
-#: src/getting-started/c.md:88
+#: src/getting-started/c.md:90
 msgid ""
 "**SemVer-frozen ABI.** The status enum is append-only; new fields and "
 "functions are additive. `purrdf_abi_version` reports the current ABI version "
@@ -4636,11 +4641,11 @@ msgstr ""
 "返回契约或文档所述行为的任何修改都会使它递增，增量式参数也包括在内，因为增量"
 "式参数对每个 C 使用方而言仍意味着重新编译。"
 
-#: src/getting-started/c.md:98
+#: src/getting-started/c.md:100
 msgid "Ownership and lifetimes"
 msgstr "所有权与生命周期"
 
-#: src/getting-started/c.md:100
+#: src/getting-started/c.md:102
 msgid ""
 "Every handle/buffer/error/cursor has **exactly one matching `*_free`** "
 "(`purrdf_dataset_free`, `purrdf_graph_free`, `purrdf_cursor_free`, "
@@ -4652,7 +4657,7 @@ msgstr ""
 "`purrdf_rowcursor_free`、`purrdf_buffer_free`、`purrdf_error_free`）。释放 "
 "`NULL` 不做任何操作。"
 
-#: src/getting-started/c.md:104
+#: src/getting-started/c.md:106
 msgid ""
 "**The C side never `free()`s a `PurrdfStr.ptr`** — it borrows library-owned "
 "memory; copy the bytes out if they must outlive the borrow. Term views from "
@@ -4664,7 +4669,7 @@ msgstr ""
 "视图，在该游标上的下一次 `purrdf_cursor_next` 或 `purrdf_cursor_free` 之前有"
 "效。"
 
-#: src/getting-started/c.md:108
+#: src/getting-started/c.md:110
 msgid ""
 "Pattern cursors pin the dataset and pull rows lazily from the selected core "
 "index; opening a cursor does not allocate a matching-row snapshot."
@@ -4672,7 +4677,7 @@ msgstr ""
 "模式游标会固定住数据集，并从所选的核心索引中惰性拉取行；打开游标不会为匹配行"
 "分配快照。"
 
-#: src/getting-started/c.md:110
+#: src/getting-started/c.md:112
 msgid ""
 "`PurrdfDataset` is frozen and `Send + Sync` — readable concurrently from "
 "many threads. `PurrdfGraph` (the copy-on-write mutable delta) and cursors "
@@ -4681,11 +4686,11 @@ msgstr ""
 "`PurrdfDataset` 是冻结的，且为 `Send + Sync`——可以从多个线程并发读取。"
 "`PurrdfGraph`（写时复制的可变增量）与游标是单线程的。"
 
-#: src/getting-started/c.md:114
+#: src/getting-started/c.md:116
 msgid "GTS star-layer round-trip"
 msgstr "GTS star 层往返"
 
-#: src/getting-started/c.md:116
+#: src/getting-started/c.md:118
 msgid ""
 "The GTS **star layer** round-trip (`purrdf_to_gts` → `purrdf_from_gts` of a "
 "dataset containing quoted triples / reifier bindings) succeeds with "
@@ -4702,7 +4707,7 @@ msgstr ""
 "`gts_star_roundtrip_preserves_the_statement_layer`，固定了恢复后数据集中的引"
 "用三元组与具体化节点绑定，因此任一层出现回归都会在那里失败。"
 
-#: src/getting-started/c.md:125
+#: src/getting-started/c.md:127
 msgid ""
 "Full contract details — status codes, term crossing representations, thread-"
 "safety per handle — are in the [`purrdf-capi` README](https://github.com/"
@@ -24326,11 +24331,11 @@ msgid ""
 "github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md); this "
 "chapter explains how the machine works."
 msgstr ""
-"PurRDF 使用标准测试套件和第一方语料检验各个引擎。这些套件随库固化于仓库中并**按字节"
-"冻结**——从不手工编辑，在每次 `make check` 时进行 SHA-256 校验，因此任何静默的"
-"内容修改都会使构建失败。完整的实时记分板见 [`docs/CONFORMANCE.md`](https://"
-"github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)；本章说"
-"明这套机制如何运作。"
+"PurRDF 使用标准测试套件和第一方语料检验各个引擎。这些套件随库固化于仓库中并**"
+"按字节冻结**——从不手工编辑，在每次 `make check` 时进行 SHA-256 校验，因此任何"
+"静默的内容修改都会使构建失败。完整的实时记分板见 [`docs/CONFORMANCE.md`]"
+"(https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/"
+"CONFORMANCE.md)；本章说明这套机制如何运作。"
 
 #: src/project/conformance.md:15
 msgid "The single conformance matrix"
@@ -24663,13 +24668,12 @@ msgid ""
 "graph-free `TripleDataset` has three-component rows and separate reifier and "
 "annotation tables. Evaluation works over interned IDs."
 msgstr ""
-"驻留的 `RdfDataset` IR（[驻留数据集 IR](../concepts/interned-dataset.md)）"
-"在字符串存储区中驻留词法文本，并以组成项 ID 存储三元组项。其可复制的 `TermId` "
+"驻留的 `RdfDataset` IR（[驻留数据集 IR](../concepts/interned-dataset.md)）在"
+"字符串存储区中驻留词法文本，并以组成项 ID 存储三元组项。其可复制的 `TermId` "
 "使用 `NonZeroU32`；独立的全局地址空间在 `GlobalTermId` 中使用 `NonZeroU64`。"
-"热点映射使用固定密钥的 `FixedHasher`。冻结四元组行带有惰性序数置换索引"
-"（每个已构建的置换中，每个四元组占四个字节）。显式的不含图分量的 "
-"`TripleDataset` 具有三个组成项的行，以及独立的具体化节点和注解表。"
-"求值在驻留 ID 上进行。"
+"热点映射使用固定密钥的 `FixedHasher`。冻结四元组行带有惰性序数置换索引（每个"
+"已构建的置换中，每个四元组占四个字节）。显式的不含图分量的 `TripleDataset` 具"
+"有三个组成项的行，以及独立的具体化节点和注解表。求值在驻留 ID 上进行。"
 
 #: src/project/performance.md:27
 msgid ""
@@ -24680,10 +24684,10 @@ msgid ""
 "free carrier's physical row tables and populated ordinal indexes. Each "
 "result applies to its measured source, workload and host."
 msgstr ""
-"布局比较位于 `crates/rdf-core/benches/ir_layout.rs`。该基准套件在同一组冻结"
-"四元组上，将驻留四元组行存储与数组结构体、谓词邻接两种备选布局进行比较，"
-"报告分配次数、内存高水位和端到端延迟。它还报告不含图分量的载体的物理行表"
-"与已构建的序数索引。每项结果都只适用于其测量时的源码、工作负载和宿主。"
+"布局比较位于 `crates/rdf-core/benches/ir_layout.rs`。该基准套件在同一组冻结四"
+"元组上，将驻留四元组行存储与数组结构体、谓词邻接两种备选布局进行比较，报告分"
+"配次数、内存高水位和端到端延迟。它还报告不含图分量的载体的物理行表与已构建的"
+"序数索引。每项结果都只适用于其测量时的源码、工作负载和宿主。"
 
 #: src/project/performance.md:34
 msgid "The two benchmark layers"
@@ -25203,20 +25207,20 @@ msgstr ""
 msgid ""
 "Failures reported as `RdfDiagnostic` values carry a stable, machine-readable "
 "`code` alongside `severity`, `message`, `detail` and `location`. The code is "
-"the contract: tests, the SARIF emitter, the CLI, the Python "
-"`ValueError` text and downstream matchers key on it, while the `message` is "
-"free prose that may change wording. This page lists the codes by family, "
-"with the failure each one names and what a caller can do about it. The set "
-"was enumerated from the constructor sites in the source tree, not written "
-"from memory; if a code you see is missing here, the source is authoritative "
-"and the page is stale."
+"the contract: tests, the SARIF emitter, the CLI, the Python `ValueError` "
+"text and downstream matchers key on it, while the `message` is free prose "
+"that may change wording. This page lists the codes by family, with the "
+"failure each one names and what a caller can do about it. The set was "
+"enumerated from the constructor sites in the source tree, not written from "
+"memory; if a code you see is missing here, the source is authoritative and "
+"the page is stale."
 msgstr ""
 "以 `RdfDiagnostic` 值报告的失败，除 `severity`、`message`、`detail` 和 "
-"`location` 之外，还携带稳定的、机器可读的 `code`。代码就"
-"是契约：测试、SARIF 生成器、CLI、Python `ValueError` 文本以及下游的匹配器都以"
-"它为键，而 `message` 是可能改变措辞的自由文本。本页按族列出这些代码，以及每个"
-"代码所指的失败和调用方可以采取的措施。这个集合是从源码树中的构造位置枚举出来"
-"的，而不是凭记忆写成的；如果看到的某个代码不在此列，以源码为准，本页已过时。"
+"`location` 之外，还携带稳定的、机器可读的 `code`。代码就是契约：测试、SARIF "
+"生成器、CLI、Python `ValueError` 文本以及下游的匹配器都以它为键，而 "
+"`message` 是可能改变措辞的自由文本。本页按族列出这些代码，以及每个代码所指的"
+"失败和调用方可以采取的措施。这个集合是从源码树中的构造位置枚举出来的，而不是"
+"凭记忆写成的；如果看到的某个代码不在此列，以源码为准，本页已过时。"
 
 #: src/project/diagnostic-codes.md:18
 msgid ""
@@ -25253,8 +25257,8 @@ msgstr "`iri-*`——IRI 解析与基准解析（`purrdf-iri`）"
 msgid ""
 "`IriError::diagnostic_code` is the single owner of these strings for the "
 "whole workspace; every codec, SPARQL, ShEx and SHACL route an IRI failure "
-"through it. The base-related codes distinguish an invalid base, a missing base "
-"and a grammar that forbids relative references; their remedies differ."
+"through it. The base-related codes distinguish an invalid base, a missing "
+"base and a grammar that forbids relative references; their remedies differ."
 msgstr ""
 "`IriError::diagnostic_code` 是整个工作区中这些字符串的唯一所有者；每个编解码"
 "器、SPARQL、ShEx 与 SHACL 都把 IRI 失败交由它处理。与基准相关的代码区分无效的"
@@ -26296,16 +26300,16 @@ msgstr "`native-sparql-workspace-unpriced`"
 
 #: src/project/diagnostic-codes.md:159
 msgid ""
-"An execution operation has no admitted working-memory owner, or a raw evaluator "
-"entry was called without the required reservation."
+"An execution operation has no admitted working-memory owner, or a raw "
+"evaluator entry was called without the required reservation."
 msgstr ""
 "某项执行操作没有经过准入的工作内存所有者，或调用原始求值器入口时未持有所需的"
 "预留。"
 
 #: src/project/diagnostic-codes.md:159
 msgid ""
-"Use an engine entry that carries the view's owned workspace admission; supply "
-"any missing host/provider workspace certificate."
+"Use an engine entry that carries the view's owned workspace admission; "
+"supply any missing host/provider workspace certificate."
 msgstr ""
 "使用携带视图所提供的自有工作内存准入的引擎入口，并补全宿主或提供方所需的工作"
 "内存证明。"
@@ -26558,7 +26562,8 @@ msgstr ""
 "PurRDF 为求值每个请求保留该栈中固定的 640 KiB 预算——图模式最多嵌套 284 层，整"
 "棵树最多 2 048 层外加每个嵌套组八层，表达式与路径最多 2 304 层——而 V8 为同步"
 "通道和异步作业分配的栈相同，因此超出预算的计划会在运行之前被拒绝，两条通道一"
-"致。解析器在堆上分配的栈中处理嵌套；这些上限用于求值器准入。Cloudflare 适配器以 `400` 应答。"
+"致。解析器在堆上分配的栈中处理嵌套；这些上限用于求值器准入。Cloudflare 适配器"
+"以 `400` 应答。"
 
 #: src/project/diagnostic-codes.md:173
 msgid "Nest the request less deeply."
@@ -26584,14 +26589,16 @@ msgstr "`native-sparql-service-denied`"
 msgid ""
 "An installed `ServiceCatalog` withheld a capability from a `SERVICE` "
 "endpoint the request names — the endpoint has no profile, or its profile "
-"does not grant a required `query`, `network` or `credentials` capability — so no endpoint was contacted. Under "
-"`SERVICE SILENT` the clause is the join identity instead, recorded as a "
-"silenced `denied` invocation. The Cloudflare adapter answers it with a `403`."
+"does not grant a required `query`, `network` or `credentials` capability — "
+"so no endpoint was contacted. Under `SERVICE SILENT` the clause is the join "
+"identity instead, recorded as a silenced `denied` invocation. The Cloudflare "
+"adapter answers it with a `403`."
 msgstr ""
 "已安装的 `ServiceCatalog` 未向请求指名的某个 `SERVICE` 端点授予所需的能力——该"
-"端点没有 profile，或其 profile 未授予所需的 `query`、`network` 或 `credentials` 能力——因此没有联系任何"
-"端点。在 `SERVICE SILENT` 下该子句则是连接的单位元，并记录为一次被静默的 "
-"`denied` 调用。Cloudflare 适配器以 `403` 应答。"
+"端点没有 profile，或其 profile 未授予所需的 `query`、`network` 或 "
+"`credentials` 能力——因此没有联系任何端点。在 `SERVICE SILENT` 下该子句则是连"
+"接的单位元，并记录为一次被静默的 `denied` 调用。Cloudflare 适配器以 `403` 应"
+"答。"
 
 #: src/project/diagnostic-codes.md:175
 msgid ""
@@ -26686,18 +26693,20 @@ msgstr "`native-sparql-load-denied`"
 msgid ""
 "An installed `ServiceCatalog` withheld a capability from the `LOAD` source "
 "(`LoadError::Denied`) — the source, or a location a redirect named, has no "
-"profile, or its profile does not grant a required `network` or `credentials` capability — so nothing was fetched. "
-"`LOAD SILENT` succeeds instead with nothing loaded, recorded as a silenced "
-"`denied` invocation. The Cloudflare adapter answers it with a `403`."
+"profile, or its profile does not grant a required `network` or `credentials` "
+"capability — so nothing was fetched. `LOAD SILENT` succeeds instead with "
+"nothing loaded, recorded as a silenced `denied` invocation. The Cloudflare "
+"adapter answers it with a `403`."
 msgstr ""
 "已安装的 `ServiceCatalog` 未向 `LOAD` 来源授予所需的能力"
 "（`LoadError::Denied`）——该来源或某次重定向指明的位置没有 profile，或其 "
-"profile 未授予所需的 `network` 或 `credentials` 能力——因此没有抓取任何内容。`LOAD SILENT` 则会成功返回、"
-"不加载任何内容，并记录为一次被静默的 `denied` 调用。Cloudflare 适配器以 "
-"`403` 应答。"
+"profile 未授予所需的 `network` 或 `credentials` 能力——因此没有抓取任何内容。"
+"`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默的 `denied` 调"
+"用。Cloudflare 适配器以 `403` 应答。"
 
 #: src/project/diagnostic-codes.md:180
-msgid "Grant the source the missing capability in the catalog, or remove the `LOAD`."
+msgid ""
+"Grant the source the missing capability in the catalog, or remove the `LOAD`."
 msgstr "在目录中为该来源授予缺少的能力，或去掉 `LOAD`。"
 
 #: src/project/diagnostic-codes.md:181
@@ -27066,21 +27075,22 @@ msgstr ""
 #: src/project/diagnostic-codes.md:213
 msgid ""
 "Every `xpath-*` code is **operational**. It is never a syntax verdict and "
-"never a non-match: invalid flags (FORX0001), an invalid pattern (FORX0002), an empty-matching "
-"replacement pattern (FORX0003) or invalid replacement text (FORX0004) is the "
-"host's ordinary invalid-pattern outcome instead, which is a SPARQL "
-"expression error, a SHACL finding or a failed ShEx facet. A refusal fails "
-"the whole operation. A query publishes no answer, an update changes nothing, "
-"and a validation writes no report; the refusal never becomes an unbound "
-"value, a `false` filter or a conforming graph. The C ABI reports it as "
-"`PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13)."
+"never a non-match: invalid flags (FORX0001), an invalid pattern (FORX0002), "
+"an empty-matching replacement pattern (FORX0003) or invalid replacement text "
+"(FORX0004) is the host's ordinary invalid-pattern outcome instead, which is "
+"a SPARQL expression error, a SHACL finding or a failed ShEx facet. A refusal "
+"fails the whole operation. A query publishes no answer, an update changes "
+"nothing, and a validation writes no report; the refusal never becomes an "
+"unbound value, a `false` filter or a conforming graph. The C ABI reports it "
+"as `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13)."
 msgstr ""
 "每个 `xpath-*` 代码都是**运行层面的**。它绝不是语法裁决，也绝不是不匹配：无效"
-"的标志（FORX0001）、无效的模式（FORX0002）、匹配空字符串的替换模式（FORX0003）或无效的替换文本"
-"（FORX0004）则是宿主普通的无效模式结果，即 SPARQL 表达式错误、SHACL 结果或失"
-"败的 ShEx 分面。拒绝会使整个操作失败。查询不发布任何答案，更新不改变任何内"
-"容，验证不写出任何报告；拒绝绝不会变成未绑定的值、`false` 的过滤结果或符合约"
-"束的图。C ABI 以 `PURRDF_STATUS_REGEX_RESOURCE_ERROR`（13）报告它。"
+"的标志（FORX0001）、无效的模式（FORX0002）、匹配空字符串的替换模式"
+"（FORX0003）或无效的替换文本（FORX0004）则是宿主普通的无效模式结果，即 "
+"SPARQL 表达式错误、SHACL 结果或失败的 ShEx 分面。拒绝会使整个操作失败。查询不"
+"发布任何答案，更新不改变任何内容，验证不写出任何报告；拒绝绝不会变成未绑定的"
+"值、`false` 的过滤结果或符合约束的图。C ABI 以 "
+"`PURRDF_STATUS_REGEX_RESOURCE_ERROR`（13）报告它。"
 
 #: src/project/diagnostic-codes.md:222
 msgid ""
