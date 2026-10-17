@@ -735,6 +735,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				continuation_objects_saturate_at_the_same_indent_guard \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
+				class_expression_role_refusals_retain_original_source_terms \
 				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
 				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
 				universal_obligations_clash_after_recursive_paths_and_blocking \
