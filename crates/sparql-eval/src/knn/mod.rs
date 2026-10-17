@@ -302,6 +302,19 @@ enum ArtifactRefusal {
     Unverified(purrdf_core::EmbeddingError),
     Metric(purrdf_core::EmbeddingError),
     Matrix(purrdf_core::EmbeddingError),
+    Scalar(purrdf_core::EmbeddingError),
+    Row {
+        row: usize,
+        error: purrdf_core::EmbeddingError,
+    },
+    Width {
+        row: usize,
+        actual: usize,
+        dimension: usize,
+    },
+    ZeroNorm {
+        row: usize,
+    },
 }
 
 impl purrdf_hash::error::StructuredError for ArtifactRefusal {
@@ -310,6 +323,15 @@ impl purrdf_hash::error::StructuredError for ArtifactRefusal {
         Unverified(error) => "knn-artifact-verification" { "cause" => Cause(error) },
         Metric(error) => "knn-metric-unreadable" { "cause" => Cause(error) },
         Matrix(error) => "knn-matrix-unreadable" { "cause" => Cause(error) },
+        Scalar(error) => "knn-scalar-unreadable" { "cause" => Cause(error) },
+        Row { row, error } => "knn-row-unreadable" {
+            "row" => Unsigned(*row as u128), "cause" => Cause(error),
+        },
+        Width { row, actual, dimension } => "knn-decoded-row-width" {
+            "row" => Unsigned(*row as u128), "actual" => Unsigned(*actual as u128),
+            "dimension" => Unsigned(*dimension as u128),
+        },
+        ZeroNorm { row } => "knn-zero-norm" { "row" => Unsigned(*row as u128) },
     }
 }
 
@@ -320,6 +342,22 @@ impl core::fmt::Display for ArtifactRefusal {
             Self::Unverified(error) => write!(f, "the PURREMB artifact does not verify: {error}"),
             Self::Metric(error) => write!(f, "the family's declared metric is unusable: {error}"),
             Self::Matrix(error) => write!(f, "the effective matrix is unreadable: {error}"),
+            Self::Scalar(error) => write!(f, "the matrix's scalar type is unreadable: {error}"),
+            Self::Row { row, error } => write!(f, "row {row} of the matrix is unreadable: {error}"),
+            Self::Width {
+                row,
+                actual,
+                dimension,
+            } => write!(
+                f,
+                "row {row} decoded {actual} component(s); the vector space declares {dimension}"
+            ),
+            Self::ZeroNorm { row } => write!(
+                f,
+                "row {row} has a zero L2 norm, and the declared metric divides by it; a \
+                 zero-norm vector has no direction, so its cosine distance is undefined \
+                 rather than large"
+            ),
         }
     }
 }
@@ -330,7 +368,10 @@ impl std::error::Error for ArtifactRefusal {
             Self::Unreadable(error)
             | Self::Unverified(error)
             | Self::Metric(error)
-            | Self::Matrix(error) => Some(error),
+            | Self::Matrix(error)
+            | Self::Scalar(error)
+            | Self::Row { error, .. } => Some(error),
+            Self::Width { .. } | Self::ZeroNorm { .. } => None,
         }
     }
 }
@@ -1068,10 +1109,13 @@ fn read_vectors(
     dimension: usize,
     exact: Resolved<Exact>,
 ) -> Result<Vec<f64>, EvalError> {
-    let dtype = effective
-        .matrix()
-        .dtype()
-        .map_err(|e| EvalError::data(format!("the matrix's scalar type is unreadable: {e}")))?;
+    let dtype = effective.matrix().dtype().map_err(|error| {
+        crate::NativeDiagnostic::error_cause(
+            crate::NativeDiagnosticKind::Data,
+            ArtifactRefusal::Scalar(error),
+            &crate::WorkspaceCapability::resident(),
+        )
+    })?;
     let mut out: Vec<f64> = Vec::with_capacity(row_count.saturating_mul(dimension));
     for row in 0..row_count {
         let index = row as u64;
@@ -1079,11 +1123,19 @@ fn read_vectors(
         match dtype {
             VectorDtype::F32 => {
                 let values = effective.f32_row(index, exact).map_err(|e| {
-                    EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
+                    crate::NativeDiagnostic::error_cause(
+                        crate::NativeDiagnosticKind::Data,
+                        ArtifactRefusal::Row { row, error: e },
+                        &crate::WorkspaceCapability::resident(),
+                    )
                 })?;
                 for value in values {
                     let value = value.map_err(|e| {
-                        EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
+                        crate::NativeDiagnostic::error_cause(
+                            crate::NativeDiagnosticKind::Data,
+                            ArtifactRefusal::Row { row, error: e },
+                            &crate::WorkspaceCapability::resident(),
+                        )
                     })?;
                     // Exact: every binary32 is a binary64.
                     out.push(f64::from(value));
@@ -1091,20 +1143,33 @@ fn read_vectors(
             }
             VectorDtype::F64 => {
                 let values = effective.f64_row(index, exact).map_err(|e| {
-                    EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
+                    crate::NativeDiagnostic::error_cause(
+                        crate::NativeDiagnosticKind::Data,
+                        ArtifactRefusal::Row { row, error: e },
+                        &crate::WorkspaceCapability::resident(),
+                    )
                 })?;
                 for value in values {
                     out.push(value.map_err(|e| {
-                        EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
+                        crate::NativeDiagnostic::error_cause(
+                            crate::NativeDiagnosticKind::Data,
+                            ArtifactRefusal::Row { row, error: e },
+                            &crate::WorkspaceCapability::resident(),
+                        )
                     })?);
                 }
             }
         }
         if out.len() - before != dimension {
-            return Err(EvalError::data(format!(
-                "row {row} decoded {} component(s); the vector space declares {dimension}",
-                out.len() - before
-            )));
+            return Err(crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Data,
+                ArtifactRefusal::Width {
+                    row,
+                    actual: out.len() - before,
+                    dimension,
+                },
+                &crate::WorkspaceCapability::resident(),
+            ));
         }
     }
     Ok(out)
@@ -1129,11 +1194,11 @@ fn read_norms(
         // rather than inventing a score." Caught here rather than per invocation, so a
         // space that verifies can never fail a query this way.
         if value <= 0.0 {
-            return Err(EvalError::data(format!(
-                "row {row} has a zero L2 norm, and the declared metric divides by it; a \
-                 zero-norm vector has no direction, so its cosine distance is undefined \
-                 rather than large"
-            )));
+            return Err(crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Data,
+                ArtifactRefusal::ZeroNorm { row },
+                &crate::WorkspaceCapability::resident(),
+            ));
         }
         norms.push(value);
     }

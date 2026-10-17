@@ -2323,6 +2323,30 @@ fn knn_space_refusals_keep_row_terms_dimensions_and_float_bits() {
     );
 }
 
+fn knn_zero_norm_retains_row_after_original_owner_release() {
+    use purrdf_core::{DistanceMetric, TermValue};
+    use purrdf_sparql_eval::knn::{EmbeddingSpace, KnnGuard};
+    let error = EmbeddingSpace::from_vectors(
+        &DistanceMetric::Cosine,
+        2,
+        vec![(TermValue::iri("https://example.org/origin"), vec![0.0, 0.0])],
+        KnnGuard::new(1, 1).unwrap(),
+    )
+    .unwrap_err();
+    let retained = error.clone();
+    drop(error);
+    let events = Vec::with_capacity(16);
+    let window = CurrentThreadWindow::open();
+    let capture = Capture::read_with_buffer(&retained, events);
+    assert_eq!(window.close().allocations, 0);
+    let diagnostic = capture.child("cause");
+    assert_eq!(diagnostic.child("kind").code, "sparql-native-data");
+    let reason = diagnostic.child("cause");
+    assert_eq!(reason.code, "knn-zero-norm");
+    assert!(matches!(reason.field("row"), ErrorValue::Unsigned(0)));
+    assert!(retained.to_string().contains("row 0 has a zero L2 norm"));
+}
+
 fn knn_artifact_refusals_retain_native_format_causes() {
     use purrdf_core::{
         EmbeddingError, PURREMB_HEADER_LENGTH, PURREMB_MAGIC, TargetSetId, VectorSpaceId,
@@ -2405,6 +2429,7 @@ fn knn_artifact_refusals_retain_native_format_causes() {
 }
 
 purrdf_testkit::harness_main!(
+    knn_zero_norm_retains_row_after_original_owner_release,
     knn_artifact_refusals_retain_native_format_causes,
     knn_space_refusals_keep_row_terms_dimensions_and_float_bits,
     knn_guard_refusals_keep_both_full_width_bounds,

@@ -491,6 +491,13 @@ fn a_zero_norm_vector_is_refused_under_cosine_and_admitted_under_the_metrics_tha
         "got {error:?}"
     );
     assert!(error.to_string().contains("zero L2 norm"), "got {error}");
+    let capture = purrdf_testkit::error_capture::Capture::read(&error);
+    let reason = capture.child("cause").child("cause");
+    assert_eq!(reason.code, "knn-zero-norm");
+    assert!(matches!(
+        reason.field("row"),
+        purrdf_hash::error::ErrorValue::Unsigned(_)
+    ));
 
     for metric in [
         DistanceMetric::SquaredEuclidean,
@@ -515,6 +522,37 @@ fn a_zero_norm_vector_is_refused_under_cosine_and_admitted_under_the_metrics_tha
             .is_ok(),
         "a subnormal component still gives a non-zero norm through the scaled fold"
     );
+}
+
+#[test]
+fn row_decode_adapters_preserve_counts_and_native_span_errors() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let fixture = fixture(&DistanceMetric::SquaredEuclidean, &points());
+    let mut view = EmbeddingView::from_bytes(&fixture.artifact).unwrap();
+    verify_embedding(&mut view).unwrap();
+    let matrix = view
+        .effective_matrix(fixture.target_set, fixture.vector_space)
+        .unwrap()
+        .unwrap();
+    let exact = Exact::resolve().unwrap();
+    // Exercise the internal read adapter outside the certified constructor's
+    // row/dimension preconditions; ordinary verified construction cannot do this.
+    let error = read_vectors(&matrix, 1, 3, exact).unwrap_err();
+    let reason = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(reason.code, "knn-decoded-row-width");
+    assert!(matches!(reason.field("row"), ErrorValue::Unsigned(0)));
+    assert!(matches!(reason.field("actual"), ErrorValue::Unsigned(2)));
+    assert!(matches!(reason.field("dimension"), ErrorValue::Unsigned(3)));
+
+    let error = read_vectors(&matrix, points().len() + 1, 2, exact).unwrap_err();
+    let reason = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(reason.code, "knn-row-unreadable");
+    assert!(
+        matches!(reason.field("row"), ErrorValue::Unsigned(row) if row == points().len() as u128)
+    );
+    assert_eq!(reason.child("cause").code, "purremb-invalid-span");
 }
 
 #[test]
