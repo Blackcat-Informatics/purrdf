@@ -19,6 +19,14 @@ pub enum EvidenceDictionaryError {
     Storage(StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for EvidenceDictionaryError {
+    purrdf_hash::error_visit! {
+        InvalidId => "evidence-dictionary-invalid-id" {},
+        IdentityCollision => "evidence-dictionary-identity-collision" {},
+        Storage(cause) => "evidence-dictionary-storage" { "cause" => Cause(cause) },
+    }
+}
+
 purrdf_lex::variant_from!(EvidenceDictionaryError { Storage(StorageError) });
 
 impl core::fmt::Display for EvidenceDictionaryError {

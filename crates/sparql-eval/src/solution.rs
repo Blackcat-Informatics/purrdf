@@ -672,9 +672,9 @@ impl<I: ViewTermId> RetainedRow<I> {
                 .get_mut()
                 .and_then(|payload| payload.cells.get_mut())
                 .ok_or_else(|| {
-                    crate::error::NativeDiagnostic::error(
+                    crate::error::NativeDiagnostic::error_cause(
                         crate::error::NativeDiagnosticKind::Internal,
-                        "fresh tracked row controls are unexpectedly shared",
+                        crate::error::EvaluatorInvariant::TrackedRowControlShared,
                         workspace,
                     )
                 })?;

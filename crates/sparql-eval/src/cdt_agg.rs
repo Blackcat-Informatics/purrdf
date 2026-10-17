@@ -294,9 +294,9 @@ impl AggregateAccumulator for FoldAccumulator {
             (&self.parts, &other.parts),
             (FoldParts::List(_), FoldParts::Map(_)) | (FoldParts::Map(_), FoldParts::List(_))
         ) {
-            return Err(crate::NativeDiagnostic::error(
+            return Err(crate::NativeDiagnostic::error_cause(
                 crate::NativeDiagnosticKind::Internal,
-                "FOLD combined two partial accumulators built for different composite datatypes; every partial of one fold comes from the same init factory",
+                EvaluatorInvariant::FoldPartialTypeMismatch,
                 &self.workspace,
             ));
         }

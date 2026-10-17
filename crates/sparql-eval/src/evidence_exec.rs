@@ -234,9 +234,9 @@ impl EvidenceOwner {
         workspace: &WorkspaceCapability,
     ) -> Result<QueryEvidence, EvalError> {
         let mut owner = self.state.lock().map_err(|_| {
-            NativeDiagnostic::error(
+            NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::Internal,
-                "poisoned original evidence input",
+                crate::error::EvaluatorInvariant::EvidenceInputPoisoned,
                 workspace,
             )
         })?;
@@ -262,9 +262,9 @@ impl EvidenceOwner {
         }
         let query = {
             let mut owner = self.state.lock().map_err(|_| {
-                NativeDiagnostic::error(
+                NativeDiagnostic::error_cause(
                     NativeDiagnosticKind::Internal,
-                    "poisoned original evidence input",
+                    crate::error::EvaluatorInvariant::EvidenceInputPoisoned,
                     workspace,
                 )
             })?;
@@ -284,9 +284,9 @@ impl EvidenceOwner {
         workspace: &WorkspaceCapability,
     ) -> Result<Option<QueryEvidence>, EvalError> {
         self.state.lock().map(|owner| owner.clone()).map_err(|_| {
-            NativeDiagnostic::error(
+            NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::Internal,
-                "poisoned original evidence input",
+                crate::error::EvaluatorInvariant::EvidenceInputPoisoned,
                 workspace,
             )
         })
@@ -673,16 +673,12 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
             ));
         }
         let owner = self.owner.query_owner(workspace)?;
-        let records = owner
-            .state
-            .records
-            .lock()
-            .map_err(|_| owner.invariant("poisoned original ledger evidence dictionary"))?;
-        let reasons = owner
-            .state
-            .reasons
-            .lock()
-            .map_err(|_| owner.invariant("poisoned original ledger reason dictionary"))?;
+        let records = owner.state.records.lock().map_err(|_| {
+            owner.invariant(crate::error::EvaluatorInvariant::LedgerEvidenceDictionaryPoisoned)
+        })?;
+        let reasons = owner.state.reasons.lock().map_err(|_| {
+            owner.invariant(crate::error::EvaluatorInvariant::LedgerReasonDictionaryPoisoned)
+        })?;
         let admission = EvidenceAdmission(SharedWorkspace::new_admitted(
             Mutex::new(LexicalFrame::new(workspace)),
             workspace,
@@ -714,7 +710,9 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
             let mut declarations = crate::AdmittedVec::new(workspace);
             for (position, (row, terms)) in rows.rows.iter().zip(read.terms).enumerate() {
                 if !owner.owns(row.evidence()) {
-                    return Err(owner.invariant("ledger row belongs to another query"));
+                    return Err(
+                        owner.invariant(crate::error::EvaluatorInvariant::LedgerRowForeignQuery)
+                    );
                 }
                 let record = records
                     .get(row.evidence().id)
@@ -742,7 +740,11 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
             .map_err(|error| match error {
                 purrdf_core::evidence::LedgerBuildError::Storage(error) => {
                     admission.0.lock().map_or_else(
-                        |_| owner.invariant("poisoned native ledger admission"),
+                        |_| {
+                            owner.invariant(
+                                crate::error::EvaluatorInvariant::LedgerAdmissionPoisoned,
+                            )
+                        },
                         |mut frame| frame.storage_error(error, "native ledger cursors"),
                     )
                 }
@@ -753,7 +755,9 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
         let original = admission
             .0
             .lock()
-            .map_err(|_| owner.invariant("poisoned native ledger admission"))?
+            .map_err(|_| {
+                owner.invariant(crate::error::EvaluatorInvariant::LedgerAdmissionPoisoned)
+            })?
             .take_failure();
         drop(reasons);
         drop(records);
@@ -823,11 +827,9 @@ impl QueryEvidence {
         accepted: &[ReasonId],
         visit: impl FnOnce(AcceptedPayloadRows<'_, T>) -> R,
     ) -> Result<R, EvalError> {
-        let records = self
-            .state
-            .records
-            .lock()
-            .map_err(|_| self.invariant("poisoned original acceptance evidence dictionary"))?;
+        let records = self.state.records.lock().map_err(|_| {
+            self.invariant(crate::error::EvaluatorInvariant::AcceptanceEvidencePoisoned)
+        })?;
         let rows = self.accepted_payloads_locked(rows, evidence, &records, accepted)?;
         let result = visit(rows);
         drop(records);
@@ -843,7 +845,9 @@ impl QueryEvidence {
     ) -> Result<AcceptedPayloadRows<'a, T>, EvalError> {
         for row in rows {
             if !self.owns(evidence(row)) {
-                return Err(self.invariant("accepted payload belongs to another query"));
+                return Err(
+                    self.invariant(crate::error::EvaluatorInvariant::AcceptedPayloadForeignQuery)
+                );
             }
             records
                 .get(evidence(row).id)
@@ -962,7 +966,7 @@ pub(crate) fn answer_failure(error: StatusFailure, workspace: &WorkspaceCapabili
             LexicalFrame::new(workspace).storage_error(error, "native answer reason counts")
         }
         StatusFailure::Answer(error) => {
-            NativeDiagnostic::error(NativeDiagnosticKind::Internal, error, workspace)
+            NativeDiagnostic::error_cause(NativeDiagnosticKind::Internal, error, workspace)
         }
     }
 }
@@ -1010,9 +1014,9 @@ impl EvidenceAdmission {
             Ok(mut frame) => frame
                 .take_failure()
                 .unwrap_or_else(|| frame.storage_error(storage, context)),
-            Err(_) => NativeDiagnostic::error(
+            Err(_) => NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::Internal,
-                "poisoned native evidence admission",
+                crate::error::EvaluatorInvariant::EvidenceAdmissionPoisoned,
                 workspace,
             ),
         }
@@ -1065,17 +1069,13 @@ impl QueryEvidence {
         Ok(Self { state })
     }
 
-    fn invariant(&self, message: impl core::fmt::Display) -> EvalError {
-        NativeDiagnostic::error(
-            NativeDiagnosticKind::Internal,
-            message,
-            &self.state.workspace,
-        )
+    fn invariant<E: purrdf_hash::error::NativeError + 'static>(&self, cause: E) -> EvalError {
+        NativeDiagnostic::error_cause(NativeDiagnosticKind::Internal, cause, &self.state.workspace)
     }
 
     fn failure(&self, error: EvidenceWorkspaceError) -> EvalError {
         let Ok(mut admission) = self.state.admission.0.lock() else {
-            return self.invariant("poisoned native evidence admission");
+            return self.invariant(crate::error::EvaluatorInvariant::EvidenceAdmissionPoisoned);
         };
         if let Some(original) = admission.take_failure() {
             return original;
@@ -1093,7 +1093,11 @@ impl QueryEvidence {
             &error,
             EvidenceWorkspaceError::Record(EvidenceRecordError::Standpoint(_))
         ) {
-            NativeDiagnostic::error(NativeDiagnosticKind::Config, error, &self.state.workspace)
+            NativeDiagnostic::error_cause(
+                NativeDiagnosticKind::Config,
+                error,
+                &self.state.workspace,
+            )
         } else {
             self.invariant(error)
         }
@@ -1146,11 +1150,9 @@ impl QueryEvidence {
         reasons: impl Clone + Iterator<Item = ReasonId>,
     ) -> Result<RowEvidence, EvalError> {
         self.require_reasons(reasons.clone())?;
-        let mut table = self
-            .state
-            .records
-            .lock()
-            .map_err(|_| self.invariant("poisoned query evidence dictionary"))?;
+        let mut table = self.state.records.lock().map_err(|_| {
+            self.invariant(crate::error::EvaluatorInvariant::EvidenceDictionaryPoisoned)
+        })?;
         table
             .intern(|memory| {
                 memory.try_scope(|memory| {
@@ -1177,11 +1179,9 @@ impl QueryEvidence {
         order: Option<&purrdf_core::evidence::StandpointOrder<purrdf_hash::hex::Digest32>>,
     ) -> Result<RowEvidence, EvalError> {
         self.require_reasons(record.reasons().iter().copied())?;
-        let mut table = self
-            .state
-            .records
-            .lock()
-            .map_err(|_| self.invariant("poisoned query evidence dictionary"))?;
+        let mut table = self.state.records.lock().map_err(|_| {
+            self.invariant(crate::error::EvaluatorInvariant::EvidenceDictionaryPoisoned)
+        })?;
         if record.is_default() {
             table
                 .get(EvidenceId::DEFAULT)
@@ -1206,11 +1206,9 @@ impl QueryEvidence {
     }
 
     fn require_reasons(&self, ids: impl IntoIterator<Item = ReasonId>) -> Result<(), EvalError> {
-        let table = self
-            .state
-            .reasons
-            .lock()
-            .map_err(|_| self.invariant("poisoned original reason dictionary"))?;
+        let table = self.state.reasons.lock().map_err(|_| {
+            self.invariant(crate::error::EvaluatorInvariant::ReasonDictionaryPoisoned)
+        })?;
         for id in ids {
             table.get(id).map_err(|error| self.reason_failure(error))?;
         }
@@ -1223,19 +1221,17 @@ impl QueryEvidence {
         id: ReasonId,
         source: impl FnOnce() -> Result<Option<ReasonDescription<'a>>, EvalError>,
     ) -> Result<(), EvalError> {
-        let table = self
-            .state
-            .reasons
-            .lock()
-            .map_err(|_| self.invariant("poisoned original reason dictionary"))?;
+        let table = self.state.reasons.lock().map_err(|_| {
+            self.invariant(crate::error::EvaluatorInvariant::ReasonDictionaryPoisoned)
+        })?;
         match table.get(id) {
             Ok(_) => return Ok(()),
             Err(ReasonTableError::UnknownReason(_)) => {}
             Err(error) => return Err(self.reason_failure(error)),
         }
         drop(table);
-        let description =
-            source()?.ok_or_else(|| self.invariant("claim names an unknown reason identity"))?;
+        let description = source()?
+            .ok_or_else(|| self.invariant(crate::error::EvaluatorInvariant::UnknownClaimReason))?;
         self.publish_reason(description, id).map(|_| ())
     }
 
@@ -1300,15 +1296,11 @@ impl QueryEvidence {
         .map_err(|error| self.reason_identity_failure(&mut frame, error))?;
         let id = reason.identity();
         if expected != id {
-            return Err(
-                self.invariant("source reason identity disagrees with its canonical description")
-            );
+            return Err(self.invariant(crate::error::EvaluatorInvariant::ReasonIdentityMismatch));
         }
-        let mut table = self
-            .state
-            .reasons
-            .lock()
-            .map_err(|_| self.invariant("poisoned original reason dictionary"))?;
+        let mut table = self.state.reasons.lock().map_err(|_| {
+            self.invariant(crate::error::EvaluatorInvariant::ReasonDictionaryPoisoned)
+        })?;
         table
             .intern(reason)
             .map_err(|error| self.reason_failure(error))?;
@@ -1318,7 +1310,7 @@ impl QueryEvidence {
 
     fn reason_failure(&self, error: ReasonTableError) -> EvalError {
         let Ok(mut admission) = self.state.reason_admission.0.lock() else {
-            return self.invariant("poisoned original reason admission");
+            return self.invariant(crate::error::EvaluatorInvariant::ReasonAdmissionPoisoned);
         };
         if let Some(original) = admission.take_failure() {
             return original;
@@ -1351,13 +1343,11 @@ impl QueryEvidence {
         law: EvidenceCombination,
     ) -> Result<RowEvidence, EvalError> {
         if !self.owns(left) || !self.owns(right) {
-            return Err(self.invariant("evidence rows belong to different query owners"));
+            return Err(self.invariant(crate::error::EvaluatorInvariant::EvidenceRowsForeignOwners));
         }
-        let mut table = self
-            .state
-            .records
-            .lock()
-            .map_err(|_| self.invariant("poisoned query evidence dictionary"))?;
+        let mut table = self.state.records.lock().map_err(|_| {
+            self.invariant(crate::error::EvaluatorInvariant::EvidenceDictionaryPoisoned)
+        })?;
         table
             .combine(left.id, right.id, law)
             .map(|id| {
@@ -1378,7 +1368,7 @@ impl QueryEvidence {
         reason: Option<ReasonId>,
     ) -> Result<RowEvidence, EvalError> {
         if !self.owns(row) {
-            return Err(self.invariant("evidence row belongs to another query owner"));
+            return Err(self.invariant(crate::error::EvaluatorInvariant::EvidenceRowForeignOwner));
         }
         self.require_reasons(reason)?;
         self.transform(row, |record, memory| {
@@ -1472,13 +1462,11 @@ impl QueryEvidence {
         ) -> Result<EvidenceRecord, EvidenceRecordError>,
     ) -> Result<RowEvidence, EvalError> {
         if !self.owns(row) {
-            return Err(self.invariant("evidence row belongs to another query owner"));
+            return Err(self.invariant(crate::error::EvaluatorInvariant::EvidenceRowForeignOwner));
         }
-        let mut table = self
-            .state
-            .records
-            .lock()
-            .map_err(|_| self.invariant("poisoned query evidence dictionary"))?;
+        let mut table = self.state.records.lock().map_err(|_| {
+            self.invariant(crate::error::EvaluatorInvariant::EvidenceDictionaryPoisoned)
+        })?;
         table
             .transform(row.id, update)
             .map(|id| {
@@ -1607,15 +1595,15 @@ impl RowEvidence {
         if !search.is_virtual() {
             if let Some(owner) = &record.owner {
                 if !owner.owns(search) {
-                    return Err(
-                        owner.invariant("existential search belongs to another query owner")
-                    );
+                    return Err(owner.invariant(
+                        crate::error::EvaluatorInvariant::ExistentialSearchForeignOwner,
+                    ));
                 }
             } else if let Some(owner) = &search.owner {
                 if !owner.owns(&record) {
-                    return Err(
-                        owner.invariant("existential witness belongs to another query owner")
-                    );
+                    return Err(owner.invariant(
+                        crate::error::EvaluatorInvariant::ExistentialWitnessForeignOwner,
+                    ));
                 }
                 record.owner = Some(owner.clone());
             }
@@ -1773,11 +1761,9 @@ impl RowEvidence {
         let Some(owner) = &self.owner else {
             return Ok(read(&EvidenceRecord::default()));
         };
-        let table = owner
-            .state
-            .records
-            .lock()
-            .map_err(|_| owner.invariant("poisoned query evidence dictionary"))?;
+        let table = owner.state.records.lock().map_err(|_| {
+            owner.invariant(crate::error::EvaluatorInvariant::EvidenceDictionaryPoisoned)
+        })?;
         let record = table.get(self.id).map_err(|error| owner.failure(error))?;
         let result = read(record);
         drop(table);
@@ -1795,17 +1781,15 @@ impl RowEvidence {
         read: impl FnOnce(ReasonDescription<'_>) -> R,
     ) -> Result<R, EvalError> {
         let Some(owner) = &self.owner else {
-            return Err(NativeDiagnostic::error(
+            return Err(NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::Internal,
-                "ordinary evidence has no reason owner",
+                crate::error::EvaluatorInvariant::ReasonOwnerMissing,
                 &WorkspaceCapability::default(),
             ));
         };
-        let table = owner
-            .state
-            .reasons
-            .lock()
-            .map_err(|_| owner.invariant("poisoned original reason dictionary"))?;
+        let table = owner.state.reasons.lock().map_err(|_| {
+            owner.invariant(crate::error::EvaluatorInvariant::ReasonDictionaryPoisoned)
+        })?;
         let reason = table.get(id).map_err(|error| owner.reason_failure(error))?;
         let result = read(reason.description());
         drop(table);

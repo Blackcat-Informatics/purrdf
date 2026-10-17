@@ -179,6 +179,15 @@ pub enum ReasonTableError {
     Storage(StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for ReasonTableError {
+    purrdf_hash::error_visit! {
+        Aborted => "reason-table-aborted" {},
+        UnknownReason(reason) => "reason-table-unknown" { "reason" => Record(reason) },
+        IdentityCollision(reason) => "reason-table-identity-collision" { "reason" => Record(reason) },
+        Storage(cause) => "reason-table-storage" { "cause" => Cause(cause) },
+    }
+}
+
 impl fmt::Display for ReasonTableError {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

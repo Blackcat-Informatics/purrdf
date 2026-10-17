@@ -502,16 +502,16 @@ impl LexicalFrame {
             return Err(error);
         }
         let Some(capacity) = text.as_ref().map(String::capacity) else {
-            return Err(NativeDiagnostic::error(
+            return Err(NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::Internal,
-                "native text publication has no payload",
+                crate::error::EvaluatorInvariant::NativeTextMissing,
                 &self.workspace,
             ));
         };
         if capacity != self.live {
-            return Err(NativeDiagnostic::error(
+            return Err(NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::Internal,
-                "native text publication retains unmatched working storage",
+                crate::error::EvaluatorInvariant::NativeTextStorageMismatch,
                 &self.workspace,
             ));
         }

@@ -286,9 +286,9 @@ fn truncate_graph(
             purrdf_core::describe::DescribeError::Storage(error) => {
                 Err(frame.storage_error(error, "graph truncation storage"))
             }
-            error => Err(crate::NativeDiagnostic::error(
+            error => Err(crate::NativeDiagnostic::error_cause(
                 crate::NativeDiagnosticKind::Internal,
-                &error,
+                error,
                 workspace,
             )),
         };

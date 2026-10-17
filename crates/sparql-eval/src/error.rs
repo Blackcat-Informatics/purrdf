@@ -194,16 +194,16 @@ impl NativeDiagnostic {
             return Err(error);
         }
         let Some(capacity) = text.as_ref().map(String::capacity) else {
-            return Err(Self::error(
+            return Err(Self::error_cause(
                 NativeDiagnosticKind::Internal,
-                "native diagnostic publication has no original text",
+                EvaluatorInvariant::DiagnosticTextMissing,
                 frame.workspace(),
             ));
         };
         if capacity != frame.admitted_bytes() {
-            return Err(Self::error(
+            return Err(Self::error_cause(
                 NativeDiagnosticKind::Internal,
-                "native diagnostic publication retains unmatched construction storage",
+                EvaluatorInvariant::DiagnosticStorageMismatch,
                 frame.workspace(),
             ));
         }
@@ -310,7 +310,22 @@ impl NativeDiagnostic {
         message: impl core::fmt::Display,
         workspace: &crate::WorkspaceCapability,
     ) -> EvalError {
-        match Self::render(kind, message, workspace) {
+        Self::rendered_error(Self::render(kind, message, workspace))
+    }
+
+    /// Adapt an original structured native cause through the existing admitted
+    /// box, presentation and shared-control owner.
+    #[must_use]
+    pub fn error_cause<E: purrdf_hash::error::NativeError + 'static>(
+        kind: NativeDiagnosticKind,
+        cause: E,
+        workspace: &crate::WorkspaceCapability,
+    ) -> EvalError {
+        Self::rendered_error(Self::render_cause(kind, cause, workspace))
+    }
+
+    fn rendered_error(result: Result<Self, EvalError>) -> EvalError {
+        match result {
             Ok(diagnostic) => EvalError::NativeDiagnostic(diagnostic),
             Err(error) => error,
         }
@@ -1331,12 +1346,11 @@ mod tests {
         let (workspace, ledger, _) = account(base + 1);
         let capability = workspace.capability();
         let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-        let error = NativeDiagnostic::render_cause(
+        let error = NativeDiagnostic::error_cause(
             NativeDiagnosticKind::Data,
             purrdf_testkit::error_capture::CallerRefusal { limit: u128::MAX },
             &capability,
-        )
-        .unwrap_err();
+        );
         assert_eq!(window.close().allocations, 0);
         assert!(matches!(error, EvalError::WorkspaceStopped));
         assert_eq!(ledger.live.load(std::sync::atomic::Ordering::Relaxed), base);

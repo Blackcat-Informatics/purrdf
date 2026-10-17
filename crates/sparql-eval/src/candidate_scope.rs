@@ -62,9 +62,9 @@ fn scope_error<E>(
         ScopeError::Storage(storage) => {
             admission.storage_error(storage, "native candidate constraint accounting", workspace)
         }
-        ScopeError::Aborted => NativeDiagnostic::error(
+        ScopeError::Aborted => NativeDiagnostic::error_cause(
             NativeDiagnosticKind::Internal,
-            "candidate constraint accounting was aborted; partial counts cannot be published",
+            crate::error::EvaluatorInvariant::CandidateAccountingAborted,
             workspace,
         ),
         ScopeError::NonCanonicalConstraints => NativeDiagnostic::error(
@@ -111,9 +111,9 @@ impl<'a> NativeCandidateScope<'a> {
         read: impl FnOnce(&[ConstraintCounts]) -> R,
     ) -> Result<R, EvalError> {
         let counts = self.counts.lock().map_err(|_| {
-            NativeDiagnostic::error(
+            NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::Internal,
-                "poisoned candidate constraint accounting",
+                crate::error::EvaluatorInvariant::CandidateAccountingPoisoned,
                 &self.workspace,
             )
         })?;
@@ -142,9 +142,9 @@ impl CandidateScope for NativeCandidateScope<'_> {
         workspace: &WorkspaceCapability,
     ) -> Result<CandidateMembership, EvalError> {
         let mut counts = self.counts.lock().map_err(|_| {
-            NativeDiagnostic::error(
+            NativeDiagnostic::error_cause(
                 NativeDiagnosticKind::Internal,
-                "poisoned candidate constraint accounting",
+                crate::error::EvaluatorInvariant::CandidateAccountingPoisoned,
                 &self.workspace,
             )
         })?;

@@ -4753,17 +4753,17 @@ impl NativeSparqlEngine {
                 let rows = match outcome {
                     Outcome::Solutions(rows) => rows,
                     _ => ctx.evidence_answer.as_ref().ok_or_else(|| {
-                        crate::NativeDiagnostic::error(
+                        crate::NativeDiagnostic::error_cause(
                             crate::NativeDiagnosticKind::Internal,
-                            "a completed evidence query lost its original WHERE rows",
+                            crate::error::EvaluatorInvariant::CompletedEvidenceRowsMissing,
                             &ctx.growth,
                         )
                     })?,
                 };
                 let input = ctx.evidence_input.as_ref().ok_or_else(|| {
-                    crate::NativeDiagnostic::error(
+                    crate::NativeDiagnostic::error_cause(
                         crate::NativeDiagnosticKind::Internal,
-                        "an evidence query lost its original declarations",
+                        crate::error::EvaluatorInvariant::EvidenceDeclarationsMissing,
                         &ctx.growth,
                     )
                 })?;

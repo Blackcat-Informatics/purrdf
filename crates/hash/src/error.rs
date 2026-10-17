@@ -201,6 +201,25 @@ macro_rules! unsigned_evidence {
 }
 unsigned_evidence!(u32 => u128::from, usize => |value: usize| value as u128);
 
+impl StructuredError for str {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("text-value");
+        visitor.value(Some("text"), ErrorValue::Text(self));
+    }
+}
+
+impl StructuredError for String {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        self.as_str().visit(visitor);
+    }
+}
+
+impl<T: StructuredError + ?Sized> StructuredError for &T {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        T::visit(*self, visitor);
+    }
+}
+
 /// Emit a borrowed list without materializing or cloning its items.
 ///
 /// The iterator's exact length includes absent entries. A consumer receives an

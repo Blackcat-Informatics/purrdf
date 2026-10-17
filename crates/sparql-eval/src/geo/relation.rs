@@ -524,9 +524,9 @@ impl PfCursor for GeoCursor {
                 .source()
                 .pair_terms(self.relation, pair)
                 .ok_or_else(|| {
-                    crate::NativeDiagnostic::error(
+                    crate::NativeDiagnostic::error_cause(
                         crate::NativeDiagnosticKind::Internal,
-                        "geographic relation pair does not belong to its immutable source",
+                        crate::error::EvaluatorInvariant::RelationPairSourceMismatch,
                         &self.workspace,
                     )
                 })?;

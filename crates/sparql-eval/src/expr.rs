@@ -2458,10 +2458,9 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
         return exists_deferred_decide(&slot, row, schema, ctx, evidence);
     }
     if crate::deferred_exists::is_placeholder(pattern) {
-        return Err(crate::NativeDiagnostic::error(
+        return Err(crate::NativeDiagnostic::error_cause(
             crate::NativeDiagnosticKind::Internal,
-            "a nested EXISTS placeholder was evaluated outside the substituted copy that \
-             left it",
+            EvaluatorInvariant::ExistsPlaceholderOutsideCopy,
             &ctx.growth,
         ));
     }

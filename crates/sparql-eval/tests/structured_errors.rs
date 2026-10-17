@@ -1356,7 +1356,199 @@ fn native_invariants_keep_original_diagnostics_without_allocating_text() {
     );
 }
 
+fn native_graph_and_standpoint_failures_keep_original_keys() {
+    use purrdf_core::evidence::StandpointOrder;
+    use purrdf_lex::allocation::{Memory, Resident};
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let adjacency = [vec![usize::MAX]];
+    let events = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let error = purrdf_core::graph::tarjan_scc_with_memory(&adjacency, &mut memory).unwrap_err();
+    let captured = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(captured.code, "graph-invalid-edge");
+    assert!(matches!(captured.field("from"), ErrorValue::Unsigned(0)));
+    assert!(
+        matches!(captured.field("to"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    let sharper = String::from("精确");
+    let broader = String::from("泛化");
+    let error = StandpointOrder::new(
+        &[sharper.as_str(), broader.as_str()],
+        &[
+            (sharper.as_str(), broader.as_str()),
+            (broader.as_str(), sharper.as_str()),
+        ],
+        None,
+        &mut memory,
+    )
+    .unwrap_err();
+    let captured = Capture::read(&error);
+    assert_eq!(captured.code, "standpoint-cycle");
+    let a = captured.child("sharper");
+    let b = captured.child("broader");
+    let (ErrorValue::Text(a), ErrorValue::Text(b)) = (a.field("text"), b.field("text")) else {
+        panic!("original borrowed text keys")
+    };
+    assert_ne!(a, b);
+    assert!([sharper.as_str(), broader.as_str()].contains(&a));
+    assert!([sharper.as_str(), broader.as_str()].contains(&b));
+    let events = Vec::with_capacity(2);
+    let window = CurrentThreadWindow::open();
+    let captured = Capture::read_with_buffer(&sharper, events);
+    assert_eq!(window.close().allocations, 0);
+    assert!(
+        matches!(captured.field("text"), ErrorValue::Text(text) if core::ptr::eq(text.as_ptr(), sharper.as_ptr()))
+    );
+}
+
+fn native_aggregate_bound_failures_retain_digest_bytes_and_original_cause() {
+    use purrdf_core::evidence::{AggregateBound, EvidenceRecord, EvidenceRecordError};
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::{Memory, Resident};
+    use purrdf_sparql_eval::{NativeDiagnostic, NativeDiagnosticKind};
+    let column = Digest32::new([0xa5; 32]);
+    let mut resident = Resident;
+    let original = EvidenceRecord::default()
+        .with_aggregate_bounds(
+            &[
+                (column, AggregateBound::Lower),
+                (column, AggregateBound::Upper),
+            ],
+            &mut Memory::new(&mut resident),
+        )
+        .unwrap_err();
+    let expected_original = original;
+    let expected = format!("internal evaluator error: {original}");
+    let error = NativeDiagnostic::error_cause(
+        NativeDiagnosticKind::Internal,
+        original,
+        &WorkspaceCapability::default(),
+    );
+    assert_eq!(error.to_string(), expected);
+    assert_eq!(error.code(), Some(EvalError::INTERNAL_CODE));
+    let clone = error.clone();
+    drop(error);
+    let captured = Capture::read(&clone).child("cause");
+    let cause = captured.child("cause");
+    assert_eq!(cause.code, "evidence-record-conflicting-bound");
+    assert!(
+        matches!(cause.child("column").field("bytes"), ErrorValue::Bytes(bytes) if bytes == column.as_bytes())
+    );
+    let ErrorValue::Cause(original) = captured.field("cause") else {
+        panic!("original native cause")
+    };
+    let events = Vec::with_capacity(2);
+    let window = CurrentThreadWindow::open();
+    let captured = Capture::read_with_buffer(original, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(captured.code, "evidence-record-conflicting-bound");
+    assert_eq!(
+        std::error::Error::source(std::error::Error::source(&clone).unwrap())
+            .unwrap()
+            .downcast_ref::<EvidenceRecordError>(),
+        Some(&expected_original)
+    );
+}
+
+fn native_missing_reason_failures_survive_the_admitted_query_boundary() {
+    use purrdf_core::evidence::{LedgerBuildError, ReasonDescription, ReasonTable};
+    use purrdf_core::{TermBox, TermValue};
+    use purrdf_lex::allocation::{Memory, Resident};
+    use purrdf_sparql_eval::{NativeDiagnostic, NativeDiagnosticKind, RowEvidence};
+    let cause = TermValue::iri("https://example.org/cause");
+    let concern = TermValue::Triple {
+        s: TermBox::new(TermValue::iri("https://example.org/s")),
+        p: TermBox::new(TermValue::iri("https://example.org/p")),
+        o: TermBox::new(TermValue::simple_literal("original")),
+    };
+    let description = ReasonDescription {
+        cause: &cause,
+        concern: &concern,
+        constraint: None,
+        vault: None,
+        watermark: None,
+    };
+    let mut resident = Resident;
+    let reason = description
+        .identity(&mut Memory::new(&mut resident))
+        .unwrap();
+    let table = ReasonTable::<Resident, Box<TermValue>>::with_admission(Resident);
+    let original = table.get(reason).unwrap_err();
+    let error = NativeDiagnostic::error_cause(
+        NativeDiagnosticKind::Internal,
+        LedgerBuildError::Reasons(original),
+        &WorkspaceCapability::default(),
+    );
+    drop(table);
+    let captured = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(captured.code, "ledger-build-reasons");
+    let reason_capture = captured.child("cause");
+    assert_eq!(reason_capture.code, "reason-table-unknown");
+    assert!(
+        matches!(reason_capture.child("reason").field("digest"), ErrorValue::Bytes(bytes) if bytes == reason.digest().as_bytes())
+    );
+    let error = RowEvidence::default()
+        .with_reason(reason, |_| ())
+        .unwrap_err();
+    let native = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(native.code, "eval-invariant-reason-owner-missing");
+    assert_eq!(
+        error.to_string(),
+        "internal evaluator error: ordinary evidence has no reason owner"
+    );
+}
+
+fn native_evidence_alignment_and_answer_state_failures_remain_structured() {
+    use purrdf_core::evidence::{
+        AnswerAccumulator, AnswerRequest, AnswerTier, EvidenceColumn, EvidenceId,
+        EvidenceWorkspace, SearchCompleteness, StandpointKey,
+    };
+    use purrdf_lex::allocation::Resident;
+    let mut owner = EvidenceWorkspace::with_admission(Resident);
+    let mut column = EvidenceColumn::uniform_default(0);
+    let original = owner
+        .set_row(&mut column, usize::MAX, EvidenceId::default())
+        .unwrap_err();
+    let captured = Capture::read(&original);
+    assert_eq!(captured.code, "evidence-workspace-column");
+    assert_eq!(
+        captured.child("cause").code,
+        "evidence-column-row-out-of-bounds"
+    );
+    let error = owner.canonical_index().unwrap_err();
+    assert_eq!(Capture::read(&error).code, "evidence-workspace-aborted");
+    let mut answer = AnswerAccumulator::with_admission(
+        AnswerRequest {
+            tier: AnswerTier::Summary,
+            question: None,
+            standpoint: StandpointKey::Unscoped,
+            input_completeness: SearchCompleteness::Complete,
+            closure_declared: false,
+        },
+        Resident,
+    );
+    let error = answer.status().unwrap_err();
+    assert_eq!(Capture::read(&error).code, "answer-evidence-not-finished");
+    let error = answer.finish(false).unwrap_err();
+    assert_eq!(
+        Capture::read(&error).code,
+        "answer-evidence-enumeration-required"
+    );
+    answer.finish(true).unwrap();
+    let error = answer.finish(true).unwrap_err();
+    assert_eq!(
+        Capture::read(&error).code,
+        "answer-evidence-already-finished"
+    );
+}
+
 purrdf_testkit::harness_main!(
+    native_graph_and_standpoint_failures_keep_original_keys,
+    native_aggregate_bound_failures_retain_digest_bytes_and_original_cause,
+    native_missing_reason_failures_survive_the_admitted_query_boundary,
+    native_evidence_alignment_and_answer_state_failures_remain_structured,
     native_invariants_keep_original_diagnostics_without_allocating_text,
     native_invariant_layout,
     segmented_stack_query_failure_retains_complete_snapshot_metadata,

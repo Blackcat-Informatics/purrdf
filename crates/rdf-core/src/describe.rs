@@ -73,6 +73,16 @@ pub enum DescribeError<E> {
     /// A malformed term returned by the view.
     Invalid(&'static str),
 }
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for DescribeError<E>
+{
+    purrdf_hash::error_visit! {
+        Source(cause) => "description-source" { "cause" => Cause(cause) },
+        Storage(cause) => "description-storage" { "cause" => Cause(cause) },
+        Build(cause) => "description-build" { "cause" => Cause(cause) },
+        Invalid(reason) => "description-invalid" { "reason" => Text(reason) },
+    }
+}
 impl<E: std::fmt::Display> std::fmt::Display for DescribeError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

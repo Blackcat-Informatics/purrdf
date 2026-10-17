@@ -1996,10 +1996,9 @@ fn eval_over_endpoints<D: DatasetView + Sync>(
                 silent: substituted_silent,
             } = substituted.as_ref()
             else {
-                return Err(crate::NativeDiagnostic::error(
+                return Err(crate::NativeDiagnostic::error_cause(
                     crate::NativeDiagnosticKind::Internal,
-                    "substituting an IRI endpoint into a variable-endpoint SERVICE did not \
-                     resolve its endpoint",
+                    crate::error::EvaluatorInvariant::ServiceSubstitutionUnresolved,
                     &ctx.growth,
                 ));
             };
@@ -2060,9 +2059,9 @@ fn eval_over_endpoints<D: DatasetView + Sync>(
         let mut to_out = AdmittedVec::with_capacity(block.schema.len(), &ctx.growth)?;
         for variable in block.schema.vars() {
             to_out.push(schema.index_of(variable).ok_or_else(|| {
-                crate::NativeDiagnostic::error(
+                crate::NativeDiagnostic::error_cause(
                     crate::NativeDiagnosticKind::Internal,
-                    "SERVICE block column is absent from its union schema",
+                    crate::error::EvaluatorInvariant::ServiceColumnMissing,
                     &ctx.growth,
                 )
             })?)?;

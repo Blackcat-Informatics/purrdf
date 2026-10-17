@@ -140,4 +140,41 @@ invariants! {
     SuspendedCallBuiltinFunction => "eval-invariant-suspended-call-builtin-function", "a suspended function call names a built-in function";
     VmEvidencePoisoned => "eval-invariant-vm-evidence-poisoned", "poisoned original VM evidence records";
     VmStackUnderflow => "eval-invariant-vm-stack-underflow", "an expression program popped an empty stack";
+    CandidateAccountingAborted => "eval-invariant-candidate-accounting-aborted", "candidate constraint accounting was aborted; partial counts cannot be published";
+    CandidateAccountingPoisoned => "eval-invariant-candidate-accounting-poisoned", "poisoned candidate constraint accounting";
+    FoldPartialTypeMismatch => "eval-invariant-fold-partial-type-mismatch", "FOLD combined two partial accumulators built for different composite datatypes; every partial of one fold comes from the same init factory";
+    CompletedEvidenceRowsMissing => "eval-invariant-completed-evidence-rows-missing", "a completed evidence query lost its original WHERE rows";
+    EvidenceDeclarationsMissing => "eval-invariant-evidence-declarations-missing", "an evidence query lost its original declarations";
+    DiagnosticTextMissing => "eval-invariant-diagnostic-text-missing", "native diagnostic publication has no original text";
+    DiagnosticStorageMismatch => "eval-invariant-diagnostic-storage-mismatch", "native diagnostic publication retains unmatched construction storage";
+    EvidenceInputPoisoned => "eval-invariant-evidence-input-poisoned", "poisoned original evidence input";
+    EvidenceAdmissionPoisoned => "eval-invariant-evidence-admission-poisoned", "poisoned native evidence admission";
+    ReasonOwnerMissing => "eval-invariant-reason-owner-missing", "ordinary evidence has no reason owner";
+    ExistsPlaceholderOutsideCopy => "eval-invariant-exists-placeholder-outside-copy", "a nested EXISTS placeholder was evaluated outside the substituted copy that \
+             left it";
+    RelationPairSourceMismatch => "eval-invariant-relation-pair-source-mismatch", "geographic relation pair does not belong to its immutable source";
+    HeldInListDispatch => "eval-invariant-held-in-list-dispatch", "heldIn is not an rdf:List function";
+    ForeignDatasetTerm => "eval-invariant-foreign-dataset-term", "foreign dataset term id";
+    ServiceSubstitutionUnresolved => "eval-invariant-service-substitution-unresolved", "substituting an IRI endpoint into a variable-endpoint SERVICE did not \
+                     resolve its endpoint";
+    ServiceColumnMissing => "eval-invariant-service-column-missing", "SERVICE block column is absent from its union schema";
+    TrackedRowControlShared => "eval-invariant-tracked-row-control-shared", "fresh tracked row controls are unexpectedly shared";
+    NativeTextMissing => "eval-invariant-native-text-missing", "native text publication has no payload";
+    NativeTextStorageMismatch => "eval-invariant-native-text-storage-mismatch", "native text publication retains unmatched working storage";
+    LedgerEvidenceDictionaryPoisoned => "eval-invariant-ledger-evidence-dictionary-poisoned", "poisoned original ledger evidence dictionary";
+    LedgerReasonDictionaryPoisoned => "eval-invariant-ledger-reason-dictionary-poisoned", "poisoned original ledger reason dictionary";
+    LedgerRowForeignQuery => "eval-invariant-ledger-row-foreign-query", "ledger row belongs to another query";
+    LedgerAdmissionPoisoned => "eval-invariant-ledger-admission-poisoned", "poisoned native ledger admission";
+    AcceptanceEvidencePoisoned => "eval-invariant-acceptance-evidence-poisoned", "poisoned original acceptance evidence dictionary";
+    AcceptedPayloadForeignQuery => "eval-invariant-accepted-payload-foreign-query", "accepted payload belongs to another query";
+    EvidenceDictionaryPoisoned => "eval-invariant-evidence-dictionary-poisoned", "poisoned query evidence dictionary";
+    ReasonDictionaryPoisoned => "eval-invariant-reason-dictionary-poisoned", "poisoned original reason dictionary";
+    UnknownClaimReason => "eval-invariant-unknown-claim-reason", "claim names an unknown reason identity";
+    ReasonIdentityMismatch => "eval-invariant-reason-identity-mismatch", "source reason identity disagrees with its canonical description";
+    ReasonAdmissionPoisoned => "eval-invariant-reason-admission-poisoned", "poisoned original reason admission";
+    EvidenceRowsForeignOwners => "eval-invariant-evidence-rows-foreign-owners", "evidence rows belong to different query owners";
+    EvidenceRowForeignOwner => "eval-invariant-evidence-row-foreign-owner", "evidence row belongs to another query owner";
+    ExistentialSearchForeignOwner => "eval-invariant-existential-search-foreign-owner", "existential search belongs to another query owner";
+    ExistentialWitnessForeignOwner => "eval-invariant-existential-witness-foreign-owner", "existential witness belongs to another query owner";
+
 }

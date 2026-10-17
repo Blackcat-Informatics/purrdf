@@ -59,9 +59,9 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
         PurrdfFn::ListContains => list_contains(ctx, vals),
         PurrdfFn::ListSlice => list_slice(ctx, vals),
         PurrdfFn::ListConcat => list_concat(ctx, vals),
-        PurrdfFn::HeldIn => Err(NativeDiagnostic::error(
+        PurrdfFn::HeldIn => Err(NativeDiagnostic::error_cause(
             NativeDiagnosticKind::Internal,
-            "heldIn is not an rdf:List function",
+            crate::error::EvaluatorInvariant::HeldInListDispatch,
             &ctx.growth,
         )),
     }

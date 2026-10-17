@@ -734,6 +734,14 @@ pub fn decode_32_canonical(text: &str) -> Option<[u8; 32]> {
 #[repr(transparent)]
 pub struct Digest32([u8; 32]);
 
+impl crate::error::StructuredError for Digest32 {
+    fn visit<'error>(&'error self, visitor: &mut dyn crate::error::ErrorVisitor<'error>) {
+        let Self(bytes) = self;
+        visitor.variant("digest32");
+        visitor.value(Some("bytes"), crate::error::ErrorValue::Bytes(bytes));
+    }
+}
+
 impl Digest32 {
     /// The digest length in bytes.
     pub const LEN: usize = 32;

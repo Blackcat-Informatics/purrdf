@@ -1091,9 +1091,9 @@ impl ScratchInterner {
                     purrdf_core::TermLookupError::Read(error) => source_error(error),
                     purrdf_core::TermLookupError::ForeignId => {
                         if workspace.is_bounded() {
-                            crate::NativeDiagnostic::error(
+                            crate::NativeDiagnostic::error_cause(
                                 crate::NativeDiagnosticKind::Internal,
-                                "foreign dataset term id",
+                                crate::error::EvaluatorInvariant::ForeignDatasetTerm,
                                 workspace,
                             )
                         } else {
@@ -1161,11 +1161,13 @@ impl ScratchInterner {
                 id,
                 |error| match error {
                     purrdf_core::TermLookupError::Read(error) => source_error(error),
-                    purrdf_core::TermLookupError::ForeignId => crate::NativeDiagnostic::error(
-                        crate::NativeDiagnosticKind::Internal,
-                        "foreign dataset term id",
-                        workspace,
-                    ),
+                    purrdf_core::TermLookupError::ForeignId => {
+                        crate::NativeDiagnostic::error_cause(
+                            crate::NativeDiagnosticKind::Internal,
+                            crate::error::EvaluatorInvariant::ForeignDatasetTerm,
+                            workspace,
+                        )
+                    }
                 },
                 |_| crate::EvalError::AllocationFailed {
                     construct: "materialized dataset term",
