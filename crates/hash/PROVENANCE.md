@@ -74,11 +74,13 @@ was copied or ported.
 `src/blake3.rs` and `src/arch/blake3_*.rs` are written from the
 [BLAKE3 specification](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf),
 §2.1–2.5: the tree shape, seven compression rounds, permutation, counters,
-block lengths, and domain flags. Only the unkeyed 256-bit mode used by PurRDF
-is exposed. The independent chunks and parent nodes are transposed into SIMD
-lanes; the single-block path places the four independent quarter rounds in
-four lanes. This initial implementation, including its pending-subtree stream
-state and 256-chunk batch reduction, preceded external source consultation.
+block lengths, and domain flags. PurRDF content identities use unkeyed
+BLAKE3-256; the public API also exposes keyed hashing, context-separated key
+derivation and extended output, described below. Independent chunks and parent
+nodes are transposed into SIMD lanes; the single-block path places the four
+independent quarter rounds in four lanes. This initial implementation, including
+its pending-subtree stream state and 256-chunk batch reduction, preceded external
+source consultation.
 
 For subsequent performance analysis, the following files from **blake3 1.8.5**
 were consulted: [`src/lib.rs`](https://github.com/BLAKE3-team/BLAKE3/blob/1.8.5/src/lib.rs)
