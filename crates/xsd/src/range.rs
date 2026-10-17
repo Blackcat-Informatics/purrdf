@@ -721,6 +721,8 @@ enum Space {
 enum TextSpace {
     /// `xsd:string` — length in characters.
     String,
+    /// `xsd:anyURI` — collapsed length in characters, disjoint from strings.
+    AnyUri,
     /// `xsd:hexBinary` — length in octets.
     HexBinary,
     /// `xsd:base64Binary` — length in octets.
@@ -754,8 +756,9 @@ enum TemporalSpace {
 }
 
 /// The length-selected spaces, in [`Extent::text`] order.
-const TEXT_SPACES: [TextSpace; 3] = [
+const TEXT_SPACES: [TextSpace; 4] = [
     TextSpace::String,
+    TextSpace::AnyUri,
     TextSpace::HexBinary,
     TextSpace::Base64Binary,
 ];
@@ -783,6 +786,7 @@ impl TextSpace {
     fn kind(self) -> LengthKind {
         match self {
             Self::String => LengthKind::Characters,
+            Self::AnyUri => LengthKind::CollapsedCharacters,
             Self::HexBinary | Self::Base64Binary => LengthKind::Octets,
         }
     }
@@ -827,6 +831,7 @@ fn space_of_datatype(dt: XsdDatatype) -> Space {
         D::Double => Space::Double,
         D::Boolean => Space::Boolean,
         D::String => Space::Text(TextSpace::String),
+        D::AnyUri => Space::Text(TextSpace::AnyUri),
         D::HexBinary => Space::Text(TextSpace::HexBinary),
         D::Base64Binary => Space::Text(TextSpace::Base64Binary),
         D::DateTime | D::DateTimeStamp => Space::Temporal(TemporalSpace::DateTime),
@@ -1953,6 +1958,8 @@ impl Algebra for BoolSet {
 enum LengthKind {
     /// Unicode scalar values (`xsd:string`).
     Characters,
+    /// XML character strings after the fixed whitespace collapse facet.
+    CollapsedCharacters,
     /// Octets (`xsd:hexBinary`, `xsd:base64Binary`).
     Octets,
 }
@@ -2079,11 +2086,16 @@ impl LengthSet {
                 return Ok(Cardinality::Exactly(0));
             };
             Ok(match self.kind {
-                LengthKind::Characters => {
+                LengthKind::Characters | LengthKind::CollapsedCharacters => {
                     if maximum == 0 {
                         Cardinality::Exactly(1)
                     } else {
-                        Cardinality::AtLeast(saturating_pow(STRING_ALPHABET_FLOOR, maximum))
+                        // Every string over non-whitespace XML characters is a
+                        // distinct collapsed value. Ignoring strings containing
+                        // internal spaces only lowers this cardinality bound.
+                        let alphabet = STRING_ALPHABET_FLOOR
+                            - u64::from(self.kind == LengthKind::CollapsedCharacters) * 4;
+                        Cardinality::AtLeast(saturating_pow(alphabet, maximum))
                     }
                 }
                 LengthKind::Octets => {
@@ -2118,12 +2130,9 @@ impl LengthSet {
     /// The length of a value in this space's unit, or `None` for a value from another
     /// space (which the caller's routing prevents).
     fn length_of(value: &XsdValue) -> Option<u64> {
-        let n = match value {
-            XsdValue::String(s) => s.chars().count(),
-            XsdValue::Binary { bytes, .. } => bytes.len(),
-            _ => return None,
-        };
-        Some(u64::try_from(n).unwrap_or(u64::MAX))
+        value
+            .facet_length()
+            .map(|n| u64::try_from(n).unwrap_or(u64::MAX))
     }
 
     /// Whether the space holds more than `n` values of length `length`.
@@ -2133,7 +2142,7 @@ impl LengthSet {
     /// list. Over-reporting here can only withhold an `Empty` answer, never invent one.
     fn holds_more_than(&self, length: u64, n: usize) -> bool {
         match self.kind {
-            LengthKind::Characters => length > 0 || n < 1,
+            LengthKind::Characters | LengthKind::CollapsedCharacters => length > 0 || n < 1,
             LengthKind::Octets => u128::from(saturating_pow(OCTET_ALPHABET, length)) > n as u128,
         }
     }
@@ -2618,7 +2627,7 @@ struct Extent {
     /// The `xsd:boolean` space.
     boolean: SpaceSet<BoolSet>,
     /// The length-selected spaces, in [`TEXT_SPACES`] order.
-    text: [SpaceSet<LengthSet>; 3],
+    text: [SpaceSet<LengthSet>; 4],
     /// The temporal spaces, in [`TEMPORAL_SPACES`] order.
     temporal: [SpaceSet<ListedSet<XsdValue>>; 10],
     /// The two disjoint, infinite RDF language-string spaces.

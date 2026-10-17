@@ -788,6 +788,11 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				the_transcript_digest_is_reproduced_on_this_target \
 				the_oracle_vectors_replay_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test any_uri -- --exact \
+				lexical_mapping_preserves_everything_except_xml_whitespace \
+				primitive_identity_is_disjoint_and_unordered \
+				ranges_use_collapsed_character_lengths_and_primitive_identity \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
 				the_hand_answers_are_reproduced_on_this_target \
 				the_numeric_transcript_digest_is_reproduced_on_this_target \
