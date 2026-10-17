@@ -318,7 +318,9 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
         D::Float => crate::numeric::parse_float(lexical).map(XsdValue::Float),
         D::Double => crate::numeric::parse_double(lexical).map(XsdValue::Double),
         D::Boolean => crate::simple::parse_boolean(lexical).map(XsdValue::Boolean),
-        D::String => Ok(XsdValue::String(lexical.to_string())),
+        D::String => crate::simple::read_xml_string(lexical)
+            .map(|value| XsdValue::String(value.to_owned()))
+            .map_err(|reason| XsdError::invalid(datatype, lexical, reason)),
         D::AnyUri => crate::simple::read_any_uri(lexical)
             .map(|value| XsdValue::AnyUri(value.to_string()))
             .map_err(|reason| XsdError::invalid(datatype, lexical, reason)),
@@ -549,9 +551,10 @@ pub fn try_parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
             Ok(value) => ParsedValue::Value(XsdValue::Boolean(value)),
             Err(_) => ParsedValue::Invalid(Some(ErrorCode::Forg0001)),
         }),
-        D::String => Ok(ParsedValue::Value(XsdValue::String(
-            memory.string(lexical)?,
-        ))),
+        D::String => match crate::simple::read_xml_string(lexical) {
+            Ok(value) => Ok(ParsedValue::Value(XsdValue::String(memory.string(value)?))),
+            Err(_) => Ok(ParsedValue::Invalid(Some(ErrorCode::Forg0001))),
+        },
         D::AnyUri => match crate::simple::read_any_uri(lexical) {
             Ok(value) => Ok(ParsedValue::Value(XsdValue::AnyUri(memory.format(&value)?))),
             Err(_) => Ok(ParsedValue::Invalid(Some(ErrorCode::Forg0001))),
