@@ -1,0 +1,3 @@
+Two completed jobs in this PR's workflow39051285193 fail on the same source-law defect: `gmeow:FlagshipScenarioFailureIriConstraint` has no executable violation lowering (`unsupported-consequent`). Generation A and fixture-prefix both terminate in stage-conformance's enactment gate. Producer-build, helpers and lint passed; the other jobs were still running when inspected and were left running.
+
+The verified failure, actual canonical source/lowerer locations, both job links and acceptance requirements are now owned by #1843. This is a concrete enforcement failure, not evidence of a host-resource cause. No production acceptance pass is claimed from the earlier local synthetic controls.

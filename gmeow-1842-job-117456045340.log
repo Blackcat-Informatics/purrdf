@@ -1,0 +1,640 @@
+﻿2026-10-17T17:20:02.1102122Z Current runner version: '2.337.0'
+2026-10-17T17:20:02.1121005Z ##[group]Runner Image Provisioner
+2026-10-17T17:20:02.1121560Z Hosted Compute Agent
+2026-10-17T17:20:02.1121974Z Version: 20261012.601
+2026-10-17T17:20:02.1122369Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-17T17:20:02.1122833Z Build Date: 2026-10-12T17:48:21Z
+2026-10-17T17:20:02.1123282Z Worker ID: {9aa47b6b-c74e-445f-91dd-a2a8f6e6dce0}
+2026-10-17T17:20:02.1123713Z Region: westus3
+2026-10-17T17:20:02.1124103Z Cloud: Azure
+2026-10-17T17:20:02.1124443Z ##[endgroup]
+2026-10-17T17:20:02.1125265Z ##[group]Operating System
+2026-10-17T17:20:02.1125665Z Ubuntu
+2026-10-17T17:20:02.1125981Z 24.04.5
+2026-10-17T17:20:02.1126286Z LTS
+2026-10-17T17:20:02.1126641Z ##[endgroup]
+2026-10-17T17:20:02.1127000Z ##[group]Runner Image
+2026-10-17T17:20:02.1127425Z Image: ubuntu-24.04
+2026-10-17T17:20:02.1127898Z Version: 20261012.334.1
+2026-10-17T17:20:02.1128720Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-17T17:20:02.1129640Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-17T17:20:02.1130203Z ##[endgroup]
+2026-10-17T17:20:02.1130899Z ##[group]GITHUB_TOKEN Permissions
+2026-10-17T17:20:02.1132161Z Contents: read
+2026-10-17T17:20:02.1132554Z Metadata: read
+2026-10-17T17:20:02.1132885Z ##[endgroup]
+2026-10-17T17:20:02.1134297Z Secret source: Actions
+2026-10-17T17:20:02.1134832Z Cache mode: write
+2026-10-17T17:20:02.1135545Z Prepare workflow directory
+2026-10-17T17:20:02.1375641Z Prepare all required actions
+2026-10-17T17:20:02.1406651Z Getting action download info
+2026-10-17T17:20:02.4564866Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-10-17T17:20:02.5353827Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-17T17:20:02.7554688Z Download action repository 'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333' (SHA:9000827ccba6bdab643e8b6fd33ac0654aef8333)
+2026-10-17T17:20:03.3742682Z Download action repository 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9' (SHA:55cc8345863c7cc4c66a329aec7e433d2d1c52a9)
+2026-10-17T17:20:03.5840641Z Download action repository 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' (SHA:cf430e030ddbb5b0abf93d22962f4752f3646cd9)
+2026-10-17T17:20:04.4687311Z Complete job name: fixture-prefix
+2026-10-17T17:20:04.5324123Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-10-17T17:20:04.5325070Z with:
+2026-10-17T17:20:04.5325592Z   persist-credentials: false
+2026-10-17T17:20:04.5326278Z   repository: Blackcat-Informatics/gmeow-ontology
+2026-10-17T17:20:04.5331297Z   token: ***
+2026-10-17T17:20:04.5331807Z   ssh-strict: true
+2026-10-17T17:20:04.5332329Z   ssh-user: git
+2026-10-17T17:20:04.5332827Z   clean: true
+2026-10-17T17:20:04.5333366Z   sparse-checkout-cone-mode: true
+2026-10-17T17:20:04.5334000Z   fetch-depth: 1
+2026-10-17T17:20:04.5334521Z   fetch-tags: false
+2026-10-17T17:20:04.5335063Z   show-progress: true
+2026-10-17T17:20:04.5335599Z   lfs: false
+2026-10-17T17:20:04.5336097Z   submodules: false
+2026-10-17T17:20:04.5336636Z   set-safe-directory: true
+2026-10-17T17:20:04.5337237Z   allow-unsafe-pr-checkout: false
+2026-10-17T17:20:04.5338076Z env:
+2026-10-17T17:20:04.5339295Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:04.5340769Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:04.5341661Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:04.5342448Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:04.5343066Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:04.5343690Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:04.5344288Z ##[endgroup]
+2026-10-17T17:20:04.5995311Z Syncing repository: Blackcat-Informatics/gmeow-ontology
+2026-10-17T17:20:04.5997259Z ##[group]Getting Git version info
+2026-10-17T17:20:04.5998361Z Working directory is '/home/runner/work/gmeow-ontology/gmeow-ontology'
+2026-10-17T17:20:04.5999661Z [command]/usr/bin/git version
+2026-10-17T17:20:04.6034000Z git version 2.55.0
+2026-10-17T17:20:04.6045796Z ##[endgroup]
+2026-10-17T17:20:04.6052947Z Temporarily overriding HOME='/home/runner/work/_temp/7cc1eab2-7ce5-4e71-8196-27b886270157' before making global git config changes
+2026-10-17T17:20:04.6055327Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T17:20:04.6057413Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/gmeow-ontology/gmeow-ontology
+2026-10-17T17:20:04.6090515Z Deleting the contents of '/home/runner/work/gmeow-ontology/gmeow-ontology'
+2026-10-17T17:20:04.6092511Z ##[group]Determining repository object format
+2026-10-17T17:20:04.6093583Z ##[endgroup]
+2026-10-17T17:20:04.6094519Z ##[group]Initializing the repository
+2026-10-17T17:20:04.6095752Z [command]/usr/bin/git init /home/runner/work/gmeow-ontology/gmeow-ontology
+2026-10-17T17:20:04.6166623Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-17T17:20:04.6168118Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-17T17:20:04.6169408Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-17T17:20:04.6170464Z hint: call:
+2026-10-17T17:20:04.6171278Z hint:
+2026-10-17T17:20:04.6172181Z hint: 	git config --global init.defaultBranch <name>
+2026-10-17T17:20:04.6173230Z hint:
+2026-10-17T17:20:04.6174227Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-17T17:20:04.6175821Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-17T17:20:04.6177087Z hint:
+2026-10-17T17:20:04.6177858Z hint: 	git branch -m <name>
+2026-10-17T17:20:04.6178488Z hint:
+2026-10-17T17:20:04.6179225Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-17T17:20:04.6180555Z Initialized empty Git repository in /home/runner/work/gmeow-ontology/gmeow-ontology/.git/
+2026-10-17T17:20:04.6182637Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/gmeow-ontology
+2026-10-17T17:20:04.6213296Z ##[endgroup]
+2026-10-17T17:20:04.6214584Z ##[group]Disabling automatic garbage collection
+2026-10-17T17:20:04.6215697Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-17T17:20:04.6238865Z ##[endgroup]
+2026-10-17T17:20:04.6240033Z ##[group]Setting up auth
+2026-10-17T17:20:04.6240645Z Removing SSH command configuration
+2026-10-17T17:20:04.6241798Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T17:20:04.6265086Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T17:20:04.6516404Z Removing HTTP extra header
+2026-10-17T17:20:04.6519576Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T17:20:04.6542238Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T17:20:04.6736286Z Removing includeIf entries pointing to credentials config files
+2026-10-17T17:20:04.6739272Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T17:20:04.6761683Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T17:20:04.6927130Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-17T17:20:04.6952211Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/gmeow-ontology/gmeow-ontology/.git.path /home/runner/work/_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config
+2026-10-17T17:20:04.6975909Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/gmeow-ontology/gmeow-ontology/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config
+2026-10-17T17:20:04.7000244Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config
+2026-10-17T17:20:04.7024094Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config
+2026-10-17T17:20:04.7044827Z ##[endgroup]
+2026-10-17T17:20:04.7045691Z ##[group]Fetching the repository
+2026-10-17T17:20:04.7049202Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +556947b333d95c25c61213ae08714adce0f58fe0:refs/remotes/pull/1842/merge
+2026-10-17T17:20:08.6202300Z From https://github.com/Blackcat-Informatics/gmeow-ontology
+2026-10-17T17:20:08.6202977Z  * [new ref]         556947b333d95c25c61213ae08714adce0f58fe0 -> pull/1842/merge
+2026-10-17T17:20:08.6206197Z ##[endgroup]
+2026-10-17T17:20:08.6206726Z ##[group]Determining the checkout info
+2026-10-17T17:20:08.6207233Z ##[endgroup]
+2026-10-17T17:20:08.6211664Z [command]/usr/bin/git sparse-checkout disable
+2026-10-17T17:20:08.6252556Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-17T17:20:08.6276234Z ##[group]Checking out the ref
+2026-10-17T17:20:08.6278457Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/1842/merge
+2026-10-17T17:20:09.3612487Z Note: switching to 'refs/remotes/pull/1842/merge'.
+2026-10-17T17:20:09.3612833Z 
+2026-10-17T17:20:09.3613022Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-17T17:20:09.3613506Z changes and commit them, and you can discard any commits you make in this
+2026-10-17T17:20:09.3613901Z state without impacting any branches by switching back to a branch.
+2026-10-17T17:20:09.3614141Z 
+2026-10-17T17:20:09.3614343Z If you want to create a new branch to retain commits you create, you may
+2026-10-17T17:20:09.3614733Z do so (now or later) by using -c with the switch command. Example:
+2026-10-17T17:20:09.3614941Z 
+2026-10-17T17:20:09.3615037Z   git switch -c <new-branch-name>
+2026-10-17T17:20:09.3615463Z 
+2026-10-17T17:20:09.3615566Z Or undo this operation with:
+2026-10-17T17:20:09.3615710Z 
+2026-10-17T17:20:09.3615786Z   git switch -
+2026-10-17T17:20:09.3615964Z 
+2026-10-17T17:20:09.3616143Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-17T17:20:09.3616398Z 
+2026-10-17T17:20:09.3616693Z HEAD is now at 556947b Merge 8ad7b3120ba3c86d414d8d25d4a66ba3147797d3 into a56bb744d48a816295b7feaa51073a3f6e5d3d2c
+2026-10-17T17:20:09.3657985Z ##[endgroup]
+2026-10-17T17:20:09.3688398Z [command]/usr/bin/git log -1 --format=%H
+2026-10-17T17:20:09.3702009Z 556947b333d95c25c61213ae08714adce0f58fe0
+2026-10-17T17:20:09.3711002Z ##[group]Removing auth
+2026-10-17T17:20:09.3711244Z Removing SSH command configuration
+2026-10-17T17:20:09.3714035Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T17:20:09.3741108Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T17:20:09.3929127Z Removing HTTP extra header
+2026-10-17T17:20:09.3931814Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T17:20:09.3960584Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T17:20:09.4145318Z Removing includeIf entries pointing to credentials config files
+2026-10-17T17:20:09.4147816Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T17:20:09.4168859Z includeif.gitdir:/home/runner/work/gmeow-ontology/gmeow-ontology/.git.path
+2026-10-17T17:20:09.4169192Z includeif.gitdir:/home/runner/work/gmeow-ontology/gmeow-ontology/.git/worktrees/*.path
+2026-10-17T17:20:09.4169517Z includeif.gitdir:/github/workspace/.git.path
+2026-10-17T17:20:09.4169844Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T17:20:09.4176532Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/gmeow-ontology/gmeow-ontology/.git.path
+2026-10-17T17:20:09.4194732Z /home/runner/work/_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config
+2026-10-17T17:20:09.4208246Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/gmeow-ontology/gmeow-ontology/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-89f17598\-681e\-480f\-aab3\-97196e86e15c\.config
+2026-10-17T17:20:09.4234084Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/gmeow-ontology/gmeow-ontology/.git/worktrees/*.path
+2026-10-17T17:20:09.4251578Z /home/runner/work/_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config
+2026-10-17T17:20:09.4257601Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/gmeow-ontology/gmeow-ontology/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-89f17598\-681e\-480f\-aab3\-97196e86e15c\.config
+2026-10-17T17:20:09.4283000Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-17T17:20:09.4303780Z /github/runner_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config
+2026-10-17T17:20:09.4307122Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-89f17598\-681e\-480f\-aab3\-97196e86e15c\.config
+2026-10-17T17:20:09.4332644Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T17:20:09.4350810Z /github/runner_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config
+2026-10-17T17:20:09.4362766Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-89f17598\-681e\-480f\-aab3\-97196e86e15c\.config
+2026-10-17T17:20:09.4386521Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T17:20:09.4561654Z Removing credentials config '/home/runner/work/_temp/git-credentials-89f17598-681e-480f-aab3-97196e86e15c.config'
+2026-10-17T17:20:09.4568727Z ##[endgroup]
+2026-10-17T17:20:09.4788372Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-17T17:20:09.4788598Z with:
+2026-10-17T17:20:09.4788724Z   toolchain: nightly-2026-09-05
+2026-10-17T17:20:09.4788879Z env:
+2026-10-17T17:20:09.4789184Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:09.4789561Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.4789778Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.4789962Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:09.4790103Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:09.4790243Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:09.4790377Z ##[endgroup]
+2026-10-17T17:20:09.4847035Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-17T17:20:09.4877873Z ##[group]Run : parse toolchain version
+2026-10-17T17:20:09.4878134Z [36;1m: parse toolchain version[0m
+2026-10-17T17:20:09.4878297Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-17T17:20:09.4878585Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-17T17:20:09.4879042Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-17T17:20:09.4879207Z [36;1m  exit 1[0m
+2026-10-17T17:20:09.4879397Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-17T17:20:09.4879628Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-17T17:20:09.4879923Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:09.4880199Z [36;1m  else[0m
+2026-10-17T17:20:09.4880420Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:09.4880681Z [36;1m  fi[0m
+2026-10-17T17:20:09.4880880Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-17T17:20:09.4881173Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:09.4881428Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-17T17:20:09.4881713Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:09.4881978Z [36;1melse[0m
+2026-10-17T17:20:09.4882118Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:09.4882281Z [36;1mfi[0m
+2026-10-17T17:20:09.5083700Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:09.5083891Z env:
+2026-10-17T17:20:09.5084205Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:09.5084591Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5084811Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5084996Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:09.5085144Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:09.5085304Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:09.5085446Z   toolchain: nightly-2026-09-05
+2026-10-17T17:20:09.5085582Z ##[endgroup]
+2026-10-17T17:20:09.5183778Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=33]
+2026-10-17T17:20:09.5197589Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-17T17:20:09.5216627Z ##[group]Run : construct rustup command line
+2026-10-17T17:20:09.5216816Z [36;1m: construct rustup command line[0m
+2026-10-17T17:20:09.5217071Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:09.5217553Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:09.5218021Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:09.5262849Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:09.5263034Z env:
+2026-10-17T17:20:09.5263345Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:09.5263725Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5263946Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5264135Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:09.5264279Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:09.5264424Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:09.5285115Z   targets: 
+2026-10-17T17:20:09.5285306Z   components: 
+2026-10-17T17:20:09.5285482Z ##[endgroup]
+2026-10-17T17:20:09.5360349Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=16]
+2026-10-17T17:20:09.5362770Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-17T17:20:09.5381171Z ##[group]Run : set $CARGO_HOME
+2026-10-17T17:20:09.5381460Z [36;1m: set $CARGO_HOME[0m
+2026-10-17T17:20:09.5381648Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-17T17:20:09.5426217Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:09.5426404Z env:
+2026-10-17T17:20:09.5426724Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:09.5427110Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5427339Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5427530Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:09.5427805Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:09.5427958Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:09.5428098Z ##[endgroup]
+2026-10-17T17:20:09.5491970Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=12]
+2026-10-17T17:20:09.5493393Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-17T17:20:09.5515502Z ##[group]Run : install rustup if needed
+2026-10-17T17:20:09.5515687Z [36;1m: install rustup if needed[0m
+2026-10-17T17:20:09.5515864Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-17T17:20:09.5516286Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-17T17:20:09.5516691Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-17T17:20:09.5516853Z [36;1mfi[0m
+2026-10-17T17:20:09.5561038Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:09.5561222Z env:
+2026-10-17T17:20:09.5561545Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:09.5561934Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5562163Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5562356Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:09.5562504Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:09.5562652Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:09.5562798Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:09.5562936Z ##[endgroup]
+2026-10-17T17:20:09.5625459Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=13]
+2026-10-17T17:20:09.5628181Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-17T17:20:09.5631864Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-17T17:20:09.5633981Z ##[start-action display=rustup toolchain install nightly-2026-09-05;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-17T17:20:09.5652778Z ##[group]Run rustup toolchain install nightly-2026-09-05 --profile minimal --no-self-update
+2026-10-17T17:20:09.5653142Z [36;1mrustup toolchain install nightly-2026-09-05 --profile minimal --no-self-update[0m
+2026-10-17T17:20:09.5698365Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:09.5698556Z env:
+2026-10-17T17:20:09.5698879Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:09.5699271Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5699498Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:09.5699689Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:09.5699834Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:09.5699982Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:09.5700133Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:09.5700279Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-17T17:20:09.5700417Z ##[endgroup]
+2026-10-17T17:20:09.6068807Z info: syncing channel updates for nightly-2026-09-05-x86_64-unknown-linux-gnu
+2026-10-17T17:20:09.8563410Z info: latest update on 2026-09-05 for version 1.100.0-nightly (0ed41eb41 2026-09-04)
+2026-10-17T17:20:09.8563829Z info: downloading 3 components
+2026-10-17T17:20:16.0999487Z 
+2026-10-17T17:20:16.1055012Z   nightly-2026-09-05-x86_64-unknown-linux-gnu installed - rustc 1.100.0-nightly (0ed41eb41 2026-09-04)
+2026-10-17T17:20:16.1055280Z 
+2026-10-17T17:20:16.1113051Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=6547]
+2026-10-17T17:20:16.1117614Z ##[start-action display=Run rustup default nightly-2026-09-05;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-17T17:20:16.1133074Z ##[group]Run rustup default nightly-2026-09-05
+2026-10-17T17:20:16.1133288Z [36;1mrustup default nightly-2026-09-05[0m
+2026-10-17T17:20:16.1185468Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:16.1185654Z env:
+2026-10-17T17:20:16.1185972Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:16.1186366Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.1186588Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.1186777Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:16.1186920Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:16.1187068Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:16.1187212Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:16.1187350Z ##[endgroup]
+2026-10-17T17:20:16.1287968Z info: using existing install for nightly-2026-09-05-x86_64-unknown-linux-gnu
+2026-10-17T17:20:16.1293290Z info: default toolchain set to nightly-2026-09-05-x86_64-unknown-linux-gnu
+2026-10-17T17:20:16.1293511Z 
+2026-10-17T17:20:16.1345080Z   nightly-2026-09-05-x86_64-unknown-linux-gnu unchanged - rustc 1.100.0-nightly (0ed41eb41 2026-09-04)
+2026-10-17T17:20:16.1345321Z 
+2026-10-17T17:20:16.1347843Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/gmeow-ontology/gmeow-ontology/rust-toolchain.toml')
+2026-10-17T17:20:16.1359097Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=24]
+2026-10-17T17:20:16.1362335Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-17T17:20:16.1376728Z ##[group]Run : create cachekey
+2026-10-17T17:20:16.1376912Z [36;1m: create cachekey[0m
+2026-10-17T17:20:16.1377230Z [36;1mDATE=$(rustc +nightly-2026-09-05 --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-17T17:20:16.1377634Z [36;1mHASH=$(rustc +nightly-2026-09-05 --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-17T17:20:16.1378293Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:20:16.1427027Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:16.1427217Z env:
+2026-10-17T17:20:16.1427531Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:16.1428034Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.1428254Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.1428445Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:16.1428612Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:16.1428755Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:16.1428899Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:16.1429037Z ##[endgroup]
+2026-10-17T17:20:16.1689766Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=32]
+2026-10-17T17:20:16.1691723Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-17T17:20:16.1707043Z ##[group]Run : disable incremental compilation
+2026-10-17T17:20:16.1707389Z [36;1m: disable incremental compilation[0m
+2026-10-17T17:20:16.1707576Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-17T17:20:16.1707919Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-17T17:20:16.1708082Z [36;1mfi[0m
+2026-10-17T17:20:16.1758472Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:16.1758669Z env:
+2026-10-17T17:20:16.1758991Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:16.1759387Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.1759615Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.1759806Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:16.1759961Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:16.1760110Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:16.1760258Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:16.1760407Z ##[endgroup]
+2026-10-17T17:20:16.1826068Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=13]
+2026-10-17T17:20:16.1827636Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-17T17:20:16.1842073Z ##[group]Run : enable colors in Cargo output
+2026-10-17T17:20:16.1842271Z [36;1m: enable colors in Cargo output[0m
+2026-10-17T17:20:16.1842450Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-17T17:20:16.1842639Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-17T17:20:16.1842807Z [36;1mfi[0m
+2026-10-17T17:20:16.1890021Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:16.1890215Z env:
+2026-10-17T17:20:16.1890554Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:16.1890940Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.1891168Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.1891360Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:16.1891505Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:16.1891976Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:16.1892205Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:16.1892425Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:16.1892661Z ##[endgroup]
+2026-10-17T17:20:16.1972638Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=14]
+2026-10-17T17:20:16.1976505Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-17T17:20:16.1991626Z ##[group]Run : enable Cargo sparse registry
+2026-10-17T17:20:16.1991939Z [36;1m: enable Cargo sparse registry[0m
+2026-10-17T17:20:16.1992144Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-17T17:20:16.1992536Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-17T17:20:16.1992963Z [36;1m  if rustc +nightly-2026-09-05 --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-17T17:20:16.1993295Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-17T17:20:16.1993586Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-17T17:20:16.1993883Z [36;1m  elif rustc +nightly-2026-09-05 --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-17T17:20:16.1994210Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-17T17:20:16.1994489Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-17T17:20:16.1994686Z [36;1m  fi[0m
+2026-10-17T17:20:16.1994798Z [36;1mfi[0m
+2026-10-17T17:20:16.2040543Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:16.2040852Z env:
+2026-10-17T17:20:16.2041164Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:16.2041544Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.2041766Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.2041957Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:16.2042104Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:16.2042250Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:16.2042393Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:16.2042531Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:16.2042659Z   CARGO_TERM_COLOR: always
+2026-10-17T17:20:16.2042789Z ##[endgroup]
+2026-10-17T17:20:16.2285817Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=30]
+2026-10-17T17:20:16.2289283Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-17T17:20:16.2304313Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-17T17:20:16.2304575Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-17T17:20:16.2304887Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-17T17:20:16.2305251Z [36;1mif rustc +nightly-2026-09-05 --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-17T17:20:16.2305526Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-17T17:20:16.2305701Z [36;1mfi[0m
+2026-10-17T17:20:16.2354267Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:16.2354455Z env:
+2026-10-17T17:20:16.2354789Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:16.2355201Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.2355426Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.2355623Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:16.2355764Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:16.2355911Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:16.2356054Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:16.2356190Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:16.2356315Z   CARGO_TERM_COLOR: always
+2026-10-17T17:20:16.2356444Z ##[endgroup]
+2026-10-17T17:20:16.2513699Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=22]
+2026-10-17T17:20:16.2516681Z ##[start-action display=Run rustc +nightly-2026-09-05 --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-17T17:20:16.2531775Z ##[group]Run rustc +nightly-2026-09-05 --version --verbose
+2026-10-17T17:20:16.2532153Z [36;1mrustc +nightly-2026-09-05 --version --verbose[0m
+2026-10-17T17:20:16.2580923Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:20:16.2581110Z env:
+2026-10-17T17:20:16.2581438Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:16.2581825Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.2582048Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.2582240Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:16.2582386Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:16.2582533Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:16.2582679Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:16.2582976Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:16.2583105Z   CARGO_TERM_COLOR: always
+2026-10-17T17:20:16.2583235Z ##[endgroup]
+2026-10-17T17:20:16.2725394Z rustc 1.100.0-nightly (0ed41eb41 2026-09-04)
+2026-10-17T17:20:16.2725815Z binary: rustc
+2026-10-17T17:20:16.2725980Z commit-hash: 0ed41eb4142dda2df61eb1145a312c1a9d62eb56
+2026-10-17T17:20:16.2726193Z commit-date: 2026-09-04
+2026-10-17T17:20:16.2726536Z host: x86_64-unknown-linux-gnu
+2026-10-17T17:20:16.2726744Z release: 1.100.0-nightly
+2026-10-17T17:20:16.2726980Z LLVM version: 23.1.1
+2026-10-17T17:20:16.2738413Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=22]
+2026-10-17T17:20:16.2783954Z ##[group]Run set -euo pipefail
+2026-10-17T17:20:16.2784155Z [36;1mset -euo pipefail[0m
+2026-10-17T17:20:16.2784358Z [36;1mecho "rustc=$(rustc -Vv | sha256sum | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"[0m
+2026-10-17T17:20:16.2833275Z shell: /usr/bin/bash -e {0}
+2026-10-17T17:20:16.2833417Z env:
+2026-10-17T17:20:16.2833734Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:16.2834120Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.2834351Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:16.2834542Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:16.2834695Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:16.2834844Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:16.2834986Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:16.2835123Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:16.2835291Z   CARGO_TERM_COLOR: always
+2026-10-17T17:20:16.2835422Z ##[endgroup]
+2026-10-17T17:20:16.2944238Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-17T17:20:16.3638827Z info: latest update on 2026-10-17 for version 1.101.0-nightly (5d8fec066 2026-10-16)
+2026-10-17T17:20:16.3639199Z info: downloading 6 components
+2026-10-17T17:20:24.3182230Z warn: the missing active toolchain `nightly-x86_64-unknown-linux-gnu` has been auto-installed
+2026-10-17T17:20:24.3182757Z warn: this might cause rustup commands to take longer time to finish than expected
+2026-10-17T17:20:24.3183220Z info: you may opt out with `RUSTUP_AUTO_INSTALL=0` or `rustup set auto-install disable`
+2026-10-17T17:20:24.3349527Z ##[group]Run actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+2026-10-17T17:20:24.3349778Z with:
+2026-10-17T17:20:24.3349953Z   name: gmeow-dev-producer-556947b333d95c25c61213ae08714adce0f58fe0
+2026-10-17T17:20:24.3350158Z   path: dist/bin
+2026-10-17T17:20:24.3350281Z   merge-multiple: false
+2026-10-17T17:20:24.3350434Z   repository: Blackcat-Informatics/gmeow-ontology
+2026-10-17T17:20:24.3350606Z   run-id: 39051285193
+2026-10-17T17:20:24.3350733Z   skip-decompress: false
+2026-10-17T17:20:24.3350864Z   digest-mismatch: error
+2026-10-17T17:20:24.3350995Z env:
+2026-10-17T17:20:24.3351316Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:24.3351706Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:24.3351932Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:24.3352144Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:24.3352288Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:24.3352437Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:24.3352584Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:24.3352725Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:24.3352853Z   CARGO_TERM_COLOR: always
+2026-10-17T17:20:24.3352983Z ##[endgroup]
+2026-10-17T17:20:24.4231922Z Downloading single artifact
+2026-10-17T17:20:24.6538327Z Preparing to download the following artifacts:
+2026-10-17T17:20:24.6538885Z - gmeow-dev-producer-556947b333d95c25c61213ae08714adce0f58fe0 (ID: 12108542108, Size: 78534587, Expected Digest: sha256:c00d36e1c8b19f8e22cb9a243300a764124deb5b19daf6bf18e89e58cfb2eaad)
+2026-10-17T17:20:25.1128680Z Redirecting to blob download url: https://productionresultssa4.blob.core.windows.net/actions-results/ed881025-0cae-83d7-a4f4-63358e7c014e/workflow-job-run-dea66819-ec49-51a7-8def-b46877c3cd67/artifacts/4808b2c29e1c5ed5b01c0b362e4829b1af80caad2a3a8639119cd3b17bf3aeb5.zip
+2026-10-17T17:20:25.1129558Z Starting download of artifact to: /home/runner/work/gmeow-ontology/gmeow-ontology/dist/bin
+2026-10-17T17:20:25.4251871Z (node:2317) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-10-17T17:20:25.4252581Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-17T17:20:28.7696871Z SHA256 digest of downloaded artifact is c00d36e1c8b19f8e22cb9a243300a764124deb5b19daf6bf18e89e58cfb2eaad
+2026-10-17T17:20:28.7697391Z Artifact download completed successfully.
+2026-10-17T17:20:28.7697849Z Total of 1 artifact(s) downloaded
+2026-10-17T17:20:28.7700712Z Download artifact has finished successfully
+2026-10-17T17:20:28.8764800Z ##[group]Run chmod +x dist/bin/gmeow-dev
+2026-10-17T17:20:28.8765001Z [36;1mchmod +x dist/bin/gmeow-dev[0m
+2026-10-17T17:20:28.8816296Z shell: /usr/bin/bash -e {0}
+2026-10-17T17:20:28.8816442Z env:
+2026-10-17T17:20:28.8816767Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:28.8817179Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:28.8817411Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:28.8817601Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:28.8817823Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:28.8817989Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:28.8818137Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:28.8818278Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:28.8818406Z   CARGO_TERM_COLOR: always
+2026-10-17T17:20:28.8818538Z ##[endgroup]
+2026-10-17T17:20:30.0811943Z ##[group]Run actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+2026-10-17T17:20:30.0812174Z with:
+2026-10-17T17:20:30.0812385Z   path: .cache/gmeow-sync/actions
+.cache/gmeow-sync/stage-fixture-candidate-v2.json
+
+2026-10-17T17:20:30.0813067Z   key: test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-prefix-556947b333d95c25c61213ae08714adce0f58fe0-39051285193-1
+2026-10-17T17:20:30.0815310Z   restore-keys: test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-complete-556947b333d95c25c61213ae08714adce0f58fe0-
+test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-prefix-556947b333d95c25c61213ae08714adce0f58fe0-
+test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-complete-
+test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-prefix-
+
+2026-10-17T17:20:30.0817137Z   enableCrossOsArchive: false
+2026-10-17T17:20:30.0817291Z   fail-on-cache-miss: false
+2026-10-17T17:20:30.0817435Z   lookup-only: false
+2026-10-17T17:20:30.0817558Z env:
+2026-10-17T17:20:30.0818222Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:30.0818612Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:30.0818839Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:30.0819031Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:30.0819181Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:30.0819333Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:30.0819483Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:30.0819625Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:30.0819751Z   CARGO_TERM_COLOR: always
+2026-10-17T17:20:30.0819887Z ##[endgroup]
+2026-10-17T17:20:30.3540666Z Cache not found for input keys: test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-prefix-556947b333d95c25c61213ae08714adce0f58fe0-39051285193-1, test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-complete-556947b333d95c25c61213ae08714adce0f58fe0-, test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-prefix-556947b333d95c25c61213ae08714adce0f58fe0-, test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-complete-, test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-prefix-
+2026-10-17T17:20:30.3963226Z ##[group]Run make produce-producer-independent-test-fixtures FIXTURE_TIMINGS_JSON=dist/nextest/fixture-timings-producer-independent.json
+2026-10-17T17:20:30.3964220Z [36;1mmake produce-producer-independent-test-fixtures FIXTURE_TIMINGS_JSON=dist/nextest/fixture-timings-producer-independent.json[0m
+2026-10-17T17:20:30.4018702Z shell: /usr/bin/bash -e {0}
+2026-10-17T17:20:30.4018847Z env:
+2026-10-17T17:20:30.4019166Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:20:30.4019569Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:30.4019799Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:20:30.4019993Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:20:30.4020142Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:20:30.4020294Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:20:30.4020462Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:20:30.4020601Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:20:30.4020730Z   CARGO_TERM_COLOR: always
+2026-10-17T17:20:30.4020867Z ##[endgroup]
+2026-10-17T17:20:30.5244662Z ./dist/bin/gmeow-dev test-fixtures produce --scope producer-independent --timings-json dist/nextest/fixture-timings-producer-independent.json
+2026-10-17T17:20:32.9243746Z pipeline fixture warm admission: miss reason=candidate-not-found
+2026-10-17T17:20:32.9244128Z test fixture producer: phase=pipeline-stages state=started targets=31 jobs=4
+2026-10-17T17:20:37.2119881Z [2m2026-10-17T17:20:37.209183Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-el/webont-thing-004/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/07/owl#Thing> requires complete set-equality model admission
+2026-10-17T17:20:37.2533599Z [2m2026-10-17T17:20:37.250630Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-el/webont-thing-005/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/07/owl#Thing> requires complete set-equality model admission
+2026-10-17T17:20:37.2538400Z [2m2026-10-17T17:20:37.251014Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-el/webont-thing-005/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/07/owl#Thing> requires complete set-equality model admission
+2026-10-17T17:20:38.2030442Z [2m2026-10-17T17:20:38.199554Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/fs2rdf-domain-range-expression-ar/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m10 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: selected class model does not complete <http://example.org/p1> <http://www.w3.org/2000/01/rdf-schema#range> Iri("https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da") | class: UnsupportedCombination: selected class model does not complete <http://example.org/p2> <http://www.w3.org/2000/01/rdf-schema#domain> Iri("https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1") | class: UnsupportedCombination: selected class model does not complete <http://example.org/p3> <http://www.w3.org/2000/01/rdf-schema#range> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f") | class: UnsupportedCombination: selected class model does not complete <http://example.org/p4> <http://www.w3.org/2000/01/rdf-schema#domain> Iri("https://blackcatinformatics.ca/gmeow/skolem/7349638b85baac13a9289ba42775e96df2402b6d") | class: UnsupportedCombination: selected class model does not complete <http://example.org/p6> <http://www.w3.org/2002/07/owl#inverseOf> Iri("https://blackcatinformatics.ca/gmeow/skolem/23dfb5f2958f45ac8edab83ef6ca6a7bb390de5d") | class: UnsupportedCombination: selected class model does not complete <http://example.org/p7> <http://www.w3.org/2002/07/owl#inverseOf> Iri("https://blackcatinformatics.ca/gmeow/skolem/74e72b63189661a8f59ad2b7e528e10034badb68") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/23dfb5f2958f45ac8edab83ef6ca6a7bb390de5d> <http://www.w3.org/2000/01/rdf-schema#domain> Iri("https://blackcatinformatics.ca/gmeow/skolem/e6c97b60810e7c40dd87efbc1766a5be70492c08") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/23dfb5f2958f45ac8edab83ef6ca6a7bb390de5d> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://example.org/p6") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/74e72b63189661a8f59ad2b7e528e10034badb68> <http://www.w3.org/2000/01/rdf-schema#range> Iri("https://blackcatinformatics.ca/gmeow/skolem/23dddde8e1a47112f3d95a0239f327e67010e239") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/74e72b63189661a8f59ad2b7e528e10034badb68> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://example.org/p7")
+2026-10-17T17:20:41.2020724Z [2m2026-10-17T17:20:41.198112Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/owl2-rl-invalid-oneof/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://owl2.test/rules#Cb> requires complete set-equality model admission
+2026-10-17T17:20:41.2060266Z [2m2026-10-17T17:20:41.198636Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/owl2-rl-invalid-oneof/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://owl2.test/rules#Cb> requires complete set-equality model admission
+2026-10-17T17:20:41.7981054Z [2m2026-10-17T17:20:41.796796Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/owl2-rl-valid-oneof/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> requires complete set-equality model admission
+2026-10-17T17:20:41.8010045Z [2m2026-10-17T17:20:41.797325Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/owl2-rl-valid-oneof/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> requires complete set-equality model admission
+2026-10-17T17:20:41.8034357Z [2m2026-10-17T17:20:41.801337Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/owl2-rl-valid-oneof/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> requires complete set-equality model admission
+2026-10-17T17:20:43.5620693Z [2m2026-10-17T17:20:43.555149Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/rdfbased-sem-enum-inst-included/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.example.org#e> requires complete set-equality model admission
+2026-10-17T17:20:43.5671421Z [2m2026-10-17T17:20:43.555649Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/rdfbased-sem-enum-inst-included/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.example.org#e> requires complete set-equality model admission
+2026-10-17T17:20:44.7051316Z [2m2026-10-17T17:20:44.703310Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-equivalentproperty-005/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0madmission HasValue (Obstructed): SourceShape: a selected restriction requires exactly one property IRI
+2026-10-17T17:20:44.9801693Z [2m2026-10-17T17:20:44.977659Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-functionalproperty-004/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/FunctionalProperty/premises004#Singleton> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/FunctionalProperty/premises004#prop> <http://www.w3.org/2000/01/rdf-schema#range> Iri("http://www.w3.org/2002/03owlt/FunctionalProperty/premises004#Singleton")
+2026-10-17T17:20:44.9813462Z [2m2026-10-17T17:20:44.978142Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-functionalproperty-004/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/FunctionalProperty/premises004#Singleton> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/FunctionalProperty/premises004#prop> <http://www.w3.org/2000/01/rdf-schema#range> Iri("http://www.w3.org/2002/03owlt/FunctionalProperty/premises004#Singleton")
+2026-10-17T17:20:45.0997913Z [2m2026-10-17T17:20:45.097334Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-i4-5-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m8 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/I4.5/premises001#EUCountry> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/I4.5/premises001#EuroMP> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da") | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/I4.5/premises001#hasEuroMP> <http://www.w3.org/2000/01/rdf-schema#domain> Iri("http://www.w3.org/2002/03owlt/I4.5/premises001#EUCountry") | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/I4.5/premises001#hasEuroMP> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://www.w3.org/2002/03owlt/I4.5/premises001#isEuroMPFrom") | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/I4.5/premises001#isEuroMPFrom> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://www.w3.org/2002/03owlt/I4.5/premises001#hasEuroMP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://www.w3.org/2002/03owlt/I4.5/premises001#isEuroMPFrom") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#someValuesFrom> Iri("http://www.w3.org/2002/07/owl#Thing") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> Iri("http://www.w3.org/2002/07/owl#Restriction")
+2026-10-17T17:20:45.1014210Z [2m2026-10-17T17:20:45.098715Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-i4-5-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m8 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/I4.5/premises001#EUCountry> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/I4.5/premises001#EuroMP> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da") | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/I4.5/premises001#hasEuroMP> <http://www.w3.org/2000/01/rdf-schema#domain> Iri("http://www.w3.org/2002/03owlt/I4.5/premises001#EUCountry") | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/I4.5/premises001#hasEuroMP> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://www.w3.org/2002/03owlt/I4.5/premises001#isEuroMPFrom") | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/I4.5/premises001#isEuroMPFrom> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://www.w3.org/2002/03owlt/I4.5/premises001#hasEuroMP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://www.w3.org/2002/03owlt/I4.5/premises001#isEuroMPFrom") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#someValuesFrom> Iri("http://www.w3.org/2002/07/owl#Thing") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> Iri("http://www.w3.org/2002/07/owl#Restriction")
+2026-10-17T17:20:46.0197443Z [2m2026-10-17T17:20:46.019089Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-i5-26-006/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m4 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: unsupported selected definition on <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: unsupported selected definition on <https://blackcatinformatics.ca/gmeow/skolem/ae4f281df5a5d0ff3cad6371f76d5c29b6d953ec> | class: UnsupportedCombination: unsupported subsumer <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> of <http://www.w3.org/2002/03owlt/I5.26/consistent006#C> | class: UnsupportedCombination: unsupported subsumer <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> of <https://blackcatinformatics.ca/gmeow/skolem/ae4f281df5a5d0ff3cad6371f76d5c29b6d953ec>
+2026-10-17T17:20:46.0981572Z [2m2026-10-17T17:20:46.097301Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-i5-26-007/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m7 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: unsupported membership expression <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> on <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> | class: UnsupportedCombination: unsupported membership expression <https://blackcatinformatics.ca/gmeow/skolem/ae4f281df5a5d0ff3cad6371f76d5c29b6d953ec> on <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> | class: UnsupportedCombination: unsupported selected definition on <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: unsupported selected definition on <https://blackcatinformatics.ca/gmeow/skolem/ae4f281df5a5d0ff3cad6371f76d5c29b6d953ec> | class: UnsupportedCombination: unsupported subsumer <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> of <http://www.w3.org/2002/03owlt/I5.26/consistent007#C> | class: UnsupportedCombination: unsupported subsumer <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> of <https://blackcatinformatics.ca/gmeow/skolem/ae4f281df5a5d0ff3cad6371f76d5c29b6d953ec> | class: UnsupportedCombination: class source choice requires an unsupported recursive model completion
+2026-10-17T17:20:46.9600630Z [2m2026-10-17T17:20:46.957530Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-i5-8-010/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mobligation Datatype: UnsupportedCombination: capacity of the selected datatype intersection is undecidable
+2026-10-17T17:20:47.1720369Z [2m2026-10-17T17:20:47.171352Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-i5-8-015/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mobligation Datatype: UnsupportedValue: an asserted datatype value has no admitted interpretation
+2026-10-17T17:20:47.2290406Z [2m2026-10-17T17:20:47.226820Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-i5-8-016/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mobligation Datatype: UnsupportedValue: an asserted datatype value has no admitted interpretation
+2026-10-17T17:20:47.6752623Z [2m2026-10-17T17:20:47.672801Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-inversefunctionalproperty-004/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/InverseFunctionalProperty/premises004#Singleton> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/InverseFunctionalProperty/premises004#prop> <http://www.w3.org/2000/01/rdf-schema#domain> Iri("http://www.w3.org/2002/03owlt/InverseFunctionalProperty/premises004#Singleton")
+2026-10-17T17:20:47.6758680Z [2m2026-10-17T17:20:47.673229Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-inversefunctionalproperty-004/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/InverseFunctionalProperty/premises004#Singleton> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/InverseFunctionalProperty/premises004#prop> <http://www.w3.org/2000/01/rdf-schema#domain> Iri("http://www.w3.org/2002/03owlt/InverseFunctionalProperty/premises004#Singleton")
+2026-10-17T17:20:48.2243797Z [2m2026-10-17T17:20:48.223348Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-oneof-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m4 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> to <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> | class: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f")
+2026-10-17T17:20:48.2273286Z [2m2026-10-17T17:20:48.224353Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-oneof-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m4 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> to <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> | class: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f")
+2026-10-17T17:20:48.2312400Z [2m2026-10-17T17:20:48.225659Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-oneof-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m4 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> to <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> | class: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f")
+2026-10-17T17:20:48.2890752Z [2m2026-10-17T17:20:48.288458Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-oneof-002/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/oneOf/premises002#TShirt> requires complete set-equality model admission
+2026-10-17T17:20:48.2920298Z [2m2026-10-17T17:20:48.289524Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-oneof-002/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/oneOf/premises002#TShirt> requires complete set-equality model admission
+2026-10-17T17:20:48.3551061Z [2m2026-10-17T17:20:48.353256Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-oneof-003/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/oneOf/premises003#T1> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/oneOf/premises003#T2> requires complete set-equality model admission
+2026-10-17T17:20:48.3580580Z [2m2026-10-17T17:20:48.354169Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-oneof-003/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/oneOf/premises003#T1> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/oneOf/premises003#T2> requires complete set-equality model admission
+2026-10-17T17:20:48.6921589Z [2m2026-10-17T17:20:48.688980Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-restriction-003/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mobligation Datatype: IncompleteDefinition: a datatype expression requires one complete constructor: Iri("http://www.w3.org/2002/03owlt/Restriction/consistent003#superC") has none and is not an intrinsic datatype | obligation Datatype: IncompleteDefinition: a datatype expression requires one complete constructor: Iri("http://www.w3.org/2002/03owlt/Restriction/consistent003#superD") has none and is not an intrinsic datatype
+2026-10-17T17:20:48.7612307Z [2m2026-10-17T17:20:48.758487Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-restriction-004/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mobligation Datatype: IncompleteDefinition: a datatype expression requires one complete constructor: Iri("http://www.w3.org/2002/03owlt/Restriction/consistent004#superC") has none and is not an intrinsic datatype | obligation Datatype: IncompleteDefinition: a datatype expression requires one complete constructor: Iri("http://www.w3.org/2002/03owlt/Restriction/consistent004#superD") has none and is not an intrinsic datatype
+2026-10-17T17:20:49.4063208Z [2m2026-10-17T17:20:49.404347Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-transitiveproperty-002/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m3 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://www.w3.org/2002/03owlt/TransitiveProperty/premises002#symProp> <http://www.w3.org/2000/01/rdf-schema#range> Iri("https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da") | class: UnsupportedCombination: selected class model does not complete declaration <http://www.w3.org/2002/03owlt/TransitiveProperty/premises002#symProp> Iri("http://www.w3.org/2002/07/owl#SymmetricProperty")
+2026-10-17T17:20:49.6230081Z [2m2026-10-17T17:20:49.622474Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-unionof-003/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m3 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/unionOf/premises003#A-and-B> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/unionOf/premises003#A> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/unionOf/premises003#B> requires complete set-equality model admission
+2026-10-17T17:20:49.6251729Z [2m2026-10-17T17:20:49.623270Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-unionof-003/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m3 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/unionOf/premises003#A-and-B> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/unionOf/premises003#A> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/unionOf/premises003#B> requires complete set-equality model admission
+2026-10-17T17:20:49.6971792Z [2m2026-10-17T17:20:49.694208Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-unionof-004/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/unionOf/premises004#A> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <http://www.w3.org/2002/03owlt/unionOf/premises004#B> requires complete set-equality model admission
+2026-10-17T17:20:50.7051146Z [2m2026-10-17T17:20:50.704494Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:50.7161802Z [2m2026-10-17T17:20:50.713791Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:50.7972502Z [2m2026-10-17T17:20:50.796696Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:50.8001457Z [2m2026-10-17T17:20:50.797867Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-001/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:50.8962002Z [2m2026-10-17T17:20:50.895655Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-101/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:50.9022037Z [2m2026-10-17T17:20:50.896996Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-101/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:50.9732516Z [2m2026-10-17T17:20:50.971937Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-101/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:50.9738782Z [2m2026-10-17T17:20:50.972500Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-101/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:51.0492215Z [2m2026-10-17T17:20:51.047682Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-103/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:51.0521515Z [2m2026-10-17T17:20:51.049928Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-103/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:51.1322181Z [2m2026-10-17T17:20:51.131576Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-103/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:51.1380926Z [2m2026-10-17T17:20:51.132167Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-103/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: class expression equivalence <http://oiled.man.example.net/test#Unsatisfiable> to <https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268> | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("https://blackcatinformatics.ca/gmeow/skolem/066df207d435c4aa0aaaf876e789070088ad9268")
+2026-10-17T17:20:51.2880710Z [2m2026-10-17T17:20:51.286987Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-104/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("http://oiled.man.example.net/test#c1")
+2026-10-17T17:20:51.2931046Z [2m2026-10-17T17:20:51.288221Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-104/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("http://oiled.man.example.net/test#c1")
+2026-10-17T17:20:51.3761221Z [2m2026-10-17T17:20:51.374474Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-104/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("http://oiled.man.example.net/test#c1")
+2026-10-17T17:20:51.3810777Z [2m2026-10-17T17:20:51.378336Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-104/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#Unsatisfiable> <http://www.w3.org/2002/07/owl#equivalentClass> Iri("http://oiled.man.example.net/test#c1")
+2026-10-17T17:20:52.4212081Z [2m2026-10-17T17:20:52.419197Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://example.org/nominal-counting/oneof-differentfrom-clash/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://example.org/nominal-counting/oneof-differentfrom-clash/oneA2> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <https://example.org/nominal-counting/oneof-differentfrom-clash/oneA> requires complete set-equality model admission
+2026-10-17T17:20:52.4240720Z [2m2026-10-17T17:20:52.422982Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://example.org/nominal-counting/oneof-differentfrom-clash/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m2 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://example.org/nominal-counting/oneof-differentfrom-clash/oneA2> requires complete set-equality model admission | class: UnsupportedCombination: nominal class <https://example.org/nominal-counting/oneof-differentfrom-clash/oneA> requires complete set-equality model admission
+2026-10-17T17:21:28.9370464Z [2m2026-10-17T17:21:28.935902Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-035/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m9 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#invP> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#p> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#maxCardinality> Literal { lexical_form: "2", datatype: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger", language: None, direction: None } | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#someValuesFrom> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> Iri("http://www.w3.org/2002/07/owl#Restriction") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> Iri("http://www.w3.org/2002/07/owl#Restriction")
+2026-10-17T17:21:28.9389074Z [2m2026-10-17T17:21:28.936727Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-035/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m9 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#invP> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#p> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#maxCardinality> Literal { lexical_form: "2", datatype: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger", language: None, direction: None } | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#someValuesFrom> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> Iri("http://www.w3.org/2002/07/owl#Restriction") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> Iri("http://www.w3.org/2002/07/owl#Restriction")
+2026-10-17T17:21:28.9406181Z [2m2026-10-17T17:21:28.937384Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-035/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m9 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#invP> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#p> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#maxCardinality> Literal { lexical_form: "2", datatype: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger", language: None, direction: None } | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#someValuesFrom> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> Iri("http://www.w3.org/2002/07/owl#Restriction") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> Iri("http://www.w3.org/2002/07/owl#Restriction")
+2026-10-17T17:21:28.9423391Z [2m2026-10-17T17:21:28.938619Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-035/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m9 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#invP> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#p> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#maxCardinality> Literal { lexical_form: "2", datatype: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger", language: None, direction: None } | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#someValuesFrom> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> Iri("http://www.w3.org/2002/07/owl#Restriction") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> Iri("http://www.w3.org/2002/07/owl#Restriction")
+2026-10-17T17:21:28.9441679Z [2m2026-10-17T17:21:28.939174Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-035/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m9 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#invP> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#p> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#maxCardinality> Literal { lexical_form: "2", datatype: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger", language: None, direction: None } | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#someValuesFrom> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> Iri("http://www.w3.org/2002/07/owl#Restriction") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> Iri("http://www.w3.org/2002/07/owl#Restriction")
+2026-10-17T17:21:28.9459697Z [2m2026-10-17T17:21:28.939698Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://gmeow.example/w3c-owl2-full/webont-description-logic-035/w" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m9 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f> requires complete set-equality model admission | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#invP> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <http://oiled.man.example.net/test#p> <http://www.w3.org/2002/07/owl#inverseOf> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#maxCardinality> Literal { lexical_form: "2", datatype: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger", language: None, direction: None } | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#invP") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#onProperty> Iri("http://oiled.man.example.net/test#p") | class: UnsupportedCombination: selected class model does not complete <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> <http://www.w3.org/2002/07/owl#someValuesFrom> Iri("https://blackcatinformatics.ca/gmeow/skolem/0d99caa0f0396f675d07477acd25fcb91e23df8f") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/5b148bf74797b4291afc5e5fa1f6f7dc9ed9dea1> Iri("http://www.w3.org/2002/07/owl#Restriction") | class: UnsupportedCombination: selected class model does not complete declaration <https://blackcatinformatics.ca/gmeow/skolem/eca600fd5e8f5884324a59fc7ffbf75a377475da> Iri("http://www.w3.org/2002/07/owl#Restriction")
+2026-10-17T17:22:11.6919353Z [2m2026-10-17T17:22:11.691529Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://blackcatinformatics.ca/gmeow/graph/rl-default" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://gmeow.example/dl/oneof#Colour> requires complete set-equality model admission
+2026-10-17T17:22:11.6942302Z [2m2026-10-17T17:22:11.692106Z[0m [33m WARN[0m [2mnative_obstruction[0m[2m:[0m retained native obstruction withholds completed reads [3mworld[0m[2m=[0m"https://blackcatinformatics.ca/gmeow/graph/rl-default" [3mproperty_admission_blocked[0m[2m=[0mfalse [3mobstructions[0m[2m=[0m1 [3mdetail[0m[2m=[0mclass: UnsupportedCombination: nominal class <https://gmeow.example/dl/oneof#Colour> requires complete set-equality model admission
+2026-10-17T17:22:40.7770031Z error gmeow-dev.cli.fail: test fixtures: produce authenticated stage DAG: stage stage-conformance failed: enactment gate: 1 authored logic:Constraint(s) carry a gmeow:enforcesFailureClass but did not lower into a violation rule, so nothing enforces them — neither this gate nor the derived-SHACL surface, which cannot decide a procedural law: <https://blackcatinformatics.ca/gmeow/FlagshipScenarioFailureIriConstraint> (unsupported-consequent)
+2026-10-17T17:22:41.1003019Z make: *** [Makefile:670: produce-producer-independent-test-fixtures] Error 1
+2026-10-17T17:22:41.1018929Z ##[error]Process completed with exit code 2.
+2026-10-17T17:22:41.1071115Z ##[group]Run actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+2026-10-17T17:22:41.1071331Z with:
+2026-10-17T17:22:41.1071537Z   path: .cache/gmeow-sync/actions
+.cache/gmeow-sync/stage-fixture-candidate-v2.json
+
+2026-10-17T17:22:41.1072211Z   key: test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-prefix-556947b333d95c25c61213ae08714adce0f58fe0-39051285193-1
+2026-10-17T17:22:41.1072798Z   enableCrossOsArchive: false
+2026-10-17T17:22:41.1072939Z env:
+2026-10-17T17:22:41.1073249Z   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -Zunstable-options -Clink-self-contained=+linker -Clinker-features=+lld -Ctarget-cpu=x86-64-v3
+2026-10-17T17:22:41.1073636Z   CARGO_ENV_CFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:22:41.1073865Z   CARGO_ENV_CXXFLAGS_VALUE: -O2 -march=x86-64-v3 -mtune=generic
+2026-10-17T17:22:41.1074065Z   CARGO_ENV_CFLAGS_FORCE: true
+2026-10-17T17:22:41.1074227Z   CARGO_ENV_CXXFLAGS_FORCE: true
+2026-10-17T17:22:41.1074377Z   GMEOW_DEV: ./dist/bin/gmeow-dev
+2026-10-17T17:22:41.1074524Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:22:41.1074665Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:22:41.1074796Z   CARGO_TERM_COLOR: always
+2026-10-17T17:22:41.1074930Z ##[endgroup]
+2026-10-17T17:22:41.1897428Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/gmeow-ontology/gmeow-ontology --files-from manifest.txt --use-compress-program zstdmt
+2026-10-17T17:22:43.2379452Z Sent 34865152 of 110418620 (31.6%), 33.3 MBs/sec
+2026-10-17T17:22:44.2386396Z Sent 102498304 of 110418620 (92.8%), 48.9 MBs/sec
+2026-10-17T17:22:44.4695508Z Sent 110418620 of 110418620 (100.0%), 47.2 MBs/sec
+2026-10-17T17:22:44.6958222Z Cache saved with key: test-actions-v5-Linux-X64-92a3fffb3ddc4909c867125b6396887df764765d2bb774b297e3f1a12370992a-aa9dcdd4091b12d1546ba3c8b2d1341349ecf1e3d28aa13a6ac1ecc3a43f96a3-prefix-556947b333d95c25c61213ae08714adce0f58fe0-39051285193-1
+2026-10-17T17:22:44.7092084Z Post job cleanup.
+2026-10-17T17:22:44.7644772Z [command]/usr/bin/git version
+2026-10-17T17:22:44.7673743Z git version 2.55.0
+2026-10-17T17:22:44.7693459Z Temporarily overriding HOME='/home/runner/work/_temp/dfa70c7b-6a59-465f-b578-5dbd43f250fd' before making global git config changes
+2026-10-17T17:22:44.7694079Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T17:22:44.7696979Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/gmeow-ontology/gmeow-ontology
+2026-10-17T17:22:44.7719782Z Removing SSH command configuration
+2026-10-17T17:22:44.7723653Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T17:22:44.7747174Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T17:22:44.7923196Z Removing HTTP extra header
+2026-10-17T17:22:44.7925867Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T17:22:44.7948566Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T17:22:44.8121735Z Removing includeIf entries pointing to credentials config files
+2026-10-17T17:22:44.8122203Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T17:22:44.8143942Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T17:22:44.8419421Z Evaluate and set job outputs
+2026-10-17T17:22:44.8423422Z Cleaning up orphan processes
+

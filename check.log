@@ -1,0 +1,122 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/hash)
+   Compiling crossbeam-utils v0.8.21
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+   Compiling rayon-core v1.13.0
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/rdf-core)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/rdf-events)
+    Checking either v1.16.0
+    Checking hashbrown v0.17.1
+   Compiling libc v0.2.186
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/alloc-probe)
+    Checking crossbeam-epoch v0.9.18
+    Checking regex-automata v0.4.14
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/deflate)
+    Checking crossbeam-deque v0.8.6
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking digest v0.11.3
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/stack)
+    Checking regex v1.12.4
+    Checking rayon v1.12.0
+    Checking sha2 v0.11.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/testkit)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/cdt)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/datalog)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/586-replay-ordinary-dl-clash-reachability/crates/entail)
+error[E0609]: no field `support` on type `&SchemaClashEvidence`
+    --> crates/entail/src/owl_dl/proof.rs:3662:26
+     |
+3662 |                         .support
+     |                          ^^^^^^^ unknown field
+     |
+     = note: available field is: `bounds`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `purrdf-entail` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0609]: no field `support` on type `&owl_dl::proof::SchemaClashEvidence`
+   --> crates/entail/src/owl_dl/proof/schema_tests.rs:147:47
+    |
+147 |             .is_some_and(|evidence| !evidence.support.is_empty())
+    |                                               ^^^^^^^ unknown field
+    |
+    = note: available field is: `bounds`
+
+error[E0609]: no field `support` on type `&mut owl_dl::proof::SchemaClashEvidence`
+   --> crates/entail/src/owl_dl/proof/schema_tests.rs:150:27
+    |
+150 |     evidence(&mut forged).support.clear();
+    |                           ^^^^^^^ unknown field
+    |
+    = note: available field is: `bounds`
+
+error[E0609]: no field `frame` on type `&mut owl_dl::proof::SchemaClashEvidence`
+   --> crates/entail/src/owl_dl/proof/schema_tests.rs:156:27
+    |
+156 |     evidence(&mut forged).frame[0] = usize::MAX;
+    |                           ^^^^^ unknown field
+    |
+    = note: available field is: `bounds`
+
+error[E0609]: no field `support` on type `&mut owl_dl::proof::SchemaClashEvidence`
+   --> crates/entail/src/owl_dl/proof/schema_tests.rs:159:27
+    |
+159 |     evidence(&mut forged).support[0].frame[0] = usize::MAX;
+    |                           ^^^^^^^ unknown field
+    |
+    = note: available field is: `bounds`
+
+error[E0609]: no field `support` on type `&mut owl_dl::proof::SchemaClashEvidence`
+   --> crates/entail/src/owl_dl/proof/schema_tests.rs:199:47
+    |
+199 |     let support = &mut evidence(&mut changed).support;
+    |                                               ^^^^^^^ unknown field
+    |
+    = note: available field is: `bounds`
+
+error[E0609]: no field `support` on type `&owl_dl::proof::SchemaClashEvidence`
+    --> crates/entail/src/owl_dl/proof.rs:3662:26
+     |
+3662 |                         .support
+     |                          ^^^^^^^ unknown field
+     |
+     = note: available field is: `bounds`
+
+error[E0599]: no method named `support_steps` found for reference `&owl_dl::proof::SchemaClashEvidence` in the current scope
+   --> crates/entail/src/reasoner/schema_tests.rs:280:31
+    |
+280 |             assert_eq!(schema.support_steps(), 0);
+    |                               ^^^^^^^^^^^^^ method not found in `&owl_dl::proof::SchemaClashEvidence`
+
+error[E0599]: no method named `support_steps` found for reference `&owl_dl::proof::SchemaClashEvidence` in the current scope
+   --> crates/entail/src/reasoner/schema_tests.rs:291:24
+    |
+291 |                 schema.support_steps() > 0,
+    |                        ^^^^^^^^^^^^^ method not found in `&owl_dl::proof::SchemaClashEvidence`
+
+error[E0597]: `reference` does not live long enough
+   --> crates/entail/src/owl_dl/hyper.rs:737:17
+    |
+728 |         let bounds = if let Some(class) = self.clauses.schema_class(index, &self.g.kb().schema) {
+    |             ------ borrow later stored here
+729 |             #[cfg(test)]
+730 |             let reference = self
+    |                 --------- binding `reference` declared here
+...
+737 |                 reference
+    |                 ^^^^^^^^^ borrowed value does not live long enough
+...
+756 |         } else {
+    |         - `reference` dropped here while still borrowed
+
+Some errors have detailed explanations: E0597, E0599, E0609.
+For more information about an error, try `rustc --explain E0597`.
+error: could not compile `purrdf-entail` (lib test) due to 9 previous errors

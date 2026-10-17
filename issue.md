@@ -1,0 +1,19 @@
+# Issue #586: Replay ordinary DL clash reachability from recorded current support
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+Ordinary recorded DL clashes currently check the cited empty-headed clause and its binding frame but leave derived witness reachability unattested. Prepared cardinality clashes already use the native predecessor-linked application journal and replay current support from the consumer's assertions/refutation assumptions. Extend that existing owner to ordinary empty-headed clauses rather than introducing a second checker or guessing support from a final graph.
+
+Record the actual finite application prefix for every recorded clause clash. Replay each established body, licensed deterministic/branch head, generated witness and identification through existing native graph operations; do not call saturation or a new decision search from the checker. Keep unrecorded/recorded decisions and counters identical, share arena entries across branches, retain stop/physical-refusal/truncation behavior and existing ceilings, and return no checked reachability for a missing, forged or refused prefix.
+
+Expose the named identity of a checked clash node through its exact consumer context, preserving scoped blank identities and unknown/anonymous/generated distinctions. Dictionary resolution is not itself a locally authorized contradiction: global inconsistency must never be presented as a contradiction of every named individual. Preserve attested/trusted/unattested distinctions and retain the separate limitations of concrete-domain clash and merge-closure observations.
+
+Keep prepared cardinality evidence on the same current-support path and preserve existing proof byte contracts where applicable; version any genuinely extended wire grammar and reject malformed/unbound evidence. Migrate directly affected first-party callers/tests instead of adding duplicate evidence stores or a compatibility engine.
+
+Acceptance: current public recorded services and independent proof replay; asserted and derived ordinary clashes; exhaustive branch, equality, generated/anonymous-node and disconnected-source controls; original named/scoped-blank resolution; wrong source/context and tampered/removed prefix, frame, branch and head rejection; source-bound prepared cardinality regressions and recording-refusal parity; strict affected Clippy, complete helper check, actual WASM execution and normal hooks. No runtime dependency, semantic feature, clock, source filter, new default cap or host probe. Implement and integrate with ghprsq. This advances the checked-support prerequisite for Blackcat-Informatics/gmeow-ontology#1803; it does not claim shared-store/delta or the complete downstream cutover.
+
+
+## Comments (0)
+

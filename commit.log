@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 50172ad5534f (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/586-replay-ordinary-dl-clash-reachability 04f6edbff] Record and replay ordinary DL clash support
+ 13 files changed, 920 insertions(+), 201 deletions(-)
+ create mode 100644 crates/entail/tests/current_clash_support.rs

@@ -1,0 +1,7 @@
+# Review debt
+
+Self-audit, not independent review. Read refreshed complete pr-reviews.json, pr-inline-comments.json, pr-threads.json, pr-state.json and the merge brief. There are zero submitted reviews, zero inline comments and zero review threads; GraphQL hasNextPage is false. PR comments comprise the authoritative plan, squash notes and CodeRabbit's processing/configuration comment. The latter lists13 reviewed files and asks to wait while processing; it contains no actionable finding and is not an approval. Its disposition is pending review under the user's explicit merge-now instruction. No actionable reviewer finding is discarded or described as approved.
+
+Hosted native workspace, integration, portability and architecture lanes remain pending. Actions/C-C++/JavaScript-TypeScript/Python CodeQL, doc, msrv and python-publisher passed; optional native-profile/simd-projection lanes were skipped. No failed check was present at final inspection. CodeRabbit has no submitted review yet. Pending hosted CI/review is not a pass and is being handled under the user's existing explicit instruction to ghprsq now and own subsequent CI findings.
+
+VERDICT: no unresolved submitted review debt at this inspection. Local acceptance passes are indexed in validation.md. Independent review is unavailable, not represented as passed. Refresh review/check state immediately before merge; new actionable findings must be adjudicated.

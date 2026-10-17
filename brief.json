@@ -1,0 +1,60 @@
+{
+  "issue": 586,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Replay ordinary DL clash reachability from recorded current support",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 499,
+      "title": "Entailment: prepare schema-invariant cardinality contradictions once per class",
+      "state": "CLOSED"
+    },
+    {
+      "number": 452,
+      "title": "owl:propertyChainAxiom is a property-chain boundary; regular chains are not decided",
+      "state": "CLOSED"
+    },
+    {
+      "number": 215,
+      "title": "bug(entail): implement NN/NI counting-on-inverse reasoning and restore the OWL-DL verdict",
+      "state": "CLOSED"
+    },
+    {
+      "number": 471,
+      "title": "v4.0: remembered empty named graphs become the default",
+      "state": "CLOSED"
+    },
+    {
+      "number": 173,
+      "title": "feat(entail): close the 16 ledgered W3C OWL 2 RL entailment-corpus gaps",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "correctness": 3,
+    "none": 22,
+    "performance": 2,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/586-replay-ordinary-dl-clash-reachability"
+  },
+  "coverage": [
+    "issue #586 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Replay', 'ordinary', 'clash']: 5 other item(s)",
+    "GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #586 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #586: 0",
+    "requirement candidates: 1 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 0 identifier(s), 0 workspace package(s), 0 URL(s)"
+  ]
+}
