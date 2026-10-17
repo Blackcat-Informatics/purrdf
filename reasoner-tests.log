@@ -1,0 +1,103 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/entail)
+    Finished `test` profile [optimized] target(s) in 1m 13s
+     Running unittests src/lib.rs (/opt/.cargo/47/e242f4d11e7681/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 94 tests
+test reasoner::certificate::tests::refutes_answers_unknown_rather_than_a_guessed_verdict_when_stopped ... ok
+test reasoner::certificate::tests::session_certificate_reports_a_stopped_run_as_budget_exhausted_and_says_why ... ok
+test reasoner::certificate::tests::a_stopped_decision_is_reported_as_stopped_not_exhausted ... ok
+test reasoner::proof::tests::a_boundary_no_construct_spells_is_rejected ... ok
+test reasoner::proof::current::tests::a_fresh_class_refutation_cannot_be_relabelled_as_an_ontology_contradiction ... ok
+test reasoner::proof::tests::a_boolean_answer_binds_through_its_claim_or_through_its_absence ... ok
+test reasoner::proof::tests::a_claim_naming_a_run_that_answered_otherwise_is_rejected ... ok
+test reasoner::classify::tests::the_fragment_predicate_separates_the_corpus ... ok
+test reasoner::proof::current::tests::equivalence_requires_both_refutation_directions_not_two_copies_of_one ... ok
+test reasoner::proof::term_walk_tests::the_encoding_agrees_with_its_recursive_reference_on_generated_terms ... ok
+test reasoner::proof::tests::a_classify_proof_stating_a_subsumption_the_answer_omits_is_rejected ... ok
+test reasoner::proof::tests::a_consistency_proof_does_not_check_as_a_classification ... ok
+test reasoner::proof::tests::a_decided_answer_carries_no_stopping_receipt ... ok
+test reasoner::proof::tests::a_claim_refuted_by_no_run_is_rejected ... ok
+test reasoner::proof::tests::a_claim_naming_an_absent_run_is_rejected ... ok
+test reasoner::proof::tests::a_decided_answer_carrying_a_truncated_trace_is_rejected ... ok
+test reasoner::proof::tests::a_non_utf8_text_field_in_a_service_proof_is_rejected ... ok
+test reasoner::proof::tests::a_classification_proof_binds_every_subsumption_it_reports ... ok
+test reasoner::proof::tests::a_claim_resting_on_a_model_whose_run_closed_is_rejected ... ok
+test reasoner::proof::tests::a_module_extraction_proof_binds_its_question_and_reports_no_search ... ok
+test reasoner::proof::tests::a_classify_proof_missing_a_reported_subsumption_is_rejected ... ok
+test reasoner::proof::tests::a_receipt_checked_against_no_certificate_is_refused ... ok
+test reasoner::proof::tests::a_receipt_beside_a_proof_whose_runs_all_decided_is_rejected_without_a_certificate ... ok
+test reasoner::proof::tests::a_receipt_inventing_a_caller_cancellation_is_rejected ... ok
+test reasoner::proof::tests::a_foreign_service_proof_encoding_tag_is_rejected ... ok
+test reasoner::proof::tests::a_non_canonical_boolean_in_a_service_proof_is_rejected ... ok
+test reasoner::classify::tests::no_direct_taxonomy_edge_is_implied_by_another ... ok
+test reasoner::proof::tests::a_proofs_off_answer_carries_no_proof_and_cannot_be_presented_as_a_verified_one ... ok
+test reasoner::proof::tests::a_receipt_whose_partial_trace_understates_the_branch_points_is_rejected ... ok
+test reasoner::proof::tests::a_service_proof_literal_is_held_to_the_language_tag_grammar ... ok
+test reasoner::proof::tests::a_realization_proof_binds_every_type_it_reports ... ok
+test reasoner::proof::tests::a_receipt_claiming_a_budget_that_was_not_exhausted_is_rejected ... ok
+test reasoner::proof::tests::a_module_proof_does_not_cover_a_different_extraction ... ok
+test reasoner::proof::tests::a_receipt_beside_a_decided_certificate_is_rejected ... ok
+test reasoner::proof::tests::a_service_proof_refuses_a_reserved_vocabulary_checking_ontology_as_a_value ... ok
+test reasoner::proof::tests::a_receipt_naming_an_absent_run_is_rejected ... ok
+test reasoner::proof::tests::a_term_nested_past_the_ceiling_is_rejected ... ok
+test reasoner::proof::tests::a_receipt_pointed_at_a_deciding_run_is_rejected ... ok
+test reasoner::proof::tests::a_receipt_whose_boundary_set_is_not_the_certificates_is_rejected ... ok
+test reasoner::proof::tests::a_receipt_naming_a_run_that_decided_is_rejected ... ok
+test reasoner::proof::tests::a_runless_proof_still_refuses_a_different_ontology ... ok
+test reasoner::proof::tests::a_service_proof_does_not_check_against_a_different_ontology ... ok
+test reasoner::proof::tests::a_service_proof_stating_another_trust_base_is_rejected ... ok
+test reasoner::proof::tests::a_proofs_off_service_answer_is_identical_to_a_proofs_on_one ... ok
+test reasoner::proof::tests::a_zero_run_proof_is_a_different_answer_from_no_proof_at_all ... ok
+test reasoner::proof::tests::a_service_proof_that_travelled_as_bytes_still_verifies ... ok
+test reasoner::proof::tests::a_service_proof_whose_service_is_not_its_questions_is_rejected ... ok
+test reasoner::proof::tests::a_service_proof_round_trips_through_its_own_encoding ... ok
+test reasoner::proof::tests::an_out_of_range_module_method_ordinal_is_rejected ... ok
+test reasoner::proof::tests::a_service_proof_is_byte_identical_run_to_run ... ok
+test reasoner::proof::tests::a_run_whose_answer_contradicts_its_trace_is_rejected ... ok
+test reasoner::proof::tests::a_module_proof_does_not_check_against_a_different_notion ... ok
+test reasoner::proof::tests::a_receipt_whose_run_costs_more_than_the_service_is_rejected ... ok
+test reasoner::proof::tests::an_instance_retrieval_proof_binds_the_individuals_it_returns ... ok
+test reasoner::proof::tests::an_entails_proof_does_not_check_against_a_different_axiom ... ok
+test reasoner::proof::tests::an_out_of_range_service_ordinal_is_rejected ... ok
+test reasoner::proof::tests::an_out_of_range_service_trust_base_ordinal_is_rejected ... ok
+test reasoner::proof::tests::an_unknown_service_proof_discriminant_is_rejected ... ok
+test reasoner::schema_tests::schema_preparation_o3_scaling ... ignored, report-only O3 time/allocation sweeps, run after semantic qualification
+test reasoner::proof::tests::an_undecided_answer_carries_a_stopping_receipt_bound_to_its_counters ... ok
+test reasoner::proof::tests::extract_module_with_proofs_refuses_a_reserved_vocabulary_ontology_as_a_value ... ok
+test reasoner::proof::tests::an_undecided_run_with_no_receipt_is_rejected ... ok
+test reasoner::proof::tests::extract_module_with_proofs_still_admits_the_ordinary_taxonomy ... ok
+test reasoner::proof::tests::every_part_of_a_service_proof_is_digested ... ok
+test reasoner::proof::tests::signed_judgements_preserve_wire_terms_and_refuse_subject_substitution ... ok
+test reasoner::classify::tests::the_derived_taxonomy_costs_strictly_fewer_decisions_than_the_refuted_one ... ok
+test reasoner::proof::tests::every_service_proof_digest_is_frozen ... ok
+test reasoner::schema_tests::actual_long_datatype_temporaries_share_the_preparation_owner ... ok
+test reasoner::proof::tests::every_certified_service_carries_a_proof_bound_to_its_own_question ... ok
+test reasoner::proof::tests::trailing_bytes_after_a_service_proof_are_rejected ... ok
+test reasoner::schema_tests::exact_qualifier_and_role_sources_are_part_of_the_bound_not_current_edges ... ok
+test reasoner::schema_tests::a_class_name_does_not_assert_an_inhabitant_but_the_question_supplies_one ... ok
+test reasoner::schema_tests::retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof ... ok
+test reasoner::schema_tests::nominal_identification_and_distinct_successors_remain_per_individual ... ok
+test reasoner::classify::tests::the_saturation_agrees_with_the_tableau_pair_by_pair ... ok
+test reasoner::schema_tests::refused_entries_are_typed_incomplete_and_sufficient_retry_finishes_the_same_source ... ok
+test reasoner::tests::with_proofs_refuses_a_reserved_vocabulary_dataset_as_a_value ... ok
+test reasoner::tests::a_stopped_consistency_check_answers_unknown_not_false ... ok
+test reasoner::tests::open_reports_a_stopped_session_as_unusable_rather_than_unsatisfiable ... ok
+test reasoner::schema_tests::stopping_an_existing_owner_does_not_publish_clear_or_detach_pins ... ok
+test reasoner::tests::with_proofs_still_admits_an_ordinary_dataset ... ok
+test reasoner::tests::a_stopped_class_satisfiability_check_answers_unknown_not_a_refutation ... ok
+test reasoner::schema_tests::nominal_names_do_not_supply_cached_distinctness_or_ignore_current_identification ... ok
+test reasoner::classify::tests::the_injected_relation_agrees_with_the_tableau ... ok
+test reasoner::schema_tests::asserted_subsumed_equivalent_role_derived_and_existential_membership_are_checked ... ok
+test reasoner::schema_tests::qualified_containment_is_directional_and_has_no_unrelated_transfer ... ok
+test reasoner::schema_tests::cached_and_uncached_native_membership_paths_agree_and_check_the_same_premises ... ok
+test reasoner::classify::tests::the_two_decision_cores_agree_on_every_subsumption_of_every_fixture ... ok
+test reasoner::schema_tests::exact_data_spaces_and_finite_extents_are_prepared_without_opaque_transfer ... ok
+test reasoner::proof::tests::a_truncated_service_proof_stream_is_rejected ... ok
+test reasoner::proof::tests::no_single_byte_edit_of_a_service_proof_decodes_back_to_the_same_proof ... ok
+test reasoner::schema_tests::shared_instances_prepare_once_and_warm_no_clash_calls_do_not_copy_proofs ... ok
+test reasoner::proof::term_walk_tests::a_hundred_thousand_level_term_encodes_on_a_128_kib_thread ... ok
+test reasoner::classify::tests::classification_is_byte_identical_across_a_hundred_runs ... ok
+
+test result: ok. 93 passed; 0 failed; 1 ignored; 0 measured; 625 filtered out; finished in 0.13s
+

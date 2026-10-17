@@ -1,0 +1,15 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/entail)
+    Finished `test` profile [optimized] target(s) in 2.65s
+     Running tests/recorded_stop.rs (/opt/.cargo/47/e242f4d11e7681/debug/build/purrdf-entail/52c040d462c47cf9/out/recorded_stop-52c040d462c47cf9)
+
+running 7 tests
+test recorded_stop_refuses_before_identity_preparation ... ok
+test recorded_stop_covers_identity_digest_streaming ... ok
+test recorded_stop_retains_the_signal_after_identity ... ok
+test recorded_stop_reports_cancelled_search_without_a_semantic_verdict ... ok
+test recorded_stop_preserves_preparation_budget_selection ... ok
+test recorded_stop_preserves_complete_decisions_and_proof_identity ... ok
+test recorded_stop_covers_every_preparation_poll ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,30 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/hash)
+   Compiling crossbeam-utils v0.8.21
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+   Compiling rayon-core v1.13.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-events)
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core)
+    Checking either v1.16.0
+    Checking hashbrown v0.17.1
+    Checking crossbeam-epoch v0.9.18
+    Checking regex-automata v0.4.14
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/deflate)
+    Checking crossbeam-deque v0.8.6
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking digest v0.11.3
+    Checking regex v1.12.4
+    Checking rayon v1.12.0
+    Checking sha2 v0.11.0
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/cdt)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/datalog)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 23.33s

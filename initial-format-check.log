@@ -1,0 +1,160 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/ir/canon.rs:2369:
+     fn collect_incidence(&mut self) -> Result<(), CanonError> {
+         let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
+         let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
+-        collect_components(self.ds, self.scope, self.presentation, self.stop, &mut |comp| {
+-            let mut seen: BTreeSet<D::Id> = BTreeSet::new();
+-            comp.try_for_each_blank(self.ds, self.stop, &mut |b| {
+-                blank_set.insert(b);
+-                if seen.insert(b) {
+-                    incident.entry(b).or_default().push(comp);
+-                }
+-            })
+-        })?;
++        collect_components(
++            self.ds,
++            self.scope,
++            self.presentation,
++            self.stop,
++            &mut |comp| {
++                let mut seen: BTreeSet<D::Id> = BTreeSet::new();
++                comp.try_for_each_blank(self.ds, self.stop, &mut |b| {
++                    blank_set.insert(b);
++                    if seen.insert(b) {
++                        incident.entry(b).or_default().push(comp);
++                    }
++                })
++            },
++        )?;
+         self.blanks = blank_set.into_iter().collect();
+         self.incident = incident;
+         Ok(())
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/ir/canon.rs:2390:
+     fn charge_search(&mut self) -> Result<(), CanonError> {
+         self.check_stop()?;
+         self.budget = self.budget.checked_sub(1).ok_or_else(|| {
+-            CanonError::BudgetExceeded(BudgetExceeded { blank_count: self.blanks.len() })
++            CanonError::BudgetExceeded(BudgetExceeded {
++                blank_count: self.blanks.len(),
++            })
+         })?;
+         Ok(())
+     }
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/ir/canon.rs:2760:
+             issuer: &self.canonical,
+         };
+         let mut lines: BTreeSet<String> = BTreeSet::new();
+-        collect_components(self.ds, self.scope, self.presentation, self.stop, &mut |comp| {
+-            let mut s = String::new();
+-            self.write_component(comp, render, &mut s)?;
+-            lines.insert(s);
+-            Ok(())
+-        })?;
++        collect_components(
++            self.ds,
++            self.scope,
++            self.presentation,
++            self.stop,
++            &mut |comp| {
++                let mut s = String::new();
++                self.write_component(comp, render, &mut s)?;
++                lines.insert(s);
++                Ok(())
++            },
++        )?;
+         // CONSUMED rather than borrowed. Iterating by reference held every line
+         // alongside the concatenation that was being built from it, so the peak was
+         // the document twice over plus one allocation per line. Taking the set by
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/ir/canon.rs:4357:
+                     n += 1;
+                     Ok(())
+                 },
+-            ).unwrap();
++            )
++            .unwrap();
+             n
+         }
+ 
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/ir/canon.rs:4653:
+         };
+ 
+         let mut via_id = String::new();
+-        state.write_component(
+-            Component::Quad {
+-                s: r,
+-                p: real_reifies,
+-                o: triple,
+-                g: None,
+-            },
+-            render,
+-            &mut via_id,
+-        ).unwrap();
++        state
++            .write_component(
++                Component::Quad {
++                    s: r,
++                    p: real_reifies,
++                    o: triple,
++                    g: None,
++                },
++                render,
++                &mut via_id,
++            )
++            .unwrap();
+ 
+         let mut via_literal = String::new();
+-        state.write_component(
+-            Component::FlatReifier {
+-                r,
+-                t: triple,
+-                g: None,
+-            },
+-            render,
+-            &mut via_literal,
+-        ).unwrap();
++        state
++            .write_component(
++                Component::FlatReifier {
++                    r,
++                    t: triple,
++                    g: None,
++                },
++                render,
++                &mut via_literal,
++            )
++            .unwrap();
+ 
+         assert_eq!(
+             via_id, via_literal,
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/ir/canon.rs:4841:
+                     n += 1;
+                     Ok(())
+                 },
+-            ).unwrap();
++            )
++            .unwrap();
+             n
+         }
+         assert_eq!(
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/ir/mod.rs:79:
+     canonicalize, canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
+     check_admissible_flat_view, check_admissible_view, graph_digest_view, try_blank_count_view,
+     try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
+-    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_view_with_stop, try_canonicalize_with,
+-    try_flat_digest_view, try_graph_digest_view,
++    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_view_with_stop,
++    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
+ };
+ pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
+ pub use dataset::{
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/lib.rs:228:
+     check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
+     deskolemize, fold_term, graph_digest_view, skolemize, try_blank_count_view, try_canonicalize,
+     try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+-    try_canonicalize_view, try_canonicalize_view_with_stop, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
+-    try_graph_digest_view, visit_nested,
++    try_canonicalize_view, try_canonicalize_view_with_stop, try_canonicalize_with,
++    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
+ };
+ pub use ir::{
+     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,

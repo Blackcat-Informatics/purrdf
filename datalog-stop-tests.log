@@ -1,0 +1,17 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 2m 29s
+     Running unittests src/lib.rs (/opt/.cargo/47/e242f4d11e7681/debug/build/purrdf-datalog/9166702f3a632274/out/purrdf_datalog-9166702f3a632274)
+
+running 7 tests
+test chase::tests::a_fired_stop_signal_refuses_and_mints_nothing_a_caller_can_see ... ok
+test chase::tests::a_mid_fixpoint_stop_refuses_after_recording_committed_work ... ok
+test chase::tests::an_unfired_stop_signal_changes_no_universal_model ... ok
+test schedule::tests::layer_capacity_refusal_preserves_identity_and_stops_later_phases ... ok
+test stop::tests::an_absent_signal_never_stops_and_a_present_one_is_asked ... ok
+test seminaive::tests::a_fired_stop_signal_refuses_rather_than_truncating ... ok
+test seminaive::tests::an_unfired_stop_signal_changes_no_answer ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 362 filtered out; finished in 0.02s
+

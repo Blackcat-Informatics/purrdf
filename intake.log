@@ -1,0 +1,14 @@
+issue      /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/.stage/make-recorded-dl-preparation/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/.stage/make-recorded-dl-preparation/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/.stage/make-recorded-dl-preparation/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/.stage/make-recorded-dl-preparation/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/.stage/make-recorded-dl-preparation/brief.json  (+ requirements.json, references.json)
+
+  - issue #582 + 0 comment(s) via github
+  - link crawl: no `#N` references in the issue or its comments
+  - forge search on ['recorded', 'preparation', 'cancellable']: 0 other item(s)
+  - GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #582 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #582: 0
+  - requirement candidates: 2 line(s); 0 comment(s) matched no rule
+  - referenced artifacts: 0 path(s) (0 on disk), 0 identifier(s), 0 workspace package(s), 0 URL(s)

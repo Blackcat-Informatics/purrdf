@@ -1,0 +1,73 @@
+    Blocking waiting for file lock on build directory
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/hash)
+    Checking typenum v1.20.1
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-events)
+    Checking hashbrown v0.17.1
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/alloc-probe)
+   Compiling libc v0.2.186
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking either v1.16.0
+    Checking crossbeam-epoch v0.9.18
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/deflate)
+    Checking crossbeam-deque v0.8.6
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking digest v0.11.3
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/stack)
+    Checking rayon v1.12.0
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/iri)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/testkit)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/cdt)
+error: unnecessary closure used to substitute value for `Option::None`
+    --> crates/rdf-core/src/ir/canon.rs:2398:23
+     |
+2398 |           self.budget = self.budget.checked_sub(1).ok_or_else(|| {
+     |  _______________________^
+2399 | |             CanonError::BudgetExceeded(BudgetExceeded {
+2400 | |                 blank_count: self.blanks.len(),
+2401 | |             })
+2402 | |         })?;
+     | |__________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_lazy_evaluations
+     = note: `-D clippy::unnecessary-lazy-evaluations` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::unnecessary_lazy_evaluations)]`
+help: use `ok_or` instead
+     |
+2398 ~         self.budget = self.budget.checked_sub(1).ok_or({
+2399 +             CanonError::BudgetExceeded(BudgetExceeded {
+2400 +                 blank_count: self.blanks.len(),
+2401 +             })
+2402 ~         })?;
+     |
+
+error: could not compile `purrdf-core` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/canon.rs:5473:9
+     |
+5473 |         assert!(state.blanks.is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+     = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+     |
+5473 -         assert!(state.blanks.is_empty());
+5473 +         assert_eq!(state.blanks, [] as [ir::term::TermId; 0]);
+     |
+
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

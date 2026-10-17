@@ -1,0 +1,51 @@
+$ stagectl pr-checks 583
+IN_PROGRESS Analyze (javascript-typescript)
+IN_PROGRESS workspace
+IN_PROGRESS conformance (shapes)
+IN_PROGRESS wasm-package
+IN_PROGRESS conformance (core)
+IN_PROGRESS wasm-schema-oracles
+IN_PROGRESS doc
+IN_PROGRESS cross-arch-riscv64 (suites)
+IN_PROGRESS test (doc)
+IN_PROGRESS projection-oracles
+IN_PROGRESS test (integration-2)
+IN_PROGRESS test (integration-3)
+IN_PROGRESS avx512-sde
+IN_PROGRESS test (integration-4)
+IN_PROGRESS cross-arch
+IN_PROGRESS capi
+IN_PROGRESS msrv
+IN_PROGRESS wasm
+IN_PROGRESS Build The PurRDF Book
+IN_PROGRESS Analyze (rust)
+QUEUED     simd-asm-config (x86_64-v3)
+QUEUED     cross-arch-riscv64 (determinism-serial)
+QUEUED     wasm-exec
+QUEUED     simd-asm-config (x86_64)
+QUEUED     test (integration-5)
+QUEUED     simd-asm-config (x86_64-v4)
+QUEUED     simd-asm-config (aarch64)
+QUEUED     simd-asm-config (aarch64-neoverse-v1)
+QUEUED     simd-asm-config (wasm32)
+QUEUED     simd-asm-config (wasm32-simd128)
+SKIPPED    simd-asm-projection
+QUEUED     aarch64
+QUEUED     test (integration-1)
+QUEUED     windows-mtime
+QUEUED     test (lib)
+QUEUED     geo-determinism
+QUEUED     cross-arch-riscv64 (determinism-one-worker)
+QUEUED     cross-arch-riscv64 (determinism-more-workers)
+IN_PROGRESS Analyze (python)
+QUEUED     pytest
+QUEUED     python-publisher
+QUEUED     miri
+IN_PROGRESS Analyze (c-cpp)
+QUEUED     conformance (sparql)
+IN_PROGRESS Analyze (actions)
+QUEUED     conformance (python)
+SKIPPED    native-profile-admission
+SKIPPED    native-profile
+SKIPPED    native-profile-comparison
+state: pending

@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Recording and cancellation are currently separate constructor paths: Reasoner::with_proofs and with_proofs_and_preparation_budget compute a canonical ontology identity without a stop signal, while with_stop does not record proofs. A combined constructor alone is insufficient because canonical identity precedes ontology preparation and can perform an expensive n-degree permutation search.\n\nImplement one caller-owned stop interface at the core governance layer, shared through the existing Datalog facade. Add controlled canonicalization over DatasetView with a typed stopped outcome, cooperative checks during input collection/admission, first-degree/n-degree processing and final serialization, and no canonical output on cancellation. Keep successful bytes, labels, reserved-vocabulary/read failures and poison-budget semantics unchanged. No clock, thread, runtime dependency, copied dataset or alternate canonicalization algorithm belongs here.\n\nExpose recorded DL construction with an explicit preparation budget and the same signal retained through identity, ontology preparation and decision search. Preserve typed cancellation rather than mapping it to malformed input or a semantic false verdict. Existing recorded constructors must share the same identity implementation.\n\nAcceptance: immediate and mid-canonicalization cancellation including a symmetric blank graph and RDF 1.2 statement-layer input; successful byte/label parity for SHA-256 and SHA-384; existing canonicalization/refusal tests; actual recorded DL proof replay with a non-stopping signal; cancellation during preparation/search with honest certificates/receipts; affected strict Clippy, core/entail/Datalog tests, real WASM checks and normal hooks before ghprsq integration. This is implementation work now, supporting Blackcat-Informatics/gmeow-ontology#1803. Shared-store/delta and rooted source-proof support remain separate required boundary work.",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-17T15:25:30Z",
+  "labels": [],
+  "milestone": null,
+  "number": 582,
+  "state": "OPEN",
+  "title": "Make recorded DL preparation cancellable through canonical identity and search",
+  "updatedAt": "2026-10-17T15:25:30Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/582"
+}

@@ -1,0 +1,17 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/582-make-recorded-dl-preparation/crates/rdf-core/src/ir/canon.rs:2395:
+ 
+     fn charge_search(&mut self) -> Result<(), CanonError> {
+         self.check_stop()?;
+-        self.budget = self.budget.checked_sub(1).ok_or(
+-            CanonError::BudgetExceeded(BudgetExceeded {
++        self.budget = self
++            .budget
++            .checked_sub(1)
++            .ok_or(CanonError::BudgetExceeded(BudgetExceeded {
+                 blank_count: self.blanks.len(),
+-            }),
+-        )?;
++            }))?;
+         Ok(())
+     }
+ 

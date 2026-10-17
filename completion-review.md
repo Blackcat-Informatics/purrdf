@@ -1,0 +1,11 @@
+# Completion self-audit of the focused native issue
+
+No independent reviewer is available; this is explicitly a self-audit, not independent approval. The full downstream logic objective remains open.
+
+The live issue requires one shared stop interface, controlled canonical identity with no partial publication, recorded construction with explicit schema budget and retained signal, unchanged completed identities/proofs, typed stops and honest unknowns, focused strict checks and real WASM execution. Core/Datalog now share one definition. Existing uncontrolled and recorded constructors use the same algorithms. Source admission, nested walks, canonical label/permutation work, final output, digest streaming, ontology indexing and encoding propagate cancellation. The public constructor retains the Arc into native search rather than producing an ungoverned recording object.
+
+Evidence is indexed in validation.md: 61 canonicalization tests, seven native and seven actual WASM public integration cases, 93 reasoner cases and seven Datalog stop cases passed. Completed true/false proofs replay; cancelled search records CallerStop and Unknown; schema work ceiling selection remains effective; every observed constructor poll is exercised by latching deterministic test signals. Strict all-target Clippy for all affected crates plus the RDF facade and final formatting passed. Normal source commit hooks passed. The base merge changes only upstream unrelated implementation plus a combined documentation row, with merge hooks still required.
+
+No new runtime dependency, source filtering, alternate canonical engine, canonical-profile/budget change or host resource override was introduced. The existing ordinary query-finalization behavior is preserved; initial construction uses the explicitly fallible boundary. Scalar primitives remain cooperative polling intervals, not forcibly preemptible operations.
+
+Before merge: complete the base-sync hooks and push, refresh all PR review surfaces, record CI pending under the user's explicit authorization, finalize notes and invoke ghprsq. Shared-store/delta and rooted source-proof support are not claimed and cannot be discharged by this issue's acceptance.

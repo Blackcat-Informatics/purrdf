@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against d839dd72aaa6 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/582-make-recorded-dl-preparation 6fbf766a2] feat: retain cancellation through recorded DL preparation
+ 15 files changed, 902 insertions(+), 205 deletions(-)
+ create mode 100644 crates/entail/tests/recorded_stop.rs

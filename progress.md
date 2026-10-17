@@ -1,0 +1,5 @@
+Implemented one shared core StopSignal and controlled canonicalization, then recorded DL construction retaining that same signal through identity, ontology preparation and search. Existing constructors share the same identity/preparation implementation. No partial canonical identity or semantic false is published on cancellation; completed proof identities and replay remain unchanged.
+
+Validation so far: 61 canonicalization tests, 93 selected reasoner tests (one existing ignored), seven Datalog stop/chase tests, and seven new public recorded-stop cases passed. Those seven cases also passed actual wasm32/Node execution and are registered in make wasm-test. They include cancellation at every observed constructor poll, preparation-budget retention and stopped-search receipt replay.
+
+Strict all-target Clippy over core/Datalog/entail/RDF facade and final formatting are in progress; normal hooks and PR publication follow. No whole-workspace or hosted CI pass is claimed. Shared-store/delta and checked rooted source-proof support remain required downstream boundary work, not capabilities supplied by this change.
