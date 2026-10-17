@@ -4877,25 +4877,33 @@ fn node_admitted(
         let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
         purrdf_iri::is_absolute_with_memory(iri, &mut memory)
     };
-    match verdict {
-        Ok(true) => Ok(NamedNode::from_admitted(workspace.authored_text(&iri)?)),
-        Ok(false) => Err(GroundFailure::diagnostic(
-            "native-sparql-subst-iri",
-            &purrdf_sparql_algebra::error::IriTermDisplay::new(
-                iri,
-                &"relative IRI reference in term position (no scheme)",
-            ),
-            workspace,
-        )),
-        Err(purrdf_iri::IriReadError::Lexical(error)) => Err(GroundFailure::diagnostic(
-            "native-sparql-subst-iri",
-            &purrdf_sparql_algebra::error::IriTermDisplay::new(iri, &error),
-            workspace,
-        )),
-        Err(purrdf_iri::IriReadError::Storage(error)) => Err(frame
-            .storage_error(error, "prebound IRI recognition")
-            .into()),
+    let reason = match verdict {
+        Ok(true) => return Ok(NamedNode::from_admitted(workspace.authored_text(&iri)?)),
+        Ok(false) => purrdf_sparql_algebra::error::IriTermReason::Relative,
+        Err(purrdf_iri::IriReadError::Lexical(cause)) => {
+            purrdf_sparql_algebra::error::IriTermReason::Validation {
+                cause,
+                include_code: false,
+            }
+        }
+        Err(purrdf_iri::IriReadError::Storage(error)) => {
+            return Err(frame
+                .storage_error(error, "prebound IRI recognition")
+                .into());
+        }
+    };
+    let live = frame.admitted_bytes();
+    let lexical = {
+        let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+        memory.string(iri)
     }
+    .map_err(|error| frame.storage_error(error, "prebound IRI spelling"))?;
+    Err(crate::RetainedDiagnostic::from_native(
+        purrdf_sparql_algebra::ParseError::Iri { lexical, reason },
+        |_| "native-sparql-subst-iri",
+        frame,
+    )
+    .map_or_else(GroundFailure::Operational, GroundFailure::Diagnostic))
 }
 
 /// The borrowing LANGTAG parser owns no storage and preserves input spelling.

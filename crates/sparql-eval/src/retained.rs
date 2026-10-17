@@ -466,19 +466,33 @@ impl RetainedDiagnostic {
         error: EvalError,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
+        Self::from_native(
+            error,
+            |cause| crate::engine::eval_diagnostic_code(cause, "native-sparql-query-eval"),
+            crate::workspace::LexicalFrame::new(workspace),
+        )
+    }
+
+    /// Keep a native cause and every buffer already admitted by its original
+    /// producer frame. The same home also publishes ordinary query failures.
+    pub(crate) fn from_native<E: purrdf_hash::error::NativeError + 'static>(
+        cause: E,
+        code: impl FnOnce(&E) -> &str,
+        mut cause_frame: crate::workspace::LexicalFrame,
+    ) -> Result<Self, EvalError> {
         use purrdf_core::diagnostic::DiagnosticCause;
-        let mut cause_frame = crate::workspace::LexicalFrame::new(workspace);
-        let cause = purrdf_lex::allocation::Memory::new(&mut cause_frame)
-            .boxed(error)
+        let live = cause_frame.admitted_bytes();
+        let cause = purrdf_lex::allocation::Memory::resume(&mut cause_frame, live)
+            .boxed(cause)
             .map_err(|error| cause_frame.storage_error(error, "query diagnostic cause"))?;
         let total = cause_frame
             .admitted_bytes()
             .checked_add(DiagnosticCause::allocation_layout::<crate::WorkspaceAllocation>().size())
             .ok_or(EvalError::WorkspaceBoundOverflow)?;
         cause_frame.resize_live(total)?;
-        let mut report_frame = crate::workspace::LexicalFrame::new(workspace);
+        let mut report_frame = crate::workspace::LexicalFrame::new(cause_frame.workspace());
         let diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
-            crate::engine::eval_diagnostic_code(&cause, "native-sparql-query-eval"),
+            code(&cause),
             &cause,
             &mut purrdf_lex::allocation::Memory::new(&mut report_frame),
         )
@@ -609,43 +623,65 @@ mod query_cause_tests {
 
     #[test]
     fn query_cause_survives_resident_copy_after_report_and_query_are_dropped() {
-        let (workspace, ledger, base) = account(65_536);
-        let capability = workspace.capability();
-        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-        let report = RetainedDiagnostic::from_evaluation(
-            EvalError::AllocationFailed {
-                construct: "original native allocation",
-            },
-            &capability,
-        )
-        .unwrap();
-        let measured = window.close();
-        let complete = ledger.live.load(Ordering::Relaxed);
-        assert_eq!(
-            measured.retained_bytes,
-            i64::try_from(complete - base).unwrap()
-        );
-        assert!(complete > base);
-        let copy = report.diagnostic().clone();
-        let clone = copy.clone();
-        assert_eq!(copy, *report.diagnostic());
-        drop(report);
-        let cause_only = ledger.live.load(Ordering::Relaxed);
-        assert!(cause_only > base && cause_only < complete);
-        drop(workspace);
-        drop(capability);
-        drop(copy);
-        assert_eq!(ledger.live.load(Ordering::Relaxed), cause_only);
-        let cause = Capture::read(&clone)
-            .child("attachments")
-            .child("native_cause");
-        assert_eq!(cause.code, "sparql-eval-allocation-failed");
-        assert!(matches!(
-            cause.field("construct"),
-            ErrorValue::Text("original native allocation")
-        ));
-        drop(clone);
-        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        for iri_refusal in [false, true] {
+            let (workspace, ledger, base) = account(65_536);
+            let capability = workspace.capability();
+            let input = purrdf_core::TermValue::Iri("https://[invalid]/".into());
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let report = if iri_refusal {
+                let Err(crate::substitute::GroundFailure::Diagnostic(report)) =
+                    crate::substitute::ground_term_from_value_admitted(&input, &capability)
+                else {
+                    panic!("the actual IRI producer must retain its malformed-host diagnostic");
+                };
+                report
+            } else {
+                RetainedDiagnostic::from_evaluation(
+                    EvalError::AllocationFailed {
+                        construct: "original native allocation",
+                    },
+                    &capability,
+                )
+                .unwrap()
+            };
+            let measured = window.close();
+            let complete = ledger.live.load(Ordering::Relaxed);
+            assert_eq!(
+                measured.retained_bytes,
+                i64::try_from(complete - base).unwrap()
+            );
+            assert!(complete > base);
+            let copy = report.diagnostic().clone();
+            let clone = copy.clone();
+            assert_eq!(copy, *report.diagnostic());
+            drop(report);
+            let cause_only = ledger.live.load(Ordering::Relaxed);
+            assert!(cause_only > base && cause_only < complete);
+            drop(workspace);
+            drop(capability);
+            drop(copy);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), cause_only);
+            let cause = Capture::read(&clone)
+                .child("attachments")
+                .child("native_cause");
+            if iri_refusal {
+                assert_eq!(cause.code, "sparql-parse-iri");
+                let authority = cause.child("reason").child("cause").child("cause");
+                assert_eq!(authority.code, "iri-authority-invalid-ipv6");
+                assert!(matches!(
+                    authority.field("address"),
+                    ErrorValue::Text("invalid")
+                ));
+            } else {
+                assert_eq!(cause.code, "sparql-eval-allocation-failed");
+                assert!(matches!(
+                    cause.field("construct"),
+                    ErrorValue::Text("original native allocation")
+                ));
+            }
+            drop(clone);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
     }
 
     #[test]
