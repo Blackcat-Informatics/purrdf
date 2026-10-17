@@ -241,6 +241,12 @@ pub struct RetainedSparqlResult {
     payload: Shared<Payload<SparqlResult>>,
 }
 
+impl purrdf_hash::error::StructuredError for RetainedSparqlResult {
+    purrdf_hash::error_visit! {
+        @record self { payload } => "sparql-retained-result" { "result" => Record(&self.payload.value) }
+    }
+}
+
 impl RetainedSparqlResult {
     pub(crate) fn new(
         result: SparqlResult,
@@ -366,6 +372,14 @@ pub struct RetainedSolutions {
 pub struct RetainedPartialSparqlResult {
     result: RetainedSparqlResult,
     positional_prefix: bool,
+}
+
+impl purrdf_hash::error::StructuredError for RetainedPartialSparqlResult {
+    purrdf_hash::error_visit! {
+        @record self { result, positional_prefix } => "sparql-retained-partial-result" {
+            "result" => Record(&self.result), "positional_prefix" => Boolean(self.positional_prefix),
+        }
+    }
 }
 
 impl RetainedPartialSparqlResult {

@@ -5,8 +5,9 @@
 //!
 //! Producers report a stable variant code and every semantic field. A consumer
 //! handles this fixed value algebra, rather than matching each producer's enum.
-//! Nested payloads are references, not recursive calls: a consumer can put them
-//! on its own heap work list. Inspection neither formats nor clones a payload.
+//! Stable nested owners are references a consumer can put on its own work list.
+//! Temporary views emit balanced record events with fields borrowed from their
+//! original owner. Inspection neither formats nor clones a payload.
 
 mod io;
 pub use io::{IoFailure, io_error};
@@ -170,6 +171,20 @@ pub trait ErrorVisitor<'error> {
 
     /// End the most recently begun list.
     fn end_list(&mut self);
+
+    /// Begin a compound view whose temporary adapter need not survive inspection.
+    /// Its field values still borrow the original owner for `'error`. A named
+    /// record is a field; an unnamed record is an entry of the enclosing list.
+    fn begin_record(&mut self, name: Option<&'static str>, code: &'static str);
+
+    /// End the most recently begun record, after its fields and nested lists.
+    fn end_record(&mut self);
+}
+
+impl StructuredError for () {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("unit");
+    }
 }
 
 /// Emit a borrowed list without materializing or cloning its items.

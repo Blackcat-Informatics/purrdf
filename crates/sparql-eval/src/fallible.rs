@@ -192,6 +192,30 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
     },
 }
 
+impl<
+    OperationalError: purrdf_hash::error::StructuredError,
+    Evidence: purrdf_hash::error::StructuredError,
+> purrdf_hash::error::StructuredError for FallibleSparqlError<OperationalError, Evidence>
+{
+    purrdf_hash::error_visit! {
+        Query { diagnostic, evidence } => "sparql-fallible-query" {
+            "cause" => Cause(diagnostic), "evidence" => Record(evidence),
+        },
+        Operational { error, evidence } => "sparql-fallible-operational" {
+            "cause" => Cause(error), "evidence" => Record(evidence),
+        },
+        AllocationFailed { construct, evidence } => "sparql-fallible-allocation" {
+            "construct" => Text(construct), "evidence" => Record(evidence),
+        },
+        ControlFailure { failure, evidence } => "sparql-fallible-control" {
+            "cause" => Cause(failure), "evidence" => Record(evidence),
+        },
+        BudgetExhausted { tripped, partial, evidence } => "sparql-fallible-budget" {
+            "tripped" => Record(tripped), "partial" => Record(partial), "evidence" => Record(evidence),
+        },
+    }
+}
+
 impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence> {
     /// Attach an outer operation receipt without changing the outcome or root cause.
     pub(crate) fn map_evidence<V>(

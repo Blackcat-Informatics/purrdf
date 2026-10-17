@@ -12,6 +12,7 @@ struct CapacityFields<'error> {
     attempted: u128,
     limit: u128,
     fields: usize,
+    records: Vec<(Option<&'static str>, &'static str)>,
 }
 
 impl<'error> ErrorVisitor<'error> for CapacityFields<'error> {
@@ -35,6 +36,14 @@ impl<'error> ErrorVisitor<'error> for CapacityFields<'error> {
 
     fn end_list(&mut self) {
         panic!("ingestion capacity has no list terminator");
+    }
+
+    fn begin_record(&mut self, name: Option<&'static str>, code: &'static str) {
+        self.records.push((name, code));
+    }
+
+    fn end_record(&mut self) {
+        self.records.push((None, "record-end"));
     }
 }
 

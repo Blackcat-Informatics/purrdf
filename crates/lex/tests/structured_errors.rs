@@ -160,6 +160,15 @@ impl<'error> ErrorVisitor<'error> for Fields<'error> {
     fn end_list(&mut self) {
         self.list_ends += 1;
     }
+
+    fn begin_record(&mut self, name: Option<&'static str>, code: &'static str) {
+        self.entries
+            .push((name.unwrap_or("record"), ErrorValue::Code(code)));
+    }
+
+    fn end_record(&mut self) {
+        self.entries.push(("record-end", ErrorValue::Absent));
+    }
 }
 
 #[test]

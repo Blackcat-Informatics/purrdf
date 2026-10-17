@@ -599,7 +599,311 @@ fn governor_receipt_inspection_preserves_full_counters_lists_and_original_messag
     assert_eq!(capture.child("governors").code, "governor-evidence");
 }
 
+fn structured_graph_fixture() -> std::sync::Arc<purrdf_core::RdfDataset> {
+    use purrdf_core::{
+        BlankScope, ContentIdScheme, RdfDatasetBuilder, RdfLocation, RdfTextDirection, TermBox,
+        TermFactory, TermValue,
+    };
+    let mut builder = RdfDatasetBuilder::with_content_addressing(
+        ContentIdScheme::new("urn:content:").unwrap(),
+        Some("https://example.org/derivation".into()),
+    );
+    let subject = TermValue::Blank {
+        label: "original".into(),
+        scope: BlankScope(37),
+    };
+    let predicate = TermValue::iri("https://example.org/p");
+    let value = TermValue::Literal {
+        lexical_form: "方向".into(),
+        datatype: purrdf_iri::vocab::rdf::DIR_LANG_STRING.into(),
+        language: Some("zh".into()),
+        direction: Some(RdfTextDirection::Rtl),
+    };
+    let triple = TermValue::Triple {
+        s: TermBox::new(subject.clone()),
+        p: TermBox::new(predicate.clone()),
+        o: TermBox::new(value.clone()),
+    };
+    let s = builder.intern_value(&subject).unwrap();
+    let p = builder.intern_value(&predicate).unwrap();
+    let o = builder.intern_value(&value).unwrap();
+    let t = builder.intern_value(&triple).unwrap();
+    let r = builder.intern_iri("https://example.org/reifier").unwrap();
+    let second = builder.intern_iri("https://example.org/second").unwrap();
+    let g = builder.intern_iri("https://example.org/graph").unwrap();
+    let empty = builder.intern_iri("https://example.org/empty").unwrap();
+    let handle = builder.push_quad_with_handle(s, p, o, None).unwrap();
+    builder.attach_location(
+        handle,
+        RdfLocation {
+            path: Some("source.ttl".into()),
+            line: Some(u64::MAX),
+            ..RdfLocation::default()
+        },
+    );
+    builder.push_quad(second, p, o, None).unwrap();
+    builder.push_quad(s, p, o, Some(g)).unwrap();
+    builder.push_reifier_in_graph(r, t, Some(g)).unwrap();
+    builder.push_annotation_in_graph(r, p, o, Some(g)).unwrap();
+    builder.declare_named_graph(empty).unwrap();
+    builder.freeze().unwrap()
+}
+
+fn graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields() {
+    use purrdf_core::SparqlResult;
+    let data = structured_graph_fixture();
+    let result = SparqlResult::Graph(data.clone().into());
+    let graph = Capture::read(&result).child("graph");
+    let events = Vec::with_capacity(256);
+    let window = CurrentThreadWindow::open();
+    let exact = Capture::read_with_buffer(data.as_ref(), events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(graph.code, "rdf-dataset");
+    assert_eq!(exact.records("quads").len(), 3);
+    assert_eq!(exact.records("reifiers").len(), 1);
+    assert_eq!(exact.records("annotations").len(), 1);
+    assert!(
+        matches!(exact.records("locations")[0].child("location").field("line"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    let ErrorValue::Record(dictionary) = exact.field("dictionary") else {
+        panic!("the original dictionary is retained")
+    };
+    let events = Vec::with_capacity(256);
+    let window = CurrentThreadWindow::open();
+    let dictionary = Capture::read_with_buffer(dictionary, events);
+    assert_eq!(window.close().allocations, 0);
+    assert!(matches!(
+        dictionary.child("content_id_scheme").field("prefix"),
+        ErrorValue::Text("urn:content:")
+    ));
+    assert!(matches!(
+        dictionary.field("derivation_predicate_iri"),
+        ErrorValue::Iri("https://example.org/derivation")
+    ));
+    let terms = dictionary.records("terms");
+    assert_eq!(terms.len(), data.term_count());
+    let literal = terms
+        .iter()
+        .find(|term| term.child("term").code == "rdf-interned-literal")
+        .unwrap()
+        .child("term");
+    assert!(matches!(
+        literal.field("lexical_form"),
+        ErrorValue::Text("方向")
+    ));
+    assert!(matches!(literal.field("language"), ErrorValue::Text("zh")));
+    assert!(matches!(
+        literal.field("direction"),
+        ErrorValue::Code("rtl")
+    ));
+    assert!(matches!(
+        terms
+            .iter()
+            .find(|term| term.child("term").code == "rdf-interned-blank")
+            .unwrap()
+            .child("term")
+            .field("scope"),
+        ErrorValue::Unsigned(37)
+    ));
+    assert!(
+        terms
+            .iter()
+            .any(|term| term.child("term").code == "rdf-interned-triple")
+    );
+    assert!(matches!(
+        exact.child("capabilities").field("named_graphs"),
+        ErrorValue::Boolean(true)
+    ));
+}
+
+fn actual_fallible_query_errors_and_partial_rows_use_the_generic_consumer() {
+    use purrdf_core::SparqlRequest;
+    use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
+    let data = structured_graph_fixture();
+    let engine = NativeSparqlEngine::new();
+    let parse = engine
+        .query_fallible_view(
+            data.as_ref(),
+            SparqlRequest {
+                query: "%",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap_err();
+    let captured = Capture::read(&parse);
+    assert_eq!(captured.code, "sparql-fallible-query");
+    assert_eq!(captured.child("evidence").code, "unit");
+    assert_eq!(captured.child("cause").code, "sparql-retained-diagnostic");
+    let partial = engine
+        .query_governed_fallible_view(
+            data.as_ref(),
+            SparqlRequest {
+                query: "SELECT ?s ?missing WHERE { ?s <https://example.org/p> ?o }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+            &QueryGovernors::UNBOUNDED.with_max_answers(1),
+        )
+        .unwrap_err();
+    let events = Vec::with_capacity(3);
+    let window = CurrentThreadWindow::open();
+    let captured = Capture::read_with_buffer(&partial, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(captured.code, "sparql-fallible-budget");
+    assert_eq!(captured.child("evidence").child("view").code, "unit");
+    let partial = captured.child("partial");
+    assert_eq!(partial.code, "sparql-partial-certain");
+    let result = partial.child("result").child("result").child("result");
+    assert_eq!(result.code, "sparql-solutions");
+    use purrdf_testkit::error_capture::Event;
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::BeginList(Some("rows"), 1)))
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Value(None, ErrorValue::Absent)))
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, Event::Value(None, ErrorValue::Term(_))))
+    );
+    assert_eq!(result.child("aux").code, "rdf-dataset");
+    let ask = engine
+        .query_fallible_view(
+            data.as_ref(),
+            SparqlRequest {
+                query: "ASK { ?s <https://example.org/p> ?o }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap();
+    let ask = Capture::read(&ask.result).child("result");
+    assert_eq!(ask.code, "sparql-boolean");
+    assert!(matches!(ask.field("value"), ErrorValue::Boolean(true)));
+}
+
+fn actual_aggregate_exhaustion_exposes_the_private_withholding_operator() {
+    use purrdf_core::SparqlRequest;
+    use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
+    let data = structured_graph_fixture();
+    let engine = NativeSparqlEngine::new();
+    let mut withheld = 0;
+    for fuel in 0..24 {
+        let Err(error) = engine.query_governed_fallible_view(
+            data.as_ref(),
+            SparqlRequest {
+                query: "SELECT (COUNT(?o) AS ?n) WHERE { ?s <https://example.org/p> ?o }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+            &QueryGovernors::UNBOUNDED.with_fuel(fuel),
+        ) else {
+            continue;
+        };
+        let capture = Capture::read(&error);
+        if capture.code == "sparql-fallible-budget" {
+            let partial = capture.child("partial");
+            if partial.code == "sparql-partial-unknown" {
+                withheld += 1;
+                assert!(matches!(
+                    partial.child("barrier").field("operator"),
+                    ErrorValue::Code("Group")
+                ));
+            }
+        }
+    }
+    assert!(
+        withheld > 0,
+        "the real aggregate must withhold truncated input"
+    );
+}
+
+fn actual_partial_graph_preserves_admitted_output_and_its_certificate() {
+    use purrdf_core::SparqlRequest;
+    use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
+    let data = structured_graph_fixture();
+    let error = NativeSparqlEngine::new().query_governed_fallible_view(data.as_ref(), SparqlRequest { query: "CONSTRUCT { ?s <https://example.org/p> ?o } WHERE { ?s <https://example.org/p> ?o }", base_iri: None, substitutions: &[] }, QueryOptions::EMPTY, &QueryGovernors::UNBOUNDED.with_max_answers(1)).unwrap_err();
+    let capture = Capture::read(&error);
+    assert_eq!(capture.code, "sparql-fallible-budget");
+    let partial = capture.child("partial");
+    assert_eq!(partial.code, "sparql-partial-certain");
+    let result = partial.child("result").child("result").child("result");
+    assert_eq!(result.code, "sparql-graph");
+    assert_eq!(result.child("graph").records("quads").len(), 1);
+}
+
+fn fallible_control_shapes_keep_unformatted_causes_and_both_partial_bounds() {
+    use purrdf_sparql_eval::{FallibleSparqlError, PartialAnswers, QueryControlFailure};
+    let operational = FallibleSparqlError::Operational {
+        error: CallerRefusal { limit: u128::MAX },
+        evidence: CallerRefusal { limit: 71 },
+    };
+    let copy = operational.clone();
+    let captured = Capture::read(&operational);
+    assert_eq!(captured.code, "sparql-fallible-operational");
+    assert!(matches!(
+        captured.child("cause").field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+    assert!(matches!(
+        Capture::read(&copy).child("evidence").field("limit"),
+        ErrorValue::Unsigned(71)
+    ));
+    let allocation: FallibleSparqlError<CallerRefusal, ()> =
+        FallibleSparqlError::AllocationFailed {
+            construct: "original graph allocation",
+            evidence: (),
+        };
+    assert!(matches!(
+        Capture::read(&allocation).field("construct"),
+        ErrorValue::Text("original graph allocation")
+    ));
+    let control: FallibleSparqlError<CallerRefusal, ()> = FallibleSparqlError::ControlFailure {
+        failure: QueryControlFailure::LayoutOverflow,
+        evidence: (),
+    };
+    assert_eq!(
+        Capture::read(&control).child("cause").code,
+        "sparql-control-layout-overflow"
+    );
+    for (partial, code) in [
+        (
+            PartialAnswers::Certain(CallerRefusal { limit: u128::MAX }),
+            "sparql-partial-certain",
+        ),
+        (
+            PartialAnswers::AtMost(CallerRefusal { limit: u128::MAX }),
+            "sparql-partial-at-most",
+        ),
+    ] {
+        let capture = Capture::read(&partial);
+        assert_eq!(capture.code, code);
+        assert!(matches!(
+            capture.child("result").field("limit"),
+            ErrorValue::Unsigned(u128::MAX)
+        ));
+    }
+}
+
 purrdf_testkit::harness_main!(
+    actual_aggregate_exhaustion_exposes_the_private_withholding_operator,
+    actual_partial_graph_preserves_admitted_output_and_its_certificate,
+    graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields,
+    actual_fallible_query_errors_and_partial_rows_use_the_generic_consumer,
+    fallible_control_shapes_keep_unformatted_causes_and_both_partial_bounds,
     graph_publication_refusals_expose_original_causes_and_governor_evidence,
     governor_receipt_inspection_preserves_full_counters_lists_and_original_messages,
     erased_function_causes_keep_original_fields_and_identity_without_rendering,

@@ -44,6 +44,8 @@ use crate::{
 use super::term::{BlankScope, TermId, TermValue};
 use super::triple::{OrdinalRows, compare_masked, component_mask, masked_permutation, masked_rows};
 
+mod inspection;
+
 /// Declare the shared sparse frozen-row location lookup on resident carriers.
 macro_rules! source_location_method {
     ($(#[$meta:meta])*) => {

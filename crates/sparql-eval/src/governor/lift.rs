@@ -138,6 +138,12 @@ pub struct NonMonotoneBarrier {
     operator: &'static str,
 }
 
+impl purrdf_hash::error::StructuredError for NonMonotoneBarrier {
+    purrdf_hash::error_visit! {
+        @record self { operator } => "sparql-non-monotone-barrier" { "operator" => Code(self.operator) }
+    }
+}
+
 impl NonMonotoneBarrier {
     /// The barrier at `node`, labelled by its algebra variant.
     pub(crate) fn at(node: &GraphPattern) -> Self {

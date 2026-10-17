@@ -362,6 +362,16 @@ pub enum PartialAnswers<R = PartialSparqlResult> {
     Unknown(NonMonotoneBarrier),
 }
 
+impl<R: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for PartialAnswers<R>
+{
+    purrdf_hash::error_visit! {
+        Certain(result) => "sparql-partial-certain" { "result" => Record(result) },
+        AtMost(result) => "sparql-partial-at-most" { "result" => Record(result) },
+        Unknown(barrier) => "sparql-partial-unknown" { "barrier" => Record(barrier) },
+    }
+}
+
 impl<R> PartialAnswers<R> {
     /// The same certificate over a borrow of the rows.
     #[must_use]

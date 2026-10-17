@@ -17,6 +17,8 @@ struct Capture<'error> {
     lists: [Option<(Option<&'static str>, usize)>; 4],
     list_count: usize,
     list_ends: usize,
+    records: [Option<(Option<&'static str>, &'static str)>; 4],
+    record_count: usize,
 }
 
 impl<'error> ErrorVisitor<'error> for Capture<'error> {
@@ -36,6 +38,16 @@ impl<'error> ErrorVisitor<'error> for Capture<'error> {
 
     fn end_list(&mut self) {
         self.list_ends += 1;
+    }
+
+    fn begin_record(&mut self, name: Option<&'static str>, code: &'static str) {
+        self.records[self.record_count] = Some((name, code));
+        self.record_count += 1;
+    }
+
+    fn end_record(&mut self) {
+        self.records[self.record_count] = Some((None, "record-end"));
+        self.record_count += 1;
     }
 }
 
@@ -136,6 +148,42 @@ fn native_hex_failures_expose_original_fields_without_allocating() {
     assert!(matches!(
         captures[2].fields[1],
         Some((Some("available"), ErrorValue::ByteCount(1)))
+    ));
+}
+
+#[test]
+fn temporary_record_views_keep_fields_borrowed_from_the_original_owner() {
+    struct Projected<'a>(&'a str);
+    impl StructuredError for Projected<'_> {
+        fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+            visitor.variant("projected-owner");
+            let (prefix, suffix) = self.0.split_at(2);
+            visitor.begin_record(Some("prefix"), "projected-fragment");
+            visitor.value(Some("text"), ErrorValue::Text(prefix));
+            visitor.end_record();
+            visitor.value(Some("suffix"), ErrorValue::Text(suffix));
+        }
+    }
+    let text = String::from("éx");
+    let original = Projected(&text);
+    let mut capture = Capture::default();
+    let window = CurrentThreadWindow::open();
+    original.visit(&mut capture);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(capture.code, "projected-owner");
+    assert_eq!(
+        capture.records[0],
+        Some((Some("prefix"), "projected-fragment"))
+    );
+    assert_eq!(capture.records[1], Some((None, "record-end")));
+    let Some((Some("text"), ErrorValue::Text(prefix))) = capture.fields[0] else {
+        panic!("the original prefix is present")
+    };
+    assert_eq!(prefix, "é");
+    assert!(core::ptr::eq(prefix.as_ptr(), text.as_ptr()));
+    assert!(matches!(
+        capture.fields[1],
+        Some((Some("suffix"), ErrorValue::Text("x")))
     ));
 }
 
