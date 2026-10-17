@@ -814,6 +814,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				ranges_use_collapsed_character_lengths_and_primitive_identity \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
+				borrowed_value_equality_matches_the_query_operator_on_this_target \
 				any_uri_casts_keep_their_primitive_domain_on_this_target \
 				the_hand_answers_are_reproduced_on_this_target \
 				the_numeric_transcript_digest_is_reproduced_on_this_target \
