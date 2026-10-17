@@ -2189,7 +2189,143 @@ fn standard_function_interception_keeps_original_configuration_fields() {
     }
 }
 
+fn knn_guard_refusals_keep_both_full_width_bounds() {
+    use purrdf_sparql_eval::knn::KnnGuard;
+    for (max_candidates, max_neighbours) in [(0, 0), (0, u64::MAX), (u64::MAX, 0)] {
+        let original = KnnGuard::new(max_candidates, max_neighbours).unwrap_err();
+        let expected = format!(
+            "invalid evaluation configuration: a kNN guard admitting at most {max_candidates} candidate(s) and at most \
+             {max_neighbours} neighbour(s) can never answer any invocation; both bounds \
+             must be positive"
+        );
+        assert_eq!(original.to_string(), expected);
+        let retained = original.clone();
+        drop(original);
+        let events = Vec::with_capacity(16);
+        let window = CurrentThreadWindow::open();
+        let captured = Capture::read_with_buffer(&retained, events);
+        assert_eq!(window.close().allocations, 0);
+        let diagnostic = captured.child("cause");
+        assert_eq!(diagnostic.child("kind").code, "sparql-native-config");
+        let fields = diagnostic.child("cause");
+        assert_eq!(fields.code, "knn-invalid-guard");
+        assert!(
+            matches!(fields.field("max_candidates"), ErrorValue::Unsigned(value)
+            if value == u128::from(max_candidates))
+        );
+        assert!(
+            matches!(fields.field("max_neighbours"), ErrorValue::Unsigned(value)
+            if value == u128::from(max_neighbours))
+        );
+    }
+    for bound in [1, u64::MAX] {
+        let guard = KnnGuard::new(bound, bound).unwrap();
+        assert_eq!(guard.max_candidates(), bound);
+        assert_eq!(guard.max_neighbours(), bound);
+    }
+}
+
+fn knn_space_refusals_keep_row_terms_dimensions_and_float_bits() {
+    use purrdf_core::{DistanceMetric, TermValue};
+    use purrdf_sparql_eval::knn::{EmbeddingSpace, KnnGuard};
+
+    let metric = DistanceMetric::SquaredEuclidean;
+    let guard = KnnGuard::new(u64::MAX, u64::MAX).unwrap();
+    let zero = EmbeddingSpace::from_vectors(&metric, 0, Vec::new(), guard).unwrap_err();
+    assert_eq!(
+        Capture::read(&zero).child("cause").child("cause").code,
+        "knn-zero-dimension"
+    );
+    assert!(matches!(
+        Capture::read(&zero)
+            .child("cause")
+            .child("cause")
+            .field("dimension"),
+        ErrorValue::Unsigned(0)
+    ));
+    assert_eq!(
+        zero.to_string(),
+        "invalid evaluation configuration: a space of dimension zero holds vectors with no components, so no distance between two of them separates anything"
+    );
+
+    let over = EmbeddingSpace::from_vectors(
+        &metric,
+        1,
+        vec![
+            (TermValue::iri("https://example.org/a"), vec![1.0]),
+            (TermValue::iri("https://example.org/b"), vec![2.0]),
+        ],
+        KnnGuard::new(1, u64::MAX).unwrap(),
+    )
+    .unwrap_err();
+    let captured = Capture::read(&over).child("cause").child("cause");
+    assert_eq!(captured.code, "knn-candidate-limit");
+    assert!(matches!(captured.field("actual"), ErrorValue::Unsigned(2)));
+    assert!(matches!(captured.field("maximum"), ErrorValue::Unsigned(1)));
+
+    for value in [
+        None,
+        Some(f64::INFINITY),
+        Some(f64::NEG_INFINITY),
+        Some(f64::from_bits(0x7ff8_0000_0000_1234)),
+    ] {
+        let term = TermValue::iri("https://example.org/original");
+        let TermValue::Iri(iri) = &term else {
+            unreachable!()
+        };
+        let original_ptr = iri.as_ptr();
+        let debug_term = format!("{term:?}");
+        let values = value.map_or_else(|| vec![1.0], |bad| vec![1.0, bad]);
+        let original =
+            EmbeddingSpace::from_vectors(&metric, 2, vec![(term, values)], guard).unwrap_err();
+        let expected = value.map_or_else(
+            || format!("invalid evaluation configuration: row 0 ({debug_term}) carries 1 component(s); the space's dimension is 2"),
+            |bad| format!("invalid evaluation configuration: row 0 ({debug_term}) carries the non-finite component {bad} at position 1; a distance computed from it could not be ranked"),
+        );
+        assert_eq!(original.to_string(), expected);
+        let retained = original.clone();
+        drop(original);
+        let events = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let captured = Capture::read_with_buffer(&retained, events);
+        assert_eq!(window.close().allocations, 0);
+        let diagnostic = captured.child("cause");
+        assert_eq!(diagnostic.child("kind").code, "sparql-native-config");
+        let fields = diagnostic.child("cause");
+        assert!(matches!(fields.field("row"), ErrorValue::Unsigned(0)));
+        let original_term = fields.child("term");
+        assert_eq!(original_term.code, "rdf-term-iri");
+        assert!(matches!(original_term.field("iri"), ErrorValue::Iri(iri)
+            if iri == "https://example.org/original" && iri.as_ptr() == original_ptr));
+        if let Some(bad) = value {
+            assert_eq!(fields.code, "knn-non-finite-component");
+            assert!(matches!(fields.field("position"), ErrorValue::Unsigned(1)));
+            assert!(
+                matches!(fields.field("value"), ErrorValue::Float64Bits(bits) if bits == bad.to_bits())
+            );
+        } else {
+            assert_eq!(fields.code, "knn-row-dimension");
+            assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(1)));
+            assert!(matches!(fields.field("dimension"), ErrorValue::Unsigned(2)));
+        }
+    }
+    assert!(
+        EmbeddingSpace::from_vectors(
+            &metric,
+            2,
+            vec![(
+                TermValue::iri("https://example.org/original"),
+                vec![1.0, -0.0]
+            )],
+            KnnGuard::new(1, 1).unwrap()
+        )
+        .is_ok()
+    );
+}
+
 purrdf_testkit::harness_main!(
+    knn_space_refusals_keep_row_terms_dimensions_and_float_bits,
+    knn_guard_refusals_keep_both_full_width_bounds,
     standard_function_interception_keeps_original_configuration_fields,
     function_execution_refusals_keep_original_fields_and_operational_classes,
     shacl_prebinding_keeps_the_original_retained_diagnostic,

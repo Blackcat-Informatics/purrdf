@@ -186,23 +186,136 @@ pub struct KnnGuard {
     max_neighbours: u64,
 }
 
+#[derive(Debug)]
+struct GuardRefusal {
+    max_candidates: u64,
+    max_neighbours: u64,
+}
+
+impl purrdf_hash::error::StructuredError for GuardRefusal {
+    purrdf_hash::error_visit! {
+        @record self { max_candidates, max_neighbours } => "knn-invalid-guard" {
+            "max_candidates" => Unsigned(u128::from(self.max_candidates)),
+            "max_neighbours" => Unsigned(u128::from(self.max_neighbours)),
+        }
+    }
+}
+
+impl core::fmt::Display for GuardRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self {
+            max_candidates,
+            max_neighbours,
+        } = self;
+        write!(
+            f,
+            "a kNN guard admitting at most {max_candidates} candidate(s) and at most \
+             {max_neighbours} neighbour(s) can never answer any invocation; both bounds \
+             must be positive"
+        )
+    }
+}
+
+impl std::error::Error for GuardRefusal {}
+
+#[derive(Debug)]
+enum SpaceRefusal {
+    DimensionZero,
+    Candidates {
+        actual: usize,
+        maximum: u64,
+    },
+    RowDimension {
+        row: usize,
+        term: TermValue,
+        actual: usize,
+        dimension: usize,
+    },
+    NonFinite {
+        row: usize,
+        term: TermValue,
+        at: usize,
+        value: f64,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for SpaceRefusal {
+    purrdf_hash::error_visit! {
+        DimensionZero => "knn-zero-dimension" { "dimension" => Unsigned(0) },
+        Candidates { actual, maximum } => "knn-candidate-limit" {
+            "actual" => Unsigned(*actual as u128),
+            "maximum" => Unsigned(u128::from(*maximum)),
+        },
+        RowDimension { row, term, actual, dimension } => "knn-row-dimension" {
+            "row" => Unsigned(*row as u128), "term" => Term(term),
+            "actual" => Unsigned(*actual as u128), "dimension" => Unsigned(*dimension as u128),
+        },
+        NonFinite { row, term, at, value } => "knn-non-finite-component" {
+            "row" => Unsigned(*row as u128), "term" => Term(term),
+            "position" => Unsigned(*at as u128), "value" => Float64Bits(value.to_bits()),
+        },
+    }
+}
+
+impl core::fmt::Display for SpaceRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::DimensionZero => f.write_str(
+                "a space of dimension zero holds vectors with no components, so no distance \
+                 between two of them separates anything",
+            ),
+            Self::Candidates { actual, maximum } => write!(
+                f,
+                "this space holds {actual} row(s), which is more than the {maximum} candidate(s) \
+                 the configured guard admits; a search here would either exceed the work the \
+                 host licensed or rank a prefix of the space and report it as the whole",
+            ),
+            Self::RowDimension {
+                row,
+                term,
+                actual,
+                dimension,
+            } => write!(
+                f,
+                "row {row} ({term:?}) carries {actual} component(s); the space's dimension is \
+                 {dimension}",
+            ),
+            Self::NonFinite {
+                row,
+                term,
+                at,
+                value,
+            } => write!(
+                f,
+                "row {row} ({term:?}) carries the non-finite component {value} at position \
+                 {at}; a distance computed from it could not be ranked",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SpaceRefusal {}
+
 impl KnnGuard {
     /// A guard admitting a space of at most `max_candidates` rows and an invocation
     /// requesting at most `max_neighbours` neighbours.
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] if either bound is zero. A zero `max_candidates` admits no
+    /// A typed configuration refusal if either bound is zero. A zero `max_candidates` admits no
     /// space at all and a zero `max_neighbours` admits no request, so either one
     /// configures a relation that can never answer anything — which is a mistake worth
     /// reporting where it is made rather than a valid, permanently-empty surface.
     pub fn new(max_candidates: u64, max_neighbours: u64) -> Result<Self, EvalError> {
         if max_candidates == 0 || max_neighbours == 0 {
-            return Err(EvalError::config(format!(
-                "a kNN guard admitting at most {max_candidates} candidate(s) and at most \
-                 {max_neighbours} neighbour(s) can never answer any invocation; both bounds \
-                 must be positive"
-            )));
+            return Err(crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Config,
+                GuardRefusal {
+                    max_candidates,
+                    max_neighbours,
+                },
+                &crate::WorkspaceCapability::resident(),
+            ));
         }
         Ok(Self {
             max_candidates,
@@ -297,7 +410,7 @@ impl EmbeddingSpace {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] for a caller mistake — a space or target set the artifact
+    /// A configuration refusal for a caller mistake — a space or target set the artifact
     /// does not hold, a binding for a target outside the set, a duplicate target or term,
     /// a row no binding covers, a space larger than the guard admits, or an extension
     /// metric this engine cannot evaluate.
@@ -368,12 +481,14 @@ impl EmbeddingSpace {
 
         let row_count = set.row_count();
         if row_count as u64 > guard.max_candidates() {
-            return Err(EvalError::config(format!(
-                "this space holds {row_count} row(s), which is more than the {} candidate(s) \
-                 the configured guard admits; a search here would either exceed the work the \
-                 host licensed or rank a prefix of the space and report it as the whole",
-                guard.max_candidates()
-            )));
+            return Err(crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Config,
+                SpaceRefusal::Candidates {
+                    actual: row_count,
+                    maximum: guard.max_candidates(),
+                },
+                &crate::WorkspaceCapability::resident(),
+            ));
         }
 
         let dimension = space.dimension() as usize;
@@ -432,9 +547,10 @@ impl EmbeddingSpace {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] for every refusal above: a zero `dimension`, a row whose
-    /// component count is not `dimension`, a non-finite component, a duplicate term, a
-    /// space larger than the guard admits, or an extension metric.
+    /// A configuration refusal for a zero `dimension`, a row whose component count
+    /// is not `dimension`, a non-finite component, a duplicate term, a space larger
+    /// than the guard admits, or an extension metric. Native refusals retain their
+    /// original typed fields through [`crate::NativeDiagnostic`].
     ///
     /// [`EvalError::Data`] for a zero-norm vector under a norm-dividing metric, the
     /// classification [`Self::from_artifact`] gives the same defect.
@@ -459,38 +575,50 @@ impl EmbeddingSpace {
             ))
         })?;
         if dimension == 0 {
-            return Err(EvalError::config(
-                "a space of dimension zero holds vectors with no components, so no distance \
-                 between two of them separates anything"
-                    .to_owned(),
+            return Err(crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Config,
+                SpaceRefusal::DimensionZero,
+                &crate::WorkspaceCapability::resident(),
             ));
         }
         let row_count = rows.len();
         if row_count as u64 > guard.max_candidates() {
-            return Err(EvalError::config(format!(
-                "this space holds {row_count} row(s), which is more than the {} candidate(s) \
-                 the configured guard admits; a search here would either exceed the work the \
-                 host licensed or rank a prefix of the space and report it as the whole",
-                guard.max_candidates()
-            )));
+            return Err(crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Config,
+                SpaceRefusal::Candidates {
+                    actual: row_count,
+                    maximum: guard.max_candidates(),
+                },
+                &crate::WorkspaceCapability::resident(),
+            ));
         }
 
         let mut terms: Vec<TermValue> = Vec::with_capacity(row_count);
         let mut vectors: Vec<f64> = Vec::with_capacity(row_count.saturating_mul(dimension));
         for (row, (term, values)) in rows.into_iter().enumerate() {
             if values.len() != dimension {
-                return Err(EvalError::config(format!(
-                    "row {row} ({term:?}) carries {} component(s); the space's dimension is \
-                     {dimension}",
-                    values.len()
-                )));
+                return Err(crate::NativeDiagnostic::error_cause(
+                    crate::NativeDiagnosticKind::Config,
+                    SpaceRefusal::RowDimension {
+                        row,
+                        term,
+                        actual: values.len(),
+                        dimension,
+                    },
+                    &crate::WorkspaceCapability::resident(),
+                ));
             }
             if let Some(at) = values.iter().position(|value| !value.is_finite()) {
-                return Err(EvalError::config(format!(
-                    "row {row} ({term:?}) carries the non-finite component {} at position \
-                     {at}; a distance computed from it could not be ranked",
-                    values[at]
-                )));
+                return Err(crate::NativeDiagnostic::error_cause(
+                    crate::NativeDiagnosticKind::Config,
+                    SpaceRefusal::NonFinite {
+                        row,
+                        term,
+                        at,
+                        value: values[at],
+                    },
+                    &crate::WorkspaceCapability::resident(),
+                ));
             }
             vectors.extend_from_slice(&values);
             terms.push(term);

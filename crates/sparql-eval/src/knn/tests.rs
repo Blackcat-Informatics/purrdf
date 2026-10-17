@@ -336,7 +336,11 @@ fn a_space_larger_than_the_candidate_bound_is_refused_and_one_exactly_at_it_is_n
     let error = fixture(&DistanceMetric::SquaredEuclidean, &rows)
         .open(one_short)
         .expect_err("three rows exceed a two-candidate bound");
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::NativeDiagnostic(diagnostic)
+        if diagnostic.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
     assert!(error.to_string().contains("3 row(s)"), "got {error}");
     assert!(error.to_string().contains("2 candidate(s)"), "got {error}");
 }
@@ -346,7 +350,11 @@ fn a_zero_guard_bound_is_refused_in_either_position() {
     for (candidates, neighbours) in [(0, 5), (5, 0), (0, 0)] {
         let error = KnnGuard::new(candidates, neighbours)
             .expect_err("a bound of zero admits nothing at all");
-        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::NativeDiagnostic(diagnostic)
+            if diagnostic.kind() == crate::NativeDiagnosticKind::Config),
+            "got {error:?}"
+        );
     }
     // The neighbouring VALID case: one of each is a legitimate, if tiny, configuration.
     assert!(KnnGuard::new(1, 1).is_ok());
@@ -3005,14 +3013,22 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
     let mut short = vector_rows(&points());
     short[1].1.pop();
     let error = refuse(&euclid, 2, short, roomy(), "carries 1 component(s)");
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::NativeDiagnostic(diagnostic)
+        if diagnostic.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
 
     // A non-finite component, and the finite neighbour.
     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let mut rows = vector_rows(&points());
         rows[2].1[0] = bad;
         let error = refuse(&euclid, 2, rows, roomy(), "non-finite component");
-        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::NativeDiagnostic(diagnostic)
+            if diagnostic.kind() == crate::NativeDiagnosticKind::Config),
+            "got {error:?}"
+        );
     }
     let mut finite = vector_rows(&points());
     finite[2].1[0] = f64::MAX / 4.0;
@@ -3035,7 +3051,11 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
         roomy(),
         "dimension zero",
     );
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::NativeDiagnostic(diagnostic)
+        if diagnostic.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
     assert!(EmbeddingSpace::from_vectors(&euclid, 1, vec![(iri("a"), vec![1.0])], roomy()).is_ok());
 
     // One row past the guard, and exactly at it.
@@ -3046,7 +3066,11 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
         KnnGuard::new(2, 10).expect("positive"),
         "3 row(s)",
     );
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::NativeDiagnostic(diagnostic)
+        if diagnostic.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
     assert!(
         EmbeddingSpace::from_vectors(
             &euclid,
