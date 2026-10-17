@@ -1,0 +1,19 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml/crates/alloc-probe)
+    Checking hybrid-array v0.4.15
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml/crates/lex)
+    Checking sha2 v0.11.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml/crates/xsd)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml/crates/testkit)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 13.71s

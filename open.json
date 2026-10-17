@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 575,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml",
+  "branch": "paudley/575-validate-the-native-xsd-string-xml",
+  "slug": "validate-the-native-xsd-string-xml",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml/.stage/validate-the-native-xsd-string-xml",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "298edd98d87641094c6b3e947894820748cf3e48",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml",
+    "branch:paudley/575-validate-the-native-xsd-string-xml",
+    "stage:/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml/.stage/validate-the-native-xsd-string-xml",
+    "issue:/home/paudley/Active/purrdf/.worktrees/575-validate-the-native-xsd-string-xml/.stage/validate-the-native-xsd-string-xml/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-17T04:28:43-0600"
+}
