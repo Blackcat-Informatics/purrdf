@@ -11,6 +11,7 @@ use purrdf_validate::regime::{
 use std::collections::BTreeMap;
 use std::io;
 
+/// Verify every original answer, then refresh only the artifact's proof/check bodies.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dl-proof.vectors");
