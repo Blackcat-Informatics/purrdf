@@ -263,7 +263,67 @@ fn the_hand_answers_are_reproduced_on_this_target() {
     );
 }
 
+fn any_uri_casts_keep_their_primitive_domain_on_this_target() {
+    assert_eq!(
+        outcome_text(&governed(
+            "SELECT (xsd:anyURI(\"  /relative\\t \\n\") AS ?a) WHERE {}",
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )),
+        "/relative^^anyURI"
+    );
+    for (target, lexical) in [
+        ("hexBinary", "0F"),
+        ("base64Binary", "AA=="),
+        ("date", "2024-01-01"),
+        ("dayTimeDuration", "PT1S"),
+        ("integer", "1"),
+        ("boolean", "true"),
+    ] {
+        for (from, to) in [("anyURI", target), (target, "anyURI")] {
+            let query = format!("SELECT (xsd:{to}(\"{lexical}\"^^xsd:{from}) AS ?a) WHERE {{}}");
+            assert_eq!(
+                outcome_text(&governed(
+                    &query,
+                    QueryOptions::EMPTY,
+                    &QueryGovernors::METERED
+                )),
+                "-",
+                "{query}"
+            );
+        }
+    }
+    for (target, expected) in [
+        ("string", "/relative^^string"),
+        ("anyURI", "/relative^^anyURI"),
+    ] {
+        let query =
+            format!("SELECT (xsd:{target}(\"  /relative\\t \\n\"^^xsd:anyURI) AS ?a) WHERE {{}}");
+        assert_eq!(
+            outcome_text(&governed(
+                &query,
+                QueryOptions::EMPTY,
+                &QueryGovernors::METERED
+            )),
+            expected
+        );
+    }
+    for target in ["string", "anyURI"] {
+        let query = format!("SELECT (xsd:{target}(\"bad\\u0000\"^^xsd:anyURI) AS ?a) WHERE {{}}");
+        assert_eq!(
+            outcome_text(&governed(
+                &query,
+                QueryOptions::EMPTY,
+                &QueryGovernors::METERED
+            )),
+            "-",
+            "{query}"
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
+    any_uri_casts_keep_their_primitive_domain_on_this_target,
     the_hand_answers_are_reproduced_on_this_target,
     the_numeric_transcript_digest_is_reproduced_on_this_target,
 );

@@ -105,6 +105,23 @@ separate from ranking identity. The pure `PreparedCorpus` and `PreparedQuery`
 APIs expose the same scoring implementation for other stores, binding cached
 IDFs to validated corpus statistics and the immutable profile.
 
+`index.with_delta(&next_dataset, &added, &removed)` updates an owned index from
+effective statement additions and removals. The inputs use the same carrier
+profile as the index. Both asserted and annotation literal rows count, including
+a literal present in both layers. Reversing the delta must recover the indexed
+source fingerprint; missing additions and incomplete deltas are typed refusals.
+The next source also refreshes predicate coverage for nonliteral changes.
+
+Only changed `(graph, subject, language)` documents are analyzed. Their complete
+next literal rows are analyzed together, so a retained literal in a changed
+document is analyzed again. Other documents retain their token and source
+projection buffers; their gram positions and pronunciation codes are reused.
+Canonical IDs, statistics, fingerprints and answers match a fresh build. IDs can
+change after an update: keep them with their index generation. Source collection,
+sorting, hashing and ordered table merges still visit retained data; total work
+is not sublinear. To preserve an older snapshot, clone before the owned update;
+the explicit clone copies buffers rather than sharing them implicitly.
+
 For sparse fields, select `RankingProfile::with_field_populations()` and supply
 per-field carrier counts to `PreparedCorpus::with_field_populations`. Lengths
 then normalize against the mean of the field's carriers; IDF remains

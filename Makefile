@@ -804,10 +804,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				ranges_use_collapsed_character_lengths_and_primitive_identity \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
+				any_uri_casts_keep_their_primitive_domain_on_this_target \
 				the_hand_answers_are_reproduced_on_this_target \
 				the_numeric_transcript_digest_is_reproduced_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test wasm_determinism -- --exact \
+				delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target \
 				scoped_text_bound_candidates_retain_unknown_membership \
 				scoped_text_depth_preserves_original_unknown_rows_and_scores \
 				scoped_text_preserves_original_constraint_failure \
