@@ -287,7 +287,7 @@ fn named_graph_bench(c: &mut Bench) {
         let source = named_graph_data(rows);
         let native = Arc::new(
             source
-                .project_named_graph(SELECTED_GRAPH)
+                .project_graph(Some(&purrdf_core::RdfTerm::iri(SELECTED_GRAPH)))
                 .expect("graph projects"),
         );
         let views = [
@@ -389,7 +389,7 @@ fn named_graph_bench(c: &mut Bench) {
                 b.iter(|| {
                     std::hint::black_box(
                         source
-                            .project_named_graph(SELECTED_GRAPH)
+                            .project_graph(Some(&purrdf_core::RdfTerm::iri(SELECTED_GRAPH)))
                             .expect("graph projects"),
                     )
                 });

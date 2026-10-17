@@ -567,7 +567,7 @@ pub fn try_canonicalize_view<D: DatasetView>(
 ///
 /// Selection is graph-FAITHFUL and emission graph-ERASING, uniformly across both
 /// layers, exactly as
-/// [`RdfDataset::project_named_graph`](super::dataset::RdfDataset::project_named_graph)
+/// [`RdfDataset::project_graph`](super::dataset::RdfDataset::project_graph)
 /// defines it: a base quad contributes when its graph slot is `graph`, and a reifier
 /// declaration or annotation row contributes when **its own** graph slot is `graph`;
 /// each is canonicalized with no graph name. The statement layer is keyed per graph in
@@ -4024,7 +4024,8 @@ mod tests {
     fn graph_scoped_canonicalization_matches_the_named_graph_projection() {
         let ds = seam_dataset();
         let graph = "http://example.org/g";
-        let projected = canonicalize(&ds.project_named_graph(graph).unwrap()).nquads;
+        let projected =
+            canonicalize(&ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap()).nquads;
         assert!(!projected.is_empty(), "the graph must hold content");
         assert_eq!(
             canonicalize_graph_view(&*ds, graph, CanonHash::Sha256).nquads,
@@ -4044,7 +4045,11 @@ mod tests {
         // it flat does.
         let absent = "http://example.org/no-such-graph";
         assert_eq!(
-            canonicalize(&ds.project_named_graph(absent).unwrap()).nquads,
+            canonicalize(
+                &ds.project_graph(Some(&crate::RdfTerm::iri(absent)))
+                    .unwrap()
+            )
+            .nquads,
             ""
         );
         assert_eq!(
@@ -4075,7 +4080,11 @@ mod tests {
                 .expect("a clean graph must still canonicalize");
         assert_eq!(
             neighbour.nquads,
-            canonicalize(&ds.project_named_graph("http://example.org/clean").unwrap()).nquads
+            canonicalize(
+                &ds.project_graph(Some(&crate::RdfTerm::iri("http://example.org/clean")))
+                    .unwrap()
+            )
+            .nquads
         );
         // The whole dataset IS refused, because the offending row is in it.
         assert!(matches!(
@@ -4946,14 +4955,14 @@ mod tests {
 
     /// Composition sanity: `try_canonicalize_flat_graph_view` on graph A equals
     /// `try_canonicalize_flat_view` on a dataset containing only graph A's rows
-    /// (`project_named_graph`, already graph-erased) — the same relationship the
+    /// (`project_graph`, already graph-erased) — the same relationship the
     /// overlay family's `graph_scoped_canonicalization_matches_the_named_graph_projection`
     /// pins, held under the flat presentation instead.
     #[test]
     fn flat_graph_scope_is_flat_dataset_scope_composed_with_projection() {
         let ds = two_graph_flat_fixture();
         let graph = "http://example.org/gA";
-        let projected = ds.project_named_graph(graph).unwrap();
+        let projected = ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap();
         let via_projection =
             try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
         let via_graph_scope =
