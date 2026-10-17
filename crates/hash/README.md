@@ -24,7 +24,7 @@ allocates nothing, and builds for `wasm32-unknown-unknown`.
 
 | Module | Algorithm | Specification | Output |
 |---|---|---|---|
-| `blake3` | Unkeyed BLAKE3-256 | BLAKE3 §2.1–2.5 | 32 bytes |
+| `blake3` | BLAKE3 hash, keyed hash, key derivation and XOF | BLAKE3 §2.1–2.6 | 32 bytes or caller-selected length |
 | `md5` | MD5 | RFC 1321 | 16 bytes |
 | `sha1` | SHA-1 | FIPS 180-4 | 20 bytes |
 | `sha3` | SHA3-224 / 256 / 384 / 512, Keccak-f[1600] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
@@ -37,6 +37,22 @@ streams exactly those bytes into any `Digest`, and `frame_be_labelled` is the
 big-endian label-and-value framing three published identities were minted
 with. Every preimage and wire encoding in the workspace frames through it, and
 `purrdf-hash-conformance` replays its frozen answers on every target.
+
+## BLAKE3 modes and output
+
+`blake3::keyed_hash(&key, data)` authenticates bytes with a 32-byte key.
+`blake3::derive_key(context, material)` returns 32 derived key bytes, with a
+unique application-specific context string. `Hasher::new_keyed` and
+`Hasher::new_derive_key` accept repeated `update` calls; the compact
+`RecordHasher` supports the same constructors. Reset starts a new message
+under the same key and mode.
+
+`hash_xof`, `keyed_hash_xof` and `derive_key_xof` fill caller-provided output
+storage. For incremental output, `finalize_xof()` returns an owned reader
+with `fill`, `position`, `set_position` and `std::io::Read`. Seeking and
+cloning a reader never rehash the input or change the hasher. Output lengths
+share a prefix; the ordinary digest is the first 32 bytes. The output limit
+is 2^64 - 1 bytes, and `fill` refuses an overflowing range before mutation.
 
 ## Owned secret storage
 
@@ -169,7 +185,7 @@ All four SHA-3 output widths replay independent frozen differential vectors.
 
 ## BLAKE3: mathematics and implementation
 
-This module implements the unkeyed 256-bit mode from the
+This module implements hashing, keyed hashing, key derivation and extended output from the
 [BLAKE3 specification, §2](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf).
 All paths retain the specified **seven rounds**, 1,024-byte chunks, tree
 shape, counters and domain flags. Optimizations change how operations are
@@ -194,7 +210,13 @@ words follow the permutation
 `[2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]`.
 The seven schedules are composed at compile time. Explicit round calls let
 the compiler resolve message indices without a dynamic scheduling loop.
-The first eight output words are `v[i] XOR v[i+8]`.
+The first eight output words are `v[i] XOR v[i+8]`; the second eight are
+`v[i+8] XOR input_cv[i]`. Chaining values use the first eight words, while
+extended output uses all sixteen. Keyed mode starts chunks and parents at the
+caller key and sets `KEYED_HASH` on every compression. Derivation first hashes
+the context with `DERIVE_KEY_CONTEXT`, then uses its 32-byte result as the key
+for material hashing under `DERIVE_KEY_MATERIAL`. Extended output repeats the
+root compression with an independent output-block counter.
 
 The default x86 short-message and stream-finalization paths use scalar ARX.
 Four independent scalar quarter-round chains let the processor schedule work
@@ -365,6 +387,14 @@ Native Rust executes the complete frozen corpus. The focused WASM lane checks
 actual backend selection and compares the explicit simd128 kernel with the
 portable implementation; it does not replay the full oracle. See
 [WASM test ownership](../../docs/WASM_TESTING.md).
+
+Separately, all **35 official BLAKE3 cases** replay the complete 131-byte
+hash, keyed-hash and derive-key answers on every available backend and both
+stream buffers, natively and on scalar/SIMD WASM. These checks cover split
+updates, reset, cloned readers and seek boundaries. Long Unicode contexts,
+megabyte output and high output-counter carries compare every available
+backend with portable arithmetic. Overflowing output ranges are refused
+before mutation. These are correctness checks, with no timing claim.
 
 A paired measurement on an AMD Ryzen AI Max+ 395, compiling with
 `target-cpu=native`, opt-level 3, thin LTO and one codegen unit, compared fresh

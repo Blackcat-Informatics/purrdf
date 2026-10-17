@@ -277,6 +277,30 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn any_uri_typing_and_equality_use_the_native_primitive() {
+        use purrdf_xsd::datatype::XSD_ANY_URI;
+        let index = index_of(&[
+            ("a", " \ta b\r ", XSD_ANY_URI),
+            ("b", "a b", XSD_ANY_URI),
+            ("c", "a b", XSD_STRING),
+            ("d", "a%20b", XSD_ANY_URI),
+            ("e", "invalid\0", XSD_ANY_URI),
+        ]);
+        let equal = rows(&index, DT_EQUAL_RELATION);
+        assert!(equal.contains(&("a".to_owned(), "b".to_owned())));
+        assert!(!equal.contains(&("a".to_owned(), "c".to_owned())));
+        assert!(!equal.contains(&("a".to_owned(), "d".to_owned())));
+        assert_eq!(
+            rows(&index, DT_ILL_TYPED_RELATION),
+            vec![("e".to_owned(), super::iri_surface(XSD_ANY_URI))]
+        );
+        let typed = rows(&index, DT_VALUE_RELATION);
+        assert!(typed.contains(&("a".to_owned(), super::iri_surface(XSD_ANY_URI))));
+        assert!(!typed.contains(&("a".to_owned(), super::iri_surface(XSD_STRING))));
+        assert!(!typed.contains(&("c".to_owned(), super::iri_surface(XSD_ANY_URI))));
+    }
+
     /// Two integers past the double's precision are each DIFFERENT from the double
     /// nearest them, and from each other: equality across the numeric tower is exact,
     /// so `dt-eq` can never close two different integers into one value through a

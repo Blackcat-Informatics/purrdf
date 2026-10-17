@@ -75,6 +75,8 @@ use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
 use std::cmp::Ordering;
 
+mod delta;
+
 use crate::SurfaceIndex;
 use crate::{CorpusProfile, GraphFree, GraphLanguage};
 
@@ -809,7 +811,7 @@ impl<P: CorpusProfile> TextIndex<P> {
         D::ReadError: purrdf_hash::error::StructuredError,
     {
         let (rows, coverage) = collect_rows(dataset, config)?;
-        let source_fingerprint = digest_rows(&rows);
+        let source_fingerprint = digest_rows(rows.iter());
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         Self::assemble(
             config.clone(),
@@ -838,7 +840,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             profile.field_for(predicate)?;
         }
         let (rows, coverage) = collect_rows(dataset, config)?;
-        let source_fingerprint = digest_rows(&rows);
+        let source_fingerprint = digest_rows(rows.iter());
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         Self::assemble(
             config.clone(),
@@ -1604,16 +1606,16 @@ impl<P: CorpusProfile> TextIndex<P> {
         coverage: SourceCoverage,
         ranking: RankingProfile,
     ) -> Result<Self, TextError> {
-        if u32::try_from(documents.len()).is_err() {
-            return Err(data_error(
-                crate::data_refusal::DataRefusal::DocumentCount {
-                    count: documents.len(),
-                },
-                None,
-            ));
-        }
+        check_document_count(documents.len())?;
 
-        let (partitions, partition_of) = build_partitions(&documents)?;
+        let (partitions, partition_of) = build_partitions(documents.iter().map(|document| {
+            (
+                &document.key.graph,
+                &document.key.subject,
+                &document.key.language,
+                document.tokens.len() as u64,
+            )
+        }))?;
         let table: Vec<Document<P>> = documents
             .iter()
             .map(|document| Document {
@@ -1626,15 +1628,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             })
             .collect();
         let (terms, token_streams) = build_terms(&documents, dictionary, &table);
-        let mut occurrence_order: Vec<u32> = (0..table.len()).map(|id| id as u32).collect();
-        occurrence_order.sort_unstable_by(|&a, &b| {
-            let a = &table[a as usize];
-            let b = &table[b as usize];
-            a.subject
-                .cmp(&b.subject)
-                .then_with(|| a.language.cmp(&b.language))
-                .then_with(|| a.partition.cmp(&b.partition))
-        });
+        let occurrence_order = build_occurrence_order(&table);
         let subject_order = build_subject_order(&table);
         let mut analyses = Vec::new();
         let mut han_occurrences = Vec::new();
@@ -2140,14 +2134,10 @@ fn analyze_rows<P: CorpusProfile>(
     rows: &[SourceRow<P>],
     config: &TextIndexConfig<P>,
 ) -> Result<(Vec<AnalyzedDocument<P>>, Vec<String>), TextError> {
-    let mut groups: FastMap<DocumentKey<P>, Vec<u32>> = FastMap::default();
+    let mut groups: FastMap<DocumentKey<P>, Vec<usize>> = FastMap::default();
     for (index, row) in rows.iter().enumerate() {
-        let key = DocumentKey {
-            graph: row.graph.clone(),
-            subject: row.subject.clone(),
-            language: row.language.clone(),
-        };
-        groups.entry(key).or_default().push(index as u32);
+        let key = document_key(&row.graph, &row.subject, row.language.as_deref());
+        groups.entry(key).or_default().push(index);
     }
 
     let analyzer = config.analyzer();
@@ -2160,7 +2150,7 @@ fn analyze_rows<P: CorpusProfile>(
         // `(predicate, lexical form, direction)` order, so it does not depend on
         // the order the dataset yielded them in.
         indices.sort_by(|&left, &right| {
-            let (left, right) = (&rows[left as usize], &rows[right as usize]);
+            let (left, right) = (&rows[left], &rows[right]);
             left.predicate
                 .cmp(&right.predicate)
                 .then_with(|| left.lexical_form.cmp(&right.lexical_form))
@@ -2175,7 +2165,7 @@ fn analyze_rows<P: CorpusProfile>(
         let mut position: u32 = 0;
         let mut has_auxiliary = false;
         for index in indices {
-            let row = &rows[index as usize];
+            let row = &rows[index];
             let predicate = config
                 .predicates
                 .binary_search(&row.predicate)
@@ -2231,7 +2221,7 @@ fn analyze_rows<P: CorpusProfile>(
             // buffer, including capacity, before retaining the remaining views.
             drop(core::mem::take(&mut analysis.lexical));
             if config.surface || config.projection == IndexProjection::Han {
-                analyses.push((digest_rows(std::slice::from_ref(row)), analysis));
+                analyses.push((digest_rows(std::iter::once(row)), analysis));
             }
         }
         // Retain auxiliary-only documents without admitting them into the
@@ -2260,19 +2250,39 @@ type Partitioning<P> = (
     FastMap<DocumentKey<P>, u32>,
 );
 
+/// Borrowed document identity and token count, without copying source terms.
+type DocumentFacts<'a, P> = (
+    &'a <P as CorpusProfile>::Graph,
+    &'a TermValue,
+    &'a Option<String>,
+    u64,
+);
+
+fn document_key<P: CorpusProfile>(
+    graph: &P::Graph,
+    subject: &TermValue,
+    language: Option<&str>,
+) -> DocumentKey<P> {
+    DocumentKey {
+        graph: graph.clone(),
+        subject: subject.clone(),
+        language: language.map(str::to_owned),
+    }
+}
+
 /// Assign partition indices and compute each partition's statistics.
-fn build_partitions<P: CorpusProfile>(
-    documents: &[AnalyzedDocument<P>],
+fn build_partitions<'a, P: CorpusProfile + 'a>(
+    documents: impl Clone + Iterator<Item = DocumentFacts<'a, P>>,
 ) -> Result<Partitioning<P>, TextError> {
     let mut totals: FastMap<PartitionKey<P>, (u64, u64)> = FastMap::default();
-    for document in documents {
+    for (graph, _, language, length) in documents.clone() {
         let key = PartitionKey {
-            graph: document.key.graph.clone(),
-            language: document.key.language.clone(),
+            graph: graph.clone(),
+            language: language.clone(),
         };
         let entry = totals.entry(key).or_insert((0, 0));
-        entry.0 += u64::from(!document.tokens.is_empty());
-        entry.1 += document.tokens.len() as u64;
+        entry.0 += u64::from(length != 0);
+        entry.1 += length;
     }
 
     let mut keys: Vec<PartitionKey<P>> = totals.keys().cloned().collect();
@@ -2298,14 +2308,40 @@ fn build_partitions<P: CorpusProfile>(
     }
 
     let mut partition_of: FastMap<DocumentKey<P>, u32> = FastMap::default();
-    for document in documents {
+    for (graph, subject, language, _) in documents {
         let key = PartitionKey {
-            graph: document.key.graph.clone(),
-            language: document.key.language.clone(),
+            graph: graph.clone(),
+            language: language.clone(),
         };
-        partition_of.insert(document.key.clone(), index_of[&key]);
+        partition_of.insert(
+            document_key(graph, subject, language.as_deref()),
+            index_of[&key],
+        );
     }
     Ok((partitions, partition_of))
+}
+
+/// The physical stream order used by phrase occurrence traversal.
+fn build_occurrence_order<P: CorpusProfile>(table: &[Document<P>]) -> Vec<u32> {
+    let mut order: Vec<_> = (0..table.len()).map(|id| id as u32).collect();
+    order.sort_unstable_by(|&a, &b| {
+        let (a, b) = (&table[a as usize], &table[b as usize]);
+        a.subject
+            .cmp(&b.subject)
+            .then_with(|| a.language.cmp(&b.language))
+            .then_with(|| a.partition.cmp(&b.partition))
+    });
+    order
+}
+
+/// Refuse a document ordinal outside the index address space.
+fn check_document_count(count: usize) -> Result<(), TextError> {
+    u32::try_from(count).map(|_| ()).map_err(|_| {
+        data_error(
+            crate::data_refusal::DataRefusal::DocumentCount { count },
+            None,
+        )
+    })
 }
 
 /// `total / count`, exactly, in fixed point.
@@ -2385,20 +2421,7 @@ fn build_terms<P: CorpusProfile>(
         // partition leaves each partition's run ascending by document id too.
         list.sort_by_key(|posting| table[posting.document as usize].partition);
 
-        let mut spans = Vec::new();
-        let mut at = 0;
-        while at < list.len() {
-            let partition = table[list[at].document as usize].partition;
-            let start = at;
-            while at < list.len() && table[list[at].document as usize].partition == partition {
-                at += 1;
-            }
-            spans.push(PartitionSpan {
-                partition,
-                start: start as u32,
-                end: at as u32,
-            });
-        }
+        let spans = posting_spans(&list, table);
         entries.push(TermEntry {
             term,
             postings: list,
@@ -2406,6 +2429,25 @@ fn build_terms<P: CorpusProfile>(
         });
     }
     (entries, token_streams)
+}
+
+/// Partition runs over the canonical posting order, shared by build and update.
+fn posting_spans<P: CorpusProfile>(list: &[Posting], table: &[Document<P>]) -> Vec<PartitionSpan> {
+    let mut spans = Vec::new();
+    let mut at = 0;
+    while at < list.len() {
+        let partition = table[list[at].document as usize].partition;
+        let start = at;
+        while at < list.len() && table[list[at].document as usize].partition == partition {
+            at += 1;
+        }
+        spans.push(PartitionSpan {
+            partition,
+            start: start as u32,
+            end: at as u32,
+        });
+    }
+    spans
 }
 
 // ---------------------------------------------------------------------------
@@ -2437,11 +2479,13 @@ where
     D::ReadError: purrdf_hash::error::StructuredError,
 {
     let (rows, coverage) = collect_rows(dataset, config)?;
-    Ok((digest_rows(&rows), coverage))
+    Ok((digest_rows(rows.iter()), coverage))
 }
 
 /// Digest the source rows: what the index actually walked, and nothing else.
-fn digest_rows<P: CorpusProfile>(rows: &[SourceRow<P>]) -> [u8; FINGERPRINT_BYTES] {
+fn digest_rows<'a, P: CorpusProfile + 'a>(
+    rows: impl ExactSizeIterator<Item = &'a SourceRow<P>>,
+) -> [u8; FINGERPRINT_BYTES] {
     let mut digest = Digest::new(if P::GRAPH_FREE {
         TRIPLE_SOURCE_DIGEST_DOMAIN
     } else {

@@ -2714,6 +2714,7 @@ const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
         | XsdDatatype::Double
         | XsdDatatype::Boolean
         | XsdDatatype::String
+        | XsdDatatype::AnyUri
         | XsdDatatype::Duration
         | XsdDatatype::DayTimeDuration
         | XsdDatatype::YearMonthDuration

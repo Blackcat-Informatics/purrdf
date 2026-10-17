@@ -68,16 +68,7 @@ const EXPECTED: [(&str, &str); 2] = [("d1", "1.646224553827"), ("d2", "1.3862943
 
 /// An index over [`CORPUS`].
 fn corpus_index() -> TextIndex {
-    let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE).unwrap();
-    for (local, text) in CORPUS {
-        let subject = builder
-            .intern_iri(&format!("https://example.org/{local}"))
-            .unwrap();
-        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
-        builder.push_quad(subject, note, literal, None).unwrap();
-    }
-    let dataset: Arc<RdfDataset> = builder.freeze().expect("the fixture must validate");
+    let dataset = corpus_dataset(&CORPUS);
     TextIndex::from_dataset(
         &*dataset,
         &TextIndexConfig::new(
@@ -88,6 +79,87 @@ fn corpus_index() -> TextIndex {
         .expect("the fixture configuration is well formed"),
     )
     .expect("the fixture index must build")
+}
+
+fn corpus_dataset(corpus: &[(&str, &str)]) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE).unwrap();
+    for &(local, text) in corpus {
+        let subject = builder
+            .intern_iri(&format!("https://example.org/{local}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
+    }
+    builder.freeze().expect("the fixture must validate")
+}
+
+fn delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target() {
+    let original = corpus_index();
+    let old_fingerprint = original.fingerprint();
+    let snapshot = original.clone();
+    let additions = [("d0", "quick brown quick quick")];
+    let removed = corpus_dataset(&CORPUS[..1]);
+    let added = corpus_dataset(&additions);
+    let next_rows: Vec<_> = CORPUS[1..].iter().chain(&additions).copied().collect();
+    let next = corpus_dataset(&next_rows);
+    let fresh = TextIndex::from_dataset(&*next, original.config()).unwrap();
+    let updated = original.with_delta(&*next, &*added, &*removed).unwrap();
+    assert_eq!(updated.fingerprint(), fresh.fingerprint());
+    assert_eq!(updated.source_fingerprint(), fresh.source_fingerprint());
+    let needle = Analyzer::empty_lexicon().terms("quick brown").unwrap();
+    assert_eq!(
+        select(
+            &updated,
+            &needle,
+            &PartitionFilter::unconstrained(),
+            None,
+            None
+        )
+        .unwrap(),
+        select(
+            &fresh,
+            &needle,
+            &PartitionFilter::unconstrained(),
+            None,
+            None
+        )
+        .unwrap()
+    );
+    for needle in ["qu", "brown", "river"] {
+        assert_eq!(
+            format!(
+                "{:?}",
+                updated.surface_index().unwrap().substring_report(needle)
+            ),
+            format!(
+                "{:?}",
+                fresh.surface_index().unwrap().substring_report(needle)
+            )
+        );
+    }
+    assert_eq!(snapshot.fingerprint(), old_fingerprint);
+    let empty = corpus_dataset(&[]);
+    let emptied = updated.with_delta(&*empty, &*empty, &*next).unwrap();
+    assert_eq!(
+        emptied.fingerprint(),
+        TextIndex::from_dataset(&*empty, emptied.config())
+            .unwrap()
+            .fingerprint()
+    );
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("urn:subject").unwrap();
+    let predicate = builder.intern_iri(NOTE).unwrap();
+    let object = builder.intern_iri("urn:object").unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
+    let nonliteral = builder.freeze().unwrap();
+    let generation = emptied.fingerprint();
+    let covered = emptied
+        .with_delta(&*nonliteral, &*nonliteral, &*empty)
+        .unwrap();
+    assert_eq!(covered.fingerprint(), generation);
+    assert!(covered.source_coverage().dataset_holds_statements());
+    assert_eq!(covered.source_coverage().unrepresented_predicates(), []);
 }
 
 /// The ranking, as `(document local name, score lexical)` in emission order.
@@ -211,6 +283,7 @@ fn the_independent_fielded_reference_is_reproduced_on_this_target() {
 }
 
 purrdf_testkit::harness_main!(
+    delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target,
     scoped_text_bound_candidates_retain_unknown_membership,
     scoped_text_depth_preserves_original_unknown_rows_and_scores,
     scoped_text_preserves_original_constraint_failure,

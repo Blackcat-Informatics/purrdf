@@ -728,6 +728,15 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test recorded_stop -- --exact \
+				recorded_stop_preserves_complete_decisions_and_proof_identity \
+				recorded_stop_refuses_before_identity_preparation \
+				recorded_stop_retains_the_signal_after_identity \
+				recorded_stop_covers_identity_digest_streaming \
+				recorded_stop_reports_cancelled_search_without_a_semantic_verdict \
+				recorded_stop_preserves_preparation_budget_selection \
+				recorded_stop_covers_every_preparation_poll \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-rdf --test turtle_chains -- --exact \
 				blank_chains_at_one_hundred_thousand blank_chains_at_one_million \
 				exact_guard_neighbors_and_permuted_interning cycles_shared_and_quoted_blanks_preserve_statements \
@@ -735,6 +744,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				continuation_objects_saturate_at_the_same_indent_guard \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
+				class_expression_role_refusals_retain_original_source_terms \
 				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
 				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
 				universal_obligations_clash_after_recursive_paths_and_blocking \
@@ -766,7 +776,9 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				the_image_records_the_path_and_shape_this_build_was_made_for \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test blake3 -- --exact \
-				required_backends_are_available \
+				required_backends_are_available official_modes_and_extended_output \
+				xof_large_output_and_seek_boundaries \
+				derived_context_trees_match_across_backends \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-testkit --test bench -- --exact \
 				the_store_options_are_refused_on_wasm32 \
@@ -786,11 +798,18 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				the_transcript_digest_is_reproduced_on_this_target \
 				the_oracle_vectors_replay_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test any_uri -- --exact \
+				lexical_mapping_preserves_everything_except_xml_whitespace \
+				primitive_identity_is_disjoint_and_unordered \
+				ranges_use_collapsed_character_lengths_and_primitive_identity \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
+				any_uri_casts_keep_their_primitive_domain_on_this_target \
 				the_hand_answers_are_reproduced_on_this_target \
 				the_numeric_transcript_digest_is_reproduced_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test wasm_determinism -- --exact \
+				delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target \
 				scoped_text_bound_candidates_retain_unknown_membership \
 				scoped_text_depth_preserves_original_unknown_rows_and_scores \
 				scoped_text_preserves_original_constraint_failure \
@@ -914,6 +933,8 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test blake3 -- --exact \
 				required_backends_are_available \
+				official_modes_and_extended_output xof_large_output_and_seek_boundaries \
+				derived_context_trees_match_across_backends \
 				random_inputs_cover_irregular_trees_and_alignment \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \

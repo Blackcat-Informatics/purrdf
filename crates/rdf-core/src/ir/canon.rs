@@ -377,11 +377,16 @@ fn digest_hex(hash: CanonHash, bytes: &[u8]) -> HashHex {
 
 /// Hash a sequence of already-serialized lines under the selected algorithm, feeding
 /// each line into one running digest (Hash First Degree Quads, §4.6).
-fn hash_lines(hash: CanonHash, lines: &[String]) -> HashHex {
-    match hash {
+fn hash_lines(
+    hash: CanonHash,
+    lines: &[String],
+    stop: Option<&dyn crate::StopSignal>,
+) -> Result<HashHex, CanonError> {
+    let result = match hash {
         CanonHash::Sha256 => {
             let mut h = Sha256::new();
             for line in lines {
+                check_stop(stop)?;
                 h.update(line.as_bytes());
             }
             hex_of(&h.finalize())
@@ -389,11 +394,14 @@ fn hash_lines(hash: CanonHash, lines: &[String]) -> HashHex {
         CanonHash::Sha384 => {
             let mut h = Sha384::new();
             for line in lines {
+                check_stop(stop)?;
                 h.update(line.as_bytes());
             }
             hex_of(&h.finalize())
         }
-    }
+    };
+    check_stop(stop)?;
+    Ok(result)
 }
 
 /// The result of canonicalizing a dataset or a view of one.
@@ -565,12 +573,43 @@ pub fn try_canonicalize_view<D: DatasetView>(
     .map_err(CanonError::with_read_error)
 }
 
+/// Canonicalize a view with a caller-owned stop signal throughout preparation,
+/// label search and output construction. No canonical result is returned after
+/// an observed stop; a non-stopped operation produces the same bytes and labels
+/// as [`try_canonicalize_view`]. The view is read in place.
+///
+/// # Errors
+/// The source/profile failures of [`try_canonicalize_view`], or
+/// [`CanonError::Stopped`] when the caller signal is observed.
+pub fn try_canonicalize_view_with_stop<D: DatasetView>(
+    view: &D,
+    hash: CanonHash,
+    stop: &dyn crate::StopSignal,
+) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
+    check_stop(Some(stop)).map_err(CanonError::with_read_error)?;
+    view.checked_read(|view| {
+        CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash)
+            .with_stop(stop)
+            .run_fallible()
+    })
+    .map_err(CanonError::Read)?
+    .map_err(CanonError::with_read_error)
+}
+
+fn check_stop(stop: Option<&dyn crate::StopSignal>) -> Result<(), CanonError> {
+    if crate::governor::is_stopped(stop) {
+        Err(CanonError::Stopped)
+    } else {
+        Ok(())
+    }
+}
+
 /// Canonicalize the subgraph of `view` asserted in the named graph `graph` (an IRI),
 /// with the graph slot erased — the per-graph identity a carrier digest pins.
 ///
 /// Selection is graph-FAITHFUL and emission graph-ERASING, uniformly across both
 /// layers, exactly as
-/// [`RdfDataset::project_named_graph`](super::dataset::RdfDataset::project_named_graph)
+/// [`RdfDataset::project_graph`](super::dataset::RdfDataset::project_graph)
 /// defines it: a base quad contributes when its graph slot is `graph`, and a reifier
 /// declaration or annotation row contributes when **its own** graph slot is `graph`;
 /// each is canonicalized with no graph name. The statement layer is keyed per graph in
@@ -1149,12 +1188,15 @@ fn blank_count_unchecked<D: DatasetView>(view: &D) -> usize {
         view,
         CanonScope::Dataset,
         CanonPresentation::Overlay,
+        None,
         &mut |comp| {
             comp.for_each_blank(view, &mut |b| {
                 set.insert(b);
             });
+            Ok(())
         },
-    );
+    )
+    .expect("an uncontrolled component walk cannot stop");
     set.len()
 }
 
@@ -1323,13 +1365,25 @@ impl<Id: ViewTermId> Component<Id> {
     /// Invoke `f` for every blank id appearing anywhere in this component
     /// (recursing into triple terms).
     fn for_each_blank<D: DatasetView<Id = Id>>(self, ds: &D, f: &mut impl FnMut(Id)) {
+        let _ = self.try_for_each_blank(ds, None, f);
+    }
+
+    fn try_for_each_blank<D: DatasetView<Id = Id>>(
+        self,
+        ds: &D,
+        stop: Option<&dyn crate::StopSignal>,
+        f: &mut impl FnMut(Id),
+    ) -> Result<(), CanonError> {
         let (s, p, o, g) = self.slots();
         for slot in [Some(s), Some(p), Some(o), g].into_iter().flatten() {
             match slot {
-                Slot::Term(id) | Slot::AnnotationGraph(Some(id)) => blanks_in_term(ds, id, f),
+                Slot::Term(id) | Slot::AnnotationGraph(Some(id)) => {
+                    blanks_in_term(ds, id, stop, f)?;
+                }
                 Slot::Sentinel(_) | Slot::AnnotationGraph(None) => {}
             }
         }
+        Ok(())
     }
 }
 
@@ -1345,27 +1399,41 @@ impl<Id: ViewTermId> Component<Id> {
 /// The walk is [`try_fold_term`]'s work list: a triple term's subject, predicate and
 /// object are visited in that order, each fully before the next, and `f` fires
 /// for each blank as the walk reaches it.
-fn blanks_in_term<D: DatasetView>(ds: &D, id: D::Id, f: &mut impl FnMut(D::Id)) {
-    let _ = try_fold_term(
+fn blanks_in_term<D: DatasetView>(
+    ds: &D,
+    id: D::Id,
+    stop: Option<&dyn crate::StopSignal>,
+    f: &mut impl FnMut(D::Id),
+) -> Result<(), CanonError> {
+    let result = try_fold_term(
         ds,
         id,
         |id, term| {
+            check_stop(stop).map_err(Some)?;
             match term {
                 TermRef::Blank { .. } => f(id),
                 TermRef::Literal {
                     lexical, datatype, ..
                 } => {
                     for id in composite_blanks(ds, lexical, datatype) {
+                        check_stop(stop).map_err(Some)?;
                         f(id);
                     }
                 }
                 TermRef::Iri(_) | TermRef::Triple { .. } => {}
             }
-            Ok::<(), D::ReadError>(())
+            Ok(())
         },
-        |_, (), (), ()| Ok(()),
-        |error| error,
+        |_, (), (), ()| check_stop(stop).map_err(Some),
+        // This walk is provisional inside checked_read/checkpointed_drain,
+        // which retains the sticky source fault and discards the partial result.
+        // Stop the fold here without formatting or replacing that original cause.
+        |_| None,
     );
+    match result {
+        Ok(()) | Err(None) => Ok(()),
+        Err(Some(refusal)) => Err(refusal),
+    }
 }
 
 /// The view ids of the blank nodes a composite literal's lexical form names,
@@ -1658,28 +1726,34 @@ fn collect_components<D: DatasetView>(
     ds: &D,
     scope: CanonScope<D::Id>,
     presentation: CanonPresentation,
-    f: &mut impl FnMut(Component<D::Id>),
-) {
+    stop: Option<&dyn crate::StopSignal>,
+    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError>,
+) -> Result<(), CanonError> {
+    check_stop(stop)?;
     let sentinels = Sentinels::of(ds);
     match scope {
         CanonScope::Dataset => {
             for q in ds.quads() {
+                check_stop(stop)?;
                 let graph_probe = graph_match_of(q.g);
                 if let Some(comp) =
                     base_quad_component(ds, scope, presentation, graph_probe, sentinels, q)
                 {
-                    f(comp);
+                    f(comp)?;
                 }
             }
             for q in ds.reifier_quads() {
-                emit_reifier_row(ds, presentation, graph_match_of(q.g), q, q.g, f);
+                check_stop(stop)?;
+                emit_reifier_row(ds, presentation, graph_match_of(q.g), q, q.g, f)?;
             }
             for q in ds.annotation_quads() {
-                emit_annotation_row(ds, presentation, graph_match_of(q.g), q, q.g, f);
+                check_stop(stop)?;
+                emit_annotation_row(ds, presentation, graph_match_of(q.g), q, q.g, f)?;
             }
         }
         CanonScope::Graph(graph) => {
             for q in ds.quads_for_pattern(None, None, None, GraphMatch::Named(graph)) {
+                check_stop(stop)?;
                 // The graph slot is erased FIRST, so the fold reads the quad as this
                 // scope will emit it (see [`fold_sentinel_row`]) — but the dedup probe
                 // still needs the scope's ACTUAL graph, so it is passed separately
@@ -1694,17 +1768,20 @@ fn collect_components<D: DatasetView>(
                     sentinels,
                     q,
                 ) {
-                    f(comp);
+                    f(comp)?;
                 }
             }
             for q in ds.reifier_quads().filter(|q| q.g == Some(graph)) {
-                emit_reifier_row(ds, presentation, GraphMatch::Named(graph), q, None, f);
+                check_stop(stop)?;
+                emit_reifier_row(ds, presentation, GraphMatch::Named(graph), q, None, f)?;
             }
             for q in ds.annotation_quads().filter(|q| q.g == Some(graph)) {
-                emit_annotation_row(ds, presentation, GraphMatch::Named(graph), q, None, f);
+                check_stop(stop)?;
+                emit_annotation_row(ds, presentation, GraphMatch::Named(graph), q, None, f)?;
             }
         }
     }
+    check_stop(stop)
 }
 
 /// The [`GraphMatch`] naming exactly the quads whose graph slot is `g` — [`Default`]
@@ -1759,8 +1836,8 @@ fn emit_reifier_row<D: DatasetView>(
     graph_probe: GraphMatch<D::Id>,
     q: QuadIds<D::Id>,
     emitted_g: Option<D::Id>,
-    f: &mut impl FnMut(Component<D::Id>),
-) {
+    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError>,
+) -> Result<(), CanonError> {
     match presentation {
         CanonPresentation::Overlay => f(Component::Reifier {
             r: q.s,
@@ -1774,8 +1851,9 @@ fn emit_reifier_row<D: DatasetView>(
                     p: q.p,
                     o: q.o,
                     g: emitted_g,
-                });
+                })?;
             }
+            Ok(())
         }
     }
 }
@@ -1792,8 +1870,8 @@ fn emit_annotation_row<D: DatasetView>(
     graph_probe: GraphMatch<D::Id>,
     q: QuadIds<D::Id>,
     emitted_g: Option<D::Id>,
-    f: &mut impl FnMut(Component<D::Id>),
-) {
+    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError>,
+) -> Result<(), CanonError> {
     match presentation {
         CanonPresentation::Overlay => f(Component::Annotation {
             r: q.s,
@@ -1808,8 +1886,9 @@ fn emit_annotation_row<D: DatasetView>(
                     p: q.p,
                     o: q.o,
                     g: emitted_g,
-                });
+                })?;
             }
+            Ok(())
         }
     }
 }
@@ -1913,12 +1992,9 @@ struct CanonState<'a, D: DatasetView> {
     hash: CanonHash,
     /// Remaining recursion/permutation budget (poison guard).
     budget: u64,
+    /// One caller signal shared with the operation using this identity.
+    stop: Option<&'a dyn crate::StopSignal>,
 }
-
-/// Internal early-unwind carrier for the poison-budget guard (no payload —
-/// [`CanonState::run_fallible`] attaches the blank count when it surfaces the
-/// public [`BudgetExceeded`] to a caller).
-struct Exhausted;
 
 /// The n-degree search's call/permutation budget (`RDFC_CALL_LIMIT`) was
 /// exhausted before the dataset canonicalized — a pathologically symmetric
@@ -2062,6 +2138,8 @@ pub enum CanonError<E = Infallible> {
     ReservedVocabulary(ReservedVocabulary),
     /// The backing dataset could not be read completely. No canonical result is returned.
     Read(E),
+    /// The caller stopped canonicalization. No canonical identity was published.
+    Stopped,
 }
 
 impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for CanonError<E> {
@@ -2071,6 +2149,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         BudgetExceeded(cause) => "canonical-budget" { "cause" => Cause(cause) },
         ReservedVocabulary(cause) => "canonical-reserved" { "cause" => Cause(cause) },
         Read(cause) => "canonical-read" { "cause" => Cause(cause) },
+        Stopped => "canonical-stopped" {},
     }
 }
 
@@ -2082,6 +2161,7 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::BudgetExceeded(err) => err.fmt(f),
             Self::ReservedVocabulary(err) => err.fmt(f),
             Self::Read(error) => write!(f, "dataset read failed: {error}"),
+            Self::Stopped => f.write_str("canonicalization was stopped by the caller"),
         }
     }
 }
@@ -2094,6 +2174,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
             Self::Read(error) => Some(error),
+            Self::Stopped => None,
         }
     }
 }
@@ -2115,6 +2196,7 @@ impl CanonError {
             Self::BudgetExceeded(error) => CanonError::BudgetExceeded(error),
             Self::ReservedVocabulary(error) => CanonError::ReservedVocabulary(error),
             Self::Read(error) => match error {},
+            Self::Stopped => CanonError::Stopped,
         }
     }
 }
@@ -2228,15 +2310,22 @@ impl<E, Ev> From<DrainFailure<E, Ev>> for ViewCanonError<E, Ev> {
 /// object held back until the subject's whole nesting is done. The first reserved
 /// IRI met ends the walk. A term that is not a triple term pushes nothing, so the
 /// common case allocates nothing.
-fn reserved_in_term<D: DatasetView>(ds: &D, id: D::Id) -> Option<Box<str>> {
+fn reserved_in_term<D: DatasetView>(
+    ds: &D,
+    id: D::Id,
+    stop: Option<&dyn crate::StopSignal>,
+) -> Result<Option<Box<str>>, CanonError> {
     let mut held: Vec<D::Id> = Vec::new();
     let mut next = Some(id);
     while let Some(id) = next.take().or_else(|| held.pop()) {
-        let guard = ds.resolve_if_ready(id)?;
+        check_stop(stop)?;
+        let Some(guard) = ds.resolve_if_ready(id) else {
+            return Ok(None);
+        };
         match guard.term() {
             TermRef::Iri(iri) => {
                 if iri.starts_with(RESERVED_NAMESPACE) {
-                    return Some(Box::from(iri));
+                    return Ok(Some(Box::from(iri)));
                 }
             }
             TermRef::Literal { datatype, .. } => next = Some(datatype),
@@ -2247,7 +2336,7 @@ fn reserved_in_term<D: DatasetView>(ds: &D, id: D::Id) -> Option<Box<str>> {
             TermRef::Blank { .. } => {}
         }
     }
-    None
+    Ok(None)
 }
 
 /// The view's reserved-namespace violation within `scope`, or `None` if it is
@@ -2265,8 +2354,18 @@ fn reserved_vocabulary<D: DatasetView>(
     scope: CanonScope<D::Id>,
     presentation: CanonPresentation,
 ) -> Option<ReservedVocabulary> {
+    reserved_vocabulary_with_stop(ds, scope, presentation, None)
+        .expect("an uncontrolled reserved-vocabulary sweep cannot stop")
+}
+
+fn reserved_vocabulary_with_stop<D: DatasetView>(
+    ds: &D,
+    scope: CanonScope<D::Id>,
+    presentation: CanonPresentation,
+    stop: Option<&dyn crate::StopSignal>,
+) -> Result<Option<ReservedVocabulary>, CanonError> {
     let mut worst: Option<ReservedVocabulary> = None;
-    collect_components(ds, scope, presentation, &mut |comp| {
+    collect_components(ds, scope, presentation, stop, &mut |comp| {
         let (s, p, o, g) = comp.slots();
         for (slot, position) in [
             (Some(s), TermPosition::Subject),
@@ -2283,7 +2382,7 @@ fn reserved_vocabulary<D: DatasetView>(
             let Some(Slot::Term(id) | Slot::AnnotationGraph(Some(id))) = slot else {
                 continue;
             };
-            let Some(iri) = reserved_in_term(ds, id) else {
+            let Some(iri) = reserved_in_term(ds, id, stop)? else {
                 continue;
             };
             let found = ReservedVocabulary { iri, position };
@@ -2294,47 +2393,75 @@ fn reserved_vocabulary<D: DatasetView>(
                 worst = Some(found);
             }
         }
-    });
-    worst
+        Ok(())
+    })?;
+    Ok(worst)
 }
 
 impl<'a, D: DatasetView> CanonState<'a, D> {
-    /// Seed canonicalization state for `scope`: every blank the scope's
-    /// components reach is recorded once (via `seen`, per component) with its
-    /// full incidence list, `canonical` starts a fresh [`CANON_PREFIX`]
-    /// issuer, and `budget` starts at [`RDFC_CALL_LIMIT`] — the n-degree
-    /// budget this run may spend before [`try_canonicalize_view`] refuses it.
+    /// Seed the operation without reading its source. Admission and incidence
+    /// collection run only after a selected stop signal has been attached.
     fn new(
         ds: &'a D,
         scope: CanonScope<D::Id>,
         presentation: CanonPresentation,
         hash: CanonHash,
     ) -> Self {
-        let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
-        let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
-        collect_components(ds, scope, presentation, &mut |comp| {
-            // Record incidence for each distinct blank in the component (a blank that
-            // appears in two positions of one quad still lists that quad once).
-            let mut seen: BTreeSet<D::Id> = BTreeSet::new();
-            comp.for_each_blank(ds, &mut |b| {
-                blank_set.insert(b);
-                if seen.insert(b) {
-                    incident.entry(b).or_default().push(comp);
-                }
-            });
-        });
-        let blanks: Vec<D::Id> = blank_set.into_iter().collect();
         Self {
             ds,
             scope,
             presentation,
-            blanks,
-            incident,
+            blanks: Vec::new(),
+            incident: BTreeMap::new(),
             first_degree: BTreeMap::new(),
             canonical: IdIssuer::new(CANON_PREFIX),
             hash,
             budget: RDFC_CALL_LIMIT,
+            stop: None,
         }
+    }
+
+    fn with_stop(mut self, stop: &'a dyn crate::StopSignal) -> Self {
+        self.stop = Some(stop);
+        self
+    }
+
+    fn collect_incidence(&mut self) -> Result<(), CanonError> {
+        let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
+        let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
+        collect_components(
+            self.ds,
+            self.scope,
+            self.presentation,
+            self.stop,
+            &mut |comp| {
+                let mut seen: BTreeSet<D::Id> = BTreeSet::new();
+                comp.try_for_each_blank(self.ds, self.stop, &mut |b| {
+                    blank_set.insert(b);
+                    if seen.insert(b) {
+                        incident.entry(b).or_default().push(comp);
+                    }
+                })
+            },
+        )?;
+        self.blanks = blank_set.into_iter().collect();
+        self.incident = incident;
+        Ok(())
+    }
+
+    fn check_stop(&self) -> Result<(), CanonError> {
+        check_stop(self.stop)
+    }
+
+    fn charge_search(&mut self) -> Result<(), CanonError> {
+        self.check_stop()?;
+        self.budget = self
+            .budget
+            .checked_sub(1)
+            .ok_or(CanonError::BudgetExceeded(BudgetExceeded {
+                blank_count: self.blanks.len(),
+            }))?;
+        Ok(())
     }
 
     /// Run the full algorithm, panicking on poison-budget exhaustion (trusted
@@ -2356,7 +2483,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// must be refused without spending the poison budget deciding so.
     fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError> {
         let canonical = self.issue_labels()?;
-        let nquads = canonical.serialize_canonical();
+        let nquads = canonical.serialize_canonical()?;
         let presentation = canonical.presentation;
         let labels = canonical.canonical.issued;
         Ok(Canonicalized {
@@ -2368,24 +2495,23 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
     /// Admit and issue labels once for both typed relabeling and canonical text.
     fn issue_labels(mut self) -> Result<Self, CanonError> {
-        if let Some(violation) = reserved_vocabulary(self.ds, self.scope, self.presentation) {
+        self.check_stop()?;
+        if let Some(violation) =
+            reserved_vocabulary_with_stop(self.ds, self.scope, self.presentation, self.stop)?
+        {
             return Err(CanonError::ReservedVocabulary(violation));
         }
-        let blank_count = self.blanks.len();
-        match self.run_inner() {
-            Ok(()) => {}
-            Err(Exhausted) => {
-                return Err(CanonError::BudgetExceeded(BudgetExceeded { blank_count }));
-            }
-        }
+        self.collect_incidence()?;
+        self.run_inner()?;
         Ok(self)
     }
 
-    fn run_inner(&mut self) -> Result<(), Exhausted> {
+    fn run_inner(&mut self) -> Result<(), CanonError> {
         // §4.4 step 3: first-degree hash of every blank, grouped by hash.
         let mut by_hash: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
         for &b in &self.blanks {
-            let h = self.hash_first_degree(b);
+            self.check_stop()?;
+            let h = self.hash_first_degree(b)?;
             self.first_degree.insert(b, h);
             by_hash.entry(h).or_default().push(b);
         }
@@ -2394,6 +2520,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         // Defer hash-colliding groups to the n-degree pass.
         let mut ambiguous: Vec<HashHex> = Vec::new();
         for (h, group) in &by_hash {
+            self.check_stop()?;
             if group.len() == 1 {
                 self.canonical.issue(group[0]);
             } else {
@@ -2403,6 +2530,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
         // §4.4 step 5: resolve each ambiguous group via the n-degree search.
         for h in ambiguous {
+            self.check_stop()?;
             // `by_hash` is a local, not part of `self`, so the group can be walked
             // by reference across the `&mut self` calls below (no `Vec` clone).
             let group = by_hash.get(&h).expect("ambiguous hash present");
@@ -2410,6 +2538,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             // fresh temporary issuer seeded with that blank.
             let mut hash_paths: Vec<(HashHex, IdIssuer<D::Id>)> = Vec::new();
             for &b in group {
+                self.check_stop()?;
                 if self.canonical.has(b) {
                     continue;
                 }
@@ -2424,29 +2553,26 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             hash_paths.sort_by_key(|(h, _)| *h);
             for (_h, issuer) in hash_paths {
                 for &b in issuer.order() {
+                    self.check_stop()?;
                     self.canonical.issue(b);
                 }
             }
         }
-        Ok(())
+        self.check_stop()
     }
 
     /// Hash First Degree Quads (RDFC-1.0 §4.6) for blank `b`.
-    fn hash_first_degree(&self, b: D::Id) -> HashHex {
+    fn hash_first_degree(&self, b: D::Id) -> Result<HashHex, CanonError> {
         let render = BlankRender::FirstDegree { focus: b };
-        let mut lines: Vec<String> = self
-            .incident
-            .get(&b)
-            .map_or_default(Vec::as_slice)
-            .iter()
-            .map(|comp| {
-                let mut s = String::new();
-                self.write_component(*comp, render, &mut s);
-                s
-            })
-            .collect();
+        let mut lines = Vec::new();
+        for comp in self.incident.get(&b).map_or_default(Vec::as_slice) {
+            self.check_stop()?;
+            let mut line = String::new();
+            self.write_component(*comp, render, &mut line)?;
+            lines.push(line);
+        }
         lines.sort_unstable();
-        hash_lines(self.hash, &lines)
+        hash_lines(self.hash, &lines, self.stop)
     }
 
     /// Hash N-Degree Quads (RDFC-1.0 §4.8): the gossip-path permutation search.
@@ -2454,8 +2580,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         &mut self,
         identifier: D::Id,
         mut issuer: IdIssuer<D::Id>,
-    ) -> Result<(HashHex, IdIssuer<D::Id>), Exhausted> {
-        self.budget = self.budget.checked_sub(1).ok_or(Exhausted)?;
+    ) -> Result<(HashHex, IdIssuer<D::Id>), CanonError> {
+        self.charge_search()?;
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
         let mut hn: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
@@ -2463,12 +2589,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         for comp in &components {
             self.related_blanks(*comp, identifier, &issuer, &mut |related, related_hash| {
                 hn.entry(related_hash).or_default().push(related);
-            });
+            })?;
         }
 
         let mut data_to_hash = String::new();
         // §4.8 step 5: for each related hash, ascending.
         for (related_hash, related_list) in &hn {
+            self.check_stop()?;
             data_to_hash.push_str(related_hash.as_str());
             let mut chosen_path: Option<String> = None;
             let mut chosen_issuer: Option<IdIssuer<D::Id>> = None;
@@ -2479,7 +2606,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 // contributes k! permutations, so this — not the recursive-call count —
                 // is the dominant cost on a pathologically symmetric graph (e.g. a
                 // 10-blank clique). Counting it here bounds the actual work.
-                self.budget = self.budget.checked_sub(1).ok_or(Exhausted)?;
+                self.charge_search()?;
                 let mut issuer_copy = issuer.clone();
                 let mut path = String::new();
                 let mut recursion: Vec<D::Id> = Vec::new();
@@ -2487,6 +2614,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
                 // 5.4.4
                 for related in &perm {
+                    self.check_stop()?;
                     if let Some(id) = self.canonical.issued_for(*related) {
                         path.push_str("_:");
                         path.push_str(id);
@@ -2512,6 +2640,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
                 // 5.4.5: recurse into newly-seen related blanks in path order.
                 for related in &recursion {
+                    self.check_stop()?;
                     let (rec_hash, rec_issuer) =
                         self.hash_n_degree(*related, issuer_copy.clone())?;
                     path.push_str("_:");
@@ -2560,16 +2689,17 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         focus: D::Id,
         issuer: &IdIssuer<D::Id>,
         f: &mut impl FnMut(D::Id, HashHex),
-    ) {
+    ) -> Result<(), CanonError> {
         let (s, p, o, g) = comp.slots();
         // Standard quad positions whose blanks are "related": subject, object, graph.
         // (Predicates are always IRIs / sentinels — never blank.) Blanks nested
         // inside a triple-term slot recurse with a position-path tag (RDF-1.2 ext).
-        self.related_in_slot(s, "s", &p, focus, issuer, f);
-        self.related_in_slot(o, "o", &p, focus, issuer, f);
+        self.related_in_slot(s, "s", &p, focus, issuer, f)?;
+        self.related_in_slot(o, "o", &p, focus, issuer, f)?;
         if let Some(g) = g {
-            self.related_in_slot(g, "g", &p, focus, issuer, f);
+            self.related_in_slot(g, "g", &p, focus, issuer, f)?;
         }
+        Ok(())
     }
 
     /// Walk a slot for related blanks, each nested triple term's components under
@@ -2587,18 +2717,19 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         focus: D::Id,
         issuer: &IdIssuer<D::Id>,
         f: &mut impl FnMut(D::Id, HashHex),
-    ) {
+    ) -> Result<(), CanonError> {
         // The annotation-overlay graph marker carries a real graph term whose blanks
         // are "related" exactly like any graph-slot term.
         let id = match slot {
             Slot::Term(id) | Slot::AnnotationGraph(Some(id)) => id,
-            Slot::Sentinel(_) | Slot::AnnotationGraph(None) => return,
+            Slot::Sentinel(_) | Slot::AnnotationGraph(None) => return Ok(()),
         };
         let mut held: Vec<(D::Id, Cow<'_, str>)> = Vec::new();
         let mut next = Some((id, Cow::Borrowed(position)));
         while let Some((id, position)) = next.take().or_else(|| held.pop()) {
+            self.check_stop()?;
             let Some(guard) = self.ds.resolve_if_ready(id) else {
-                return;
+                return Ok(());
             };
             match guard.term() {
                 TermRef::Blank { .. } => {
@@ -2626,6 +2757,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     // from the slot's own term, and the segment is label-independent,
                     // which is what canonicality requires.
                     for related in composite_blanks(self.ds, lexical, datatype) {
+                        self.check_stop()?;
                         if related != focus {
                             let h = self.hash_related_blank_node(
                                 related,
@@ -2640,6 +2772,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 TermRef::Iri(_) => {}
             }
         }
+        Ok(())
     }
 
     /// Hash Related Blank Node (RDFC-1.0 §4.7).
@@ -2691,16 +2824,23 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     /// §4.4 step 7: serialize every component with canonical labels, sorted + deduped.
-    fn serialize_canonical(&self) -> String {
+    fn serialize_canonical(&self) -> Result<String, CanonError> {
         let render = BlankRender::Canonical {
             issuer: &self.canonical,
         };
         let mut lines: BTreeSet<String> = BTreeSet::new();
-        collect_components(self.ds, self.scope, self.presentation, &mut |comp| {
-            let mut s = String::new();
-            self.write_component(comp, render, &mut s);
-            lines.insert(s);
-        });
+        collect_components(
+            self.ds,
+            self.scope,
+            self.presentation,
+            self.stop,
+            &mut |comp| {
+                let mut s = String::new();
+                self.write_component(comp, render, &mut s)?;
+                lines.insert(s);
+                Ok(())
+            },
+        )?;
         // CONSUMED rather than borrowed. Iterating by reference held every line
         // alongside the concatenation that was being built from it, so the peak was
         // the document twice over plus one allocation per line. Taking the set by
@@ -2708,9 +2848,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         // instead of stacking.
         let mut out = String::with_capacity(lines.iter().map(String::len).sum());
         for line in lines {
+            self.check_stop()?;
             out.push_str(&line);
         }
-        out
+        self.check_stop()?;
+        Ok(out)
     }
 
     /// Write one component as a canonical N-Quads line (`s p o [g] .\n`).
@@ -2719,24 +2861,31 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         comp: Component<D::Id>,
         render: BlankRender<'_, D::Id>,
         out: &mut String,
-    ) {
+    ) -> Result<(), CanonError> {
         let (s, p, o, g) = comp.slots();
-        self.write_slot(s, render, out);
+        self.write_slot(s, render, out)?;
         out.push(' ');
-        self.write_slot(p, render, out);
+        self.write_slot(p, render, out)?;
         out.push(' ');
-        self.write_slot(o, render, out);
+        self.write_slot(o, render, out)?;
         if let Some(g) = g {
             out.push(' ');
-            self.write_slot(g, render, out);
+            self.write_slot(g, render, out)?;
         }
         out.push_str(" .\n");
+        Ok(())
     }
 
-    fn write_slot(&self, slot: Slot<D::Id>, render: BlankRender<'_, D::Id>, out: &mut String) {
+    fn write_slot(
+        &self,
+        slot: Slot<D::Id>,
+        render: BlankRender<'_, D::Id>,
+        out: &mut String,
+    ) -> Result<(), CanonError> {
+        self.check_stop()?;
         match slot {
             Slot::Sentinel(iri) => write_iri(iri, out),
-            Slot::Term(id) => self.write_term(id, render, out),
+            Slot::Term(id) => self.write_term(id, render, out)?,
             Slot::AnnotationGraph(g) => {
                 // `None`: bare annotation sentinel — byte-identical to the pre-graph
                 // form. `Some(g)`: sentinel then the graph term, so a named-graph
@@ -2746,10 +2895,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 write_iri(SENTINEL_ANNOTATION_GRAPH, out);
                 if let Some(g) = g {
                     out.push(' ');
-                    self.write_term(g, render, out);
+                    self.write_term(g, render, out)?;
                 }
             }
         }
+        Ok(())
     }
 
     /// Write a term in canonical N-Quads form. Literal lexical forms / datatypes /
@@ -2767,7 +2917,12 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// its subject next, with the separators, the predicate, the object and the
     /// closing ` )>>` held back in that order until the subject's whole nesting is
     /// written. A term that is not a triple term pushes nothing.
-    fn write_term(&self, id: D::Id, render: BlankRender<'_, D::Id>, out: &mut String) {
+    fn write_term(
+        &self,
+        id: D::Id,
+        render: BlankRender<'_, D::Id>,
+        out: &mut String,
+    ) -> Result<(), CanonError> {
         enum Step<Id> {
             Term(Id),
             Text(&'static str),
@@ -2775,6 +2930,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let mut held: Vec<Step<D::Id>> = Vec::new();
         let mut next = Some(Step::Term(id));
         while let Some(step) = next.take().or_else(|| held.pop()) {
+            self.check_stop()?;
             let id = match step {
                 Step::Text(text) => {
                     out.push_str(text);
@@ -2783,7 +2939,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 Step::Term(id) => id,
             };
             let Some(guard) = self.ds.resolve_if_ready(id) else {
-                return;
+                return Ok(());
             };
             match guard.term() {
                 TermRef::Iri(iri) => write_iri(iri, out),
@@ -2795,8 +2951,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     direction,
                 } => {
                     let rendered = self.render_composite_lexical(lexical, datatype, render);
+                    self.check_stop()?;
                     let Some(datatype_guard) = self.ds.resolve_if_ready(datatype) else {
-                        return;
+                        return Ok(());
                     };
                     let TermRef::Iri(dt) = datatype_guard.term() else {
                         unreachable!("literal datatype must be an IRI")
@@ -2826,6 +2983,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 }
             }
         }
+        Ok(())
     }
 
     /// A composite literal's lexical form with every embedded blank label
@@ -4073,7 +4231,8 @@ mod tests {
     fn graph_scoped_canonicalization_matches_the_named_graph_projection() {
         let ds = seam_dataset();
         let graph = "http://example.org/g";
-        let projected = canonicalize(&ds.project_named_graph(graph).unwrap()).nquads;
+        let projected =
+            canonicalize(&ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap()).nquads;
         assert!(!projected.is_empty(), "the graph must hold content");
         assert_eq!(
             canonicalize_graph_view(&*ds, graph, CanonHash::Sha256).nquads,
@@ -4093,7 +4252,11 @@ mod tests {
         // it flat does.
         let absent = "http://example.org/no-such-graph";
         assert_eq!(
-            canonicalize(&ds.project_named_graph(absent).unwrap()).nquads,
+            canonicalize(
+                &ds.project_graph(Some(&crate::RdfTerm::iri(absent)))
+                    .unwrap()
+            )
+            .nquads,
             ""
         );
         assert_eq!(
@@ -4124,7 +4287,11 @@ mod tests {
                 .expect("a clean graph must still canonicalize");
         assert_eq!(
             neighbour.nquads,
-            canonicalize(&ds.project_named_graph("http://example.org/clean").unwrap()).nquads
+            canonicalize(
+                &ds.project_graph(Some(&crate::RdfTerm::iri("http://example.org/clean")))
+                    .unwrap()
+            )
+            .nquads
         );
         // The whole dataset IS refused, because the offending row is in it.
         assert!(matches!(
@@ -4260,8 +4427,13 @@ mod tests {
                 ds,
                 CanonScope::Dataset,
                 CanonPresentation::FlatAssertion,
-                &mut |_| n += 1,
-            );
+                None,
+                &mut |_| {
+                    n += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
             n
         }
 
@@ -4557,27 +4729,31 @@ mod tests {
         };
 
         let mut via_id = String::new();
-        state.write_component(
-            Component::Quad {
-                s: r,
-                p: real_reifies,
-                o: triple,
-                g: None,
-            },
-            render,
-            &mut via_id,
-        );
+        state
+            .write_component(
+                Component::Quad {
+                    s: r,
+                    p: real_reifies,
+                    o: triple,
+                    g: None,
+                },
+                render,
+                &mut via_id,
+            )
+            .unwrap();
 
         let mut via_literal = String::new();
-        state.write_component(
-            Component::FlatReifier {
-                r,
-                t: triple,
-                g: None,
-            },
-            render,
-            &mut via_literal,
-        );
+        state
+            .write_component(
+                Component::FlatReifier {
+                    r,
+                    t: triple,
+                    g: None,
+                },
+                render,
+                &mut via_literal,
+            )
+            .unwrap();
 
         assert_eq!(
             via_id, via_literal,
@@ -4740,8 +4916,13 @@ mod tests {
                 ds,
                 CanonScope::Dataset,
                 CanonPresentation::FlatAssertion,
-                &mut |_| n += 1,
-            );
+                None,
+                &mut |_| {
+                    n += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
             n
         }
         assert_eq!(
@@ -4995,14 +5176,14 @@ mod tests {
 
     /// Composition sanity: `try_canonicalize_flat_graph_view` on graph A equals
     /// `try_canonicalize_flat_view` on a dataset containing only graph A's rows
-    /// (`project_named_graph`, already graph-erased) — the same relationship the
+    /// (`project_graph`, already graph-erased) — the same relationship the
     /// overlay family's `graph_scoped_canonicalization_matches_the_named_graph_projection`
     /// pins, held under the flat presentation instead.
     #[test]
     fn flat_graph_scope_is_flat_dataset_scope_composed_with_projection() {
         let ds = two_graph_flat_fixture();
         let graph = "http://example.org/gA";
-        let projected = ds.project_named_graph(graph).unwrap();
+        let projected = ds.project_graph(Some(&crate::RdfTerm::iri(graph))).unwrap();
         let via_projection =
             try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
         let via_graph_scope =
@@ -5262,5 +5443,173 @@ mod tests {
             }
             other => panic!("expected NotReady at the After checkpoint; got {other:?}"),
         }
+    }
+
+    #[derive(Debug)]
+    struct CanonStopAfter(std::sync::atomic::AtomicUsize);
+
+    impl CanonStopAfter {
+        fn new(polls: usize) -> Self {
+            Self(std::sync::atomic::AtomicUsize::new(polls))
+        }
+    }
+
+    impl crate::StopSignal for CanonStopAfter {
+        fn stopped(&self) -> bool {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.0
+                .try_update(Relaxed, Relaxed, |n| Some(n.saturating_sub(1)))
+                .expect("the update always supplies a value")
+                == 0
+        }
+    }
+
+    /// A stop is operational refusal even for an empty or malformed source.
+    #[test]
+    fn controlled_canonicalization_stops_before_source_admission() {
+        let empty = RdfDatasetBuilder::new().freeze().unwrap();
+        let error =
+            try_canonicalize_view_with_stop(&*empty, CanonHash::Sha256, &CanonStopAfter::new(0))
+                .unwrap_err();
+        assert!(matches!(error, CanonError::Stopped));
+        let capture = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(capture.code, "canonical-stopped");
+        assert_eq!(
+            error.to_string(),
+            "canonicalization was stopped by the caller"
+        );
+        assert!(std::error::Error::source(&error).is_none());
+        let mut builder = RdfDatasetBuilder::new();
+        let bad = builder.intern_iri("urn:purrdf:rdfc:forbidden").unwrap();
+        let p = iri(&mut builder, "p");
+        builder.push_quad(bad, p, p, None).unwrap();
+        let malformed = builder.freeze().unwrap();
+        assert!(matches!(
+            try_canonicalize_view_with_stop(
+                &*malformed,
+                CanonHash::Sha256,
+                &CanonStopAfter::new(0)
+            ),
+            Err(CanonError::Stopped)
+        ));
+        assert!(matches!(
+            try_canonicalize_view_with_stop(
+                &*malformed,
+                CanonHash::Sha256,
+                &CanonStopAfter::new(usize::MAX)
+            ),
+            Err(CanonError::ReservedVocabulary(_))
+        ));
+    }
+
+    /// RDF 1.2 overlay identity and both standard hash choices are unchanged.
+    #[test]
+    fn controlled_canonicalization_preserves_complete_bytes_and_labels() {
+        for spelling in [Spelling::Native, Spelling::Lowered] {
+            let dataset = statement_layer_fixture(spelling);
+            for hash in [CanonHash::Sha256, CanonHash::Sha384] {
+                let expected = try_canonicalize_view(&*dataset, hash).unwrap();
+                let actual = try_canonicalize_view_with_stop(
+                    &*dataset,
+                    hash,
+                    &CanonStopAfter::new(usize::MAX),
+                )
+                .unwrap();
+                assert_eq!(actual.nquads, expected.nquads);
+                assert_eq!(actual.labels, expected.labels);
+                assert_eq!(actual.presentation, expected.presentation);
+            }
+        }
+    }
+
+    /// An interrupted incidence pass cannot publish a partial prepared inventory.
+    #[test]
+    fn controlled_canonicalization_unwinds_during_component_collection() {
+        let dataset = poison_symmetric_dataset(6);
+        let signal = CanonStopAfter::new(12);
+        let mut state = CanonState::new(
+            &*dataset,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            CanonHash::Sha256,
+        )
+        .with_stop(&signal);
+        assert!(matches!(
+            state.collect_incidence(),
+            Err(CanonError::Stopped)
+        ));
+        assert_eq!(state.blanks, []);
+        assert!(state.incident.is_empty());
+    }
+
+    /// Cancellation reaches the exponential search, rather than only its entry.
+    #[test]
+    fn controlled_canonicalization_unwinds_inside_permutation_search() {
+        let dataset = poison_symmetric_dataset(7);
+        let mut state = CanonState::new(
+            &*dataset,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            CanonHash::Sha256,
+        );
+        state.collect_incidence().unwrap();
+        for &blank in &state.blanks {
+            let hash = state.hash_first_degree(blank).unwrap();
+            state.first_degree.insert(blank, hash);
+        }
+        let signal = CanonStopAfter::new(1000);
+        state.stop = Some(&signal);
+        let blank = state.blanks[0];
+        let mut issuer = IdIssuer::new(TEMP_PREFIX);
+        issuer.issue(blank);
+        assert!(matches!(
+            state.hash_n_degree(blank, issuer),
+            Err(CanonError::Stopped)
+        ));
+        assert!(
+            state.budget < RDFC_CALL_LIMIT - 1,
+            "the search reached permutation work"
+        );
+    }
+
+    /// Label completion is not permission to return a truncated canonical document.
+    #[test]
+    fn controlled_canonicalization_unwinds_during_rdf12_output() {
+        let dataset = statement_layer_fixture(Spelling::Native);
+        let mut state = CanonState::new(
+            &*dataset,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            CanonHash::Sha256,
+        )
+        .issue_labels()
+        .unwrap();
+        let signal = CanonStopAfter::new(8);
+        state.stop = Some(&signal);
+        assert!(matches!(
+            state.serialize_canonical(),
+            Err(CanonError::Stopped)
+        ));
+    }
+
+    /// The controlled entry point retains the backing view failure channel.
+    #[test]
+    fn controlled_canonicalization_preserves_read_failures() {
+        let view = FlatProbeView::faults_on_first_read(presentation_fixture());
+        let error = try_canonicalize_view_with_stop(
+            &view,
+            CanonHash::Sha256,
+            &CanonStopAfter::new(usize::MAX),
+        )
+        .unwrap_err();
+        let CanonError::Read(cause) = &error else {
+            panic!("the source fault takes precedence over provisional algorithm output");
+        };
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<FlatProbeFault>(),
+            Some(cause)
+        );
     }
 }

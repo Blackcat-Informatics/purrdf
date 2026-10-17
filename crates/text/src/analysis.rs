@@ -14,6 +14,12 @@ const ANALYZER_DOMAIN: Domain = Domain::new(b"purrdf-text/resolved-analyzer/v4\0
 use purrdf_lex::unicode::{TaggedScalar, compose_tagged};
 use std::{borrow::Cow, collections::BTreeMap, fmt, ops::Range, sync::Arc};
 
+#[cfg(test)]
+std::thread_local! {
+    /// Fixed-work observation, isolated from other concurrently running tests.
+    pub(crate) static PROJECTION_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// A lexical token and its consecutive ordinal.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Token<'a> {
@@ -499,6 +505,8 @@ impl Analyzer {
     /// # Errors
     /// Propagates strict reference errors and position-space exhaustion.
     pub fn projections(&self, input: &str) -> Result<Analysis, TextError> {
+        #[cfg(test)]
+        PROJECTION_CALLS.with(|calls| calls.set(calls.get() + 1));
         let normalized = self.normalize(input)?;
         let mut surface_ranges = Vec::new();
         let mut lexical_ranges = Vec::new();

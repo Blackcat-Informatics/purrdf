@@ -39,12 +39,12 @@ fn message<const A: usize, const B: usize, const C: usize, const D: usize>(
 
 #[inline]
 #[target_feature(enable = "avx2,avx512f,avx512vl")]
-fn initial(first: usize) -> __m256i {
+fn initial(key: &[u32; 8], first: usize) -> __m256i {
     let [a, b, c, d] = [
-        IV[first] as i32,
-        IV[first + 1] as i32,
-        IV[first + 2] as i32,
-        IV[first + 3] as i32,
+        key[first] as i32,
+        key[first + 1] as i32,
+        key[first + 2] as i32,
+        key[first + 3] as i32,
     ];
     _mm256_setr_epi32(a, b, c, d, a, b, c, d)
 }
@@ -52,7 +52,7 @@ fn initial(first: usize) -> __m256i {
 /// Hashes the two independent parent blocks made from four child CVs.
 #[inline]
 #[target_feature(enable = "avx2,avx512f,avx512vl")]
-pub(crate) fn parents(children: &[[u32; 8]; 4]) -> [[u32; 8]; 2] {
+pub(crate) fn parents(children: &[[u32; 8]; 4], mode: crate::blake3::Mode) -> [[u32; 8]; 2] {
     let mut rows = [_mm256_set1_epi32(0); 4];
     for (row, output) in rows.iter_mut().enumerate() {
         // SAFETY: the four child arrays occupy exactly 128 readable bytes.
@@ -63,10 +63,19 @@ pub(crate) fn parents(children: &[[u32; 8]; 4]) -> [[u32; 8]; 2] {
             *output = _mm256_inserti128_si256::<1>(first, _mm_loadu_si128(ptr.add(64).cast()));
         }
     }
-    let mut a = initial(0);
-    let mut b = initial(4);
-    let mut c = initial(0);
-    let mut d = _mm256_setr_epi32(0, 0, 64, 4, 0, 0, 64, 4);
+    let mut a = initial(&mode.key, 0);
+    let mut b = initial(&mode.key, 4);
+    let mut c = initial(&IV, 0);
+    let mut d = _mm256_setr_epi32(
+        0,
+        0,
+        64,
+        (4 | mode.flags) as i32,
+        0,
+        0,
+        64,
+        (4 | mode.flags) as i32,
+    );
     macro_rules! g {
         ($x:expr, $y:expr) => {{
             a = _mm256_add_epi32(_mm256_add_epi32(a, b), $x);

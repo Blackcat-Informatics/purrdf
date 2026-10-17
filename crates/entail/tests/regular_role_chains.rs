@@ -713,6 +713,73 @@ fn top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling(
     assert!(error.presentation().is_some());
 }
 
+/// Restriction-role failures retain typed causes and source arguments after input disposal.
+fn class_expression_role_refusals_retain_original_source_terms() {
+    use purrdf_lex::diagnostic::DiagnosticValue;
+    for recording in [false, true] {
+        for literal in [false, true] {
+            let expected = if literal {
+                "literal-role-source"
+            } else {
+                "http://example.org/annotationRole"
+            };
+            let failure = {
+                let mut o = Ontology::default();
+                let role = if literal {
+                    o.builder
+                        .intern_literal(purrdf_core::RdfLiteral::simple(expected))
+                        .unwrap()
+                } else {
+                    let role = o.named("annotationRole");
+                    let kind = o.standard(owl::ANNOTATION_PROPERTY);
+                    o.relation(role, rdf::TYPE, kind);
+                    role
+                };
+                let filler = o.named("Filler");
+                let restriction = o.restriction(role, owl::SOME_VALUES_FROM, filler);
+                let class = o.named("Class");
+                o.relation(class, rdfs::SUB_CLASS_OF, restriction);
+                let dataset = o.finish();
+                match if recording {
+                    Reasoner::with_proofs(&dataset)
+                } else {
+                    Reasoner::new(&dataset)
+                } {
+                    Err(error) => error,
+                    Ok(_) => panic!("invalid restriction role must refuse before publication"),
+                }
+            };
+            let EntailError::RoleHierarchy(error) = failure else {
+                panic!("role refusal must retain its native typed classification");
+            };
+            assert!(matches!(
+                error.classification(),
+                RoleHierarchyError::InvalidProperty { .. }
+            ));
+            let presentation = error
+                .presentation()
+                .expect("original source must be retained");
+            assert_eq!(presentation.message_id(), "entail.role-hierarchy.source");
+            let source = presentation
+                .parameters()
+                .iter()
+                .find(|parameter| parameter.name() == "first")
+                .expect("source argument");
+            assert!(
+                matches!(source.value(), DiagnosticValue::Text(value) if value.contains(expected))
+            );
+            assert!(presentation.english().contains(expected));
+            let original = std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<RoleHierarchyError>())
+                .expect("original typed cause");
+            assert!(matches!(
+                original,
+                RoleHierarchyError::InvalidProperty { .. }
+            ));
+        }
+    }
+}
+
 fn stopping_during_regular_role_reads_never_publishes_a_completed_answer() {
     #[derive(Debug)]
     struct Stop {
@@ -769,6 +836,7 @@ fn stopping_during_regular_role_reads_never_publishes_a_completed_answer() {
 }
 
 purrdf_testkit::harness_main!(
+    class_expression_role_refusals_retain_original_source_terms,
     top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling,
     stopping_during_regular_role_reads_never_publishes_a_completed_answer,
     all_nine_consumer_shapes_are_exact_and_contradictions_are_detected,

@@ -6042,11 +6042,9 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
 /// [`purrdf_xsd::temporal::cast_calendar`]; a calendar target refuses any other
 /// non-string source.
 ///
-/// Every other source is read lexically: a string (or an IRI, cast to `xsd:string`)
-/// is parsed against the target under the XSD 1.0 operand rules, and a literal with
-/// no value in the numeric/boolean domain (an ill-typed or non-numeric literal) keeps
-/// its lexical constructor behaviour — its lexical form is copied for `xsd:string`
-/// and parsed against any other target.
+/// A native `xsd:anyURI` value casts to itself or to `xsd:string`, preserving its
+/// whitespace collapse. Other source/target pairs admitted by the primitive table
+/// use the target's lexical parser; an IRI casts to `xsd:string` directly.
 fn eval_xsd_cast<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     target: XsdDatatype,
@@ -6072,6 +6070,19 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         }
         _ => return Ok(None),
     };
+    // F&O 3.1 §19.1.1 casts the URI value, not its uncollapsed RDF spelling.
+    if source_datatype == Some(XsdDatatype::AnyUri) && target == XsdDatatype::String {
+        let Some(value) = crate::parsed_value::ParsedValue::parse(
+            lexical,
+            XsdDatatype::AnyUri,
+            false,
+            &ctx.growth,
+        )?
+        else {
+            return Ok(None);
+        };
+        return governed_xsd_to_term(ctx, &value, XSD_STRING);
+    }
     let parsed_source = match source_datatype {
         Some(datatype) if datatype.is_numeric() || datatype == XsdDatatype::Boolean => {
             crate::parsed_value::ParsedValue::parse(lexical, datatype, false, &ctx.growth)?
@@ -6160,7 +6171,10 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // `whiteSpace` facet (XPath F&O 3.1 §19.2): `collapse` for every non-string
     // target here, so `xsd:integer(" 12 ")` is 12. A non-string source's lexical
     // form is its own and is read as written.
-    let collapsed = if target != XsdDatatype::String && is_string_row(datatype_iri) {
+    // The native anyURI parser already owns its collapse mapping.
+    let collapsed = if !matches!(target, XsdDatatype::String | XsdDatatype::AnyUri)
+        && is_string_row(datatype_iri)
+    {
         let view = purrdf_xsd::simple::CollapsedWhitespace(lexical);
         let length = crate::workspace::display_len(&view)?;
         let allocation = ctx
@@ -6379,16 +6393,17 @@ fn cast_duration_or_binary<D: DatasetView + Sync>(
 /// * A numeric or `xsd:boolean` source casts only to a numeric or `xsd:boolean`
 ///   target (`Y`/`M`); to `xsd:dateTime` and every other non-numeric target the
 ///   table says `N` (`xsd:gYear(2020)` is an error, not `"2020"^^xsd:gYear`).
+/// * A modelled `xsd:anyURI` casts only to itself or `xsd:string` (XPath F&O
+///   3.1 §19.1); its spelling is not another primitive's lexical input.
+///   An `xsd:anyURI` target likewise admits only URI and string-row sources.
 /// * Any other XSD datatype PurRDF models (`xsd:dateTime`, `xsd:date`, the
 ///   durations, the Gregorian and binary types) casts to no numeric or boolean
 ///   target (`N`); its casts to the other XSD targets are left to the lexical path.
 /// * An XSD 1.1 built-in datatype outside the modelled set is classed by the
 ///   primitive XPath derives it from: the types derived from `xsd:string`
 ///   (`xsd:token`, `xsd:NCName`, …) take the `str` row like a simple literal;
-///   `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION` cast to `xsd:string` alone (their
-///   rows are `N` for every other target, so `xsd:date("2024-01-01"^^xsd:anyURI)` is
-///   an error); and the list types cast to no
-///   numeric or boolean target, exactly like a modelled non-numeric source.
+///   `xsd:QName` and `xsd:NOTATION` cast to `xsd:string` alone; and the list types
+///   cast to no numeric or boolean target, like a modelled non-numeric source.
 /// * Every other literal — a language-tagged string, or a datatype that is not an
 ///   XSD built-in — has no row in the table, so the cast is an error rather than a
 ///   re-parse of its lexical form (`xsd:double("1.5"^^ex:custom)` is unbound).
@@ -6411,8 +6426,14 @@ fn cast_source_admitted(source: &TermValue, target: XsdDatatype) -> bool {
     if language.is_some() {
         return false;
     }
+    if target == XsdDatatype::AnyUri {
+        return datatype == XsdDatatype::AnyUri.iri() || is_string_row(datatype);
+    }
     let numeric_target = target.is_numeric() || target == XsdDatatype::Boolean;
     if let Some(from) = XsdDatatype::from_iri(datatype) {
+        if from == XsdDatatype::AnyUri {
+            return target == from;
+        }
         return (from.is_numeric() || from == XsdDatatype::Boolean) == numeric_target;
     }
     match datatype
@@ -6432,7 +6453,7 @@ fn cast_source_admitted(source: &TermValue, target: XsdDatatype) -> bool {
 enum CastRow {
     /// Derived from `xsd:string`: the `str` row.
     Str,
-    /// `xsd:anyURI`, `xsd:QName`, `xsd:NOTATION`: rows that cast to `xsd:string` (and
+    /// `xsd:QName`, `xsd:NOTATION`: rows that cast to `xsd:string` (and
     /// their own type, which no XSD constructor function PurRDF evaluates names) and
     /// to nothing else.
     StringOnly,
@@ -6448,7 +6469,7 @@ fn xsd_builtin_cast_row(local: &str) -> Option<CastRow> {
     match local {
         "normalizedString" | "token" | "language" | "Name" | "NCName" | "NMTOKEN" | "ID"
         | "IDREF" | "ENTITY" => Some(CastRow::Str),
-        "anyURI" | "QName" | "NOTATION" => Some(CastRow::StringOnly),
+        "QName" | "NOTATION" => Some(CastRow::StringOnly),
         "NMTOKENS" | "IDREFS" | "ENTITIES" => Some(CastRow::NonNumeric),
         _ => None,
     }

@@ -704,7 +704,7 @@ impl<'a> CeExtractor<'a> {
                 return Ok(DataRange::Datatype(datatype));
             }
             // A datatype NAME whose value space this layer does not model: `owl:real`,
-            // `owl:rational`, `xsd:anyURI`, a caller's own `rdfs:Datatype`.
+            // `owl:rational`, a caller's own `rdfs:Datatype`.
             return Ok(DataRange::Opaque);
         }
         if let Some(base) = self.get(node, self.v.on_datatype) {
@@ -1024,7 +1024,7 @@ impl<'a> CeExtractor<'a> {
             stop: self.stop,
         }
         .role(r)
-        .map_err(Into::into)
+        .map_err(|error| EntailError::from(error.with_source(self.interner)))
     }
 
     /// Parse a cardinality literal (an `xsd:nonNegativeInteger`/`integer`) as `u32`.

@@ -47,6 +47,14 @@ impl StructuredError for core::fmt::Error {
     }
 }
 
+impl StructuredError for core::num::TryFromIntError {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        // The standard error has no payload; the native producer retains the
+        // source value and destination limit alongside this original cause.
+        visitor.variant("integer-conversion-range");
+    }
+}
+
 impl StructuredError for std::io::ErrorKind {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
         // Public stable categories have portable names. The standard library

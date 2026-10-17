@@ -580,18 +580,28 @@ fn string_derived_and_date_time_stamp_sources_cast_to_calendar_targets() {
     assert_eq!(cast("hexBinary", stamp), None);
 }
 
-/// XPath F&O 3.1 §19.1: `xsd:anyURI` casts to `xsd:string` and nothing else — its
-/// lexical form spelling a date does not make it one. `xsd:QName` and `xsd:NOTATION`
-/// likewise. The `xsd:string` neighbour still casts.
+/// XPath F&O 3.1 §19.1: `xsd:anyURI` casts to string and itself; a lexical form
+/// spelling a date or binary value does not admit another primitive cast.
+/// `xsd:QName`/`xsd:NOTATION` still cast to string among the modelled native targets.
 #[test]
-fn an_any_uri_casts_to_string_alone() {
+fn any_uri_casts_preserve_the_primitive_row() {
     for (target, source) in [
         ("date", "\"2024-01-01\"^^xsd:anyURI"),
         ("dateTime", "\"2024-01-01T00:00:00Z\"^^xsd:anyURI"),
         ("gYear", "\"2024\"^^xsd:anyURI"),
         ("integer", "\"1\"^^xsd:anyURI"),
         ("hexBinary", "\"0F\"^^xsd:anyURI"),
+        ("base64Binary", "\"AA==\"^^xsd:anyURI"),
         ("dayTimeDuration", "\"PT1S\"^^xsd:anyURI"),
+        ("anyURI", "\"0F\"^^xsd:hexBinary"),
+        ("anyURI", "\"AA==\"^^xsd:base64Binary"),
+        ("anyURI", "\"2024-01-01\"^^xsd:date"),
+        ("anyURI", "\"PT1S\"^^xsd:dayTimeDuration"),
+        ("anyURI", "\"1\"^^xsd:integer"),
+        ("anyURI", "\"true\"^^xsd:boolean"),
+        ("anyURI", "\"a b\"^^xsd:NMTOKENS"),
+        ("string", "\"bad\\u0000\"^^xsd:anyURI"),
+        ("anyURI", "\"bad\\u0000\"^^xsd:anyURI"),
         ("date", "\"2024-01-01\"^^xsd:QName"),
         ("date", "\"2024-01-01\"^^xsd:NOTATION"),
     ] {
@@ -600,6 +610,22 @@ fn an_any_uri_casts_to_string_alone() {
     assert_eq!(
         cast("string", "\"2024-01-01\"^^xsd:anyURI"),
         Some("2024-01-01".to_owned())
+    );
+    assert_eq!(
+        cast("string", "\"  /relative\\t \\n\"^^xsd:anyURI"),
+        Some("/relative".to_owned())
+    );
+    assert_eq!(
+        cast("anyURI", "\"  /relative\\t \\n\"^^xsd:anyURI"),
+        Some("/relative".to_owned())
+    );
+    assert_eq!(
+        cast("anyURI", "\"  /relative\\t \\n\""),
+        Some("/relative".to_owned())
+    );
+    assert_eq!(
+        cast("anyURI", "\"/relative\"^^xsd:token"),
+        Some("/relative".to_owned())
     );
     assert_eq!(
         cast("string", "\"ex:a\"^^xsd:QName"),

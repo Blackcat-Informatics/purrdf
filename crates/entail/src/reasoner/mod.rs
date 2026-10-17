@@ -99,7 +99,7 @@ use crate::EntailError;
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::graph::{Assumptions, Budget};
 use crate::owl_dl::parser::Vocab;
-use crate::owl_dl::query::{build_data_index, collect_named_classes};
+use crate::owl_dl::query::{build_data_index_until, collect_named_classes_until};
 use crate::owl_dl::{Kb, class_concept};
 use crate::report::Construct;
 
@@ -281,9 +281,7 @@ impl Reasoner {
     /// [`purrdf_core::canonicalize`] would raise for the same
     /// input.
     pub fn with_proofs(ds: &RdfDataset) -> Result<Self, EntailError> {
-        let input = crate::owl_dl::proof::try_ontology_identity(ds)
-            .map_err(EntailError::Canonicalization)?;
-        Self::build(ds, Some(input))
+        Self::recorded(ds, SchemaPreparationBudget::default(), None)
     }
 
     /// Construct with preparation resource ceilings selected before schema encoding.
@@ -304,9 +302,41 @@ impl Reasoner {
         ds: &RdfDataset,
         budget: SchemaPreparationBudget,
     ) -> Result<Self, EntailError> {
-        let input = crate::owl_dl::proof::try_ontology_identity(ds)
-            .map_err(EntailError::Canonicalization)?;
-        Self::build_with_preparation(ds, Some(input), budget, None)
+        Self::recorded(ds, budget, None)
+    }
+
+    /// Record proofs while retaining one caller stop signal from input identity
+    /// computation through ontology preparation and every decision search. The
+    /// explicit budget applies before schema preparation, as in
+    /// [`Self::with_proofs_and_preparation_budget`]. A non-stopped run has the
+    /// same input identity, decisions and replayable proofs.
+    ///
+    /// # Errors
+    /// The source/profile failures of [`Self::with_proofs`], or
+    /// [`EntailError::Stopped`] if preparation is cancelled. A later stopped
+    /// search reports its actual undecided result and stop receipt.
+    pub fn with_proofs_and_stop(
+        ds: &RdfDataset,
+        budget: SchemaPreparationBudget,
+        stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
+    ) -> Result<Self, EntailError> {
+        Self::recorded(ds, budget, Some(stop))
+    }
+
+    fn recorded(
+        ds: &RdfDataset,
+        budget: SchemaPreparationBudget,
+        stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
+    ) -> Result<Self, EntailError> {
+        let input = match stop.as_deref() {
+            Some(stop) => crate::owl_dl::proof::try_ontology_identity_with_stop(ds, stop),
+            None => crate::owl_dl::proof::try_ontology_identity(ds),
+        }
+        .map_err(|error| match error {
+            purrdf_core::CanonError::Stopped => EntailError::Stopped,
+            error => EntailError::Canonicalization(error),
+        })?;
+        Self::build_with_preparation(ds, Some(input), budget, stop)
     }
 
     /// Retain a caller's stop signal at the original parser and decision boundaries.
@@ -378,18 +408,39 @@ impl Reasoner {
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
     ) -> Result<Self, EntailError> {
         let mut kb = Kb::from_dataset_with_preparation(ds, stop, preparation)?;
+        let signal = kb.stop.clone();
+        let mut poll = || {
+            if purrdf_core::governor::is_stopped(signal.as_deref()) {
+                Err(EntailError::Stopped)
+            } else {
+                Ok(())
+            }
+        };
+        poll()?;
         let vocab = Vocab::intern(&mut kb.interner);
-        let index = build_data_index(ds, &mut kb.interner);
-        let named = collect_named_classes(&kb.interner, &index, &vocab);
+        let index = build_data_index_until(ds, &mut kb.interner, &mut poll)?;
+        let named = collect_named_classes_until(&kb.interner, &index, &vocab, &mut poll)?;
         let classes: Vec<(u32, u32)> = named
             .iter()
-            .map(|&c| (c, kb.table.intern(class_concept(&vocab, c))))
-            .collect();
-        let individuals: Vec<u32> = kb.individuals.iter().copied().collect();
-        kb.finalize()?;
+            .map(|&c| {
+                poll()?;
+                Ok((c, kb.table.intern(class_concept(&vocab, c))))
+            })
+            .collect::<Result<_, EntailError>>()?;
+        let individuals: Vec<u32> = kb
+            .individuals
+            .iter()
+            .map(|&individual| {
+                poll()?;
+                Ok(individual)
+            })
+            .collect::<Result<_, EntailError>>()?;
+        kb.finalize_until(&mut poll)?;
+        poll()?;
         let budget = Budget::for_kb(&kb);
         let boundaries = kb.boundaries().clone();
         let fresh = FreshSymbols::for_interner(&kb.interner);
+        poll()?;
         Ok(Self {
             kb,
             vocab,

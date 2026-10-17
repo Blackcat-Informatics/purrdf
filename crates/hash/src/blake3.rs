@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Unkeyed BLAKE3-256, from the BLAKE3 specification §2.1–2.5.
+//! BLAKE3 hashing, keyed hashing, key derivation and extendable output (§2.1–2.6).
 //!
-//! PurRDF's content identities use this mode and its first 32 output bytes.
+//! PurRDF's content identities use unkeyed mode and its first 32 output bytes.
 //! Input is limited by the specification to fewer than 2^64 bytes. Tree
 //! storage is bounded; neither streaming nor one-shot hashing allocates.
 
@@ -20,7 +20,7 @@ pub(crate) const IV: [u32; 8] = [
     0x5be0_cd19,
 ];
 /// Execution paths used by conformance tests and performance measurements.
-/// Every path implements the same unkeyed BLAKE3-256 function.
+/// Every path implements the same three BLAKE3 modes and output stream.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -94,7 +94,7 @@ impl Backend {
     /// Hash on this path, or return `None` if the path cannot execute here.
     #[inline]
     pub fn hash(self, data: &[u8]) -> Option<Hash> {
-        self.is_available().then(|| hash_on(data, self))
+        self.is_available().then(|| hash_on(data, self, Mode::HASH))
     }
     /// A stream pinned to this backend, if available.
     pub fn hasher(self) -> Option<Hasher> {
@@ -108,15 +108,32 @@ impl Backend {
     pub fn streaming<const BUFFER: usize>(self) -> Option<Streaming<BUFFER>> {
         self.is_available().then(|| Streaming::on(self))
     }
+    /// A keyed stream pinned to this backend, if available.
+    pub fn keyed_streaming<const BUFFER: usize>(self, key: &[u8; 32]) -> Option<Streaming<BUFFER>> {
+        self.streaming().map(|mut stream| {
+            stream.mode = Mode::keyed(key, KEYED_HASH);
+            stream
+        })
+    }
+    /// A key-derivation stream pinned to this backend, including context hashing.
+    pub fn derive_key_streaming<const BUFFER: usize>(
+        self,
+        context: &str,
+    ) -> Option<Streaming<BUFFER>> {
+        self.streaming().map(|mut stream| {
+            stream.mode = Mode::derive(context, Some(self));
+            stream
+        })
+    }
     #[inline]
-    fn compress(
+    fn compress<const OUTPUT: usize>(
         self,
         cv: [u32; 8],
         words: &[u32; 16],
         counter: u64,
         length: u32,
         flags: u32,
-    ) -> [u32; 8] {
+    ) -> [u32; OUTPUT] {
         if self == Self::Portable {
             compress_portable(cv, words, counter, length, flags)
         } else {
@@ -126,11 +143,44 @@ impl Backend {
     }
 }
 
+/// The initial chaining value and domain for every compression in a mode.
+#[derive(Clone, Copy)]
+pub(crate) struct Mode {
+    pub(crate) key: [u32; 8],
+    pub(crate) flags: u32,
+}
+impl Mode {
+    const HASH: Self = Self { key: IV, flags: 0 };
+    fn keyed(key: &[u8; 32], flags: u32) -> Self {
+        Self {
+            key: cv_words(key),
+            flags,
+        }
+    }
+    fn derive(context: &str, forced_backend: Option<Backend>) -> Self {
+        let context_mode = Self {
+            key: IV,
+            flags: DERIVE_KEY_CONTEXT,
+        };
+        // Default contexts use the complete ordinary dispatcher, including
+        // SIMD chunk batches for long contexts and scalar short roots on x86.
+        // Explicit backend streams keep their named kernel for every block.
+        let context_key = match forced_backend {
+            Some(backend) => hash_on(context.as_bytes(), backend, context_mode),
+            None => hash_mode(context.as_bytes(), context_mode),
+        };
+        Self::keyed(context_key.as_bytes(), DERIVE_KEY_MATERIAL)
+    }
+}
+
 const START: u32 = 1;
 const END: u32 = 2;
 const PARENT: u32 = 4;
 const ROOT: u32 = 8;
 const CHUNK: usize = 1024;
+const KEYED_HASH: u32 = 16;
+const DERIVE_KEY_CONTEXT: u32 = 32;
+const DERIVE_KEY_MATERIAL: u32 = 64;
 
 const fn schedules() -> [[usize; 16]; 7] {
     let permutation = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
@@ -165,13 +215,16 @@ fn rotate<const N: u32>(value: u32) -> u32 {
     }
 }
 
-pub(crate) fn compress_portable(
+pub(crate) fn compress_portable<const OUTPUT: usize>(
     cv: [u32; 8],
     words: &[u32; 16],
     counter: u64,
     length: u32,
     flags: u32,
-) -> [u32; 8] {
+) -> [u32; OUTPUT] {
+    const {
+        assert!(OUTPUT == 8 || OUTPUT == 16);
+    }
     let mut v = [0; 16];
     v[..8].copy_from_slice(&cv);
     v[8..12].copy_from_slice(&IV[..4]);
@@ -213,7 +266,13 @@ pub(crate) fn compress_portable(
     round!(4);
     round!(5);
     round!(6);
-    core::array::from_fn(|i| v[i] ^ v[i + 8])
+    core::array::from_fn(|i| {
+        if i < 8 {
+            v[i] ^ v[i + 8]
+        } else {
+            v[i] ^ cv[i - 8]
+        }
+    })
 }
 
 fn words(block: &[u8]) -> [u32; 16] {
@@ -239,7 +298,8 @@ impl Output {
     }
     #[inline]
     fn root(self, backend: Backend) -> Hash {
-        let cv = backend.compress(self.cv, &self.words, 0, self.length, self.flags | ROOT);
+        let cv: [u32; 8] =
+            backend.compress(self.cv, &self.words, 0, self.length, self.flags | ROOT);
         let mut bytes = [0; 32];
         for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(cv) {
             dest.copy_from_slice(&word.to_le_bytes());
@@ -248,21 +308,21 @@ impl Output {
     }
 }
 #[inline]
-fn parent(left: [u32; 8], right: [u32; 8]) -> Output {
+fn parent(left: [u32; 8], right: [u32; 8], mode: Mode) -> Output {
     let mut words = [0; 16];
     words[..8].copy_from_slice(&left);
     words[8..].copy_from_slice(&right);
     Output {
-        cv: IV,
+        cv: mode.key,
         words,
         counter: 0,
         length: 64,
-        flags: PARENT,
+        flags: PARENT | mode.flags,
     }
 }
-fn chunk(bytes: &[u8], counter: u64, backend: Backend) -> Output {
+fn chunk(bytes: &[u8], counter: u64, backend: Backend, mode: Mode) -> Output {
     debug_assert!(bytes.len() <= CHUNK);
-    let mut cv = IV;
+    let mut cv = mode.key;
     let mut offset = 0;
     while bytes.len() - offset > 64 {
         cv = backend.compress(
@@ -270,7 +330,7 @@ fn chunk(bytes: &[u8], counter: u64, backend: Backend) -> Output {
             &words(&bytes[offset..offset + 64]),
             counter,
             64,
-            if offset == 0 { START } else { 0 },
+            mode.flags | if offset == 0 { START } else { 0 },
         );
         offset += 64;
     }
@@ -279,7 +339,76 @@ fn chunk(bytes: &[u8], counter: u64, backend: Backend) -> Output {
         words: words(&bytes[offset..]),
         counter,
         length: (bytes.len() - offset) as u32,
-        flags: END | if offset == 0 { START } else { 0 },
+        flags: END | mode.flags | if offset == 0 { START } else { 0 },
+    }
+}
+
+/// An owned, allocation-free BLAKE3 output stream. Cloning copies its position.
+/// It retains root compression inputs; filling and seeking never rehash input.
+/// Debug output excludes the root state, which can contain secret material.
+#[derive(Clone)]
+pub struct OutputReader {
+    output: Output,
+    backend: Backend,
+    position: u64,
+}
+impl OutputReader {
+    /// Current byte position in the output stream.
+    #[must_use]
+    pub const fn position(&self) -> u64 {
+        self.position
+    }
+
+    /// Seek to an absolute byte position. The maximum position is end of stream.
+    pub const fn set_position(&mut self, position: u64) {
+        self.position = position;
+    }
+
+    /// Fill the complete caller buffer, advancing the position.
+    ///
+    /// # Panics
+    /// If the end position exceeds BLAKE3's output limit of 2^64 - 1 bytes.
+    /// The range is checked before changing either the buffer or position.
+    pub fn fill(&mut self, mut out: &mut [u8]) {
+        let end = self
+            .position
+            .checked_add(u64::try_from(out.len()).expect("output length fits u64"))
+            .expect("BLAKE3 output exceeds 2^64 - 1 bytes");
+        while !out.is_empty() {
+            let offset = (self.position % 64) as usize;
+            let words: [u32; 16] = self.backend.compress(
+                self.output.cv,
+                &self.output.words,
+                self.position / 64,
+                self.output.length,
+                self.output.flags | ROOT,
+            );
+            let mut block = [0; 64];
+            for (dest, word) in block.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+                dest.copy_from_slice(&word.to_le_bytes());
+            }
+            let count = out.len().min(64 - offset);
+            out[..count].copy_from_slice(&block[offset..offset + count]);
+            self.position += count as u64;
+            out = &mut out[count..];
+        }
+        debug_assert_eq!(self.position, end);
+    }
+}
+impl core::fmt::Debug for OutputReader {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Blake3Output")
+            .field("position", &self.position)
+            .finish_non_exhaustive()
+    }
+}
+impl std::io::Read for OutputReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let count = out
+            .len()
+            .min(usize::try_from(u64::MAX - self.position).unwrap_or(usize::MAX));
+        self.fill(&mut out[..count]);
+        Ok(count)
     }
 }
 
@@ -310,6 +439,7 @@ pub type RecordHasher = Streaming<1024>;
 pub struct Streaming<const BUFFER: usize> {
     backend: Backend,
     short_backend: Backend,
+    mode: Mode,
     buffer: [u8; BUFFER],
     filled: usize,
     pending: Option<(Output, u32)>,
@@ -329,9 +459,24 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
         // x86's scheduler. Within-block SIMD serializes them into one vector
         // chain; measured short roots are faster with scalar ARX. Explicitly
         // forced streams keep the requested kernel for differential coverage.
-        if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
-            stream.short_backend = Backend::Portable;
-        }
+        stream.short_backend = short_backend(stream.backend);
+        stream
+    }
+
+    /// Start keyed hashing with a 256-bit key (§2.3).
+    #[must_use]
+    pub fn new_keyed(key: &[u8; 32]) -> Self {
+        let mut stream = Self::new();
+        stream.mode = Mode::keyed(key, KEYED_HASH);
+        stream
+    }
+
+    /// Start context-separated key derivation (§2.3).
+    /// Use a unique, application-specific context string, not a password salt.
+    #[must_use]
+    pub fn new_derive_key(context: &str) -> Self {
+        let mut stream = Self::new();
+        stream.mode = Mode::derive(context, None);
         stream
     }
 
@@ -345,6 +490,7 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
         Self {
             backend,
             short_backend: backend,
+            mode: Mode::HASH,
             buffer: [0; BUFFER],
             filled: 0,
             pending: None,
@@ -359,7 +505,7 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
         let mut count = self.chunks >> height;
         while count & 1 == 0 {
             self.depth -= 1;
-            cv = parent(self.stack[self.depth], cv).chaining(self.short_backend);
+            cv = parent(self.stack[self.depth], cv, self.mode).chaining(self.short_backend);
             count >>= 1;
         }
         self.stack[self.depth] = cv;
@@ -389,7 +535,7 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
                 return self;
             }
             self.push_subtree(
-                tree_cv(&self.buffer, self.chunks, self.backend),
+                tree_cv(&self.buffer, self.chunks, self.backend, self.mode),
                 (BUFFER / CHUNK).ilog2(),
             );
             self.filled = 0;
@@ -402,10 +548,16 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
             let height = available_height.min(self.chunks.trailing_zeros());
             let bytes = CHUNK << height;
             if bytes == data.len() {
-                self.pending = Some((tree_output(data, self.chunks, self.backend), height));
+                self.pending = Some((
+                    tree_output(data, self.chunks, self.backend, self.mode),
+                    height,
+                ));
                 return self;
             }
-            self.push_subtree(tree_cv(&data[..bytes], self.chunks, self.backend), height);
+            self.push_subtree(
+                tree_cv(&data[..bytes], self.chunks, self.backend, self.mode),
+                height,
+            );
             data = &data[bytes..];
         }
         self.buffer[..data.len()].copy_from_slice(data);
@@ -426,13 +578,31 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
     /// The digest so far, without consuming or altering the state.
     #[must_use]
     pub fn finalize(&self) -> Hash {
+        // Preserve the existing direct compression path for short records.
+        if self.pending.is_none() && self.chunks == 0 && self.filled <= 64 {
+            return hash_on(&self.buffer[..self.filled], self.short_backend, self.mode);
+        }
+        self.output().root(self.short_backend)
+    }
+
+    /// Read arbitrarily long output without consuming or changing this stream.
+    #[must_use]
+    pub fn finalize_xof(&self) -> OutputReader {
+        OutputReader {
+            output: self.output(),
+            backend: self.short_backend,
+            position: 0,
+        }
+    }
+
+    fn output(&self) -> Output {
         if self.pending.is_none() && self.chunks == 0 {
             let backend = if self.filled <= CHUNK {
                 self.short_backend
             } else {
                 self.backend
             };
-            return hash_on(&self.buffer[..self.filled], backend);
+            return tree_output(&self.buffer[..self.filled], 0, backend, self.mode);
         }
         let tail_backend = if self.filled <= CHUNK {
             self.short_backend
@@ -440,13 +610,20 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
             self.backend
         };
         let mut output = self.pending.map_or_else(
-            || tree_output(&self.buffer[..self.filled], self.chunks, tail_backend),
+            || {
+                tree_output(
+                    &self.buffer[..self.filled],
+                    self.chunks,
+                    tail_backend,
+                    self.mode,
+                )
+            },
             |(output, _)| output,
         );
         for left in self.stack[..self.depth].iter().rev() {
-            output = parent(*left, output.chaining(self.short_backend));
+            output = parent(*left, output.chaining(self.short_backend), self.mode);
         }
-        output.root(self.short_backend)
+        output
     }
 }
 crate::default_from_new!([const BUFFER: usize] Streaming<BUFFER>);
@@ -494,34 +671,92 @@ impl<const BUFFER: usize> crate::Digest for Streaming<BUFFER> {
 #[must_use]
 #[inline]
 pub fn hash(data: &[u8]) -> Hash {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if data.len() <= CHUNK {
-        return hash_on(data, Backend::Portable);
-    }
-    let backend = Backend::selected();
-    let short = if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
+    hash_mode(data, Mode::HASH)
+}
+
+fn short_backend(backend: Backend) -> Backend {
+    if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
         Backend::Portable
     } else {
         backend
-    };
+    }
+}
+
+fn hash_mode(data: &[u8], mode: Mode) -> Hash {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if data.len() <= CHUNK {
-        hash_on(data, short)
+        return hash_on(data, Backend::Portable, mode);
+    }
+    let backend = Backend::selected();
+    let short = short_backend(backend);
+    if data.len() <= CHUNK {
+        hash_on(data, short, mode)
     } else {
-        tree_output(data, 0, backend).root(short)
+        tree_output(data, 0, backend, mode).root(short)
     }
 }
 
 #[inline]
-fn hash_on(data: &[u8], backend: Backend) -> Hash {
+fn hash_on(data: &[u8], backend: Backend, mode: Mode) -> Hash {
     if data.len() <= 64 {
-        let cv = backend.compress(IV, &words(data), 0, data.len() as u32, START | END | ROOT);
+        let cv: [u32; 8] = backend.compress(
+            mode.key,
+            &words(data),
+            0,
+            data.len() as u32,
+            mode.flags | START | END | ROOT,
+        );
         let mut bytes = [0; 32];
         for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(cv) {
             dest.copy_from_slice(&word.to_le_bytes());
         }
         return Hash(bytes);
     }
-    tree_output(data, 0, backend).root(backend)
+    tree_output(data, 0, backend, mode).root(backend)
+}
+
+/// Authenticate bytes with a 256-bit BLAKE3 key.
+#[must_use]
+pub fn keyed_hash(key: &[u8; 32], data: &[u8]) -> Hash {
+    hash_mode(data, Mode::keyed(key, KEYED_HASH))
+}
+
+/// Derive 32 key bytes using an application-specific context and key material.
+#[must_use]
+pub fn derive_key(context: &str, key_material: &[u8]) -> [u8; 32] {
+    *hash_mode(key_material, Mode::derive(context, None)).as_bytes()
+}
+
+/// Fill caller storage with the unkeyed BLAKE3 output prefix.
+pub fn hash_xof(data: &[u8], out: &mut [u8]) {
+    mode_xof(data, out, Mode::HASH);
+}
+
+/// Fill caller storage with the keyed BLAKE3 output prefix.
+pub fn keyed_hash_xof(key: &[u8; 32], data: &[u8], out: &mut [u8]) {
+    mode_xof(data, out, Mode::keyed(key, KEYED_HASH));
+}
+
+/// Fill caller storage with context-separated derived key bytes.
+pub fn derive_key_xof(context: &str, key_material: &[u8], out: &mut [u8]) {
+    mode_xof(key_material, out, Mode::derive(context, None));
+}
+
+fn mode_xof(data: &[u8], out: &mut [u8], mode: Mode) {
+    let backend = Backend::selected();
+    let short = short_backend(backend);
+    let output = tree_output(
+        data,
+        0,
+        if data.len() <= CHUNK { short } else { backend },
+        mode,
+    );
+    OutputReader {
+        output,
+        backend: short,
+        position: 0,
+    }
+    .fill(out);
 }
 
 /// Caller-owned scheduling for independent BLAKE3 subtrees.
@@ -566,7 +801,7 @@ fn joined_output(
     join: &impl Join,
 ) -> Output {
     if data.len() < minimum {
-        return tree_output(data, counter, backend);
+        return tree_output(data, counter, backend, Mode::HASH);
     }
     let left_chunks = 1usize << ((data.len() - 1) / CHUNK).ilog2();
     let split = left_chunks * CHUNK;
@@ -583,63 +818,69 @@ fn joined_output(
             .chaining(backend)
         },
     );
-    parent(left, right)
+    parent(left, right, Mode::HASH)
 }
 
-fn tree_output(data: &[u8], counter: u64, backend: Backend) -> Output {
+fn tree_output(data: &[u8], counter: u64, backend: Backend, mode: Mode) -> Output {
     #[cfg(target_arch = "x86_64")]
     if backend == Backend::Avx512 && data.len() == 4096 {
         let parents = crate::arch::blake3_subtree_four(
             data.try_into().expect("four complete chunks"),
             counter,
+            mode,
         )
         .expect("available four-chunk backend");
-        return parent(parents[0], parents[1]);
+        return parent(parents[0], parents[1], mode);
     }
     if data.len() <= CHUNK {
-        return chunk(data, counter, backend);
+        return chunk(data, counter, backend, mode);
     }
     if backend == Backend::Avx512 && data.len() <= 4096 {
-        return narrow_output::<4>(data, counter, backend);
+        return narrow_output::<4>(data, counter, backend, mode);
     }
     #[cfg(target_arch = "x86_64")]
     if backend == Backend::Avx512
-        && let Some(words) = crate::arch::blake3_x86::small_output(data, counter)
+        && let Some(words) = crate::arch::blake3_x86::small_output(data, counter, mode)
     {
         return Output {
-            cv: IV,
+            cv: mode.key,
             words,
             counter: 0,
             length: 64,
-            flags: PARENT,
+            flags: PARENT | mode.flags,
         };
     }
     // Reducing 256 chunk CVs together fills sixteen parent lanes across
     // neighbouring chunk batches instead of repeatedly leaving most idle.
     if backend == Backend::Avx512 && data.len() <= 262_144 && data.len().is_multiple_of(16_384) {
-        return narrow_output::<256>(data, counter, backend);
+        return narrow_output::<256>(data, counter, backend, mode);
     }
     if data.len() <= 65536 && backend != Backend::Portable && backend != Backend::Avx512 {
-        return narrow_output::<64>(data, counter, backend);
+        return narrow_output::<64>(data, counter, backend, mode);
     }
     let left_chunks = 1usize << ((data.len() - 1) / CHUNK).ilog2();
     let split = left_chunks * CHUNK;
-    let left = tree_cv(&data[..split], counter, backend);
-    let right = tree_cv(&data[split..], counter + left_chunks as u64, backend);
-    parent(left, right)
+    let left = tree_cv(&data[..split], counter, backend, mode);
+    let right = tree_cv(&data[split..], counter + left_chunks as u64, backend, mode);
+    parent(left, right, mode)
 }
-fn tree_cv(data: &[u8], counter: u64, backend: Backend) -> [u32; 8] {
+fn tree_cv(data: &[u8], counter: u64, backend: Backend, mode: Mode) -> [u32; 8] {
     #[cfg(target_arch = "x86_64")]
     if backend == Backend::Avx512
         && data.len() == 16 * CHUNK
-        && let Some(cv) = crate::arch::blake3_x86::subtree(data, counter, 4)
+        && let Some(cv) = crate::arch::blake3_x86::subtree(data, counter, 4, mode)
     {
         return cv;
     }
-    tree_output(data, counter, backend).chaining(backend)
+    tree_output(data, counter, backend, mode).chaining(backend)
 }
 
-fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Backend) -> Output {
+fn narrow_output<const CAPACITY: usize>(
+    data: &[u8],
+    counter: u64,
+    backend: Backend,
+    mode: Mode,
+) -> Output {
     let lanes = match backend {
         Backend::Avx512 if data.len() <= 4096 => 4,
         Backend::Avx512 => 16,
@@ -652,25 +893,25 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
         let count = bytes.len().div_ceil(CHUNK);
         #[cfg(target_arch = "x86_64")]
         if lanes == 16 {
-            let batch = crate::arch::blake3_x86::chunks16(bytes, counter + start as u64)
+            let batch = crate::arch::blake3_x86::chunks16(bytes, counter + start as u64, mode)
                 .expect("complete supported batch");
             cvs[start..start + count].copy_from_slice(&batch[..count]);
             continue;
         }
         #[cfg(target_arch = "x86_64")]
         if backend == Backend::Avx512 {
-            let batch = crate::arch::blake3_four_avx512(bytes, counter + start as u64)
+            let batch = crate::arch::blake3_four_avx512(bytes, counter + start as u64, mode)
                 .expect("available four-lane backend");
             cvs[start..start + count].copy_from_slice(&batch[..count]);
             continue;
         }
         if lanes == 8 {
-            let batch = crate::arch::blake3_eight(bytes, counter + start as u64)
+            let batch = crate::arch::blake3_eight(bytes, counter + start as u64, mode)
                 .expect("available backend");
             cvs[start..start + count].copy_from_slice(&batch[..count]);
         } else {
-            let batch =
-                crate::arch::blake3_four(bytes, counter + start as u64).expect("available backend");
+            let batch = crate::arch::blake3_four(bytes, counter + start as u64, mode)
+                .expect("available backend");
             cvs[start..start + count].copy_from_slice(&batch[..count]);
         }
     }
@@ -684,6 +925,7 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
             while i + 16 <= pairs {
                 let parents = crate::arch::blake3_x86::parents16(
                     cvs[2 * i..2 * i + 32].try_into().expect("32 child CVs"),
+                    mode,
                 )
                 .expect("available backend");
                 cvs[i..i + 16].copy_from_slice(&parents);
@@ -695,11 +937,13 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
                 let children = cvs[2 * i..2 * i + 16]
                     .try_into()
                     .expect("sixteen child CVs");
-                let parents = crate::arch::blake3_parents8(children).expect("available backend");
+                let parents =
+                    crate::arch::blake3_parents8(children, mode).expect("available backend");
                 cvs[i..i + 8].copy_from_slice(&parents);
             } else {
                 let children = cvs[2 * i..2 * i + 8].try_into().expect("eight child CVs");
-                let parents = crate::arch::blake3_parents4(children).expect("available backend");
+                let parents =
+                    crate::arch::blake3_parents4(children, mode).expect("available backend");
                 cvs[i..i + 4].copy_from_slice(&parents);
             }
             i += lanes;
@@ -711,14 +955,14 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
             let children = cvs[2 * i..2 * i + 8].try_into().expect("eight child CVs");
             #[cfg(target_arch = "x86_64")]
             let wide = if backend == Backend::Avx512 {
-                crate::arch::blake3_parents4_avx512(children)
+                crate::arch::blake3_parents4_avx512(children, mode)
             } else {
                 None
             };
             #[cfg(not(target_arch = "x86_64"))]
             let wide = None;
             let parents = wide
-                .or_else(|| crate::arch::blake3_parents4(children))
+                .or_else(|| crate::arch::blake3_parents4(children, mode))
                 .expect("available backend");
             cvs[i..i + 4].copy_from_slice(&parents);
             i += 4;
@@ -726,7 +970,8 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
         #[cfg(target_arch = "x86_64")]
         if backend == Backend::Avx512 && i + 2 <= pairs {
             let children = cvs[2 * i..2 * i + 4].try_into().expect("four child CVs");
-            let parents = crate::arch::blake3_parents2_avx512(children).expect("available backend");
+            let parents =
+                crate::arch::blake3_parents2_avx512(children, mode).expect("available backend");
             cvs[i..i + 2].copy_from_slice(&parents);
             i += 2;
         }
@@ -736,7 +981,7 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
             } else {
                 backend
             };
-            cvs[i] = parent(cvs[2 * i], cvs[2 * i + 1]).chaining(short);
+            cvs[i] = parent(cvs[2 * i], cvs[2 * i + 1], mode).chaining(short);
             i += 1;
         }
         if !count.is_multiple_of(2) {
@@ -744,7 +989,7 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
         }
         count = count.div_ceil(2);
     }
-    parent(cvs[0], cvs[1])
+    parent(cvs[0], cvs[1], mode)
 }
 
 /// A subtree's chaining value: the non-root output of a complete BLAKE3 subtree
@@ -798,7 +1043,7 @@ pub fn subtree_chaining_value(data: &[u8], input_offset: u64) -> ChainingValue {
         "a subtree starts at a multiple of its own size"
     );
     let backend = Backend::selected();
-    cv_bytes(tree_output(data, input_offset / CHUNK as u64, backend).chaining(backend))
+    cv_bytes(tree_output(data, input_offset / CHUNK as u64, backend, Mode::HASH).chaining(backend))
 }
 
 /// The chaining value of the parent of two adjacent subtrees, when that parent is not the
@@ -806,14 +1051,14 @@ pub fn subtree_chaining_value(data: &[u8], input_offset: u64) -> ChainingValue {
 #[must_use]
 pub fn merge_subtrees_non_root(left: &ChainingValue, right: &ChainingValue) -> ChainingValue {
     let backend = Backend::selected();
-    cv_bytes(parent(cv_words(left), cv_words(right)).chaining(backend))
+    cv_bytes(parent(cv_words(left), cv_words(right), Mode::HASH).chaining(backend))
 }
 
 /// The hash of an input whose two top-level subtrees have chaining values `left` and
 /// `right`: the tree's root.
 #[must_use]
 pub fn merge_subtrees_root(left: &ChainingValue, right: &ChainingValue) -> Hash {
-    parent(cv_words(left), cv_words(right)).root(Backend::selected())
+    parent(cv_words(left), cv_words(right), Mode::HASH).root(Backend::selected())
 }
 
 fn cv_bytes(words: [u32; 8]) -> ChainingValue {
@@ -835,6 +1080,22 @@ fn cv_words(bytes: &ChainingValue) -> [u32; 8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn xof_overflow_refuses_before_mutation() {
+        let mut stream = RecordHasher::new_keyed(&[0xa5; 32]);
+        stream.update(b"root input");
+        let mut reader = stream.finalize_xof();
+        reader.set_position(u64::MAX - 1);
+        let mut destination = [0xa5; 2];
+        let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reader.fill(&mut destination);
+        }));
+        assert!(refusal.is_err());
+        assert_eq!(reader.position(), u64::MAX - 1);
+        assert_eq!(destination, [0xa5; 2]);
+    }
 
     /// The hash, rebuilt from the chaining values of its two top-level subtrees.
     fn rebuilt(data: &[u8]) -> Hash {
@@ -916,7 +1177,7 @@ mod tests {
                     let words =
                         core::array::from_fn(|i| (i as u32).wrapping_mul(0x9e37_79b9) ^ len);
                     if let Some(actual) =
-                        crate::arch::blake3_compress4(cv, &words, counter, len, flags)
+                        crate::arch::blake3_compress4::<16>(cv, &words, counter, len, flags)
                     {
                         assert_eq!(actual, compress_portable(cv, &words, counter, len, flags));
                     }
@@ -945,11 +1206,11 @@ mod tests {
                         .chunks(CHUNK)
                         .enumerate()
                         .map(|(i, b)| {
-                            chunk(b, counter + i as u64, Backend::Portable)
+                            chunk(b, counter + i as u64, Backend::Portable, Mode::HASH)
                                 .chaining(Backend::Portable)
                         })
                         .collect();
-                    if let Some(cvs) = crate::arch::blake3_four(bytes, counter) {
+                    if let Some(cvs) = crate::arch::blake3_four(bytes, counter, Mode::HASH) {
                         assert_eq!(
                             &cvs[..expected.len()],
                             expected.as_slice(),
@@ -958,18 +1219,21 @@ mod tests {
                     }
                     #[cfg(target_arch = "x86_64")]
                     if let Ok(full) = <&[u8; 4096]>::try_from(bytes)
-                        && let Some(parents) = crate::arch::blake3_subtree_four(full, counter)
+                        && let Some(parents) =
+                            crate::arch::blake3_subtree_four(full, counter, Mode::HASH)
                     {
                         assert_eq!(
                             parents,
                             [
-                                parent(expected[0], expected[1]).chaining(Backend::Portable),
-                                parent(expected[2], expected[3]).chaining(Backend::Portable),
+                                parent(expected[0], expected[1], Mode::HASH)
+                                    .chaining(Backend::Portable),
+                                parent(expected[2], expected[3], Mode::HASH)
+                                    .chaining(Backend::Portable),
                             ],
                             "four-chunk parents counter={counter}, offset={offset}"
                         );
                     }
-                    if let Some(cvs) = crate::arch::blake3_eight(bytes, counter) {
+                    if let Some(cvs) = crate::arch::blake3_eight(bytes, counter, Mode::HASH) {
                         assert_eq!(
                             &cvs[..expected.len()],
                             expected.as_slice(),

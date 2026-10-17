@@ -282,7 +282,182 @@ fn caller_scheduled_trees_match_frozen_answers() {
     assert_eq!(count, 8214);
 }
 
+const OFFICIAL: &str = include_str!("vectors/blake3_official_vectors.txt");
+const OFFICIAL_KEY: &[u8; 32] = b"whats the Elvish word for friend";
+const OFFICIAL_CONTEXT: &str = "BLAKE3 2019-12-27 16:29:52 test vectors context";
+
+fn official_modes_and_extended_output() {
+    use purrdf_hash::blake3::{derive_key, derive_key_xof, hash_xof, keyed_hash, keyed_hash_xof};
+    let data = corpus();
+    let vectors = VectorFile::load(OFFICIAL);
+    assert_eq!(vectors.records().len(), 35);
+    let count = vectors
+        .replay(1, |fields| {
+            let input = &data[..fields[0].parse::<usize>().expect("input length")];
+            let mut answers = [[0; 131]; 3];
+            hash_xof(input, &mut answers[0]);
+            keyed_hash_xof(OFFICIAL_KEY, input, &mut answers[1]);
+            derive_key_xof(OFFICIAL_CONTEXT, input, &mut answers[2]);
+            assert_eq!(hash(input).as_bytes(), &answers[0][..32]);
+            assert_eq!(
+                keyed_hash(OFFICIAL_KEY, input).as_bytes(),
+                &answers[1][..32]
+            );
+            assert_eq!(derive_key(OFFICIAL_CONTEXT, input), answers[2][..32]);
+            answers
+                .iter()
+                .map(|bytes| Lower(bytes).to_string())
+                .collect()
+        })
+        .expect("official full output, default dispatch");
+    assert_eq!(count, 35);
+    replay_official_streams::<1024>(&vectors, &data);
+    replay_official_streams::<16384>(&vectors, &data);
+}
+
+fn replay_official_streams<const BUFFER: usize>(vectors: &VectorFile<'_>, data: &[u8]) {
+    use purrdf_hash::blake3::Streaming;
+    for backend in Backend::all_available() {
+        let count = vectors
+            .replay(1, |fields| {
+                let input = &data[..fields[0].parse::<usize>().expect("input length")];
+                let mut answers = Vec::new();
+                for mode in 0..3 {
+                    let mut stream = match mode {
+                        0 => backend.streaming::<BUFFER>(),
+                        1 => backend.keyed_streaming::<BUFFER>(OFFICIAL_KEY),
+                        _ => backend.derive_key_streaming::<BUFFER>(OFFICIAL_CONTEXT),
+                    }
+                    .expect("available backend");
+                    let mut default = match mode {
+                        0 => Streaming::<BUFFER>::new(),
+                        1 => Streaming::<BUFFER>::new_keyed(OFFICIAL_KEY),
+                        _ => Streaming::<BUFFER>::new_derive_key(OFFICIAL_CONTEXT),
+                    };
+                    // Whole-input updates exercise the existing batch/subtree paths;
+                    // subsequent passes cross unrelated compression/buffer boundaries.
+                    stream.update(input);
+                    let mut expected = [0; 131];
+                    stream.finalize_xof().fill(&mut expected);
+                    for grain in [63, 2053] {
+                        stream.reset();
+                        for part in input.chunks(grain) {
+                            stream.update(part);
+                        }
+                        assert_eq!(stream.finalize().as_bytes(), &expected[..32]);
+                        let snapshot = stream.clone();
+                        let mut reader = snapshot.finalize_xof();
+                        let mut actual = [0; 131];
+                        reader.fill(&mut actual[..31]);
+                        reader.fill(&mut []);
+                        reader.fill(&mut actual[31..65]);
+                        reader.fill(&mut actual[65..]);
+                        assert_eq!(
+                            actual, expected,
+                            "{backend:?}, mode={mode}, buffer={BUFFER}"
+                        );
+                        for position in [0, 31, 32, 63, 64, 65, 127, 128, 131] {
+                            reader.set_position(position);
+                            let mut tail = vec![0; 131 - position as usize];
+                            reader.clone().fill(&mut tail);
+                            assert_eq!(tail, expected[position as usize..]);
+                            assert_eq!(reader.position(), position);
+                        }
+                    }
+                    default.update(input);
+                    assert_eq!(default.finalize(), stream.finalize());
+                    let mut default_output = [0; 131];
+                    default.finalize_xof().fill(&mut default_output);
+                    assert_eq!(default_output, expected);
+                    answers.push(Lower(&expected).to_string());
+                }
+                answers
+            })
+            .unwrap_or_else(|error| panic!("{backend:?}, buffer={BUFFER}: {error:?}"));
+        assert_eq!(count, 35);
+    }
+}
+
+fn derived_context_trees_match_across_backends() {
+    use purrdf_hash::blake3::{derive_key, derive_key_xof};
+    let context = "应用-specific context🦀".repeat(2049);
+    let data = corpus();
+    let mut portable = Backend::Portable
+        .derive_key_streaming::<1024>(&context)
+        .expect("portable");
+    for length in [1025, 16_384, 262_145, 1_048_576] {
+        portable.reset();
+        portable.update(&data[..length]);
+        let mut expected = [0; 197];
+        portable.finalize_xof().fill(&mut expected);
+        assert_eq!(derive_key(&context, &data[..length]), expected[..32]);
+        let mut one_shot = [0; 197];
+        derive_key_xof(&context, &data[..length], &mut one_shot);
+        assert_eq!(one_shot, expected);
+        for backend in Backend::all_available() {
+            let mut stream = backend
+                .derive_key_streaming::<16384>(&context)
+                .expect("available");
+            for part in data[..length].chunks(997) {
+                stream.update(part);
+            }
+            let mut actual = [0; 197];
+            stream.finalize_xof().fill(&mut actual);
+            assert_eq!(actual, expected, "{backend:?}, length={length}");
+        }
+    }
+}
+
+fn xof_large_output_and_seek_boundaries() {
+    use std::io::Read as _;
+    let data = corpus();
+    for mode in 0..3 {
+        let mut portable = match mode {
+            0 => Backend::Portable.hasher(),
+            1 => Backend::Portable.keyed_streaming(OFFICIAL_KEY),
+            _ => Backend::Portable.derive_key_streaming(OFFICIAL_CONTEXT),
+        }
+        .expect("portable");
+        portable.update(&data[..262_145]);
+        let mut expected = vec![0; 1_048_579];
+        portable.finalize_xof().fill(&mut expected);
+        for backend in Backend::all_available() {
+            let mut stream = match mode {
+                0 => backend.hasher(),
+                1 => backend.keyed_streaming(OFFICIAL_KEY),
+                _ => backend.derive_key_streaming(OFFICIAL_CONTEXT),
+            }
+            .expect("available backend");
+            stream.update(&data[..262_145]);
+            let mut reader = stream.finalize_xof();
+            let mut actual = vec![0; expected.len()];
+            for part in actual.chunks_mut(4093) {
+                reader.read_exact(part).expect("read output");
+            }
+            assert_eq!(actual, expected, "{backend:?}, mode={mode}");
+            reader.set_position(u64::MAX - 1);
+            assert_eq!(reader.read(&mut [0; 2]).expect("last byte"), 1);
+            assert_eq!(reader.position(), u64::MAX);
+            assert_eq!(reader.read(&mut [0; 1]).expect("end of output"), 0);
+            reader.fill(&mut []);
+            for position in [(1_u64 << 38) - 1, 1_u64 << 38, u64::MAX - 128] {
+                let mut oracle = portable.finalize_xof();
+                oracle.set_position(position);
+                reader.set_position(position);
+                let mut want = [0; 127];
+                let mut got = [0; 127];
+                oracle.fill(&mut want);
+                reader.fill(&mut got);
+                assert_eq!(got, want);
+            }
+        }
+    }
+}
+
 purrdf_testkit::harness_main!(
+    derived_context_trees_match_across_backends,
+    official_modes_and_extended_output,
+    xof_large_output_and_seek_boundaries,
     required_backends_are_available,
     caller_scheduled_trees_match_frozen_answers,
     random_inputs_cover_irregular_trees_and_alignment,

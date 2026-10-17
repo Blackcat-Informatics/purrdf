@@ -13,6 +13,74 @@ use purrdf_text::{Analyzer, AnalyzerProfile, InputMode, SurfaceIndex, TextError}
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+fn delta_failures_keep_original_identities_counts_and_nested_causes() {
+    use purrdf_text::TextDeltaError;
+    let expected = [0x17; 32];
+    let actual = [0xe3; 32];
+    for error in [
+        TextDeltaError::MissingAddition {
+            ordinal: usize::MAX,
+        },
+        TextDeltaError::SourceMismatch { expected, actual },
+        TextDeltaError::AnalyzerMismatch { expected, actual },
+        TextDeltaError::SourceOverlap {
+            document: u32::MAX,
+            identity: actual,
+        },
+        TextDeltaError::TermCapacity {
+            observed: u128::MAX,
+            limit: u32::MAX,
+            cause: u32::try_from(u128::MAX).unwrap_err(),
+        },
+        TextDeltaError::Indexing(TextError::data("original caller data")),
+    ] {
+        let retained = error.clone();
+        drop(error);
+        let buffer = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let capture = Capture::read_with_buffer(&retained, buffer);
+        assert_eq!(window.close().allocations, 0);
+        match capture.code {
+            "text-delta-missing-addition" => assert!(matches!(
+                capture.field("ordinal"), ErrorValue::Unsigned(value) if value == usize::MAX as u128
+            )),
+            "text-delta-source-mismatch" | "text-delta-analyzer-mismatch" => {
+                assert!(
+                    matches!(capture.field("expected"), ErrorValue::Bytes(value) if value == expected)
+                );
+                assert!(
+                    matches!(capture.field("actual"), ErrorValue::Bytes(value) if value == actual)
+                );
+            }
+            "text-delta-source-overlap" => {
+                assert!(
+                    matches!(capture.field("document"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+                );
+                assert!(
+                    matches!(capture.field("identity"), ErrorValue::Bytes(value) if value == actual)
+                );
+            }
+            "text-delta-term-capacity" => {
+                assert!(matches!(
+                    capture.field("observed"),
+                    ErrorValue::Unsigned(u128::MAX)
+                ));
+                assert!(
+                    matches!(capture.field("limit"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+                );
+                assert_eq!(capture.child("cause").code, "integer-conversion-range");
+                assert!(
+                    std::error::Error::source(&retained)
+                        .unwrap()
+                        .is::<std::num::TryFromIntError>()
+                );
+            }
+            "text-delta-indexing" => assert_eq!(capture.child("cause").code, "text-data"),
+            unexpected => panic!("unexpected delta record: {unexpected}"),
+        }
+    }
+}
+
 fn phonetic_native_scalar_survives_evaluator_conversion() {
     let refusal = DoubleMetaphone::new(4).unwrap().encode("東京").unwrap_err();
     let error = TextError::from(refusal).into_eval_in(&WorkspaceCapability::resident());
@@ -437,6 +505,23 @@ fn source_read_failure_retains_the_actual_backend_error_through_conversion_and_c
     drop(error);
     let cause = Capture::read(&clone).child("cause").child("cause");
     assert_eq!(cause.code, "triple-read-named-graphs-unsupported");
+
+    let empty = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+    let index = TextIndex::from_dataset(&*empty, &config).unwrap();
+    let delta = index.with_delta(&read, &*empty, &*empty).unwrap_err();
+    assert_eq!(
+        delta.to_string(),
+        "text-index source read error: the triple-only carrier does not support named graphs"
+    );
+    let retained = delta.clone();
+    drop(delta);
+    let capture = Capture::read(&retained);
+    assert_eq!(capture.code, "text-delta-indexing");
+    assert_eq!(capture.child("cause").code, "text-source-read");
+    assert_eq!(
+        capture.child("cause").child("cause").child("cause").code,
+        "triple-read-named-graphs-unsupported"
+    );
 }
 
 fn ledger_source_errors_preserve_nested_node_keys_and_native_reason_refusals() {
@@ -948,6 +1033,7 @@ fn native_query_diagnostics_keep_the_original_relation_cause_on_both_public_rout
 }
 
 purrdf_testkit::harness_main!(
+    delta_failures_keep_original_identities_counts_and_nested_causes,
     phonetic_native_scalar_survives_evaluator_conversion,
     substring_native_refusal_preserves_counters_limits_and_generation,
     html_native_diagnostic_list_preserves_standard_codes_and_original_ranges,

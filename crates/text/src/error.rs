@@ -15,6 +15,136 @@
 //! module — that conversion is the single place the mapping is decided, so the
 //! same failure never reaches a caller wearing two different labels.
 
+/// A refused index delta, retaining the original operands independently of its
+/// human-readable presentation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TextDeltaError {
+    /// The effective additions do not occur in the supplied next source.
+    MissingAddition {
+        /// Canonical selected addition ordinal.
+        ordinal: usize,
+    },
+    /// Reversing the delta does not recover the indexed source generation.
+    SourceMismatch {
+        /// Existing selected-source identity.
+        expected: [u8; 32],
+        /// Identity reconstructed from the supplied source and delta.
+        actual: [u8; 32],
+    },
+    /// The original source, analysis, capacity or ranking refusal.
+    Indexing(TextError),
+    /// The delta was analyzed under a different resolved law.
+    AnalyzerMismatch {
+        /// The existing index's analyzer identity.
+        expected: [u8; 32],
+        /// The supplied delta's analyzer identity.
+        actual: [u8; 32],
+    },
+    /// A supposedly replaced document still occurs in both source tables.
+    SourceOverlap {
+        /// The overlapping document identifier.
+        document: u32,
+        /// The original source-literal identity.
+        identity: [u8; 32],
+    },
+    /// The resulting projection dictionary exceeds its address space.
+    TermCapacity {
+        /// The exact requested number of distinct terms.
+        observed: u128,
+        /// The largest supported dictionary population.
+        limit: u32,
+        /// The original integer conversion refusal.
+        cause: std::num::TryFromIntError,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for TextDeltaError {
+    purrdf_hash::error_visit! {
+        MissingAddition { ordinal } => "text-delta-missing-addition" {
+            "ordinal" => Unsigned(*ordinal as u128),
+        },
+        SourceMismatch { expected, actual } => "text-delta-source-mismatch" {
+            "expected" => Bytes(expected), "actual" => Bytes(actual),
+        },
+        Indexing(cause) => "text-delta-indexing" { "cause" => Cause(cause) },
+        AnalyzerMismatch { expected, actual } => "text-delta-analyzer-mismatch" {
+            "expected" => Bytes(expected), "actual" => Bytes(actual),
+        },
+        SourceOverlap { document, identity } => "text-delta-source-overlap" {
+            "document" => Unsigned(u128::from(*document)), "identity" => Bytes(identity),
+        },
+        TermCapacity { observed, limit, cause } => "text-delta-term-capacity" {
+            "observed" => Unsigned(*observed), "limit" => Unsigned(u128::from(*limit)),
+            "cause" => Cause(cause),
+        },
+    }
+}
+
+impl core::fmt::Display for TextDeltaError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MissingAddition { ordinal } => write!(
+                f,
+                "text delta addition {ordinal} is absent from the next source"
+            ),
+            Self::SourceMismatch { expected, actual } => write!(
+                f,
+                "text delta source mismatch: expected {}, reconstructed {}",
+                purrdf_hash::hex::Lower(expected),
+                purrdf_hash::hex::Lower(actual)
+            ),
+            Self::Indexing(cause) => cause.fmt(f),
+            Self::AnalyzerMismatch { expected, actual } => write!(
+                f,
+                "text delta analyzer mismatch: expected {}, received {}",
+                purrdf_hash::hex::Lower(expected),
+                purrdf_hash::hex::Lower(actual)
+            ),
+            Self::SourceOverlap { document, identity } => write!(
+                f,
+                "replaced document {document} retained source {}",
+                purrdf_hash::hex::Lower(identity)
+            ),
+            Self::TermCapacity {
+                observed, limit, ..
+            } => write!(
+                f,
+                "text delta needs {observed} distinct terms; limit is {limit}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TextDeltaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Indexing(cause) => Some(cause),
+            Self::TermCapacity { cause, .. } => Some(cause),
+            Self::AnalyzerMismatch { .. }
+            | Self::SourceOverlap { .. }
+            | Self::MissingAddition { .. }
+            | Self::SourceMismatch { .. } => None,
+        }
+    }
+}
+
+purrdf_lex::variant_from!(TextDeltaError {
+    Indexing(TextError),
+});
+
+/// Admit a dictionary population, widening before adding even at usize::MAX.
+pub(crate) fn term_ordinal(current_count: usize) -> Result<u32, TextDeltaError> {
+    let observed = current_count as u128 + 1;
+    u32::try_from(observed)
+        .map(|count| count - 1)
+        .map_err(|cause| TextDeltaError::TermCapacity {
+            observed,
+            limit: u32::MAX,
+            cause,
+        })
+}
+
 /// A failure raised by the text index.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]

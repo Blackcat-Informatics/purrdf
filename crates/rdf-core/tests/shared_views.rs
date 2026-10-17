@@ -1650,7 +1650,12 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     for graph in [GRAPH, OTHER_GRAPH] {
         // The reference: materialize the named-graph projection and canonicalize it,
         // exactly as the flat per-graph digest does today.
-        let projected = canonicalize(&flat.project_named_graph(graph).unwrap()).nquads;
+        let projected = canonicalize(
+            &flat
+                .project_graph(Some(&purrdf_core::RdfTerm::iri(graph)))
+                .unwrap(),
+        )
+        .nquads;
         assert!(
             !projected.is_empty(),
             "{graph} must actually hold content, or parity proves nothing"
@@ -1712,7 +1717,12 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     // error, and byte-identical to projecting an absent graph flat.
     let absent = "http://example.org/no-such-graph";
     assert_eq!(
-        canonicalize(&flat.project_named_graph(absent).unwrap()).nquads,
+        canonicalize(
+            &flat
+                .project_graph(Some(&purrdf_core::RdfTerm::iri(absent)))
+                .unwrap()
+        )
+        .nquads,
         ""
     );
     for empty in [
