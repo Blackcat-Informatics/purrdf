@@ -269,15 +269,17 @@ fn asserted_subsumed_equivalent_role_derived_and_existential_membership_are_chec
             "actual inhabitance derivation {derivation}"
         );
         let proof = checked(&dataset, &answer);
-        let schema = proof
+        let (run, step) = proof
             .runs()
             .iter()
             .filter_map(|run| run.proof())
-            .flat_map(crate::DlProof::clashes)
-            .find_map(|step| step.schema_evidence())
+            .flat_map(|run| run.clashes().iter().map(move |step| (run, step)))
+            .find(|(_, step)| step.schema_evidence().is_some())
             .expect("the checked current class closes");
+        let schema = step.schema_evidence().unwrap();
+        assert!(step.current_support().is_some());
         if derivation == 0 {
-            assert_eq!(schema.support_steps(), 0);
+            assert_eq!(run.current_support_applications(), 0);
         } else if derivation <= 2 {
             // Positive subclass closure prepares B itself. Its CURRENT asserted
             // membership plus the checked B→A source law is sufficient; no ABox
@@ -288,7 +290,7 @@ fn asserted_subsumed_equivalent_role_derived_and_existential_membership_are_chec
             );
         } else {
             assert!(
-                schema.support_steps() > 0,
+                run.current_support_applications() > 0,
                 "role/existential-derived membership needs a checked prefix"
             );
         }

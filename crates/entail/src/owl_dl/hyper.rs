@@ -536,9 +536,7 @@ pub(crate) fn decide_recording(
             .support_budget(budget);
     }
     let mut st = h.g.init_state(assumptions);
-    if kb.schema.stats.contradictions != 0 {
-        st.support = super::support::Cursor::Active(None);
-    }
+    st.support = super::support::Cursor::Active(None);
     let decision = h.run(st);
     let trace = h
         .trace
@@ -550,7 +548,7 @@ pub(crate) fn decide_recording(
 pub(crate) fn replay_current_support(
     kb: &Kb,
     assumptions: &Assumptions<'_>,
-    applications: &[super::support::Application],
+    applications: &[&super::support::Application],
     clause: usize,
     frame: &[usize],
     branches: &[BranchStep],
@@ -727,13 +725,12 @@ impl<'a> Hyper<'a> {
             frame,
         );
         let mut step = ClashStep::new(index, node_ref(st, x), frame_refs(st, frame), witness);
-        if let Some(class) = self.clauses.schema_class(index, &self.g.kb().schema) {
-            #[cfg(test)]
-            let reference = self
-                .g
-                .kb()
-                .schema_reference
-                .then(|| super::bounds::Preparation::current_class(self.g.kb(), class));
+        let class = self.clauses.schema_class(index, &self.g.kb().schema);
+        #[cfg(test)]
+        let reference = class
+            .filter(|_| self.g.kb().schema_reference)
+            .map(|class| super::bounds::Preparation::current_class(self.g.kb(), class));
+        let bounds = if let Some(class) = class {
             #[cfg(test)]
             let evidence = if self.g.kb().schema_reference {
                 reference
@@ -754,9 +751,15 @@ impl<'a> Hyper<'a> {
                 .schema
                 .evidence(class)
                 .expect("schema clause has its original evidence");
-            if let super::support::Cursor::Active(latest) = st.support {
-                step.schema = trace.borrow_mut().schema_clash(evidence, latest, frame);
-            }
+            Some(evidence)
+        } else {
+            None
+        };
+        if let super::support::Cursor::Active(latest) = st.support
+            && let Some((schema, current)) = trace.borrow_mut().current_clash(bounds, latest, frame)
+        {
+            step.schema = schema;
+            step.current = Some(current);
         }
         trace.borrow_mut().clash(step);
     }
@@ -2147,7 +2150,7 @@ impl<'a> Hyper<'a> {
     pub(crate) fn replay_support(
         kb: &'a Kb,
         assumptions: &Assumptions<'_>,
-        applications: &[super::support::Application],
+        applications: &[&super::support::Application],
         clause_index: usize,
         frame: &[usize],
         branches: &[BranchStep],
