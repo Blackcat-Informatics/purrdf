@@ -294,8 +294,9 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     // identities and do not declare or emit a library vocabulary.
     let has_definitions = !definitions.is_empty();
     for (node, body) in definitions {
-        kb.push_gci(Concept::Named(node), body.clone());
-        kb.push_gci(body, Concept::Named(node));
+        let source = super::AxiomSource::QueryDefinition(node);
+        kb.push_gci_from(Concept::Named(node), body.clone(), source);
+        kb.push_gci_from(body, Concept::Named(node), source);
     }
     let mut boundaries = kb.boundaries().clone();
     boundaries.extend(query_boundaries);

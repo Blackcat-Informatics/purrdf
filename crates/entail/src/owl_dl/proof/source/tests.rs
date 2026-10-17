@@ -268,12 +268,22 @@ fn checked_source_blank_scope_and_schema_bounds_survive_resolution() {
         2
     );
     for s in steps {
-        if let SchemaReason::Inclusion { sub, sup } = s.reason {
+        if let SchemaReason::Inclusion { sub, sup, origin } = s.reason {
             assert!(matches!(sub.kind(), ConceptKind::Named(_)));
             assert!(matches!(
                 sup.kind(),
                 ConceptKind::Min(_, _, _) | ConceptKind::Max(_, _, _)
             ));
+            let ResolvedAxiomSource::Triple {
+                predicate: ResolvedTerm::Source(predicate),
+                object: ResolvedTerm::Source(object),
+                ..
+            } = origin
+            else {
+                panic!("authored inclusion must retain its original axiom anchor");
+            };
+            assert_eq!(predicate, &TermValue::Iri(rdfs::SUB_CLASS_OF.to_owned()));
+            assert!(matches!(object, TermValue::Blank { .. }));
         }
     }
 }

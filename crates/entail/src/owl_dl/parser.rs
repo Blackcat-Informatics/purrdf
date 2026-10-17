@@ -1193,6 +1193,10 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                 ce.poll()?;
                 for &axiom_class in preds.get(&v.ty).map_or(&[][..], Vec::as_slice) {
                     ce.poll()?;
+                    acc.source = super::AxiomSource::Node {
+                        node,
+                        kind: Some(axiom_class),
+                    };
                     axiom_node(&mut ce, &mut table, &mut acc, &v, node, axiom_class)?;
                 }
                 // A negative property assertion is identified by its VOCABULARY, not by its
@@ -1205,15 +1209,18 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                         .get(&v.ty)
                         .is_some_and(|types| types.contains(&v.negative_property_assertion))
                 {
+                    acc.source = super::AxiomSource::Node { node, kind: None };
                     negative_assertion(&ce, &mut table, &mut acc, &v, node)?;
                 }
             }
             for &spo in &triples {
                 ce.poll()?;
+                acc.source = super::AxiomSource::Triple(spo.0, spo.1, spo.2);
                 axiom(&mut ce, &mut table, &mut acc, &v, &interner, spo)?;
             }
             for (&node, body) in ce.definitions() {
                 ce.poll()?;
+                acc.source = super::AxiomSource::RecursiveDefinition(node);
                 gci(&mut table, &mut acc, Concept::Named(node), body.clone());
                 gci(&mut table, &mut acc, body.clone(), Concept::Named(node));
             }
@@ -1323,6 +1330,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             top,
             bottom,
             tbox: acc.tbox,
+            tbox_sources: acc.tbox_sources,
             // Both TBox encodings are DERIVED, not accumulated: `Kb::encode_until` below
             // clausifies the whole inclusion list at once, which is what lets absorption split
             // an axiom against inclusions the scan had not yet reached.
@@ -1381,8 +1389,7 @@ pub(crate) fn constrain_bottom_roles(kb: &mut Kb, terms: impl IntoIterator<Item 
             .table
             .intern(Concept::All(Role::Named(role), Box::new(Concept::Bottom)));
         if !kb.tbox.contains(&(kb.top, filler)) {
-            kb.tbox.push((kb.top, filler));
-            kb.encoded = false;
+            kb.push_gci_ids_from(kb.top, filler, super::AxiomSource::EmptyRole(role));
             changed = true;
         }
     }
@@ -1538,6 +1545,8 @@ fn subrole_satisfies(
 #[derive(Default)]
 struct Accums {
     tbox: Vec<(u32, u32)>,
+    tbox_sources: Vec<super::AxiomSource>,
+    source: super::AxiomSource,
     inverses: BTreeMap<u32, BTreeSet<u32>>,
     role_sub: BTreeMap<u32, BTreeSet<u32>>,
     abox_types: Vec<(u32, u32)>,
@@ -1937,6 +1946,7 @@ fn gci(table: &mut ConceptTable, acc: &mut Accums, sub: Concept, sup: Concept) {
     let sub_id = table.intern(sub);
     let sup_id = table.intern(sup);
     acc.tbox.push((sub_id, sup_id));
+    acc.tbox_sources.push(acc.source);
 }
 
 /// Build a nominal from `owl:oneOf` ids: a singleton stays `{a}`; a larger set is the

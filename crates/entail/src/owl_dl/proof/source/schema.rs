@@ -8,7 +8,8 @@ use crate::owl_dl::bounds::{
     QualifierProof, SchemaBoundEvidence, SchemaRule, SchemaStep, SchemaUpperBound,
 };
 
-/// A checked normalized implication step. It does not identify original RDF axioms.
+/// A checked normalized implication step with its original normalization anchor.
+/// The anchor alone is not complete causal provenance.
 #[derive(Debug)]
 pub struct ResolvedSchemaStep<'a> {
     /// The normalized concept established by this step.
@@ -28,12 +29,14 @@ pub enum SchemaReason<'a> {
     Conjunct(ResolvedConcept<'a>),
     /// Formation of a conjunction from its previously established members.
     Conjunction,
-    /// One native normalized inclusion. Source RDF provenance is a separate layer.
+    /// One native normalized inclusion and its consumer-owned source anchor.
     Inclusion {
         /// Antecedent established by earlier steps.
         sub: ResolvedConcept<'a>,
         /// Consequent of the normalized inclusion.
         sup: ResolvedConcept<'a>,
+        /// Original normalization operation, not a complete causal premise set.
+        origin: super::ResolvedAxiomSource<'a>,
     },
 }
 
@@ -48,6 +51,7 @@ fn step<'a>(kb: &'a Kb, step: &SchemaStep) -> ResolvedSchemaStep<'a> {
             SchemaReason::Inclusion {
                 sub: ResolvedConcept::of(kb, sub),
                 sup: ResolvedConcept::of(kb, sup),
+                origin: super::origin::resolve(kb, kb.tbox_sources[index]),
             }
         }
     };

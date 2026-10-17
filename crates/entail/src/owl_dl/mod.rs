@@ -40,9 +40,12 @@ use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
 use crate::interner::Interner;
+
+mod axiom_source;
 use crate::owl_dl::absorb::{Encoding, GuardedClause};
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
+use axiom_source::AxiomSource;
 // `Decomp`/`Role` are used only by the `cfg(test)` sub-cardinality interning for the
 // concept-tree `NN`-rule; production no longer reads either here.
 #[cfg(test)]
@@ -131,6 +134,8 @@ pub(crate) struct Kb {
     pub(crate) bottom: u32,
     /// General concept inclusions `sub ⊑ sup`, as concept-id pairs.
     pub(crate) tbox: Vec<(u32, u32)>,
+    /// Original normalization anchor for each TBox entry, in exactly the same order.
+    pub(crate) tbox_sources: Vec<AxiomSource>,
     /// The internalized TBox: meta-concept ids `nnf(¬sub ⊔ sup)`, one per inclusion whose
     /// antecedent [`absorb`] could not guard.
     ///
@@ -215,8 +220,8 @@ pub(crate) struct Kb {
     /// runs it once inside [`parser::build_until`], and every caller downstream that finalizes
     /// again after interning MORE concepts — [`Reasoner::new`](crate::reasoner::Reasoner::new)
     /// chief among them — would otherwise re-derive an identical absorbed table from an
-    /// unchanged inclusion list. [`Kb::push_gci`] is the only way [`Kb::tbox`] grows after
-    /// construction, and it clears this, so the flag cannot go stale.
+    /// unchanged inclusion list. [`Kb::push_gci_from`] and its interned ingress grow
+    /// [`Kb::tbox`] after construction; both clear this flag, so it cannot go stale.
     pub(crate) encoded: bool,
     /// How many times [`Kb::encode_until`] actually ran its absorption pass.
     ///
@@ -291,6 +296,7 @@ impl Kb {
         Self {
             interner: Interner::default(),
             source_terms: 0,
+            tbox_sources: Vec::new(),
             table,
             schema: bounds::Preparation::default(),
             schema_budget: bounds::SchemaPreparationBudget::default(),
@@ -472,10 +478,22 @@ impl Kb {
     /// Clears [`Kb::encoded`]: this is the one way [`Kb::tbox`] grows after construction, and
     /// [`Kb::encode_until`]'s absorption pass must see the grown list on the next call rather
     /// than skip itself over an inclusion it has not yet absorbed.
+    #[cfg(test)]
     pub(crate) fn push_gci(&mut self, sub: Concept, sup: Concept) {
+        self.push_gci_from(sub, sup, AxiomSource::Unrecorded);
+    }
+
+    /// Keep the original source anchor at the same ingress that invalidates encoding.
+    pub(crate) fn push_gci_from(&mut self, sub: Concept, sup: Concept, source: AxiomSource) {
         let sub_id = self.table.intern(sub);
         let sup_id = self.table.intern(sup);
+        self.push_gci_ids_from(sub_id, sup_id, source);
+    }
+
+    /// Interned ingress shared with built-in laws; never leaves source/order stale.
+    pub(crate) fn push_gci_ids_from(&mut self, sub_id: u32, sup_id: u32, source: AxiomSource) {
         self.tbox.push((sub_id, sup_id));
+        self.tbox_sources.push(source);
         self.encoded = false;
         self.schema = bounds::Preparation::default();
     }

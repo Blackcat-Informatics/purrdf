@@ -14,7 +14,9 @@ use crate::owl_dl::concept::{Concept, Role};
 use purrdf_core::TermValue;
 use purrdf_xsd::range::DataRange;
 
+mod origin;
 mod schema;
+pub use origin::ResolvedAxiomSource;
 pub use schema::{QualifierKind, ResolvedSchema, ResolvedSchemaStep, SchemaReason, SchemaUpper};
 
 /// An exact RDF term and whether it existed before query preparation.
