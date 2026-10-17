@@ -158,6 +158,8 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::Integer, "invalid"),
         (D::Decimal, "invalid"),
         (D::Boolean, "invalid"),
+        (D::String, "invalid\0"),
+        (D::String, "invalid\u{fffe}"),
         (D::AnyUri, "invalid\0"),
         (D::HexBinary, "invalid"),
         (D::Base64Binary, "invalid"),
