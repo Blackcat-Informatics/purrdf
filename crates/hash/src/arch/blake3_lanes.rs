@@ -67,17 +67,27 @@ macro_rules! blake3_lanes {
 
         /// A full SIMD batch of parent nodes. Each lane hashes two child CVs.
         #[target_feature(enable=$feature)]
-        pub(crate) fn parents(children: &[[u32; 8]; 2 * LANES]) -> [[u32; 8]; LANES] {
+        pub(crate) fn parents(
+            children: &[[u32; 8]; 2 * LANES],
+            mode: crate::blake3::Mode,
+        ) -> [[u32; 8]; LANES] {
             let mut cv = [V::splat(0); 8];
             for i in 0..8 {
-                cv[i] = V::splat(IV[i]);
+                cv[i] = V::splat(mode.key[i]);
             }
             let mut m = [V::splat(0); 16];
             for i in 0..8 {
                 m[i] = V::load(core::array::from_fn(|lane| children[2 * lane][i]));
                 m[i + 8] = V::load(core::array::from_fn(|lane| children[2 * lane + 1][i]));
             }
-            let cv = lane_compress!(cv, m, V::splat(0), V::splat(0), V::splat(64), V::splat(4));
+            let cv = lane_compress!(
+                cv,
+                m,
+                V::splat(0),
+                V::splat(0),
+                V::splat(64),
+                V::splat(4 | mode.flags)
+            );
             let mut out = [[0; 8]; LANES];
             for (word, column) in cv.into_iter().enumerate() {
                 for (lane, value) in column.array().into_iter().enumerate() {
@@ -90,10 +100,14 @@ macro_rules! blake3_lanes {
         // Full batches need neither a padded copy nor per-lane tail masks.
         // Keep this separate so the compiler sees uniform lengths and flags.
         #[target_feature(enable=$feature)]
-        fn full_chunk_cvs(bytes: &[u8; 1024 * LANES], counter: u64) -> [[u32; 8]; LANES] {
+        fn full_chunk_cvs(
+            bytes: &[u8; 1024 * LANES],
+            counter: u64,
+            mode: crate::blake3::Mode,
+        ) -> [[u32; 8]; LANES] {
             let mut cv = [V::splat(0); 8];
             for i in 0..8 {
-                cv[i] = V::splat(IV[i]);
+                cv[i] = V::splat(mode.key[i]);
             }
             let low = V::load(core::array::from_fn(|i| (counter + i as u64) as u32));
             let high = V::load(core::array::from_fn(|i| {
@@ -101,7 +115,8 @@ macro_rules! blake3_lanes {
             }));
             for block in 0..16 {
                 let m = load_block(bytes, block);
-                let flags = V::splat(u32::from(block == 0) | (u32::from(block == 15) << 1));
+                let flags =
+                    V::splat(mode.flags | u32::from(block == 0) | (u32::from(block == 15) << 1));
                 cv = lane_compress!(cv, m, low, high, V::splat(64), flags);
             }
             let mut result = [[0; 8]; LANES];
@@ -116,10 +131,14 @@ macro_rules! blake3_lanes {
         /// Chaining values for the live chunks. Inactive lanes duplicate the
         /// first valid chunk; all pointer loads stay within the padded buffer.
         #[target_feature(enable=$feature)]
-        pub(crate) fn chunk_cvs(bytes: &[u8], counter: u64) -> [[u32; 8]; LANES] {
+        pub(crate) fn chunk_cvs(
+            bytes: &[u8],
+            counter: u64,
+            mode: crate::blake3::Mode,
+        ) -> [[u32; 8]; LANES] {
             assert!(!bytes.is_empty() && bytes.len() <= 1024 * LANES);
             if let Ok(full) = <&[u8; 1024 * LANES]>::try_from(bytes) {
-                return full_chunk_cvs(full, counter);
+                return full_chunk_cvs(full, counter, mode);
             }
             let mut padded = [0u8; 1024 * LANES];
             padded[..bytes.len()].copy_from_slice(bytes);
@@ -128,7 +147,7 @@ macro_rules! blake3_lanes {
             let last_block = (last_length - 1) / 64;
             let mut cv = [V::splat(0); 8];
             for i in 0..8 {
-                cv[i] = V::splat(IV[i]);
+                cv[i] = V::splat(mode.key[i]);
             }
             let low = V::load(core::array::from_fn(|i| (counter + i as u64) as u32));
             let high = V::load(core::array::from_fn(|i| {
@@ -138,7 +157,7 @@ macro_rules! blake3_lanes {
                 let m = load_block(&padded, block);
                 let flags = V::load(core::array::from_fn(|i| {
                     let end = if i + 1 == count { last_block } else { 15 };
-                    u32::from(block == 0) | (u32::from(block == end) << 1)
+                    mode.flags | u32::from(block == 0) | (u32::from(block == end) << 1)
                 }));
                 let length = V::load(core::array::from_fn(|i| {
                     if i + 1 == count && block == last_block {
@@ -179,13 +198,16 @@ macro_rules! blake3_single4 {
         // can inline into chunk loops without duplicating seven rounds.
         #[inline(never)]
         #[target_feature(enable=$feature)]
-        pub(super) fn single(
+        pub(super) fn single<const OUTPUT: usize>(
             cv: [u32; 8],
             words: &[u32; 16],
             counter: u64,
             length: u32,
             flags: u32,
-        ) -> [u32; 8] {
+        ) -> [u32; OUTPUT] {
+            const {
+                assert!(OUTPUT == 8 || OUTPUT == 16);
+            }
             let mut a = V::load([cv[0], cv[1], cv[2], cv[3]]);
             let mut b = V::load([cv[4], cv[5], cv[6], cv[7]]);
             let mut c = V::load([IV[0], IV[1], IV[2], IV[3]]);
@@ -228,9 +250,13 @@ macro_rules! blake3_single4 {
             round!(4);
             round!(5);
             round!(6);
-            let mut out = [0; 8];
+            let mut out = [0; OUTPUT];
             out[..4].copy_from_slice(&a.xor(c).array());
-            out[4..].copy_from_slice(&b.xor(d).array());
+            out[4..8].copy_from_slice(&b.xor(d).array());
+            if OUTPUT == 16 {
+                out[8..12].copy_from_slice(&c.xor(V::load([cv[0], cv[1], cv[2], cv[3]])).array());
+                out[12..16].copy_from_slice(&d.xor(V::load([cv[4], cv[5], cv[6], cv[7]])).array());
+            }
             out
         }
     };

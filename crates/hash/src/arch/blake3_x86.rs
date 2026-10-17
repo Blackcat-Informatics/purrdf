@@ -55,14 +55,20 @@ use core::arch::x86_64::{
     _mm512_xor_si512,
 };
 
+// Keep each named kernel observable even when its ISA is enabled for the
+// whole target. The assembly audit binds both output widths to these paths.
+#[inline(never)]
 #[target_feature(enable = "ssse3")]
-pub(super) unsafe fn single(
+pub(super) unsafe fn single<const OUTPUT: usize>(
     cv: [u32; 8],
     words: &[u32; 16],
     counter: u64,
     length: u32,
     flags: u32,
-) -> [u32; 8] {
+) -> [u32; OUTPUT] {
+    const {
+        assert!(OUTPUT == 8 || OUTPUT == 16);
+    }
     let mut a = _mm_setr_epi32(cv[0] as i32, cv[1] as i32, cv[2] as i32, cv[3] as i32);
     let mut b = _mm_setr_epi32(cv[4] as i32, cv[5] as i32, cv[6] as i32, cv[7] as i32);
     let mut c = _mm_setr_epi32(IV[0] as i32, IV[1] as i32, IV[2] as i32, IV[3] as i32);
@@ -134,23 +140,33 @@ pub(super) unsafe fn single(
     round!(4);
     round!(5);
     round!(6);
-    let mut out = [0; 8];
-    // SAFETY: each unaligned store writes four words into an eight-word array.
+    let mut out = [0; OUTPUT];
+    // SAFETY: OUTPUT is 8 or 16; each store writes four words within that array.
     unsafe {
         _mm_storeu_si128(out.as_mut_ptr().cast(), _mm_xor_si128(a, c));
         _mm_storeu_si128(out.as_mut_ptr().add(4).cast(), _mm_xor_si128(b, d));
+        if OUTPUT == 16 {
+            let key_a = _mm_setr_epi32(cv[0] as i32, cv[1] as i32, cv[2] as i32, cv[3] as i32);
+            let key_b = _mm_setr_epi32(cv[4] as i32, cv[5] as i32, cv[6] as i32, cv[7] as i32);
+            _mm_storeu_si128(out.as_mut_ptr().add(8).cast(), _mm_xor_si128(c, key_a));
+            _mm_storeu_si128(out.as_mut_ptr().add(12).cast(), _mm_xor_si128(d, key_b));
+        }
     }
     out
 }
 
+#[inline(never)]
 #[target_feature(enable = "avx512f,avx512vl")]
-pub(super) unsafe fn single_avx512(
+pub(super) unsafe fn single_avx512<const OUTPUT: usize>(
     cv: [u32; 8],
     words: &[u32; 16],
     counter: u64,
     length: u32,
     flags: u32,
-) -> [u32; 8] {
+) -> [u32; OUTPUT] {
+    const {
+        assert!(OUTPUT == 8 || OUTPUT == 16);
+    }
     let mut a = _mm_setr_epi32(cv[0] as i32, cv[1] as i32, cv[2] as i32, cv[3] as i32);
     let mut b = _mm_setr_epi32(cv[4] as i32, cv[5] as i32, cv[6] as i32, cv[7] as i32);
     let mut c = _mm_setr_epi32(IV[0] as i32, IV[1] as i32, IV[2] as i32, IV[3] as i32);
@@ -212,23 +228,33 @@ pub(super) unsafe fn single_avx512(
     round!(4);
     round!(5);
     round!(6);
-    let mut out = [0; 8];
-    // SAFETY: each unaligned store writes four words into an eight-word array.
+    let mut out = [0; OUTPUT];
+    // SAFETY: OUTPUT is 8 or 16; each store writes four words within that array.
     unsafe {
         _mm_storeu_si128(out.as_mut_ptr().cast(), _mm_xor_si128(a, c));
         _mm_storeu_si128(out.as_mut_ptr().add(4).cast(), _mm_xor_si128(b, d));
+        if OUTPUT == 16 {
+            let key_a = _mm_setr_epi32(cv[0] as i32, cv[1] as i32, cv[2] as i32, cv[3] as i32);
+            let key_b = _mm_setr_epi32(cv[4] as i32, cv[5] as i32, cv[6] as i32, cv[7] as i32);
+            _mm_storeu_si128(out.as_mut_ptr().add(8).cast(), _mm_xor_si128(c, key_a));
+            _mm_storeu_si128(out.as_mut_ptr().add(12).cast(), _mm_xor_si128(d, key_b));
+        }
     }
     out
 }
 
+#[inline(never)]
 #[target_feature(enable = "avx2")]
-pub(super) unsafe fn single_avx2(
+pub(super) unsafe fn single_avx2<const OUTPUT: usize>(
     cv: [u32; 8],
     words: &[u32; 16],
     counter: u64,
     length: u32,
     flags: u32,
-) -> [u32; 8] {
+) -> [u32; OUTPUT] {
+    const {
+        assert!(OUTPUT == 8 || OUTPUT == 16);
+    }
     let mut a = _mm_setr_epi32(cv[0] as i32, cv[1] as i32, cv[2] as i32, cv[3] as i32);
     let mut b = _mm_setr_epi32(cv[4] as i32, cv[5] as i32, cv[6] as i32, cv[7] as i32);
     let mut c = _mm_setr_epi32(IV[0] as i32, IV[1] as i32, IV[2] as i32, IV[3] as i32);
@@ -316,22 +342,33 @@ pub(super) unsafe fn single_avx2(
     round!(4);
     round!(5);
     round!(6);
-    let mut out = [0; 8];
-    // SAFETY: each unaligned store writes four words into an eight-word array.
+    let mut out = [0; OUTPUT];
+    // SAFETY: OUTPUT is 8 or 16; each store writes four words within that array.
     unsafe {
         _mm_storeu_si128(out.as_mut_ptr().cast(), _mm_xor_si128(a, c));
         _mm_storeu_si128(out.as_mut_ptr().add(4).cast(), _mm_xor_si128(b, d));
+        if OUTPUT == 16 {
+            let key_a = _mm_setr_epi32(cv[0] as i32, cv[1] as i32, cv[2] as i32, cv[3] as i32);
+            let key_b = _mm_setr_epi32(cv[4] as i32, cv[5] as i32, cv[6] as i32, cv[7] as i32);
+            _mm_storeu_si128(out.as_mut_ptr().add(8).cast(), _mm_xor_si128(c, key_a));
+            _mm_storeu_si128(out.as_mut_ptr().add(12).cast(), _mm_xor_si128(d, key_b));
+        }
     }
     out
 }
 
-pub(crate) fn subtree(bytes: &[u8], counter: u64, height: u32) -> Option<[u32; 8]> {
+pub(crate) fn subtree(
+    bytes: &[u8],
+    counter: u64,
+    height: u32,
+    mode: crate::blake3::Mode,
+) -> Option<[u32; 8]> {
     if std::is_x86_feature_detected!("avx512f")
         && (1..=4).contains(&height)
         && bytes.len() >= (1024 << height)
     {
         // SAFETY: feature checked; the first 1024 << height bytes contain every live chunk.
-        Some(unsafe { subtree_16(bytes, counter, height) })
+        Some(unsafe { subtree_16(bytes, counter, height, mode) })
     } else {
         None
     }
@@ -400,10 +437,11 @@ unsafe fn chunk_columns16(
     bytes: &[u8],
     counter: u64,
     height: u32,
+    mode: crate::blake3::Mode,
 ) -> [core::arch::x86_64::__m512i; 8] {
     let mut initial = [_mm512_setzero_si512(); 8];
     for i in 0..8 {
-        initial[i] = _mm512_set1_epi32(IV[i] as i32);
+        initial[i] = _mm512_set1_epi32(mode.key[i] as i32);
     }
     let lows: [u32; 16] = core::array::from_fn(|i| (counter + i as u64) as u32);
     let highs: [u32; 16] = core::array::from_fn(|i| ((counter + i as u64) >> 32) as u32);
@@ -458,23 +496,31 @@ unsafe fn chunk_columns16(
             low,
             high,
             _mm512_set1_epi32(64),
-            _mm512_set1_epi32(if block == 0 {
-                1
-            } else if block == 15 {
-                2
-            } else {
-                0
-            }),
+            _mm512_set1_epi32(
+                mode.flags as i32
+                    | if block == 0 {
+                        1
+                    } else if block == 15 {
+                        2
+                    } else {
+                        0
+                    }
+            ),
         );
     }
     cv
 }
 
 #[target_feature(enable = "avx512f")]
-unsafe fn subtree_16(bytes: &[u8], counter: u64, height: u32) -> [u32; 8] {
+unsafe fn subtree_16(
+    bytes: &[u8],
+    counter: u64,
+    height: u32,
+    mode: crate::blake3::Mode,
+) -> [u32; 8] {
     // SAFETY: caller checked feature support and the complete live chunks.
-    let mut cv = unsafe { chunk_columns16(bytes, counter, height) };
-    let initial: [_; 8] = core::array::from_fn(|i| _mm512_set1_epi32(IV[i] as i32));
+    let mut cv = unsafe { chunk_columns16(bytes, counter, height, mode) };
+    let initial: [_; 8] = core::array::from_fn(|i| _mm512_set1_epi32(mode.key[i] as i32));
     // Four levels of binary parents. Only the leading 8,4,2,1 lanes are
     // live; permuting unused lanes is harmless and does not access memory.
     let even = _mm512_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -491,7 +537,7 @@ unsafe fn subtree_16(bytes: &[u8], counter: u64, height: u32) -> [u32; 8] {
             _mm512_setzero_si512(),
             _mm512_setzero_si512(),
             _mm512_set1_epi32(64),
-            _mm512_set1_epi32(4),
+            _mm512_set1_epi32((4 | mode.flags) as i32),
         );
     }
     let mut out = [0; 8];
@@ -502,16 +548,20 @@ unsafe fn subtree_16(bytes: &[u8], counter: u64, height: u32) -> [u32; 8] {
 }
 
 /// Returns the two final child CVs so the caller can apply ROOT exactly once.
-pub(crate) fn small_output(bytes: &[u8], counter: u64) -> Option<[u32; 16]> {
+pub(crate) fn small_output(
+    bytes: &[u8],
+    counter: u64,
+    mode: crate::blake3::Mode,
+) -> Option<[u32; 16]> {
     if std::is_x86_feature_detected!("avx512f") && (1025..=16384).contains(&bytes.len()) {
         // SAFETY: feature and length checked; the kernel pads all SIMD loads.
-        Some(unsafe { small_parent(bytes, counter) })
+        Some(unsafe { small_parent(bytes, counter, mode) })
     } else {
         None
     }
 }
 #[target_feature(enable = "avx512f")]
-unsafe fn small_parent(bytes: &[u8], counter: u64) -> [u32; 16] {
+unsafe fn small_parent(bytes: &[u8], counter: u64, mode: crate::blake3::Mode) -> [u32; 16] {
     let mut padded = [0u8; 16384];
     padded[..bytes.len()].copy_from_slice(bytes);
     let mut count = bytes.len().div_ceil(1024);
@@ -520,7 +570,7 @@ unsafe fn small_parent(bytes: &[u8], counter: u64) -> [u32; 16] {
     let last_mask = 1u16 << (count - 1);
     let mut initial = [_mm512_setzero_si512(); 8];
     for i in 0..8 {
-        initial[i] = _mm512_set1_epi32(IV[i] as i32);
+        initial[i] = _mm512_set1_epi32(mode.key[i] as i32);
     }
     let lows: [u32; 16] = core::array::from_fn(|i| (counter + i as u64) as u32);
     let highs: [u32; 16] = core::array::from_fn(|i| ((counter + i as u64) >> 32) as u32);
@@ -563,13 +613,16 @@ unsafe fn small_parent(bytes: &[u8], counter: u64) -> [u32; 16] {
             m[col + 12] = _mm512_shuffle_i32x4::<0xdd>(c, d);
         }
 
-        let flags = _mm512_set1_epi32(if block == 0 {
-            1
-        } else if block == 15 {
-            2
-        } else {
-            0
-        });
+        let flags = _mm512_set1_epi32(
+            mode.flags as i32
+                | if block == 0 {
+                    1
+                } else if block == 15 {
+                    2
+                } else {
+                    0
+                },
+        );
         let flags = if block == last_block {
             _mm512_mask_or_epi32(flags, last_mask, flags, _mm512_set1_epi32(2))
         } else {
@@ -606,7 +659,7 @@ unsafe fn small_parent(bytes: &[u8], counter: u64) -> [u32; 16] {
             _mm512_setzero_si512(),
             _mm512_setzero_si512(),
             _mm512_set1_epi32(64),
-            _mm512_set1_epi32(4)
+            _mm512_set1_epi32((4 | mode.flags) as i32)
         );
         if !count.is_multiple_of(2) {
             let last = _mm512_set1_epi32((count - 1) as i32);
@@ -635,20 +688,24 @@ use core::arch::x86_64::{
     _mm256_setr_epi32,
 };
 
-pub(crate) fn chunks16(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 16]> {
+pub(crate) fn chunks16(
+    bytes: &[u8],
+    counter: u64,
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 16]> {
     if std::is_x86_feature_detected!("avx512f") && bytes.len() == 16384 {
         // SAFETY: the feature and complete input batch were checked.
-        Some(unsafe { chunk_cvs16(bytes, counter) })
+        Some(unsafe { chunk_cvs16(bytes, counter, mode) })
     } else {
         None
     }
 }
 
 #[target_feature(enable = "avx512f")]
-unsafe fn chunk_cvs16(bytes: &[u8], counter: u64) -> [[u32; 8]; 16] {
+unsafe fn chunk_cvs16(bytes: &[u8], counter: u64, mode: crate::blake3::Mode) -> [[u32; 8]; 16] {
     assert_eq!(bytes.len(), 16384);
     // SAFETY: complete sixteen-chunk batch; feature enabled by this function.
-    let cv = unsafe { chunk_columns16(bytes, counter, 4) };
+    let cv = unsafe { chunk_columns16(bytes, counter, 4, mode) };
     let mut columns = [[0u32; 16]; 8];
     for (dest, column) in columns.iter_mut().zip(cv) {
         // SAFETY: the destination contains sixteen writable words.
@@ -657,16 +714,19 @@ unsafe fn chunk_cvs16(bytes: &[u8], counter: u64) -> [[u32; 8]; 16] {
     core::array::from_fn(|lane| core::array::from_fn(|word| columns[word][lane]))
 }
 
-pub(crate) fn parents16(children: &[[u32; 8]; 32]) -> Option<[[u32; 8]; 16]> {
+pub(crate) fn parents16(
+    children: &[[u32; 8]; 32],
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 16]> {
     if std::is_x86_feature_detected!("avx512f") {
         // SAFETY: feature checked; the array contains all 32 child CVs.
-        Some(unsafe { parents16_inner(children) })
+        Some(unsafe { parents16_inner(children, mode) })
     } else {
         None
     }
 }
 #[target_feature(enable = "avx512f")]
-unsafe fn parents16_inner(children: &[[u32; 8]; 32]) -> [[u32; 8]; 16] {
+unsafe fn parents16_inner(children: &[[u32; 8]; 32], mode: crate::blake3::Mode) -> [[u32; 8]; 16] {
     // SAFETY: each row reads two consecutive eight-word CVs, inside the array.
     let rows: [_; 16] = core::array::from_fn(|i| unsafe {
         _mm512_loadu_si512(children.as_ptr().add(i * 2).cast())
@@ -696,14 +756,14 @@ unsafe fn parents16_inner(children: &[[u32; 8]; 32]) -> [[u32; 8]; 16] {
         m[col + 12] = _mm512_shuffle_i32x4::<0xdd>(c, d);
     }
 
-    let initial: [_; 8] = core::array::from_fn(|i| _mm512_set1_epi32(IV[i] as i32));
+    let initial: [_; 8] = core::array::from_fn(|i| _mm512_set1_epi32(mode.key[i] as i32));
     let cv = wide!(
         initial,
         m,
         _mm512_setzero_si512(),
         _mm512_setzero_si512(),
         _mm512_set1_epi32(64),
-        _mm512_set1_epi32(4)
+        _mm512_set1_epi32((4 | mode.flags) as i32)
     );
     let mut columns = [[0u32; 16]; 8];
     for (dest, column) in columns.iter_mut().zip(cv) {

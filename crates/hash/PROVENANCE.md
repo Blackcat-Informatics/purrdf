@@ -5,8 +5,9 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # Provenance of `purrdf-hash`
 
-Everything under `src/`, `tests/*.rs` and `benches/`, and under
-`crates/hash-conformance/` (this crate's frozen-vector suites), is first-party. The
+Implementation and test code under `src/`, `tests/*.rs` and `benches/`, and under
+`crates/hash-conformance/` (this crate's frozen-vector suites), is first-party.
+Imported oracle data is identified below. The
 initial implementations were written from the specifications below without
 consulting third-party implementations. Subsequent source consultation for
 performance analysis is recorded by algorithm below; no third-party code
@@ -73,11 +74,13 @@ was copied or ported.
 `src/blake3.rs` and `src/arch/blake3_*.rs` are written from the
 [BLAKE3 specification](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf),
 §2.1–2.5: the tree shape, seven compression rounds, permutation, counters,
-block lengths, and domain flags. Only the unkeyed 256-bit mode used by PurRDF
-is exposed. The independent chunks and parent nodes are transposed into SIMD
-lanes; the single-block path places the four independent quarter rounds in
-four lanes. This initial implementation, including its pending-subtree stream
-state and 256-chunk batch reduction, preceded external source consultation.
+block lengths, and domain flags. PurRDF content identities use unkeyed
+BLAKE3-256; the public API also exposes keyed hashing, context-separated key
+derivation and extended output, described below. Independent chunks and parent
+nodes are transposed into SIMD lanes; the single-block path places the four
+independent quarter rounds in four lanes. This initial implementation, including
+its pending-subtree stream state and 256-chunk batch reduction, preceded external
+source consultation.
 
 For subsequent performance analysis, the following files from **blake3 1.8.5**
 were consulted: [`src/lib.rs`](https://github.com/BLAKE3-team/BLAKE3/blob/1.8.5/src/lib.rs)
@@ -107,6 +110,16 @@ every length through 8,192 bytes and power-of-two tree boundaries through
 through 64 KiB, exercising irregular tree shapes and unaligned input.
 Streaming splits, empty updates, snapshots and reset are checked against
 these answers, which must never be changed to match the implementation.
+
+Keyed hashing, context derivation and extended output follow specification
+sections 2.3 and 2.6 through the existing compression and tree implementations.
+No additional third-party implementation source was consulted for these modes.
+`blake3_official_test_vectors.json` is the verbatim official vector data at
+[BLAKE3 commit f55849f89cd85083c1c9daa2c5de20766f309c00](https://github.com/BLAKE3-team/BLAKE3/blob/f55849f89cd85083c1c9daa2c5de20766f309c00/test_vectors/test_vectors.json).
+`blake3_official_vectors.txt` projects every input length and all three full
+131-byte outputs into the existing digest-verified vector format. Its header
+retains the source, key and context; no answer is computed by PurRDF when
+creating this frozen projection. All 35 cases are retained without truncation.
 
 ## Known-answer values (`tests/known_answers.rs`)
 

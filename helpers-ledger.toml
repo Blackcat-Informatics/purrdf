@@ -240,13 +240,14 @@ reason = "An artifact identity digest is its own kind, compared only with anothe
 
 [[job]]
 id = "blake3"
-summary = "BLAKE3-256, one-shot and streaming, with caller-scheduled subtrees"
+summary = "BLAKE3 hashing, keyed hashing, key derivation and extendable output, one-shot and streaming"
 home = "purrdf_hash::blake3::hash"
-entry_points = ["purrdf_hash::blake3::Streaming", "purrdf_hash::blake3::Hash"]
-spec = "the BLAKE3 specification (O'Connor, Aumasson, Neves, Wilcox-O'Hearn), unkeyed hash mode"
+entry_points = ["purrdf_hash::blake3::Streaming", "purrdf_hash::blake3::Hash", "purrdf_hash::blake3::OutputReader", "purrdf_hash::blake3::keyed_hash", "purrdf_hash::blake3::derive_key", "purrdf_hash::blake3::hash_xof", "purrdf_hash::blake3::keyed_hash_xof", "purrdf_hash::blake3::derive_key_xof"]
+spec = "the BLAKE3 specification (O'Connor, Aumasson, Neves, Wilcox-O'Hearn), all three modes and extendable output, sections 2.1-2.6"
 vectors = [
     "crates/hash-conformance/tests/vectors/blake3_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/blake3_random_vectors.txt",
+    "crates/hash-conformance/tests/vectors/blake3_official_vectors.txt",
 ]
 bench = ["purrdf-hash-conformance:digests"]
 sites = ["blake3.hash-many-dispatch", "blake3.single-block"]
