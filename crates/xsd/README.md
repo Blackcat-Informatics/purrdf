@@ -36,7 +36,10 @@ Coverage:
   spec's timezone-indeterminate partial order.
 - **Binary** — `hexBinary`/`base64Binary` with hand-rolled (still zero-dep)
   codecs.
-- **`boolean`, `string`**, effective boolean value, and whitespace facets.
+- **`boolean`, `string`, `anyURI`**, effective boolean value, and whitespace facets.
+  The `anyURI` primitive has fixed XML whitespace collapse, a disjoint value
+  space from strings, and character-count length facets. It accepts empty and
+  relative references without URL normalization; see [XSD 1.1 §3.3.17](https://www.w3.org/TR/xmlschema11-2/#anyURI).
 
 One deliberate design point: the crate keeps **term identity** (RDF `sameTerm`,
 the IR's job) and **value-space identity** (SPARQL `=`/`<`) strictly apart.

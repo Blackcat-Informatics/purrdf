@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The simple (non-numeric, non-temporal) XSD value spaces: `boolean` and `string`.
+//! Simple XSD values: `boolean`, `string` and whitespace-collapsed `anyURI`.
 //!
 //! `xsd:string`'s value space is its lexical space, so it has no dedicated parser
 //! (the [`crate::parse`] entry maps it straight to [`crate::XsdValue::String`]).
@@ -10,6 +10,20 @@ use purrdf_lex::scan::in_runs;
 
 use crate::datatype::XsdDatatype;
 use crate::value::XsdError;
+
+/// Validate the XSD 1.1 Part 2 §3.3.17 lexical space and borrow its collapsed
+/// value. Empty and relative references are valid; URI syntax, percent escapes,
+/// case and Unicode normalization are deliberately not rewritten.
+///
+/// # Errors
+/// Refuses a character outside XML 1.0 `Char` before creating an owned value.
+pub fn read_any_uri(s: &str) -> Result<CollapsedWhitespace<'_>, &'static str> {
+    if s.chars().all(purrdf_lex::terminals::is_xml_char) {
+        Ok(CollapsedWhitespace(s))
+    } else {
+        Err("anyURI requires XML characters")
+    }
+}
 
 /// `xsd:boolean`: lexical space is `true | false | 1 | 0`; canonical is `true|false`.
 /// Read the Boolean lexical space without copying a refused lexical.

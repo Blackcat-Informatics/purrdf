@@ -48,6 +48,9 @@ pub enum XsdValue {
     Boolean(bool),
     /// `xsd:string` — the value space is the lexical space (no normalization).
     String(String),
+    /// `xsd:anyURI`, after fixed XML whitespace collapse. This primitive value
+    /// space is disjoint from `xsd:string`, even for identical character sequences.
+    AnyUri(String),
     /// `xsd:dateTime`.
     DateTime(temporal::DateTime),
     /// `xsd:date`.
@@ -93,6 +96,7 @@ impl XsdValue {
             Self::Double(_) => XsdDatatype::Double,
             Self::Boolean(_) => XsdDatatype::Boolean,
             Self::String(_) => XsdDatatype::String,
+            Self::AnyUri(_) => XsdDatatype::AnyUri,
             Self::DateTime(_) => XsdDatatype::DateTime,
             Self::Date(_) => XsdDatatype::Date,
             Self::Time(_) => XsdDatatype::Time,
@@ -169,7 +173,7 @@ impl XsdValue {
         match self {
             Self::Integer { value, .. } => usize::try_from(value.heap_bytes()).ok(),
             Self::Decimal(value) => usize::try_from(value.heap_bytes()).ok(),
-            Self::String(text) => Some(text.capacity()),
+            Self::String(text) | Self::AnyUri(text) => Some(text.capacity()),
             Self::Binary { bytes, .. } => Some(bytes.capacity()),
             Self::DateTime(value) => usize::try_from(value.owned_heap_bytes()).ok(),
             Self::Time(value) => usize::try_from(value.owned_heap_bytes()).ok(),
@@ -201,7 +205,7 @@ impl XsdValue {
             Self::Float(f) => crate::numeric::canonical_float(*f),
             Self::Double(d) => crate::numeric::canonical_double(*d),
             Self::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
-            Self::String(s) => s.clone(),
+            Self::String(s) | Self::AnyUri(s) => s.clone(),
             Self::DateTime(v) => v.canonical_lexical(),
             Self::Date(v) => v.canonical_lexical(),
             Self::Time(v) => v.canonical_lexical(),
@@ -240,7 +244,7 @@ impl core::fmt::Display for CanonicalNonNumeric<'_> {
     fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.value {
             XsdValue::Boolean(value) => output.write_str(if *value { "true" } else { "false" }),
-            XsdValue::String(value) => output.write_str(value),
+            XsdValue::String(value) | XsdValue::AnyUri(value) => output.write_str(value),
             XsdValue::DateTime(value) => core::fmt::Display::fmt(value, output),
             XsdValue::Date(value) => core::fmt::Display::fmt(value, output),
             XsdValue::Time(value) => core::fmt::Display::fmt(value, output),
@@ -303,6 +307,9 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
         D::Double => crate::numeric::parse_double(lexical).map(XsdValue::Double),
         D::Boolean => crate::simple::parse_boolean(lexical).map(XsdValue::Boolean),
         D::String => Ok(XsdValue::String(lexical.to_string())),
+        D::AnyUri => crate::simple::read_any_uri(lexical)
+            .map(|value| XsdValue::AnyUri(value.to_string()))
+            .map_err(|reason| XsdError::invalid(datatype, lexical, reason)),
         D::DateTime => temporal::parse_datetime(lexical).map(XsdValue::DateTime),
         D::DateTimeStamp => temporal::parse_datetime_stamp(lexical).map(XsdValue::DateTime),
         D::Date => temporal::parse_date(lexical).map(XsdValue::Date),
@@ -533,6 +540,10 @@ pub fn try_parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
         D::String => Ok(ParsedValue::Value(XsdValue::String(
             memory.string(lexical)?,
         ))),
+        D::AnyUri => match crate::simple::read_any_uri(lexical) {
+            Ok(value) => Ok(ParsedValue::Value(XsdValue::AnyUri(memory.format(&value)?))),
+            Err(_) => Ok(ParsedValue::Invalid(Some(ErrorCode::Forg0001))),
+        },
         D::HexBinary | D::Base64Binary => {
             use crate::binary::{BinaryPlan, BinaryReadError};
             let plan = match BinaryPlan::new(datatype, lexical) {

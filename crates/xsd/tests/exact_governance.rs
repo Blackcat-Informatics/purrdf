@@ -73,6 +73,8 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::Double, "-0.0"),
         (D::Boolean, "true"),
         (D::String, "é\ntext"),
+        (D::AnyUri, " \t../é\n path#Fragment\r "),
+        (D::AnyUri, " \t\r\n "),
         (D::HexBinary, "00aF"),
         (D::Base64Binary, " A P 8 = "),
         (D::DateTime, "2024-02-29T12:34:56Z"),
@@ -156,6 +158,7 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::Integer, "invalid"),
         (D::Decimal, "invalid"),
         (D::Boolean, "invalid"),
+        (D::AnyUri, "invalid\0"),
         (D::HexBinary, "invalid"),
         (D::Base64Binary, "invalid"),
         (D::DateTime, "invalid"),
@@ -183,6 +186,7 @@ fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
         (D::Integer, very_large_integer.as_str()),
         (D::Decimal, huge_decimal.as_str()),
         (D::String, "owned"),
+        (D::AnyUri, " \towned\r\n "),
         (D::HexBinary, "abcd"),
     ] {
         let mut allocation_budget = ParseAccount::default();
