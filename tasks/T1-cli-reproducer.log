@@ -1,0 +1,110 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling cpufeatures v0.3.0
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/lex)
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/iri)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/cdt)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/rdf-core)
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.4
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling either v1.16.0
+   Compiling libc v0.2.186
+   Compiling rayon v1.12.0
+   Compiling getrandom v0.3.4
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/stack)
+   Compiling ctutils v0.4.2
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/sparql-results)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/sparql-algebra)
+   Compiling cpubits v0.1.1
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/sparql-eval)
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling structured-zstd v0.0.49
+   Compiling ghash v0.6.0
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling proc-macro2 v1.0.106
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/gts)
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/datalog)
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-parse v1.0.0
+   Compiling anstyle-query v1.1.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle v1.0.14
+   Compiling colorchoice v1.0.5
+   Compiling anstream v1.0.0
+   Compiling syn v2.0.118
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/entail)
+   Compiling strsim v0.11.1
+   Compiling heck v0.5.0
+   Compiling clap_lex v1.1.0
+   Compiling clap_builder v4.6.0
+   Compiling clap_derive v4.6.1
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/json)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/shex)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/mime)
+   Compiling clap v4.6.1
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/alloc-probe)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/retrieval)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/geo)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/cli)
+    Finished `test` profile [optimized] target(s) in 13m 56s
+     Running tests/entails_cli.rs (/opt/.cargo/af/dad1a4b476ddf1/debug/build/purrdf-cli/32bcf7a26a7f7cde/out/entails_cli-32bcf7a26a7f7cde)
+
+running 1 test
+test consistency_decides_the_imports_closure ... FAILED
+
+failures:
+
+---- consistency_decides_the_imports_closure stdout ----
+
+thread 'consistency_decides_the_imports_closure' (3341758) panicked at crates/cli/tests/entails_cli.rs:1073:5:
+purrdf: --check-proof /opt/.cargo/af/dad1a4b476ddf1/tmp/purrdf-3341747-0-1792265216538246316/negative-proof.txt: the proof does not check: malformed OWL-DL proof term: current support does not establish the recorded inhabitant
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    consistency_decides_the_imports_closure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p purrdf-cli --test entails_cli`

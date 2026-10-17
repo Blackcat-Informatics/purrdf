@@ -1,0 +1,91 @@
+{
+  "issue": 591,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Proof replay: imported inconsistent closure does not establish its recorded inhabitant",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 590,
+      "title": "SPARQL: expose borrowed native value equality for integrity consumers",
+      "state": "OPEN"
+    },
+    {
+      "number": 588,
+      "title": "Refresh shared cross-host proof goldens for current-support encoding",
+      "state": "CLOSED"
+    },
+    {
+      "number": 558,
+      "title": "Structured access to error variants and fields, so consumers never render errors to text",
+      "state": "OPEN"
+    },
+    {
+      "number": 458,
+      "title": "purrdf-gts: composite ML-DSA-65 + Ed25519 signatures under COSE_Sign1",
+      "state": "CLOSED"
+    },
+    {
+      "number": 384,
+      "title": "Build a portable adversarial SHACL suite and contribute missing W3C tests",
+      "state": "OPEN"
+    },
+    {
+      "number": 425,
+      "title": "Keep general semantic coverage native and focus existing WASM execution on target behavior",
+      "state": "CLOSED"
+    },
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    },
+    {
+      "number": 358,
+      "title": "Expose async SERVICE resolution to JavaScript/Wasm hosts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 173,
+      "title": "feat(entail): close the 16 ledgered W3C OWL 2 RL entailment-corpus gaps",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "missing-intrinsic-runtime": 1,
+    "proof-artifact-drift": 1,
+    "proof-premise-reachability": 1,
+    "correctness": 3,
+    "none": 20,
+    "performance": 2,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [
+      {
+        "number": 592,
+        "title": "Expose borrowed native SPARQL value equality",
+        "state": "MERGED",
+        "url": "https://github.com/Blackcat-Informatics/purrdf/pull/592",
+        "this_stage": false
+      }
+    ],
+    "own_branch": "paudley/591-proof-replay-imported-inconsistent"
+  },
+  "coverage": [
+    "issue #591 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Proof', 'replay:', 'imported']: 9 other item(s)",
+    "GhpRsq-Defect-Class trailers: 8 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #591 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #591: 1",
+    "requirement candidates: 1 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 3 path(s) (2 on disk), 0 identifier(s), 0 workspace package(s), 1 URL(s)"
+  ]
+}

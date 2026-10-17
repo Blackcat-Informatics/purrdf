@@ -1,0 +1,10 @@
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/cli)
+    Finished `test` profile [optimized] target(s) in 3m 42s
+     Running tests/entails_cli.rs (/opt/.cargo/af/dad1a4b476ddf1/debug/build/purrdf-cli/32bcf7a26a7f7cde/out/entails_cli-32bcf7a26a7f7cde)
+
+running 1 test
+test consistency_decides_the_imports_closure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.11s
+

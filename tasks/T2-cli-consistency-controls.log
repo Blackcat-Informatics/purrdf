@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.90s
+     Running tests/entails_cli.rs (/opt/.cargo/af/dad1a4b476ddf1/debug/build/purrdf-cli/32bcf7a26a7f7cde/out/entails_cli-32bcf7a26a7f7cde)
+
+running 1 test
+test consistency_decides_the_imports_closure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.12s
+

@@ -1,0 +1,31 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/entail)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/591-proof-replay-imported-inconsistent/crates/cli)
+    Finished `test` profile [optimized] target(s) in 5m 33s
+     Running tests/entails_cli.rs (/opt/.cargo/af/dad1a4b476ddf1/debug/build/purrdf-cli/32bcf7a26a7f7cde/out/entails_cli-32bcf7a26a7f7cde)
+
+running 1 test
+test consistency_decides_the_imports_closure ... FAILED
+
+failures:
+
+---- consistency_decides_the_imports_closure stdout ----
+
+thread 'consistency_decides_the_imports_closure' (3710067) panicked at crates/cli/tests/entails_cli.rs:1073:5:
+replay probe: recorded frame [Individual(85)], replayed frame [Individual(87)]; recorded facts [Concept { node: Individual(85), concept: 1 }], replayed facts [Concept { node: Individual(87), concept: 1 }]
+replay probe: recorded id 85 in consumer source: Iri("http://www.w3.org/2002/07/owl#imports")
+replay probe: replayed id 87 in consumer source: Iri("http://example.org/tom")
+purrdf: --check-proof /opt/.cargo/af/dad1a4b476ddf1/tmp/purrdf-3710042-0-1792265648959312818/negative-proof.txt: the proof does not check: malformed OWL-DL proof term: current support does not establish the recorded inhabitant
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    consistency_decides_the_imports_closure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.22s
+
+error: test failed, to rerun pass `-p purrdf-cli --test entails_cli`

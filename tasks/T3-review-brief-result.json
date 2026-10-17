@@ -1,0 +1,20 @@
+{
+  "issue": 591,
+  "branch": "paudley/591-proof-replay-imported-inconsistent",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "c86272091f5b7a12b9603883724564fe87ee091c",
+      "subject": "Fix imported proof checking against resolved source snapshots",
+      "date": "2026-10-17"
+    }
+  ],
+  "files": [
+    "Makefile",
+    "crates/cli/src/consistency.rs",
+    "crates/validate/src/regime.rs",
+    "crates/validate/tests/dl_proof_vectors.rs",
+    "docs/WASM_TESTING.md"
+  ],
+  "adrs_touched": []
+}
