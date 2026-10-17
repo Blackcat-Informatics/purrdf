@@ -409,6 +409,116 @@ fn control_and_load_errors_keep_native_causes_and_genuine_messages() {
     );
 }
 
+fn actual_load_configuration_and_false_stop_keep_their_native_causes() {
+    use purrdf_core::{RdfDataset, SparqlRequest};
+    use purrdf_sparql_eval::{
+        GraphResolveRequest, GraphResolver, LoadError, NativeSparqlEngine, QueryGovernors,
+        QueryOptions,
+    };
+    use std::sync::Arc;
+
+    struct FalseStop;
+    impl GraphResolver for FalseStop {
+        fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError> {
+            assert_eq!(request.iri, "https://example.org/document");
+            assert!(request.stop.is_none(), "this request has no stop signal");
+            Err(LoadError::Governed(TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled,
+            }))
+        }
+    }
+
+    let engine = NativeSparqlEngine::new();
+    for text in [
+        "LOAD <https://example.org/document>",
+        "LOAD SILENT <https://example.org/document>",
+    ] {
+        let mut data = support::empty_dataset();
+        let error = engine
+            .update_with_options(
+                &mut data,
+                SparqlRequest {
+                    query: text,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::EMPTY.with_load(Some(&FalseStop)),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "native-sparql-load-stopped");
+        let retained = error.clone();
+        drop(error);
+        drop(data);
+        let cause = retained
+            .native_cause()
+            .expect("the host's original stop report");
+        let original = (cause as &dyn std::error::Error)
+            .downcast_ref::<LoadError>()
+            .unwrap();
+        assert_eq!(
+            *original,
+            LoadError::Governed(TrippedGovernor::Stopped {
+                cause: StopCause::Cancelled
+            })
+        );
+        let buffer = Vec::with_capacity(8);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(cause, buffer);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(
+            fields.child("governor").child("cause").code,
+            "stop-cancelled"
+        );
+    }
+
+    let mut data = support::empty_dataset();
+    let error = engine
+        .update_with_options(
+            &mut data,
+            SparqlRequest {
+                query: "LOAD <https://example.org/document>",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "native-sparql-load-no-resolver");
+    assert_eq!(
+        error.message,
+        "LOAD <https://example.org/document> needs a GraphResolver host seam, none was provided"
+    );
+    let outcome = engine
+        .update_governed(
+            &mut data,
+            SparqlRequest {
+                query: "LOAD SILENT <https://example.org/document>",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
+        .unwrap();
+    assert!(outcome.tripped().is_none());
+    let receipts = outcome.evidence().silenced().to_vec();
+    drop(outcome);
+    drop(engine);
+    drop(data);
+    assert_eq!(receipts.len(), 1);
+    for cause in [error.native_cause().unwrap(), receipts[0].cause().unwrap()] {
+        let buffer = Vec::with_capacity(4);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(cause, buffer);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(fields.code, "load-resolver-missing");
+        assert!(matches!(
+            fields.field("source"),
+            ErrorValue::Iri("https://example.org/document")
+        ));
+    }
+}
+
 fn native_protocol_resource_refusals_remain_allocation_free() {
     use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
     use purrdf_sparql_eval::protocol::{OperationKind, ProtocolError, ProtocolReason};
@@ -3280,5 +3390,6 @@ purrdf_testkit::harness_main!(
     query_admission_refusals_keep_the_original_version_and_basic_construct,
     application_policy_failures_keep_native_reason_identity,
     control_and_load_errors_keep_native_causes_and_genuine_messages,
+    actual_load_configuration_and_false_stop_keep_their_native_causes,
     native_protocol_resource_refusals_remain_allocation_free,
 );

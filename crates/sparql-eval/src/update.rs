@@ -941,6 +941,42 @@ fn admit_where<D: purrdf_core::DatasetView + Sync>(
 
 // ── LOAD ─────────────────────────────────────────────────────────────────────
 
+#[derive(Debug)]
+struct MissingLoadResolver {
+    source: purrdf_lex::allocation::SharedText,
+}
+
+impl purrdf_hash::error::StructuredError for MissingLoadResolver {
+    purrdf_hash::error_visit! {
+        @record self { source } => "load-resolver-missing" {
+            "source" => Iri(self.source.as_str()),
+        }
+    }
+}
+
+impl core::fmt::Display for MissingLoadResolver {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "LOAD <{}> needs a GraphResolver host seam, none was provided",
+            self.source
+        )
+    }
+}
+
+impl std::error::Error for MissingLoadResolver {}
+
+fn retain_load_cause(
+    cause: impl purrdf_hash::error::NativeError + 'static,
+) -> Result<purrdf_core::diagnostic::DiagnosticCause, RdfDiagnostic> {
+    crate::retained::PreparedDiagnosticCause::new(
+        cause,
+        crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident()),
+    )
+    .and_then(crate::retained::PreparedDiagnosticCause::publish)
+    .map_err(|error| crate::engine::EvaluationFailure::from(error).into_diagnostic())
+}
+
 /// `LOAD [SILENT] <iri> [INTO GRAPH <iri>]`.
 ///
 /// # The stop signal is polled before the host is asked for anything
@@ -975,13 +1011,19 @@ fn load(
 ) -> Result<(), UpdateAbort> {
     let governors = cfg.governors;
     let Some(resolver) = resolver else {
-        let message = format!("LOAD <{source}> needs a GraphResolver host seam, none was provided");
+        let reason = MissingLoadResolver {
+            source: crate::WorkspaceCapability::resident()
+                .authored_text(source)
+                .map_err(|error| crate::engine::EvaluationFailure::from(error).into_diagnostic())?,
+        };
+        let message = reason.to_string();
+        let cause = retain_load_cause(reason)?;
         return silence_or_fail(
             silent,
             source,
             purrdf_core::SilencedKind::Unconfigured,
             RdfDiagnostic::error("native-sparql-load-no-resolver", message),
-            None,
+            Some(cause),
             governors,
         );
     };
@@ -1009,7 +1051,18 @@ fn load(
                     (None, Some(state), LoadError::Governed(governor)) => {
                         UpdateAbort::Tripped(state.record_trip(governor))
                     }
-                    _ => UpdateAbort::Failed(diagnostic),
+                    (None, _, error) => {
+                        let cause = retain_load_cause(error)?;
+                        let diagnostic = diagnostic
+                            .with_native_cause(
+                                cause,
+                                &mut purrdf_lex::allocation::Memory::new(
+                                    &mut purrdf_lex::allocation::Resident,
+                                ),
+                            )
+                            .map_err(RdfDiagnostic::from)?;
+                        UpdateAbort::Failed(diagnostic)
+                    }
                 });
             };
             // Under `SILENT` the failure is erased, so a stop that fired during the same
@@ -1017,12 +1070,7 @@ fn load(
             if silent && let Some(tripped) = post_return_trip {
                 return Err(tripped);
             }
-            let cause = crate::retained::PreparedDiagnosticCause::new(
-                error,
-                crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident()),
-            )
-            .and_then(crate::retained::PreparedDiagnosticCause::publish)
-            .map_err(|error| crate::engine::EvaluationFailure::from(error).into_diagnostic())?;
+            let cause = retain_load_cause(error)?;
             return silence_or_fail(silent, source, kind, diagnostic, Some(cause), governors);
         }
     };
