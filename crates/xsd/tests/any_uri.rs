@@ -29,8 +29,15 @@ fn lexical_mapping_preserves_everything_except_xml_whitespace() {
         );
     }
     for lexical in ["a\0b", "\u{b}", "\u{1f}", "\u{fffe}", "\u{ffff}"] {
-        assert!(parse(lexical, D::AnyUri).is_err(), "{lexical:?}");
+        for datatype in [D::String, D::AnyUri] {
+            assert!(
+                parse(lexical, datatype).is_err(),
+                "{datatype:?} {lexical:?}"
+            );
+        }
     }
+    let text = " \té\r\n 文\u{a0} ";
+    assert_eq!(parse(text, D::String).unwrap().canonical_lexical(), text);
 }
 
 fn primitive_identity_is_disjoint_and_unordered() {
