@@ -88,8 +88,9 @@ replaces a recursive reference with an empty shape or skips its constraints.
 This is an explicit failure policy, permitted by
 [SHACL Core §6.6.3](https://www.w3.org/TR/shacl12-core/#shapes-recursion).
 It does not assign least- or greatest-fixed-point semantics to recursive
-shapes; the [sheval study](https://labra.weso.es/pdf/2026_sheval_DMKG26.pdf)
-explains how those semantics can produce different answers.
+shapes. Ahmetaj et al.'s *sheval* study compares recursive-shape
+implementations,[^sheval] and their *Common Foundations for Recursive Shape
+Languages* develops the semantics and LFP/GFP duality.[^recursive-foundations]
 
 Deep acyclic parsing and recursive validation also check the available stack.
 Node-expression evaluation retains its structural and function re-entry
@@ -1619,3 +1620,21 @@ shapes graph: over every first-party and W3C shapes graph and a set of
 generated mutants, it refuses a graph exactly when `shacl-shacl.ttl` reports a
 violation, apart from named cases. See
 [Conformance & Testing](../project/conformance.md).
+
+## References
+
+[^sheval]: Shqiponja Ahmetaj, Iovka Boneva, Jan Hidders, Maxime Jakubowski,
+    Jose-Emilio Labra-Gayo, Wim Martens, Filip Murlak, Cem Okulmus,
+    Ognjen Savković, Mantas Šimkus, and Dominik Tomaszuk.
+    “[sheval: An RDF data shapes evaluation tool and test-suite for recursive
+    shapes](https://labra.weso.es/pdf/2026_sheval_DMKG26.pdf).”
+    2nd International Workshop on Data Management for Knowledge Graphs
+    (DMKG 2026), 2026.
+
+[^recursive-foundations]: Shqiponja Ahmetaj, Iovka Boneva, Jan Hidders,
+    Maxime Jakubowski, Jose-Emilio Labra-Gayo, Wim Martens, Fabio Mogavero,
+    Filip Murlak, Cem Okulmus, Ognjen Savkovic, Mantas Šimkus, and
+    Dominik Tomaszuk. “[Common Foundations for Recursive Shape Languages](https://doi.org/10.24963/kr.2026/1).”
+    In *Proceedings of the 23rd
+    International Conference on Principles of Knowledge Representation and
+    Reasoning* (KR 2026), pp. 2–13. IJCAI Organization, 2026.
