@@ -1,0 +1,111 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling typenum v1.20.1
+   Compiling libc v0.2.186
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/hash)
+   Compiling regex-syntax v0.8.11
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/stack)
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/testkit)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/lex)
+    Finished `test` profile [optimized] target(s) in 15.75s
+     Running unittests src/lib.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/fe1d3e916639c520/out/purrdf_lex-fe1d3e916639c520)
+
+running 27 tests
+test terminals::tests::an_alphabetic_scalar_is_not_thereby_an_xml_name_start_char ... ok
+test terminals::tests::every_predicate_is_usable_in_const_context ... ok
+test terminals::tests::json_string_forbidden_is_exactly_the_complement_of_unescaped ... ok
+test terminals::tests::no_break_space_is_neither_whitespace_nor_a_name_character ... ok
+test terminals::tests::lut_matches_ranges ... ok
+test terminals::tests::pn_local_esc_refuses_the_punctuation_beside_the_members_it_names ... ok
+test terminals::tests::the_combining_block_continues_an_xml_name_and_never_opens_one ... ok
+test terminals::tests::the_iriref_content_class_is_wrong_in_both_directions_under_is_control ... ok
+test terminals::tests::the_holes_in_pn_chars_base_are_real ... ok
+test terminals::tests::the_name_heads_refuse_what_only_their_tails_admit ... ok
+test terminals::tests::varname_excludes_the_hyphen_pn_chars_admits ... ok
+test terminals::tests::varname_is_position_dependent ... ok
+test terminals::tests::ws_is_exactly_four_code_points ... ok
+test terminals::tests::ws_is_not_ascii_whitespace ... ok
+test terminals::tests::ws_never_matches_a_utf8_continuation_or_lead_byte ... ok
+test terminals::tests::ws_char_is_the_four_members_and_nothing_that_merely_looks_like_them ... ok
+test terminals::tests::ecma_class_space_is_white_space_and_line_terminators ... ok
+test terminals::tests::unicode_white_space_is_the_unicode_property_on_every_scalar ... ok
+test terminals::tests::an_xml_name_starts_with_a_narrower_class_than_it_continues_with ... ok
+test terminals::tests::the_char_lift_of_a_byte_production_agrees_on_every_scalar ... ok
+test terminals::tests::pn_local_esc_is_exactly_the_twenty_scalars_the_production_lists ... ok
+test terminals::tests::xml_name_start_char_is_pn_chars_base_plus_exactly_the_colon_and_underscore ... ok
+test terminals::tests::no_two_head_classes_in_this_grammar_are_the_same_class ... ok
+test terminals::tests::tables_agree_with_an_independent_transcription ... ok
+test terminals::tests::xml_name_char_is_pn_chars_plus_exactly_the_colon_and_the_dot ... ok
+test terminals::tests::the_classes_nest_the_way_the_grammar_nests_them ... ok
+test terminals::tests::every_range_accessor_agrees_with_its_predicate_over_all_scalars ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 285 filtered out; finished in 0.08s
+
+     Running tests/frozen_vectors.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/e691fc652eba4d6f/out/frozen_vectors-e691fc652eba4d6f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/html.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/4fbd87ba9b5cadd0/out/html-4fbd87ba9b5cadd0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/json_test_suite.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/0ff854a75eb0d1b5/out/json_test_suite-0ff854a75eb0d1b5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/json_value_equality.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/43613891f3cef5e8/out/json_value_equality-43613891f3cef5e8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/unicode_aligned.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/f214858c06383e40/out/unicode_aligned-f214858c06383e40)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/unicode_normalization.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/8fc5a3cffe10cae0/out/unicode_normalization-8fc5a3cffe10cae0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/xmlconf.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/517480616f19b3df/out/xmlconf-517480616f19b3df)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/yaml_reader_edges.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/e5423b97e9fb5eec/out/yaml_reader_edges-e5423b97e9fb5eec)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+     Running tests/yaml_scalar_keys.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/4e0bc96226987a7d/out/yaml_scalar_keys-4e0bc96226987a7d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/yaml_test_suite.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-lex/bb73530d241d42ec/out/yaml_test_suite-bb73530d241d42ec)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

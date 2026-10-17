@@ -1,0 +1,73 @@
+   Compiling const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/rdf-core)
+   Compiling cmov v0.5.4
+   Compiling rayon-core v1.13.0
+   Compiling hashbrown v0.17.1
+   Compiling cpubits v0.1.1
+   Compiling either v1.16.0
+   Compiling getrandom v0.3.4
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling visual-hashing v1.0.0
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling regex-automata v0.4.14
+   Compiling inout v0.2.2
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/deflate)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/iri)
+   Compiling structured-zstd v0.0.49
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling ctutils v0.4.2
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/ed25519)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/testkit)
+   Compiling polyval v0.7.3
+   Compiling crossbeam-deque v0.8.6
+   Compiling ghash v0.6.0
+   Compiling regex v1.12.4
+   Compiling rayon v1.12.0
+   Compiling aes-gcm v0.11.1
+   Compiling syn v2.0.118
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/gts)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/jsonschema)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/datalog)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 5m 29s
+     Running tests/w3c12_conformance.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-shapes/8deba2fbc575cae8/out/w3c12_conformance-8deba2fbc575cae8)
+
+running 16 tests
+test a_stale_unlisted_file_delta_is_refused ... ok
+test canonical_substitution_is_scoped_to_the_table ... ok
+test comparator_is_exact_term_equality ... ok
+test comparator_order_and_cardinality ... ok
+test xfail_ledger_is_empty ... ok
+test engine_emits_the_canonical_decimal_lexical_form ... ok
+test the_grader_grades_the_source_shape_both_ways ... ok
+test the_grader_grades_result_annotations_both_ways ... ok
+test a_listed_entry_is_never_amended ... ok
+test non_canonical_expectations_are_really_non_canonical ... ok
+test w3c_shacl12_unlisted_vendored_files ... ok
+test the_grader_grades_sh_detail_where_it_is_stated ... ok
+test unlisted_file_deltas_are_exact ... ok
+test validator_001_passes_in_both_suites_with_no_import_supplied ... ok
+test every_planned_inventory_id_passes ... ok
+test w3c_shacl12_conformance ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+

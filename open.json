@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 577,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently",
+  "branch": "paudley/577-select-xml-1-1-characters-consistently",
+  "slug": "select-xml-1-1-characters-consistently",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/.stage/select-xml-1-1-characters-consistently",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "f1ad5dfb634fc20622daa082a6bc2238d9a92789",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently",
+    "branch:paudley/577-select-xml-1-1-characters-consistently",
+    "stage:/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/.stage/select-xml-1-1-characters-consistently",
+    "issue:/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/.stage/select-xml-1-1-characters-consistently/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-17T06:02:54-0600"
+}

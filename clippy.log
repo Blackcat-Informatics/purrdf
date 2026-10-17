@@ -1,0 +1,18 @@
+    Blocking waiting for file lock on build directory
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/hash)
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+    Checking regex-syntax v0.8.11
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/alloc-probe)
+   Compiling libc v0.2.186
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/lex)
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/stack)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/testkit)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/xsd)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 7.57s

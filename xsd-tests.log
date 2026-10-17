@@ -1,0 +1,766 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/alloc-probe)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/577-select-xml-1-1-characters-consistently/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 1m 01s
+     Running unittests src/lib.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/1faeafff57fb3cc8/out/purrdf_xsd-1faeafff57fb3cc8)
+
+running 413 tests
+test bigint::arithmetic_tests::tests::pow_gcd_and_decimal_shapes ... ok
+test bigint::scratch::native_owner_tests::native_arena_admits_before_birth_and_preserves_original_refusal ... ok
+test bigint::scratch::native_owner_tests::packed_arena_partial_birth_destroys_payload_before_refunding_owner ... ok
+test bigint::scratch::native_owner_tests::original_arena_owner_survives_handle_drop_and_last_numeric_clone ... ok
+test bigint::scratch::tests::held_immutable_values_refuse_without_fallback_and_return_last_slot ... ok
+test bigint::scratch::tests::inline_capability_executes_the_native_product_and_division_without_heap_storage ... ok
+test bigint::scratch::tests::unused_arena_requires_the_last_worker_handle_and_last_immutable_destination ... ok
+test bigint::scratch::tests::working_set_preflight_counts_shared_live_values_without_allocating ... ok
+test bigint::scratch::tests::full_worker_arena_has_constant_birth_allocations_and_exact_live_layout ... ok
+test bigint::scratch::tests::values_outlive_context_and_concurrent_final_drops_recycle_destination ... ok
+test bigint::tests::admitted_ratio_roots_match_and_refuse_without_heap_fallback ... ok
+test bigint::tests::decimal_byte_parser_validates_without_a_string_intermediate ... ok
+test bigint::tests::detaching_owned_coefficients_returns_their_reusable_destinations ... ok
+test bigint::tests::common_normalized_division_and_gcd_keep_inline_storage ... ok
+test bigint::tests::inline_magnitude_survives_carry_borrow_and_spill ... ok
+test bigint::tests::inplace_binary_gcd_preserves_exact_common_factors ... ok
+test bigint::scratch::tests::bounded_original_arithmetic_matches_unbounded_without_allocating ... ok
+test bigint::tests::normalized_division_corrects_estimate_and_addback_edges ... ok
+test bigint::tests::scaled_rational_square_root_is_exact_at_boundaries ... ok
+test bigint::tower_tests::tests::addition_is_commutative_and_order_independent ... ok
+test bigint::tower_tests::tests::adds_within_i128_exactly ... ok
+test bigint::tower_tests::tests::cancels_back_into_i128_range ... ok
+test bigint::tower_tests::tests::div_rem_u64_matches_i128_division_within_i128_range ... ok
+test bigint::tests::binary_grid_division_matches_reconstruction_across_limb_edges ... ok
+test bigint::tower_tests::tests::div_rem_u64_rejects_zero_divisor ... ok
+test bigint::tower_tests::tests::exceeds_i128_and_still_renders_exactly ... ok
+test bigint::arithmetic_tests::tests::div_rem_reconstructs_the_dividend ... ok
+test bigint::tower_tests::tests::from_binary_writes_dyadic_values_out_in_full ... ok
+test bigint::tower_tests::tests::from_digits_reads_signed_digit_runs_and_refuses_anything_else ... ok
+test bigint::tower_tests::tests::float_conversions_overflow_exactly_at_the_rounding_boundary ... ok
+test bigint::tower_tests::tests::from_u128_reaches_the_magnitude_no_i128_can_hold ... ok
+test bigint::tower_tests::tests::mul_pow10_is_exact_across_a_limb_boundary ... ok
+test bigint::tower_tests::tests::mul_and_rem_match_i128_arithmetic ... ok
+test bigint::tower_tests::tests::mul_pow10_then_div_rem_u64_reproduces_exact_decimal_division ... ok
+test bigint::tower_tests::tests::mul_pow2_is_exact_across_chunk_boundaries ... ok
+test bigint::tower_tests::tests::mul_pow5_and_mul_pow2_compose_to_mul_pow10 ... ok
+test bigint::tower_tests::tests::negative_exceeds_i128_and_still_renders_exactly ... ok
+test bigint::tower_tests::tests::ord_agrees_with_i128_and_survives_the_i128_ceiling ... ok
+test bigint::tower_tests::tests::parity_and_negation ... ok
+test bigint::tower_tests::tests::pinned_horner_witness_rounds_correctly ... ok
+test bigint::tower_tests::tests::roundtrips_i128_extremes ... ok
+test bigint::tower_tests::tests::rem_by_a_multi_limb_divisor_recovers_the_remainder ... ok
+test bigint::tower_tests::tests::to_decimal_lexical_exceeds_i128_and_still_renders_exactly ... ok
+test bigint::tower_tests::tests::to_decimal_lexical_matches_decimal_canonical_lexical_shape ... ok
+test bigint::tower_tests::tests::to_f32_rounds_once_where_narrowing_to_f64_would_round_twice ... ok
+test bigint::tower_tests::tests::zero_is_canonical ... ok
+test binary::tests::base64_aaaa_is_zero_bytes ... ok
+test binary::tests::base64_bad_char_at_sign_is_error ... ok
+test binary::tests::base64_canonical_empty ... ok
+test binary::tests::base64_canonical_man ... ok
+test binary::tests::base64_canonical_one_pad ... ok
+test binary::tests::base64_canonical_two_pads ... ok
+test binary::tests::base64_empty ... ok
+test binary::tests::base64_four_equals_is_error ... ok
+test binary::tests::base64_full_alphabet_round_trip ... ok
+test binary::tests::base64_length_not_multiple_of_4_is_error ... ok
+test binary::tests::base64_m_with_two_pads ... ok
+test binary::tests::base64_ma_with_one_pad ... ok
+test binary::tests::base64_man ... ok
+test binary::tests::base64_over_pad_is_error ... ok
+test binary::tests::base64_internal_pad_is_error ... ok
+test binary::tests::base64_padding_bits_must_be_zero ... ok
+test binary::tests::base64_whitespace_only_is_empty ... ok
+test binary::tests::base64_whitespace_tolerant_mid ... ok
+test binary::tests::base64_whitespace_tolerant_newline ... ok
+test binary::tests::canonical_base64_matches_the_rfc_4648_test_vectors ... ok
+test binary::tests::hex_all_byte_values_round_trip ... ok
+test binary::tests::hex_bad_char_is_error ... ok
+test binary::tests::hex_canonical_is_uppercase ... ok
+test binary::tests::hex_canonical_of_lowercase_input ... ok
+test binary::tests::hex_case_insensitive_value_equality ... ok
+test binary::tests::hex_decode_basic ... ok
+test binary::tests::hex_decode_empty ... ok
+test binary::tests::hex_decode_lowercase ... ok
+test binary::tests::hex_odd_length_is_error ... ok
+test binary::tests::hex_whitespace_is_error ... ok
+test binary::tests::hex_zz_is_error ... ok
+test binary::tests::parse_binary_dispatches_base64 ... ok
+test binary::tests::parse_binary_dispatches_hex ... ok
+test binary::tests::parse_binary_wrong_datatype_is_error ... ok
+test datatype::tests::integer_range_table ... ok
+test datatype::tests::iri_constants_are_byte_exact ... ok
+test datatype::tests::iri_round_trips_for_every_datatype ... ok
+test datatype::tests::non_xsd_iri_is_none ... ok
+test datatype::tests::vocabulary_constants_are_namespace_plus_local_name ... ok
+test decimal_float::tests::f32_rounds_once_where_narrowing_f64_rounds_twice ... ok
+test decimal_float::tests::pinned_two_rounding_witness_rounds_correctly ... ok
+test decimal_float::tests::the_old_two_rounding_conversion_is_refused_and_the_new_one_matches ... ok
+test decimal_float::tests::zero_is_positive_zero_at_every_scale ... ok
+test exact::certified_cost::rational_scan_is_linear_borrowed_and_checked_before_branch_selection ... ok
+test exact::certified_cost::tests::asymmetric_rational_widths_bound_each_original_gcd ... ok
+test exact::certified_cost::tests::binary64_factory_cost_bounds_extreme_original_owners ... ok
+test exact::certified_cost::tests::complete_reduction_and_decimal_power_costs_grow_before_construction ... ok
+test exact::certified_cost::tests::difference_interval_cost_encloses_all_live_original_products ... ok
+test exact::certified_cost::tests::division_and_nonunit_denominators_retain_complete_normalization ... ok
+test exact::certified_cost::tests::dyadic_factory_cost_encloses_both_shifted_outputs_without_gcd_work ... ok
+test exact::certified_cost::tests::individual_pairs_do_not_promote_the_smaller_rational_to_the_other_width ... ok
+test exact::certified_cost::tests::integer_shapes_admit_only_proved_early_exit_branches ... ok
+test exact::certified_cost::tests::mantissa_rounding_admits_arithmetic_without_unperformed_text_rendering ... ok
+test exact::certified_cost::tests::ratio_root_cost_uses_exact_quotient_width_and_bounds_live_scratch ... ok
+test exact::certified_cost::tests::scaled_integer_admission_bounds_prime_cancellation_and_checked_storage ... ok
+test exact::certified_cost::tests::square_root_admission_encloses_original_result_width_and_live_values ... ok
+test exact::cost::comparison_bounds_tests::extreme_digit_and_scale_bounds_preserve_containment ... ok
+test exact::decimal::physical_render_tests::decimal_group_and_output_refusals_keep_the_original_prefix_and_account ... ok
+test exact::decimal::physical_render_tests::decimal_groups_share_spelling_and_release_only_destroyed_scratch ... ok
+test exact::rational::certified::arithmetic_tests::binary64_birth_preserves_exact_values_and_refuses_without_fallback ... ok
+test exact::rational::certified::arithmetic_tests::canonical_cancellation_preserves_cross_product_oracle_and_all_signs ... ok
+test ieee::dyadic::tests::every_normal_power_of_two_has_one_significand ... ok
+test ieee::dyadic::tests::finite_fields_normalize_without_losing_zero_sign ... ok
+test ieee::control::tests::mxcsr_restores_nested_scopes_and_unwinding ... ok
+test ieee::environment::tests::mxcsr_departures_return_register_evidence_and_restore ... ok
+test exact::rational::certified::arithmetic_tests::canonical_native_cancellation_uses_only_prepared_original_destinations ... ok
+test ieee::environment::tests::the_required_environment_passes_every_probe ... ok
+test ieee::environment::tests::unmasked_traps_are_refused_before_any_exception_probe ... ok
+test ieee::ratio::tests::binary64_halfway_normal_and_subnormal_neighbors ... ok
+test ieee::ratio::tests::both_widths_round_overflow_midpoint_and_directed_neighbors ... ok
+test ieee::ratio::tests::canonical_dyadic_ratios_preserve_signed_values_and_reuse_bounded_storage ... ok
+test ieee::ratio::tests::bounded_binary64_preserves_ties_directed_edges_and_signed_underflow ... ok
+test ieee::ratio::tests::signed_integer_ties_use_one_symmetric_law ... ok
+test bigint::tower_tests::tests::the_old_horner_conversion_is_refused_and_the_new_one_matches_the_oracle ... ok
+test ieee::ratio::tests::gross_range_refusal_is_bounded_and_zero_denominator_sign_is_explicit ... ok
+test ieee::tests::every_binary32_witness_rounds_twice_at_24_bits_and_once_under_the_scope ... ok
+test ieee::tests::every_binary64_witness_rounds_twice_through_the_register_and_once_under_the_scope ... ok
+test ieee::ratio::tests::rational_order_keys_are_monotone_with_exact_ties_and_bounded_storage ... ok
+test ieee::tests::the_significand_power_model_reproduces_the_published_misreadings ... ok
+test json_number::tests::a_bare_point_is_refused_and_a_digit_after_it_accepted ... ok
+test json_number::tests::a_leading_plus_is_refused_and_the_unsigned_spelling_accepted ... ok
+test json_number::tests::an_empty_exponent_is_refused_and_a_signed_one_accepted ... ok
+test ieee::tests::the_reference_rounds_twice_the_way_the_x87_does ... ok
+test json_number::tests::a_leading_zero_before_digits_is_refused_and_a_lone_zero_accepted ... ok
+test json_number::tests::close_values_are_ordered_exactly ... ok
+test json_number::tests::counts_saturate ... ok
+test json_number::tests::exact_divisibility ... ok
+test json_number::tests::integrality_is_decided_by_value_not_spelling ... ok
+test math::roots::tests::exact_source_witness_proves_closed_boundary_despite_outward_residual ... ok
+test math::roots::tests::unrounded_inverse_family_completes_against_conditioning_not_decimal_grid ... ok
+test math::roots::tests::inverse_completion_refuses_negative_proof_widths_on_both_output_laws ... ok
+test math::roots::tests::inverse_family_arithmetic_floor_is_explicit_and_never_changes_final_rounding ... ok
+test math::matrix::tests::nonorthogonal_inverse_is_certified_and_singular_matrices_refuse ... ok
+test math::taylor::scratch::native_owner_tests::native_taylor_original_owner_survives_all_shallow_handle_clones ... ok
+test math::roots::tests::derivative_composition_and_actual_inverse_share_outward_arithmetic ... ok
+test bigint::tests::normalized_division_reconstructs_all_limb_normalizations ... ok
+test math::roots::tests::cancellation_and_depth_refuse_without_partial_roots_and_release_workspace ... ok
+test math::taylor::scratch::native_owner_tests::unrepresentable_taylor_layout_never_calls_the_factory_or_original_admission ... ok
+test math::taylor::tests::a_larger_child_pool_preserves_the_borrowed_parent_receipt ... ok
+test math::fixed::sum::tests::replacing_retained_panels_preserves_exact_complete_bounds ... ok
+test math::taylor::scratch::native_owner_tests::original_taylor_refusal_precedes_every_buffer_birth ... ok
+test math::roots::tests::complete_isolation_keeps_both_roots_and_proves_no_root ... ok
+test math::taylor::tests::complete_symmetric_panel_integrates_exact_polynomial_and_bounds_remainder ... ok
+test math::taylor::tests::exact_sine_coefficients_and_derivative_enclosures ... ok
+test json_number::tests::equal_values_hash_alike ... ok
+test math::fixed::sum::tests::refusal_preserves_accumulator_and_exact_grid ... ok
+test math::taylor::tests::stale_handles_and_failure_release_admitted_pool ... ok
+test math::taylor::tests::pool_observation_precedes_allocation_and_nested_checkout_refuses ... ok
+test math::taylor::tests::unwinding_returns_and_clears_the_complete_checkout ... ok
+test ieee::ratio::tests::directed_product_integer_rounding_matches_signed_euclidean_quotients ... ok
+test math::taylor::tests::differential_recurrence_retains_state_and_invalidates_rewound_sources ... ok
+test math::roots::tests::caller_root_storage_keeps_complete_order_and_clears_every_refusal ... ok
+test math::taylor::tests::correlated_square_and_composite_derivatives_cover_singularity_neighbors ... ok
+test math::tests::borrowed_arena_context_construction_allocates_no_integer_temporary ... ok
+test json_number::tests::equal_values_with_different_spellings_compare_equal ... ok
+test json_number::tests::text_outside_the_grammar_is_refused_and_a_number_accepted ... ok
+test math::tests::admission_and_cancellation_never_return_partial_values ... ok
+test math::tests::controlled_float_intervals_and_expansion_residuals_cover_exact_rationals ... ok
+test math::tests::exact_cost_refuses_before_charging_or_retaining_failed_scratch ... ok
+test math::tests::directed_decimal_interval_rounding_preserves_signs_exact_boundaries_and_ties ... ok
+test math::tests::exact_zero_trigonometry_keeps_structural_zeros_and_admission ... ok
+test math::tests::fixed_proposals_approximate_the_exact_midpoint_without_allocation ... ok
+test math::tests::dyadic_powers_use_exact_grid_endpoints_and_refuse_growth_before_allocation ... ok
+test math::floating::packed::tests::forced_available_paths_preserve_every_product_and_outward_endpoint_bit ... ok
+test math::roots::tests::closed_original_boundary_is_retained ... ok
+test math::tests::integer_endpoint_floors_and_ceilings_include_signed_exact_boundaries ... ok
+test math::tests::fast_series_remainder_bounds_follow_integer_inequalities ... ok
+test math::tests::floor_bounds_keep_negative_noninteger_and_exact_boundary_order ... ok
+test math::tests::insufficient_scale_destination_restores_the_owned_scratch_reservation ... ok
+test math::tests::pooled_interval_workspace_counts_the_original_arena_once ... ok
+test math::tests::outward_binary64_conversion_keeps_extremes_and_subnormal_bits_exact ... ok
+test math::tests::outward_signed_arithmetic_and_half_even_rounding ... ok
+test ieee::tests::every_successor_midpoint_is_exact ... ok
+test bigint::arithmetic_tests::tests::karatsuba_agrees_with_schoolbook_across_the_threshold ... ok
+test numeric::tests::a_float_operand_is_compared_as_the_dyadic_rational_it_is ... ok
+test numeric::tests::add_decimal_float_promotes_to_float ... ok
+test numeric::tests::add_integer_overflow ... ok
+test decimal_float::tests::f32_subnormals_round_once ... ok
+test numeric::tests::add_integer_integer ... ok
+test numeric::tests::an_integer_beyond_the_double_significand_stays_distinct ... ok
+test numeric::tests::bigint_avg_answers_when_the_dividend_exceeds_i128_but_the_quotient_does_not ... ok
+test ieee::ratio::tests::fused_product_rounding_matches_full_exact_product_at_signed_ties ... ok
+test numeric::tests::bigint_avg_poisons_when_the_mantissa_still_does_not_fit_i128 ... ok
+test numeric::tests::add_integer_double_promotes_to_double ... ok
+test numeric::tests::bigint_avg_matches_numeric_div_within_i128_range ... ok
+test numeric::tests::bigint_avg_decimal_lexical_answers_exactly_where_bigint_avg_decimal_poisons ... ok
+test numeric::tests::canonical_ieee_original_zero_bits_survive_input_flush ... ok
+test math::tests::tiny_argument_remainders_fit_independent_exact_alternating_bounds ... ok
+test numeric::tests::cmp_exact_cross_scale_equal ... ok
+test numeric::tests::cmp_exact_large_f64_collapse_cross_scale_regression ... ok
+test math::tests::generated_constants_and_transcendentals_enclose_independent_decimal_witnesses ... ok
+test numeric::tests::cmp_exact_large_f64_collapse_regression ... ok
+test math::tests::quadrants_branch_cuts_and_tighter_precision_are_explicit ... ok
+test numeric::tests::cmp_exact_large_mantissa_no_overflow ... ok
+test numeric::tests::cmp_exact_mixed_signs ... ok
+test numeric::tests::binary_arithmetic_rounds_once_on_double_rounding_witnesses ... ok
+test numeric::tests::canonical_lexical_matches_reference_over_mantissa_scale_grid ... ok
+test math::tests::signed_product_corners_equal_independent_exact_extrema ... ok
+test numeric::tests::bounded_ieee_canonical_writers_preserve_frozen_extremes ... ok
+test numeric::tests::cmp_exact_cross_scale_strict ... ok
+test numeric::tests::decimal_add_exact_no_float_error ... ok
+test numeric::tests::decimal_mantissa_spans_the_whole_i128_range ... ok
+test numeric::tests::decimal_promotion_rounds_once_to_double_and_to_float ... ok
+test numeric::tests::cmp_exact_negative_cross_scale ... ok
+test math::tests::interval_extrema_preserve_signed_boxes_and_admitted_detached_inputs ... ok
+test numeric::tests::div_decimal_by_zero_is_error ... ok
+test numeric::tests::div_double_by_zero_is_inf_not_error ... ok
+test numeric::tests::div_double_zero_by_zero_is_nan_not_error ... ok
+test numeric::tests::div_integer_by_zero_is_error ... ok
+test numeric::tests::div_integer_integer_returns_decimal ... ok
+test numeric::tests::double_specials_and_canonical ... ok
+test math::tests::sign_selected_interval_products_enclose_every_endpoint_product ... ok
+test numeric::tests::decimal_exact_comparison_across_scales ... ok
+test numeric::tests::decimal_negation_and_abs_of_the_smallest_mantissa_are_exact ... ok
+test numeric::tests::div_4_2_is_decimal_two ... ok
+test numeric::tests::integer_parse_and_bounds ... ok
+test numeric::tests::mul_integer_decimal_promotes_to_decimal ... ok
+test numeric::tests::numeric_promotion ... ok
+test numeric::tests::parse_double_still_accepts_plus_inf ... ok
+test numeric::tests::parse_double_xsd10_accepts_xsd10_lexicals ... ok
+test numeric::tests::cmp_exact_zero_any_scale ... ok
+test numeric::tests::decimal_alignment_overflow_is_exact_and_its_neighbour_adds ... ok
+test numeric::tests::parse_float_still_accepts_plus_inf ... ok
+test numeric::tests::decimal_parse_and_canonical ... ok
+test numeric::tests::parse_double_xsd10_rejects_plus_inf ... ok
+test numeric::tests::div_1_3_is_18_digit_decimal ... ok
+test numeric::tests::parse_float_xsd10_accepts_xsd10_lexicals ... ok
+test numeric::tests::parse_float_xsd10_rejects_plus_inf ... ok
+test numeric::tests::round_decimal_nearest_ties_toward_positive_infinity ... ok
+test numeric::tests::the_bigint_fallback_answers_the_pairs_that_overflow_a_u128 ... ok
+test numeric::tests::the_promotion_based_operator_relation_is_untouched ... ok
+test numeric::tests::the_promotion_cycle_at_nineteen_significant_digits_is_closed ... ok
+test numeric::tests::unary_minus_decimal ... ok
+test numeric::tests::unary_minus_double ... ok
+test numeric::tests::unary_minus_integer ... ok
+test numeric::tests::unary_plus_is_identity_for_numerics ... ok
+test numeric::tests::value_parse_xsd10_rejects_plus_inf_for_float_and_double ... ok
+test numeric::tests::value_parse_xsd10_unaffected_for_non_float_double_datatypes ... ok
+test ops::tests::duration_equality_is_total_while_ordering_is_partial ... ok
+test ops::tests::effective_boolean_values ... ok
+test ops::tests::operator_mapping_table ... ok
+test numeric::tests::parse_integer_typed_range_checks ... ok
+test numeric::tests::the_specials_and_the_zeroes_order_as_the_value_space_says ... ok
+test numeric::tests::unary_minus_float ... ok
+test ops::tests::sep0002_rejected_pairs ... ok
+test numeric::tests::magnitudes_outside_and_inside_the_aliasing_window_both_decide_exactly ... ok
+test ops::tests::value_eq_incomparable_is_false_not_error ... ok
+test ops::tests::value_equal_is_total_for_durations_and_a_cmp_passthrough_otherwise ... ok
+test range::tests::a_pattern_facet_leaves_containment_undecided ... ok
+test range::tests::an_intersection_can_be_contained_where_no_operand_is ... ok
+test numeric::tests::the_exact_numeric_order_is_a_total_order_over_the_whole_tower ... ok
+test math::tests::high_precision_scoped_arithmetic_reuses_its_admitted_scale_storage ... ok
+test numeric::tests::decimal_to_double_fast_path_rounds_once_on_a_double_rounding_witness ... ok
+test range::tests::a_length_zero_string_space_holds_exactly_the_empty_string ... ok
+test numeric::tests::unary_plus_non_numeric_is_error ... ok
+test range::tests::an_opaque_operand_is_undecided_and_says_so ... ok
+test range::tests::containment_is_reflexive_and_the_empty_range_is_least ... ok
+test range::tests::counting_lattice_loses_exactness_but_not_soundness ... ok
+test range::tests::disjoint_value_spaces_contain_nothing_of_each_other ... ok
+test range::tests::exclusive_integer_bounds_step_past_the_endpoint ... ok
+test range::tests::identity_agrees_with_value_eq_inside_one_space ... ok
+test range::tests::complement_of_the_full_set_is_empty_and_back ... ok
+test range::tests::every_datatype_lands_in_a_space ... ok
+test range::tests::identity_holds_only_within_one_value_space ... ok
+test range::tests::integral_window_rounds_bounds_inward ... ok
+test range::tests::intersection_takes_the_tighter_end_of_each_side ... ok
+test range::tests::kleene_lattice_keeps_proofs ... ok
+test range::tests::length_set_complement_swaps_lengths_and_the_two_finite_lists ... ok
+test range::tests::containment_follows_the_integer_tower ... ok
+test range::tests::octet_lengths_count_exactly ... ok
+test range::tests::one_nan_per_value_space ... ok
+test range::tests::an_unsigned_long_span_past_i64_is_counted_exactly ... ok
+test range::tests::the_finite_gregorian_spaces_have_exact_sizes ... ok
+test range::tests::timezone_shifted_datetimes_are_one_value ... ok
+test range::tests::touching_intervals_merge_and_separated_ones_do_not ... ok
+test range::tests::unbounded_integer_ends_stay_unbounded ... ok
+test simple::tests::boolean_lexicals ... ok
+test simple::tests::byte_scan_collapse_matches_char_reference ... ok
+test simple::tests::byte_scan_replace_matches_char_reference ... ok
+test range::tests::end_of_day_time_is_midnight ... ok
+test range::tests::the_two_zeros_of_a_float_space_share_one_ordered_point ... ok
+test range::tests::complement_of_a_closed_interval_is_its_two_gaps ... ok
+test simple::tests::collapse_precheck_sees_adjacent_spaces_across_chunk_seams ... ok
+test simple::tests::collapse_collapses_runs_and_strips_ends ... ok
+test simple::tests::collapse_leading_trailing_interior ... ok
+test simple::tests::replace_preserves_length_and_does_not_collapse_or_trim ... ok
+test temporal::tests::a_duration_follows_the_lexical_grammar ... ok
+test simple::tests::collapse_edge_cases ... ok
+test decimal_float::tests::random_decimals_match_the_oracle_across_mantissa_sizes_and_scales ... ok
+test temporal::tests::a_timezone_offset_inside_a_multibyte_character_is_refused_not_a_panic ... ok
+test temporal::tests::a_too_wide_field_is_out_of_range_only_in_an_otherwise_valid_lexical ... ok
+test temporal::tests::adjust_date_rolls_over_and_removes ... ok
+test temporal::tests::adjust_datetime_removes_timezone ... ok
+test temporal::tests::adjust_datetime_shifts_same_instant ... ok
+test temporal::tests::adjust_datetime_timezone_boundary ... ok
+test temporal::tests::adjust_datetime_without_timezone_attaches_no_shift ... ok
+test temporal::tests::a_duration_tag_join_keeps_a_subtype_only_when_both_sides_declare_it ... ok
+test temporal::tests::calendar_action_driver_matches_the_classifier_table_for_all_eight_sorts ... ok
+test temporal::tests::calendar_casts_cover_the_defined_pairs_and_refuse_missing_fields ... ok
+test numeric::tests::binary_arithmetic_equals_the_software_reference ... ok
+test simple::tests::replace_leaves_non_xsd_whitespace_untouched ... ok
+test temporal::tests::add_year_month_duration_clamps_to_month_end ... ok
+test temporal::tests::date_plus_subday_duration_truncates_at_midnight ... ok
+test simple::tests::replace_maps_each_xsd_whitespace_to_space ... ok
+test temporal::tests::adjust_time_wraps_and_removes ... ok
+test temporal::tests::datetime_from_unix_seconds_known_timestamp ... ok
+test temporal::tests::calendar_casts_keep_local_dates_timezones_and_normalize_end_of_day ... ok
+test temporal::tests::component_order_is_months_before_seconds ... ok
+test temporal::tests::datetime_accessors_work ... ok
+test range::tests::finite_character_spaces_can_be_exhausted_and_large_lengths_stay_bounded ... ok
+test temporal::tests::datetime_from_unix_seconds_epoch ... ok
+test temporal::tests::datetime_ordering_with_timezones ... ok
+test temporal::tests::day_time_duration_add_to_time_with_fractional_seconds ... ok
+test temporal::tests::datetime_indeterminate_when_one_lacks_timezone ... ok
+test temporal::tests::day_time_duration_add_subtract_datetime ... ok
+test ops::tests::sep0002_operator_table ... ok
+test temporal::tests::day_time_duration_add_with_fractional_seconds ... ok
+test temporal::tests::duration_add_mixes_subtypes_into_general_duration ... ok
+test temporal::tests::duration_canonical ... ok
+test temporal::tests::duration_divide_by_zero_is_error ... ok
+test temporal::tests::duration_month_overflow_is_out_of_range ... ok
+test temporal::tests::datetime_parse_canonical_roundtrip ... ok
+test temporal::tests::day_time_duration_add_to_date_rolls_over ... ok
+test temporal::tests::duration_multiply_and_divide ... ok
+test temporal::tests::duration_scale_rounds_months_not_truncates ... ok
+test temporal::tests::divide_durations_is_commensurability_not_tags ... ok
+test temporal::tests::duration_subtype_casts_discard_the_other_component ... ok
+test simple::tests::chunked_replace_matches_the_byte_scan_and_char_references ... ok
+test temporal::tests::duration_to_calendar_arithmetic_rejects_wrong_subtype ... ok
+test temporal::tests::duration_zero_lexical_is_subtype_correct ... ok
+test temporal::tests::day_time_duration_add_to_time_wraps ... ok
+test temporal::tests::decimal_div_past_the_scaled_intermediate_is_exact ... ok
+test temporal::tests::duration_component_accessors ... ok
+test temporal::tests::duration_add_subtract_same_subtype ... ok
+test temporal::tests::day_time_duration_divided_by_day_time_duration ... ok
+test temporal::tests::general_duration_applies_to_instants ... ok
+test temporal::tests::gmonth_cycle_wraps_without_overflow ... ok
+test math::tests::exact_integer_quotients_and_square_roots_use_the_one_arithmetic_home ... ok
+test temporal::tests::duration_partial_order ... ok
+test temporal::tests::fmt_year_is_total_and_boundary_year_round_trips ... ok
+test temporal::tests::duration_seconds_exceed_i128_without_narrowing ... ok
+test temporal::tests::gregorian_cmp_same_type ... ok
+test temporal::tests::gregorian_cross_type_incomparable ... ok
+test decimal_float::tests::exact_ties_and_their_neighbours_round_to_even ... ok
+test temporal::tests::rejects_garbage ... ok
+test temporal::tests::gregorian_parse_roundtrip ... ok
+test temporal::tests::gregorian_subtraction_is_negate_then_add ... ok
+test temporal::tests::mixed_sign_duration_is_unconstructible ... ok
+test temporal::tests::gregorian_zero_duration_preserves_timezone ... ok
+test temporal::tests::mixed_subtype_sum_is_the_general_duration ... ok
+test temporal::tests::relaxed_guards_accept_pure_component_general_durations ... ok
+test temporal::tests::duration_subtype_pattern_facets_are_enforced ... ok
+test ieee::tests::binary32_subnormal_products_and_quotients_equal_the_software_reference ... ok
+test temporal::tests::signed_or_short_temporal_fields_are_rejected ... ok
+test temporal::tests::subtract_dates_indeterminate_mix_is_error ... ok
+test temporal::tests::subtract_dates_and_times ... ok
+test temporal::tests::subtract_datetimes_indeterminate_mix_is_error ... ok
+test temporal::tests::subtract_datetimes_with_fractional_seconds ... ok
+test temporal::tests::subtract_year_month_duration_clamps_to_month_end ... ok
+test temporal::tests::two_digit_fields_refuse_outside_their_range_and_accept_its_edges ... ok
+test temporal::tests::time_wraps_huge_positive_and_negative_durations ... ok
+test temporal::tests::subtract_datetimes_across_timezones ... ok
+test temporal::tests::subtract_times_with_fractional_seconds ... ok
+test temporal::tests::subtract_times_indeterminate_mix_is_error ... ok
+test temporal::tests::temporal_seconds_remain_exact_past_bounded_decimal_scale ... ok
+test temporal::tests::time_end_of_day_is_the_same_midnight_value ... ok
+test temporal::tests::time_plus_months_is_a_type_error ... ok
+test temporal::tests::year_arithmetic_rejects_i64_min_construction ... ok
+test temporal::tests::unary_minus_negates_both_components ... ok
+test temporal::tests::year_month_duration_divided_by_year_month_duration ... ok
+test temporal::tests::year_independence_rejects_the_century_leap_case ... ok
+test simple::tests::chunked_collapse_matches_the_byte_scan_and_char_references ... ok
+test temporal::tests::year_month_duration_multiply_rounds_negative_ties_toward_positive_infinity ... ok
+test wide::tests::div_wide_inverts_wide_mul ... ok
+test temporal::tests::year_independence_accepts_the_day_after_leap_day ... ok
+test temporal::tests::zero_result_keeps_the_operand_subtype ... ok
+test numeric::tests::bounded_double_writer_round_trips_every_binade_and_refuses_full_sinks ... ok
+test wide::tests::dyadic_divisors_preserve_the_full_quotient_remainder_and_even_ties ... ok
+test temporal::tests::year_month_duration_divide_rounds_negative_ties_toward_positive_infinity ... ok
+test temporal::tests::wide_day_hour_and_minute_fields_match_seconds ... ok
+test wide::tests::rounded_wide_quotient_preserves_halfway_and_overflow_laws ... ok
+test temporal::tests::gregorian_duration_matrix ... ok
+test wide::tests::gcd_absorbs_zero_and_reduces ... ok
+test wide::tests::wide_mul_reaches_both_words ... ok
+test wide::tests::mul_div_matches_the_direct_route_and_outlives_it ... ok
+test math::tests::prepared_fast_inner_kernels_allocate_nothing_and_tables_share_across_workers ... ok
+test math::tests::fast_axes_subnormals_branch_cuts_and_exact_decimal_rounding ... ok
+test wide::tests::full_width_rounding_lies_in_the_exact_nearest_even_cell ... ok
+test ieee::tests::binary64_operations_equal_the_software_reference ... ok
+test ieee::tests::binary32_operations_equal_the_software_reference ... ok
+test math::floating::word::tests::the_narrow_ratio_split_equals_the_arbitrary_width_split ... ok
+test bigint::tower_tests::tests::float_conversions_are_correctly_rounded_across_bit_lengths ... ok
+test ieee::tests::square_roots_that_round_twice_through_64_bits_round_once_here ... ok
+test math::tests::fast_transcendental_enclosures_contain_the_independent_exact_engine ... ok
+test math::tests::directed_basic_residual_signs_enclose_exact_arithmetic_across_exponents ... ok
+test ieee::ratio::tests::the_u128_ratio_path_matches_the_arbitrary_width_body ... ok
+test bigint::tower_tests::tests::float_conversions_are_correctly_rounded_at_powers_of_two_and_ties ... ok
+test numeric::tests::from_f64_closest_matches_the_exact_expansion ... ok
+test math::tests::double_word_intervals_enclose_fixed_references_to_about_one_hundred_bits ... ok
+test math::tests::mean_value_arctangent_encloses_every_sampled_point_of_its_interval ... ok
+test math::tests::binary64_series_enclose_independent_fixed_point_values_over_narrow_intervals ... ok
+test ieee::tests::the_decimal_witness_generators_find_what_they_claim ... ok
+test temporal::tests::gmonthday_month_shift_agrees_with_the_anchored_oracle ... ok
+test temporal::tests::gday_shift_agrees_with_the_anchored_oracle ... ok
+test temporal::tests::gmonthday_day_shift_agrees_with_the_anchored_oracle ... ok
+test temporal::tests::gmonthday_composite_shift_agrees_with_the_anchored_oracle ... ok
+test numeric::tests::explicit_legacy_decimal_division_matches_the_exact_oracle ... ok
+
+test result: ok. 413 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.75s
+
+     Running tests/any_uri.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/0ff65881cbf112c8/out/any_uri-0ff65881cbf112c8)
+
+running 3 tests
+test lexical_mapping_preserves_everything_except_xml_whitespace ... ok
+test primitive_identity_is_disjoint_and_unordered ... ok
+test ranges_use_collapsed_character_lengths_and_primitive_identity ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/certified_numerical.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/81957a1da0ecbcdc/out/certified_numerical-81957a1da0ecbcdc)
+
+running 9 tests
+determinism-digest case=directed_endpoint_product_replay digest=f1508ddac398273b corpus_len=8
+test directed_endpoint_product_replay ... ok
+test numerical_refusals_are_complete ... ok
+test bounded_ieee_canonical_allocation_replay ... ok
+test bounded_rational_ownership_and_rounding_replay ... ok
+test admitted_comparison_branches_and_original_limb_replay ... ok
+test integer_difference_interval_admission_and_original_limb_replay ... ok
+test finite_decimal_scale_admission_and_original_limb_replay ... ok
+determinism-digest case=certified_elementary_replay digest=8268aff8be7630be corpus_len=7
+test reusable_taylor_pool_admission_and_allocation_replay ... ok
+test certified_elementary_replay ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/data_range.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/f7c848b0a0ccaf14/out/data_range-f7c848b0a0ccaf14)
+
+running 36 tests
+test a_bound_facet_excludes_the_nan_of_its_space ... ok
+test a_bound_outside_a_subtypes_own_range_is_empty ... ok
+test a_facet_on_the_boolean_space_is_not_decided ... ok
+test a_datatype_and_its_complement_are_empty ... ok
+test a_timezone_shifted_temporal_literal_is_the_same_value ... ok
+test adjacent_float_values_leave_no_room_between_them ... ok
+test a_lower_bound_above_the_upper_bound_is_empty_in_every_numeric_space ... ok
+test a_length_zero_space_holds_exactly_one_value ... ok
+test an_enumerated_float_zero_is_exhibited_rather_than_exact ... ok
+test a_temporal_enumeration_and_its_complement_are_decided_exactly ... ok
+test an_exclusive_temporal_bound_meeting_its_inclusive_twin_is_empty ... ok
+test an_inapplicable_facet_is_not_silently_ignored ... ok
+test binary_length_counts_octets_not_lexical_characters ... ok
+test an_opaque_range_is_undecided_but_cannot_defeat_a_witness ... ok
+test contradictory_date_bounds_are_empty_and_satisfiable_ones_are_witnessed ... ok
+test contradictory_datetime_endpoints_refute_zoned_and_local_value_strata ... ok
+test contradictory_length_facets_are_empty ... ok
+test an_enumeration_counts_distinct_values ... ok
+test datetime_stamp_requires_a_timezone_at_both_native_parse_doors ... ok
+test datetime_stamp_enumerations_count_value_identity_and_complements_exactly ... ok
+test derived_integer_datatypes_carry_their_own_value_space ... ok
+test datetime_stamp_is_the_exact_proper_timezone_stratum_of_datetime ... ok
+test disjoint_value_spaces_intersect_to_nothing ... ok
+test normalized_rdf_language_spaces_are_disjoint_infinite_exact_ranges ... ok
+test the_boolean_space_is_exhaustible ... ok
+test the_complement_of_one_datatype_is_witnessed_by_another ... ok
+test removing_one_value_from_a_populous_length_leaves_the_rest ... ok
+test tagged_enumerations_and_their_boolean_combinations_have_exact_finite_counts ... ok
+test the_complement_of_the_whole_domain_is_empty ... ok
+test the_duration_subtypes_are_inhabited_but_not_exact ... ok
+test the_integers_are_a_subset_of_the_decimals ... ok
+test the_integers_are_discrete_and_the_decimals_are_dense ... ok
+test value_space_identity_differs_from_sparql_equality_in_exactly_two_places ... ok
+test the_non_integral_decimals_are_inhabited_and_a_pinned_integer_is_not ... ok
+test ranges_over_the_non_temporal_spaces_with_applicable_facets_are_exact ... ok
+test prop::emptiness_and_membership_never_contradict ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/exact_governance.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/16332b79e4471f84/out/exact_governance-16332b79e4471f84)
+
+running 30 tests
+test calendar_exact_work_cost_tracks_wide_seconds_and_keeps_tiny_zero ... ok
+test admitted_operator_comparison_preserves_lossy_promotion_and_physical_refusal ... ok
+test calendar_text_prepares_wide_seconds_under_original_admission ... ok
+test duration_subtype_cast_admits_kept_seconds_and_drops_other_component ... ok
+test calendar_exact_work_bounds_actual_native_traffic ... ok
+test gregorian_whole_days_admits_wide_duration_before_division ... ok
+test inline_ieee_append_refuses_before_mutation_and_never_grows ... ok
+test duration_unary_minus_admits_wide_seconds_before_copy ... ok
+test duration_add_sub_admit_seconds_before_allocation ... ok
+test invalid_temporal_pairs_keep_type_error_ahead_of_admission ... ok
+test rounded_division_prices_a_long_scaled_divisor ... ok
+test inline_ieee_text_preserves_extreme_values_without_heap_traffic ... ok
+test rounded_division_prices_a_long_scaled_dividend ... ok
+test duration_text_prepares_wide_days_and_fraction_without_quotient_owner ... ok
+test named_duration_calendar_operations_use_the_exact_general_path ... ok
+test temporal_comparison_admits_wide_alignment_before_allocating ... ok
+test temporal_native_values_and_deferred_refusals_allocate_no_heap ... ok
+test instant_difference_borrows_wide_seconds_and_admits_each_total ... ok
+test exact_division_positive_scale_gap_covers_retained_result ... ok
+test timezone_adjustment_admits_wide_seconds_before_copy_or_shift ... ok
+test calendar_duration_arithmetic_admits_exact_seconds_before_allocation ... ok
+test wide_temporal_parse_admits_native_peak_and_releases_retained_owner ... ok
+test duration_scale_and_ratio_admit_borrowed_exact_parts ... ok
+test a_vast_scale_is_charged_where_it_is_paid ... ok
+test unary_functions_are_linear ... ok
+test full_native_parser_preserves_all_value_families_and_original_heap_owners ... ok
+test division_is_charged_at_its_policy ... ok
+test a_long_integer_converts_to_a_float_from_its_length ... ok
+test a_lopsided_product_costs_what_it_is_charged ... ok
+test alignment_is_charged_at_the_scale_gap ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.87s
+
+     Running tests/exact_tower.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/a4f2955e091558fa/out/exact_tower-a4f2955e091558fa)
+
+running 26 tests
+test default_division_keeps_terminating_digits_and_rounds_only_repeating_results ... ok
+test exact_first_division_preserves_physical_admission_refusal ... ok
+test division_by_zero_is_refused_and_a_unit_divisor_is_not ... ok
+test factorials_past_i128_are_exact ... ok
+test integer_narrowing_refuses_and_exact_decimal_crosses_the_old_bound ... ok
+test a_scaled_divisor_past_two_to_the_127_rounds_like_the_oracle ... ok
+test lexical_refusals_have_valid_neighbours ... ok
+test non_terminating_quotients_are_refused_and_terminating_ones_are_exact ... ok
+test non_finite_sources_are_refused_and_finite_extremes_are_not ... ok
+test scale_overflow_is_refused_and_a_representable_product_is_not ... ok
+test owl_rational_identifies_the_full_exact_decimal_branch_only ... ok
+test zero_rounds_to_zero_in_every_direction_at_every_precision ... ok
+test comparison_with_a_double_matches_the_oracle ... ok
+test power_estimates_track_the_actual_size ... ok
+test cost_estimates_bound_the_result ... ok
+test the_public_numeric_path_agrees_with_the_tower ... ok
+test exact_decimal_and_explicit_integer_narrowing ... ok
+test decimal_rounding_matches_the_oracle ... ok
+test decimal_division_matches_the_oracle ... ok
+test rational_arithmetic_matches_the_oracle ... ok
+test integer_arithmetic_matches_the_oracle ... ok
+test float_conversions_round_once ... ok
+test float_sources_convert_exactly ... ok
+test decimal_arithmetic_matches_the_oracle ... ok
+test karatsuba_products_match_the_oracle ... ok
+test vast_scales_match_the_oracle ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.24s
+
+     Running tests/exact_values.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/18e6ea11f71e1e3d/out/exact_values-18e6ea11f71e1e3d)
+
+running 9 tests
+test derived_integer_bounds_still_refuse_and_unbounded_derived_types_do_not ... ok
+test division_follows_the_policy_and_refuses_only_what_it_must ... ok
+test cost_is_charged_for_every_tower_operation ... ok
+test decimals_past_the_bounded_form_parse_exactly ... ok
+test comparison_and_the_exact_order_see_every_digit ... ok
+test data_ranges_and_value_identity_are_exact_at_any_size ... ok
+test arithmetic_that_overflowed_now_returns_the_exact_value ... ok
+test integers_past_i128_parse_exactly_and_in_range_ones_stay_bounded ... ok
+test rounding_functions_keep_the_family ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/exact_wasm_determinism.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/5f3e9de096508a12/out/exact_wasm_determinism-5f3e9de096508a12)
+
+running 3 tests
+test the_hand_values_are_reproduced_on_this_target ... ok
+test the_oracle_vectors_replay_on_this_target ... ok
+determinism-digest case=exact-tower-transcript digest=7d6b1f15734f09aa corpus_len=365276
+test the_transcript_digest_is_reproduced_on_this_target ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/frozen_vectors.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/325626e4327e1fe9/out/frozen_vectors-325626e4327e1fe9)
+
+running 7 tests
+test numeric_predicates_match_the_frozen_vectors ... ok
+test gcd_matches_the_frozen_divisors ... ok
+test calendar_matches_the_frozen_months ... ok
+test json_number_order_matches_the_frozen_pairs ... ok
+test from_binary_matches_the_frozen_expansions ... ok
+test wide_arithmetic_matches_the_frozen_vectors ... ok
+test rfc3339_matches_every_frozen_spelling ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/numeric_error_codes.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/605f4d826168cfab/out/numeric_error_codes-605f4d826168cfab)
+
+running 6 tests
+test a_huge_value_outside_a_sign_restricted_type_is_forg0001 ... ok
+test lexical_refusals_name_their_code_beside_an_accepted_neighbour ... ok
+test operator_refusals_name_their_code_beside_an_answering_neighbour ... ok
+test every_error_presents_its_code ... ok
+test tower_refusals_name_their_code ... ok
+test unary_results_of_a_derived_integer_are_xsd_integer ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/operator_mapping.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/c2805940e89bafd8/out/operator_mapping-c2805940e89bafd8)
+
+running 9 tests
+test binary_cross_datatype_incomparable ... ok
+test gregorian_effective_boolean_value_is_type_error ... ok
+test binary_cross_family_with_other_types_incomparable ... ok
+test operator_mapping_table ... ok
+test gregorian_operator_mapping_table ... ok
+test binary_same_datatype_ordering ... ok
+test duration_cross_subtype_operator_rows ... ok
+test binary_effective_boolean_value_is_type_error ... ok
+test value_cmp_is_antisymmetric_on_determinate_rows ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/range_storage.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/a67c0ba16400d775/out/range_storage-a67c0ba16400d775)
+
+running 6 tests
+test original_allocation_failure_outranks_a_failed_cleanup_callback ... ok
+test long_exact_endpoint_products_are_admitted_and_all_scratch_is_released ... ok
+test exact_boolean_decimal_binary_and_string_set_laws_survive_the_native_owner ... ok
+test refusing_work_never_becomes_an_empty_or_complete_containment_answer ... ok
+test temporal_identity_borrows_exact_seconds_and_admits_alignment ... ok
+test unequal_scale_decimal_comparison_admits_the_actual_digit_scratch ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rfc3339.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/68b3125e2a5395b6/out/rfc3339-68b3125e2a5395b6)
+
+running 24 tests
+test a_month_end_leap_second_parses_under_both_policies ... ok
+test a_mid_month_leap_second_parses_only_on_any_day ... ok
+test a_space_separator_is_refused_by_the_abnf_and_accepted_by_the_gts_grammar ... ok
+test both_grammars_accept_lowercase_t_and_z ... ok
+test day_32_is_refused_31_accepted ... ok
+test doubled_zone_letter_is_refused_single_accepted ... ok
+test five_digit_year_is_refused_four_accepted ... ok
+test error_messages_name_the_position_and_problem ... ok
+test format_refuses_outside_four_digit_years ... ok
+test february_29_needs_a_leap_year ... ok
+test format_writes_canonical_utc ... ok
+test full_date_needs_a_real_calendar_day ... ok
+test fraction_is_truncated_to_nanoseconds ... ok
+test full_time_needs_a_zone_and_a_utc_23_59_leap_second ... ok
+test hour_24_is_refused_23_accepted ... ok
+test leap_second_only_at_utc_month_end ... ok
+test month_13_is_refused_12_accepted ... ok
+test offset_followed_by_zone_letter_is_refused_offset_alone_accepted ... ok
+test offset_minute_60_is_refused_59_accepted ... ok
+test parse_accepts_instants_that_normalize_past_four_digit_years ... ok
+test parse_then_format_is_canonical ... ok
+test rfc_section_5_8_examples ... ok
+test separator_and_zone_letters ... ok
+test format_then_parse_round_trips_seeded_instants ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/value_space.rs (/opt/.cargo/cb/b0fee07c0c761b/debug/build/purrdf-xsd/f74d9f51a3f4fe3b/out/value_space-f74d9f51a3f4fe3b)
+
+running 29 tests
+test base64_binary_canonical_vectors ... ok
+test base64_binary_negative_vectors ... ok
+test binary_parse_by_iri_contract ... ok
+test binary_canonical_is_idempotent ... ok
+test canonical_lexical_round_trips ... ok
+test canonical_is_idempotent ... ok
+test double_extreme_canonical_vectors ... ok
+test determinate_orderings ... ok
+test gregorian_invalid_lexicals_are_hard_errors ... ok
+test gregorian_canonical_round_trips ... ok
+test double_extreme_canonical_roundtrip ... ok
+test gregorian_canonical_is_idempotent ... ok
+test gregorian_ordering ... ok
+test gregorian_valid_lexicals_parse_ok ... ok
+test hex_binary_canonical_vectors ... ok
+test hex_binary_case_insensitive_value_equality ... ok
+test hex_binary_negative_vectors ... ok
+test int_leading_zeros_strip_to_canonical ... ok
+test integer_range_negative_vectors_are_hard_errors ... ok
+test integer_range_positive_vectors_parse_ok ... ok
+test integer_values_past_i128_are_exact_and_derived_bounds_still_refuse ... ok
+test parse_by_iri_contract ... ok
+test partial_order_edge_cases ... ok
+test temporal_calendar_invalid_lexicals_are_hard_errors ... ok
+test temporal_calendar_valid_lexicals_parse_ok ... ok
+test prop::integer_canonical_idempotent ... ok
+test year_width_invalid_lexicals_are_hard_errors ... ok
+test year_width_valid_lexicals_parse_ok ... ok
+test prop::decimal_canonical_idempotent ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests purrdf_xsd
+
+running 51 tests
+test crates/xsd/src/datatype.rs - datatype::XsdDatatype::from_iri (line 220) ... ok
+test crates/xsd/src/exact/mod.rs - exact (line 18) ... ok
+test crates/xsd/src/numeric.rs - numeric::numeric_add (line 2152) ... ok
+test crates/xsd/src/json_number.rs - json_number::JsonNumber (line 108) ... ok
+test crates/xsd/src/exact/cost.rs - exact::cost::Shape (line 892) ... ok
+test crates/xsd/src/ieee/mod.rs - ieee (line 107) ... ok
+test crates/xsd/src/numeric.rs - numeric::numeric_total_cmp (line 1431) ... ok
+test crates/xsd/src/numeric.rs - numeric::numeric_div_with_policy (line 2346) ... ok
+test crates/xsd/src/exact/rounding.rs - exact::rounding::DivisionPolicy::from_str (line 216) ... ok
+test crates/xsd/src/lib.rs - (line 172) ... ok
+test crates/xsd/src/temporal.rs - temporal::add_duration_to_gregorian (line 3653) ... ok
+test crates/xsd/src/ops.rs - ops::value_eq (line 231) ... ok
+test crates/xsd/src/range.rs - range::contains (line 287) ... ok
+test crates/xsd/src/range.rs - range::same_value (line 505) ... ok
+test crates/xsd/src/ops.rs - ops::value_total_cmp (line 142) ... ok
+test crates/xsd/src/temporal.rs - temporal::add_durations (line 3971) ... ok
+test crates/xsd/src/range.rs - range::containment (line 415) ... ok
+test crates/xsd/src/temporal.rs - temporal::divide_durations (line 4286) ... ok
+test crates/xsd/src/ops.rs - ops::value_add (line 478) ... ok
+test crates/xsd/src/datatype.rs - datatype::XsdDatatype::admits_integer (line 394) ... ok
+test crates/xsd/src/numeric.rs - numeric::numeric_div (line 2311) ... ok
+test crates/xsd/src/ops.rs - ops::effective_boolean_value (line 255) ... ok
+test crates/xsd/src/ops.rs - ops::value_div (line 625) ... ok
+test crates/xsd/src/temporal.rs - temporal::subtract_duration_from_time (line 3607) ... ok
+test crates/xsd/src/temporal.rs - temporal::subtract_duration_from_datetime (line 3424) ... ok
+test crates/xsd/src/value.rs - value::XsdError::presentation (line 900) ... ok
+test crates/xsd/src/temporal.rs - temporal::add_duration_to_time (line 3552) ... ok
+test crates/xsd/src/temporal.rs - temporal::subtract_duration_from_gregorian (line 3708) ... ok
+test crates/xsd/src/value.rs - value::XsdValue::datatype (line 94) ... ok
+test crates/xsd/src/ops.rs - ops::value_equal (line 184) ... ok
+test crates/xsd/src/value.rs - value::XsdValue::canonical_lexical (line 205) ... ok
+test crates/xsd/src/ops.rs - ops::value_cmp (line 29) ... ok
+test crates/xsd/src/range.rs - range::satisfiability (line 260) ... ok
+test crates/xsd/src/temporal.rs - temporal::negate_duration (line 3316) ... ok
+test crates/xsd/src/value.rs - value::parse (line 284) ... ok
+test crates/xsd/src/temporal.rs - temporal::subtract_duration_from_date (line 3514) ... ok
+test crates/xsd/src/range.rs - range::cardinality (line 322) ... ok
+test crates/xsd/src/range.rs - range::counterexample (line 470) ... ok
+test crates/xsd/src/value.rs - value::XsdError::code (line 746) ... ok
+test crates/xsd/src/temporal.rs - temporal::duration_equal (line 1922) ... ok
+test crates/xsd/src/ops.rs - ops::value_sub (line 522) ... ok
+test crates/xsd/src/temporal.rs - temporal::Duration::new (line 174) ... ok
+test crates/xsd/src/temporal.rs - temporal::subtract_durations (line 4014) ... ok
+test crates/xsd/src/ops.rs - ops::value_unary_minus (line 768) ... ok
+test crates/xsd/src/ops.rs - ops::value_mul (line 571) ... ok
+test crates/xsd/src/range.rs - range::is_exactly_decided (line 371) ... ok
+test crates/xsd/src/range.rs - range (line 88) ... ok
+test crates/xsd/src/temporal.rs - temporal::add_duration_to_datetime (line 3365) ... ok
+test crates/xsd/src/value.rs - value::parse_xsd10 (line 351) ... ok
+test crates/xsd/src/value.rs - value::parse_by_iri (line 378) ... ok
+test crates/xsd/src/temporal.rs - temporal::add_duration_to_date (line 3463) ... ok
+
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 2 tests
+test crates/xsd/src/ieee/control.rs - ieee::control::Mxcsr (line 129) - compile fail ... ok
+test crates/xsd/src/ieee/control.rs - ieee::control::Mxcsr (line 133) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+all doctests ran in 2.03s; merged doctests compilation took 1.55s
