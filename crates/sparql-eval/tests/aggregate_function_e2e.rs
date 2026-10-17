@@ -671,14 +671,14 @@ fn distinct_interacts_with_a_statistical_member() {
          WHERE {{ ?s <{EX}cat> <{EX}g2> . ?s <{EX}val> ?v }}"
     );
     let distinct_result = run(&ds, &query, with_env(&reg));
-    assert_eq!(stat_lex(&rows(&distinct_result)[0], 0), "15");
+    assert_eq!(stat_lex(&rows(&distinct_result)[0], 0), "15.0");
 
     let query_plain = format!(
         "SELECT (AGG(<{STAT_NS}MEDIAN>, ?v) AS ?median) \
          WHERE {{ ?s <{EX}cat> <{EX}g2> . ?s <{EX}val> ?v }}"
     );
     let plain_result = run(&ds, &query_plain, with_env(&reg));
-    assert_eq!(stat_lex(&rows(&plain_result)[0], 0), "10");
+    assert_eq!(stat_lex(&rows(&plain_result)[0], 0), "10.0");
 }
 
 /// `ex:mval` over five subjects: values {1, 2, 3, 4, 5} — chosen (rather than
@@ -724,7 +724,7 @@ fn moments_stddev_variance_and_var_pop_end_to_end() {
     );
     assert_eq!(
         stat_lex(&result_rows[0], 1),
-        "2",
+        "2.0",
         "population variance over {{1,2,3,4,5}}: 10/5, integer-valued decimal has no point"
     );
     let stddev: f64 = stat_lex(&result_rows[0], 2).parse().expect("double");

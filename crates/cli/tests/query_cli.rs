@@ -919,7 +919,7 @@ fn aggregate_namespace_computes_median_through_the_cli() {
     );
     let json = stdout(&out);
     assert!(
-        json.contains("\"value\":\"2\""),
+        json.contains("\"value\":\"2.0\""),
         "MEDIAN of {{1, 2, 3}} is 2:\n{json}"
     );
 }
@@ -979,7 +979,7 @@ fn aggregate_namespace_computes_median_through_a_cli_update() {
     );
     let ntriples = stdout(&out);
     assert!(
-        ntriples.contains("<http://example.org/summary> <http://example.org/median> \"2\""),
+        ntriples.contains("<http://example.org/summary> <http://example.org/median> \"2.0\""),
         "MEDIAN of {{1, 2, 3}} inserted as 2:\n{ntriples}"
     );
 }
@@ -1046,7 +1046,7 @@ fn aggregate_namespace_computes_median_under_entailment_through_the_cli() {
     );
     let json = stdout(&with);
     assert!(
-        json.contains("\"value\":\"2\""),
+        json.contains("\"value\":\"2.0\""),
         "MEDIAN of {{1, 2, 3}} over the RDFS-entailed ex:Thing group is 2:\n{json}"
     );
 }

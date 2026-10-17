@@ -8,9 +8,8 @@
 //! (`purrdf_shapes::shacl_corpora`, shared with the library harness), with its drift guards:
 //! the discovered total and per-type counts are asserted before anything runs. Grading is
 //! its own `sht:EvalNodeExpr` grader (`shacl_corpora::node_expr_grading`): exact RDF 1.2
-//! term equality, in order unless `sht:ignoreOrder true`, with the one table of entries
-//! whose approved result spells a decimal non-canonically applied exactly as the
-//! library harness applies it.
+//! term equality, in order unless `sht:ignoreOrder true`, applied exactly as the library
+//! harness applies it.
 //!
 //! Each entry's expression is an anonymous `[ … ]` node (or a constant) that no caller
 //! could label, so it is named the way the manifest itself names it: from the entry,
@@ -30,10 +29,7 @@ use purrdf_shapes::free_expression::parse_term;
 use purrdf_shapes::term::Term;
 
 use shacl_corpora::file_iri;
-use shacl_corpora::node_expr_grading::{
-    ABSENT_FOCUS, NON_CANONICAL_EXPECTATIONS, NON_CANONICAL_EXPECTATIONS_COUNT,
-    canonical_expectation, compare_outputs,
-};
+use shacl_corpora::node_expr_grading::{ABSENT_FOCUS, compare_outputs};
 use shacl_corpora::shacl12::{Body, NodeExprCase, shacl12_cases, shacl12_root};
 
 const MF_ACTION: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#action";
@@ -61,7 +57,7 @@ fn focus(tc: &NodeExprCase) -> Result<Term, String> {
 }
 
 /// Run one entry through the binary and grade its output.
-fn run_case(id: &str, entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> {
+fn run_case(entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> {
     let file = tc.file.to_str().ok_or("a non-UTF-8 corpus path")?;
     let base = file_iri(&tc.file);
     let focus = focus(tc)?.to_string();
@@ -101,8 +97,7 @@ fn run_case(id: &str, entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> 
     if !stderr.contains(&reported) {
         return Err(format!("stderr does not report {reported:?}: {stderr}"));
     }
-    let expected = canonical_expectation(id, &tc.expected)?;
-    compare_outputs(&produced, &expected, tc.ignore_order)
+    compare_outputs(&produced, &tc.expected, tc.ignore_order)
 }
 
 #[test]
@@ -130,21 +125,16 @@ fn every_w3c_node_expression_runs_through_the_cli() {
     );
 
     let mut passed = 0usize;
-    let mut noncanonical = 0usize;
     let mut errors: Vec<String> = Vec::new();
     for (id, tc) in &node_expr {
         let entry_iri = format!("{root_iri}/{id}");
-        match run_case(id, &entry_iri, tc) {
-            Ok(()) if NON_CANONICAL_EXPECTATIONS.iter().any(|(e, ..)| e == id) => {
-                noncanonical += 1;
-            }
+        match run_case(&entry_iri, tc) {
             Ok(()) => passed += 1,
             Err(e) => errors.push(format!("FAIL [{id}]: {e}")),
         }
     }
     println!(
-        "W3C SHACL 1.2 sht:EvalNodeExpr through `purrdf node-expr`: passed {passed}, \
-         non-canonical-expected-decimal {noncanonical}, failed {}",
+        "W3C SHACL 1.2 sht:EvalNodeExpr through `purrdf node-expr`: passed {passed}, failed {}",
         errors.len()
     );
     assert!(
@@ -153,16 +143,7 @@ fn every_w3c_node_expression_runs_through_the_cli() {
         errors.len(),
         errors.join("\n\n")
     );
-    assert_eq!(
-        noncanonical, NON_CANONICAL_EXPECTATIONS_COUNT,
-        "every entry with a non-canonical expected decimal is counted as one, and nothing \
-         else is"
-    );
-    assert_eq!(
-        passed + noncanonical,
-        NODE_EXPR_CASES,
-        "every entry is a pass or a non-canonical expected decimal"
-    );
+    assert_eq!(passed, NODE_EXPR_CASES, "every entry is a pass");
 }
 
 /// The selector's refusal through the binary, beside its valid neighbour: the entry's

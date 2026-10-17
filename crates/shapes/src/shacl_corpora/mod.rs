@@ -50,8 +50,7 @@
 //!   `sht:Validate` entry parser, adding the 1.2 test types.
 //! * [`report_grading`] is the one `sht:Validate` grader. It returns verdicts and
 //!   asserts none, so both W3C harnesses grade a validation case identically.
-//! * [`node_expr_grading`] is the one `sht:EvalNodeExpr` grader, with the table of
-//!   entries whose approved result spells a decimal non-canonically, shared by the
+//! * [`node_expr_grading`] is the one `sht:EvalNodeExpr` grader, shared by the
 //!   library harness and the command-line harness.
 
 use std::collections::{BTreeMap, BTreeSet};

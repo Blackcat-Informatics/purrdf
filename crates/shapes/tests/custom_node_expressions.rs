@@ -361,7 +361,7 @@ fn named_parameter_function_evaluates_its_body_under_the_argument_scope() {
     ";
     assert_eq!(
         outputs(INCOME_DATA, shapes, "alice"),
-        vec!["\"15\"^^<http://www.w3.org/2001/XMLSchema#decimal>".to_owned()],
+        vec!["\"15.0\"^^<http://www.w3.org/2001/XMLSchema#decimal>".to_owned()],
         "(10 + 20) / 2 — the MULTI-valued named argument is evaluated where each \
          shnex:arg reads it"
     );

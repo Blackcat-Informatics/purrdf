@@ -128,9 +128,7 @@ Every IRI the engine implements is defined by a W3C document; PurRDF mints
 none.
 
 The W3C SHACL 1.0 `data-shapes` suite passes as approved (129/129, zero ledgered
-gaps at the time of writing), and the approved W3C SHACL 1.2 suite passes apart
-from fourteen entries that fail and six entries whose approved result spells a
-decimal non-canonically, which are counted on their own line (571/591); the live
+gaps at the time of writing), and the approved W3C SHACL 1.2 suite passes as approved (591/591); the live
 numbers are in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
 and [SHACL 1.2 conformance](#shacl-12-conformance) below says how to
@@ -584,11 +582,9 @@ The complete W3C `shacl12-test-suite` is vendored byte-exact under
 `vectors/shacl12/` and run through the library API: 592 tests, covering 213
 `sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 209
 SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. An
-upstream manifest lists 591 of them. Of those, 571 pass as approved and 6 are
-counted apart because their approved result spells a decimal non-canonically, as
-described below, and the expected-failure ledger is empty. The other 1 are entries of
-vendored files that no manifest includes, and they are reported apart. The
-remaining 14 listed entries fail; `docs/CONFORMANCE.md` names them. A
+upstream manifest lists 591 of them. Of those, 591 pass as approved and the
+expected-failure ledger is empty. The other 1 are entries of
+vendored files that no manifest includes, and they are reported apart. A
 negative SPARQL 1.2 RL test must fail at the stage its test type names, not at
 an earlier one.
 Reproduce it with:
@@ -598,7 +594,7 @@ cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
 The last line of the approved suite's scoreboard is
-`W3C12 TOTAL: passed 571, non-canonical-expected-decimal 6, xfailed 0, ledger 0`,
+`W3C12 TOTAL: passed 591, xfailed 0, ledger 0`,
 and the unlisted files' own line is
 `W3C12 UNLISTED: passed 1, exact 1, with-delta 0, total 1`.
 
@@ -622,18 +618,11 @@ the reifier and says why it fails. A missing reification has no reifier and
 carries no details.
 
 In six node-expression tests the approved result spells a computed
-`xsd:decimal` in a lexical form that is not canonical: `"4.0"`, `"3.0"`,
-`"42.0"` and `"00"`, where XSD 1.1 Part 2 (section 3.3.3.1 and the
-`decimalCanonicalMap` of E.1) makes the canonical form `"4"`, `"3"`, `"42"` and
-`"0"`. (`"00"` is canonical in neither XSD 1.1 nor XSD 1.0, whose canonical
-decimal zero is `"0.0"`.) The expected value is correct in each, and the suite
-says the results must be "equal" without saying whether that is term or value
-equality. PurRDF emits the XSD 1.1 canonical form, which is also what the
-approved W3C SPARQL tests `ceil01`, `floor01`, `round01` and `seconds` expect.
-The harness grades these six by substituting the canonical spelling for the
-expected one and comparing term for term, which for these six is the same as
-comparing values. They are counted on their own line,
-`non-canonical-expected-decimal`, not among the passes.
+`xsd:decimal` as `"4.0"`, `"3.0"`, `"42.0"` and `"00"`. The specifications leave
+the lexical form of a computed literal to the processor, so PurRDF computes a
+decimal with a point and a fractional digit (`4.0`), and `SECONDS` as the
+seconds part of the lexical form of its argument (`00`). All six are graded term
+for term against the approved result, like every other entry.
 
 `sparql/component/validator-001`, in this suite and in the SHACL 1.0 suite,
 passes by name with no import supplied. Its

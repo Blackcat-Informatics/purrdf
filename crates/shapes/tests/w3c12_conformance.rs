@@ -25,8 +25,8 @@
 //!   `sht:scope-NAME` bound through the public [`Scope`]/[`Binding`] API. The
 //!   output must equal the `mf:result` list TERM FOR TERM (RDF 1.2 term
 //!   equality: lexical form, datatype, language and direction), in order unless
-//!   the entry sets `sht:ignoreOrder true`, in which case as a multiset. The only
-//!   departure from exact equality is [`NON_CANONICAL_EXPECTATIONS`].
+//!   the entry sets `sht:ignoreOrder true`, in which case as a multiset. There is
+//!   no other departure from exact equality.
 //! * **`sht:Infer`** — the shapes graph's rules run through
 //!   [`purrdf_shapes::apply_rules`] over the data graph, and the inferred graph
 //!   must equal `data ⊎ expected` under RDF isomorphism (RDFC-1.0 canonical
@@ -77,10 +77,7 @@ use purrdf_shapes::srl::{self, SrlError};
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::{ShaclProfile, apply_rules, engine, shapes, sparql, text_ingest};
 
-use shacl_corpora::node_expr_grading::{
-    ABSENT_FOCUS, NON_CANONICAL_EXPECTATIONS, NON_CANONICAL_EXPECTATIONS_COUNT,
-    canonical_expectation, compare_outputs,
-};
+use shacl_corpora::node_expr_grading::{ABSENT_FOCUS, compare_outputs};
 use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
 use shacl_corpora::shacl12::{
     Body, Case12, InferCase, InferExpected, NodeExprCase, Root12, SrlCase, SrlKind, Status12,
@@ -326,10 +323,9 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
 }
 
 /// Grade one `sht:EvalNodeExpr` entry.
-fn run_node_expr(id: &str, tc: &NodeExprCase) -> Result<(), String> {
+fn run_node_expr(tc: &NodeExprCase) -> Result<(), String> {
     let produced = no_panic(|| eval_node_expr_case(tc))?;
-    let expected = canonical_expectation(id, &tc.expected)?;
-    compare_outputs(&produced, &expected, tc.ignore_order)
+    compare_outputs(&produced, &tc.expected, tc.ignore_order)
 }
 
 // ── sht:Infer ─────────────────────────────────────────────────────────────────
@@ -564,35 +560,9 @@ fn srl_stage(error: &SrlError) -> &'static str {
 fn run(case: &Case12) -> Result<(), String> {
     match &case.body {
         Body::Validate(tc) => run_validate(&case.id, case.root.is_listed(), tc),
-        Body::NodeExpr(tc) => run_node_expr(&case.id, tc),
+        Body::NodeExpr(tc) => run_node_expr(tc),
         Body::Infer(tc) => run_infer(tc),
         Body::Srl(tc) => run_srl(tc),
-    }
-}
-
-/// The label an approved entry that agrees with the harness is reported under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Category {
-    /// Graded against its approved expectation, exactly, and agrees.
-    Pass,
-    /// A non-canonical expected decimal: [`NON_CANONICAL_EXPECTATIONS`]. The approved
-    /// result spells a computed decimal non-canonically; graded exactly against the
-    /// XSD 1.1 canonical spelling of its one expected literal, and agrees with THAT —
-    /// never counted as a pass of the approved expectation as written.
-    NonCanonicalExpectedDecimal,
-}
-
-impl Category {
-    /// The category an approved entry is reported under when it agrees.
-    fn of(case: &Case12) -> Self {
-        if NON_CANONICAL_EXPECTATIONS
-            .iter()
-            .any(|(id, ..)| *id == case.id)
-        {
-            Self::NonCanonicalExpectedDecimal
-        } else {
-            Self::Pass
-        }
     }
 }
 
@@ -600,16 +570,12 @@ impl Category {
 #[derive(Clone, Copy, Debug, Default)]
 struct Tally {
     passed: usize,
-    noncanonical: usize,
     xfailed: usize,
 }
 
 impl Tally {
     fn line(self) -> String {
-        format!(
-            "passed {:>3}  non-canonical-expected-decimal {:>2}  xfailed {:>3}",
-            self.passed, self.noncanonical, self.xfailed
-        )
+        format!("passed {:>3}  xfailed {:>3}", self.passed, self.xfailed)
     }
 }
 
@@ -655,10 +621,7 @@ fn w3c_shacl12_conformance() {
         let bump = |tally: &mut Tally, f: fn(&mut Tally) -> &mut usize| *f(tally) += 1;
         let slot: Option<fn(&mut Tally) -> &mut usize> =
             match (run(case), xfail.get(case.id.as_str())) {
-                (Ok(()), None) => Some(match Category::of(case) {
-                    Category::Pass => |t| &mut t.passed,
-                    Category::NonCanonicalExpectedDecimal => |t| &mut t.noncanonical,
-                }),
+                (Ok(()), None) => Some(|t| &mut t.passed),
                 (Err(_), Some(_)) => Some(|t| &mut t.xfailed),
                 (Ok(()), Some(reason)) => {
                     errors.push(format!(
@@ -695,9 +658,8 @@ fn w3c_shacl12_conformance() {
         println!("  {ty:<36} {}", tally.line());
     }
     println!(
-        "  W3C12 TOTAL: passed {}, non-canonical-expected-decimal {}, xfailed {}, ledger {}",
+        "  W3C12 TOTAL: passed {}, xfailed {}, ledger {}",
         total.passed,
-        total.noncanonical,
         total.xfailed,
         XFAIL.len()
     );
@@ -714,18 +676,13 @@ fn w3c_shacl12_conformance() {
         "xfail count must match the ledger exactly"
     );
     assert_eq!(
-        total.noncanonical, NON_CANONICAL_EXPECTATIONS_COUNT,
-        "every non-canonical expected decimal is counted as one, and nothing else is"
-    );
-    assert_eq!(
         unlisted, W3C12_UNLISTED_ENTRIES,
         "entries of unlisted vendored files"
     );
     assert_eq!(
-        total.passed + total.noncanonical + total.xfailed,
+        total.passed + total.xfailed,
         W3C12_TOTAL_CASES - W3C12_UNLISTED_ENTRIES,
-        "every approved test must be a pass, a non-canonical expected decimal or a ledgered \
-         xfail"
+        "every approved test must be a pass or a ledgered xfail"
     );
 }
 
@@ -991,8 +948,8 @@ fn xfail_ledger_is_empty() {
 /// its discovered id. Each must be discovered under exactly this id (a name that
 /// is not discovered fails, so a typo cannot hide an entry) and must pass under
 /// the harness's grading — which applies [`UNLISTED_FILE_DELTAS`] (to an entry
-/// of an unlisted file) and [`NON_CANONICAL_EXPECTATIONS`]. Passing here is a
-/// grading verdict, not a count: which category each entry is REPORTED under is
+/// of an unlisted file) and nothing else. Passing here is a
+/// grading verdict, not a count: how each entry is REPORTED is
 /// [`w3c_shacl12_conformance`]'s and [`w3c_shacl12_unlisted_vendored_files`]'s
 /// business.
 const INVENTORY: &[&str] = &[
@@ -1174,62 +1131,6 @@ fn every_planned_inventory_id_passes() {
         errors.len(),
         errors.join("\n\n")
     );
-}
-
-// ── The canonical-form table ──────────────────────────────────────────────────
-
-/// Both directions of [`NON_CANONICAL_EXPECTATIONS`], plus its count pin.
-///
-/// For every entry: the named test exists and is a node-expression test; its
-/// expected results contain a literal with the stated lexical form; the XSD 1.1
-/// canonical mapping of that literal's value (`purrdf_xsd`) is EXACTLY the stated
-/// canonical form; and that canonical form DIFFERS from the expected one — an
-/// expectation that was already canonical has no business in the table. The
-/// engine side (its output equals the canonical form, term for term) is graded
-/// by the harness itself.
-#[test]
-fn non_canonical_expectations_are_really_non_canonical() {
-    assert_eq!(
-        NON_CANONICAL_EXPECTATIONS.len(),
-        NON_CANONICAL_EXPECTATIONS_COUNT,
-        "NON_CANONICAL_EXPECTATIONS count pin"
-    );
-    let cases = shacl12_cases();
-    for (id, lexical, canonical, clause) in NON_CANONICAL_EXPECTATIONS {
-        assert!(
-            clause.starts_with("XSD 1.1 Part 2 §"),
-            "{id}: the clause must cite XSD 1.1 Part 2, got {clause:?}"
-        );
-        assert_ne!(lexical, canonical, "{id}: an entry must change the form");
-        let case = cases
-            .iter()
-            .find(|c| c.id == *id)
-            .unwrap_or_else(|| panic!("{id}: no such test"));
-        assert!(
-            case.root.is_listed(),
-            "{id}: a non-canonical expected decimal is an entry of the approved suite"
-        );
-        let Body::NodeExpr(tc) = &case.body else {
-            panic!("{id}: not an sht:EvalNodeExpr test");
-        };
-        let literal = tc
-            .expected
-            .iter()
-            .find_map(|t| match t {
-                Term::Literal(l) if l.value() == *lexical => Some(l),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("{id}: no expected literal spelled {lexical:?}"));
-        let value = purrdf_xsd::parse_by_iri(literal.value(), literal.datatype_str())
-            .unwrap_or_else(|e| panic!("{id}: {lexical:?} is not a valid lexical form: {e}"))
-            .unwrap_or_else(|| panic!("{id}: <{}> is not an XSD datatype", literal.datatype_str()));
-        assert_eq!(
-            value.canonical_lexical(),
-            *canonical,
-            "{id}: the XSD 1.1 canonical form of {lexical:?}^^<{}>",
-            literal.datatype_str()
-        );
-    }
 }
 
 // ── The expectation-defect table ──────────────────────────────────────────────
@@ -1569,34 +1470,11 @@ fn comparator_order_and_cardinality() {
     );
 }
 
-/// The canonical-form substitution touches only a test the table names: every
-/// other test keeps its expectation exactly as the suite spells it.
+/// A computed `xsd:decimal` carries a point and a fractional digit: the value four
+/// that `CEIL(3.2)` yields is spelled `"4.0"`, not `"4"`. Evaluated through the
+/// same library path the harness grades with, on an `example.org` fixture.
 #[test]
-fn canonical_substitution_is_scoped_to_the_table() {
-    let spelled = [typed("4.0", "decimal")];
-    let kept = canonical_expectation("node-expr/not-in-the-table", &spelled)
-        .expect("an unlisted test passes through");
-    assert_eq!(kept, spelled);
-    for (id, lexical, canonical, _) in NON_CANONICAL_EXPECTATIONS {
-        let expected = [typed(lexical, "decimal"), typed("7", "integer")];
-        let swapped = canonical_expectation(id, &expected).expect("a listed test substitutes");
-        assert_eq!(
-            swapped,
-            [typed(canonical, "decimal"), typed("7", "integer")]
-        );
-        assert!(
-            canonical_expectation(id, &[typed("7", "integer")]).is_err(),
-            "{id}: an entry matching no expected literal is stale"
-        );
-    }
-}
-
-/// PurRDF's own numeric output is the XSD 1.1 canonical lexical form: the
-/// `xsd:decimal` value four is spelled `"4"`, not `"4.0"` (XSD 1.1 Part 2
-/// §3.3.3.1 and §E.1 `decimalCanonicalMap`). Evaluated through the same library
-/// path the harness grades with, on an `example.org` fixture.
-#[test]
-fn engine_emits_the_canonical_decimal_lexical_form() {
+fn engine_spells_a_whole_computed_decimal_with_a_point() {
     let ttl = r"
         @prefix ex: <http://example.org/ns#> .
         @prefix sparql: <http://www.w3.org/ns/sparql#> .
@@ -1637,7 +1515,7 @@ fn engine_emits_the_canonical_decimal_lexical_form() {
         Scope::EMPTY,
     )
     .expect("evaluates");
-    assert_eq!(out, [typed("4", "decimal")]);
+    assert_eq!(out, [typed("4.0", "decimal")]);
 }
 
 /// The shared grader grades SHACL-SPARQL result annotations: a first-party case in

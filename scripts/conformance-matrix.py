@@ -285,22 +285,17 @@ def _suite_shacl12_w3c() -> SuiteResult:
     Rust test functions the cargo tally would report.
 
     Only the APPROVED suite — the entries an upstream manifest lists — is this
-    row. Pass is the entries that agree with their approved expectation exactly.
-    The entries whose approved result spells a computed decimal non-canonically
-    (graded by substituting the XSD 1.1 canonical spelling) are counted in the
-    XFail/Skip column and named in the detail, never folded into Pass. The entries of vendored files no manifest includes are
+    row. Pass is the entries that agree with their approved expectation exactly;
+    the ledgered ones are the XFail/Skip column. The entries of vendored files no
+    manifest includes are
     their own row, `_suite_shacl12_unlisted`."""
     return _scrape(
         _SHACL12_NAME, _SHACL12_SOURCE, "purrdf-shapes", "w3c12_conformance",
-        "`W3C12 TOTAL: passed N, non-canonical-expected-decimal N, xfailed N, ledger N`",
-        r"W3C12 TOTAL: passed (\d+), non-canonical-expected-decimal (\d+), "
-        r"xfailed (\d+), ledger (\d+)",
-        lambda passed, noncanonical, xfailed, _ledger: (
-            passed, noncanonical + xfailed, 0,
-            (
-                f"{passed} pass as approved · {noncanonical} non-canonical expected "
-                f"decimals (graded by the XSD 1.1 canonical spelling) · {xfailed} ledgered"
-            ),
+        "`W3C12 TOTAL: passed N, xfailed N, ledger N`",
+        r"W3C12 TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)",
+        lambda passed, xfailed, _ledger: (
+            passed, xfailed, 0,
+            f"{passed} pass as approved · {xfailed} ledgered",
             True,
         ),
     )
@@ -1730,14 +1725,8 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
                 "W3C SHACL 1.2 conformance scoreboard (9 approved tests; 1 entries of "
                 "unlisted vendored files reported apart):"
             ),
-            _noise(
-                "  core/node                            passed   4  "
-                "non-canonical-expected-decimal  1  xfailed   1"
-            ),
-            _board(
-                "  W3C12 TOTAL: passed 5, non-canonical-expected-decimal 1, xfailed 2, "
-                "ledger 2"
-            ),
+            _noise("  core/node                            passed   4  xfailed   1"),
+            _board("  W3C12 TOTAL: passed 5, xfailed 2, ledger 2"),
             _noise(_CARGO_OK),
         ),
     ),

@@ -398,14 +398,17 @@ fn cli_rules() {
     ]);
     assert_eq!(code(&unused), 2, "{}", stderr(&unused));
 
-    // The knob reaches the SPARQL 1.2 RL route too: a rule nesting a triple term every
-    // round never stops generating terms, and a limit of 3 stops it by name.
+    // The knob reaches the SPARQL 1.2 RL route too, and the route is stricter than the
+    // knob: a rule whose head templates a triple term containing a variable is a
+    // run-once rule, and a run-once rule that depends on its own output is a cycle
+    // through a closed dependency, which stratification refuses before any round runs.
+    // The refusal names the stratification, not the round limit.
     let nesting = write_file(
         dir.path(),
         "nesting.srl",
         "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:n <<( ?x ex:n ?y )>> } WHERE { ?x ex:n ?y }\n",
     );
-    let bounded = run(&[
+    let refused = run(&[
         "rules",
         "--srl",
         &nesting,
@@ -415,12 +418,60 @@ fn cli_rules() {
         "ntriples",
         &data,
     ]);
-    assert_eq!(code(&bounded), 1, "{}", stderr(&bounded));
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
     assert!(
-        stderr(&bounded).contains("past the limit of 3"),
+        stderr(&refused).contains("not stratifiable"),
         "{}",
-        stderr(&bounded)
+        stderr(&refused)
     );
+    // Its neighbour: the same head over a body that does not read the head's predicate
+    // has no cycle, so it is accepted and evaluated under the same limit.
+    let acyclic = write_file(
+        dir.path(),
+        "acyclic.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:m <<( ?x ex:n ?y )>> } WHERE { ?x ex:n ?y }\n",
+    );
+    let accepted = run(&[
+        "rules",
+        "--srl",
+        &acyclic,
+        "--max-term-generating-rounds",
+        "3",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&accepted), 0, "{}", stderr(&accepted));
+    // The flag still reaches the RL route and changes the outcome: the neighbour infers a
+    // term the graph did not hold, which is one term-generating round, so a limit of 0
+    // stops it by name and a limit of 1 lets it finish.
+    let stopped = run(&[
+        "rules",
+        "--srl",
+        &acyclic,
+        "--max-term-generating-rounds",
+        "0",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&stopped), 1, "{}", stderr(&stopped));
+    assert!(
+        stderr(&stopped).contains("past the limit of 0"),
+        "{}",
+        stderr(&stopped)
+    );
+    let one = run(&[
+        "rules",
+        "--srl",
+        &acyclic,
+        "--max-term-generating-rounds",
+        "1",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&one), 0, "{}", stderr(&one));
 
     // Exactly one rule source.
     let both = run(&[

@@ -119,7 +119,13 @@ fn arithmetic_values_types_and_source_bindings_have_independent_literal_expectat
             });
             assert!(pairs.insert(ranks), "each source-type pair occurs once");
             let promoted = ranks[0].max(ranks[1]).max(usize::from(division));
-            let lexical = if promoted < 2 { scalar } else { exponential };
+            // An integer result is spelled plainly; a decimal an operator computed
+            // carries its point.
+            let lexical = match promoted {
+                0 => scalar.to_owned(),
+                1 => format!("{scalar}.0"),
+                _ => exponential.to_owned(),
+            };
             assert_eq!(
                 row[result],
                 Some(TermValue::typed_literal(lexical, TYPES[promoted])),
@@ -161,12 +167,17 @@ fn arithmetic_values_types_and_source_bindings_have_independent_literal_expectat
                 .position(|kind| *kind == datatype)
                 .expect("source type");
             assert!(types.insert(rank));
+            // Unary plus returns its operand's spelling; unary minus computes a
+            // decimal, which carries its point.
+            let lexical = match rank {
+                0 => scalar.to_owned(),
+                1 if local == "unminus-2" => format!("{scalar}.0"),
+                1 => scalar.to_owned(),
+                _ => exponential.to_owned(),
+            };
             assert_eq!(
                 row[result],
-                Some(TermValue::typed_literal(
-                    if rank < 2 { scalar } else { exponential },
-                    TYPES[rank]
-                ))
+                Some(TermValue::typed_literal(lexical, TYPES[rank]))
             );
         }
     }

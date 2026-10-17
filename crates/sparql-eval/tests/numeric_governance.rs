@@ -213,7 +213,8 @@ fn a_products_growing_scale_is_charged_for_fuel() {
         QueryOptions::EMPTY,
         ResourceDimension::Fuel,
     );
-    assert_eq!(answer, "1");
+    // The product is `1.0`, three characters: a computed whole decimal keeps its point.
+    assert_eq!(answer, "3");
     // The exact answer at a modest scale: 0.1^(2^10) has 1,024 fractional digits.
     let metered = governed(
         &squaring("0.1", 10),
@@ -511,7 +512,7 @@ fn machine_word_numbers_charge_no_tower_work() {
         QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
-    assert_eq!(first_cell(&small), "25");
+    assert_eq!(first_cell(&small), "25.0");
     assert!(
         small.evidence().consumed_in(ResourceDimension::Fuel) < 200,
         "{:?}",
