@@ -75,6 +75,18 @@ pub enum XsdValue {
 }
 
 impl XsdValue {
+    /// The XSD length-facet measure: Unicode scalar values for strings and
+    /// already-collapsed anyURI values, octets for binary values. Other
+    /// primitives have no length facet.
+    #[must_use]
+    pub fn facet_length(&self) -> Option<usize> {
+        match self {
+            Self::String(value) | Self::AnyUri(value) => Some(value.chars().count()),
+            Self::Binary { bytes, .. } => Some(bytes.len()),
+            _ => None,
+        }
+    }
+
     /// The XSD datatype this value belongs to.
     ///
     /// # Examples

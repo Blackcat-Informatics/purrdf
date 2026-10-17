@@ -2130,12 +2130,9 @@ impl LengthSet {
     /// The length of a value in this space's unit, or `None` for a value from another
     /// space (which the caller's routing prevents).
     fn length_of(value: &XsdValue) -> Option<u64> {
-        let n = match value {
-            XsdValue::String(s) | XsdValue::AnyUri(s) => s.chars().count(),
-            XsdValue::Binary { bytes, .. } => bytes.len(),
-            _ => return None,
-        };
-        Some(u64::try_from(n).unwrap_or(u64::MAX))
+        value
+            .facet_length()
+            .map(|n| u64::try_from(n).unwrap_or(u64::MAX))
     }
 
     /// Whether the space holds more than `n` values of length `length`.

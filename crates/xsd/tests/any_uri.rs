@@ -20,6 +20,7 @@ fn lexical_mapping_preserves_everything_except_xml_whitespace() {
         let value = parse(lexical, D::AnyUri).unwrap();
         assert_eq!(value.datatype(), D::AnyUri);
         assert_eq!(value.canonical_lexical(), expected);
+        assert_eq!(value.facet_length(), Some(expected.chars().count()));
         assert_eq!(
             purrdf_xsd::value::canonical_non_numeric(&value)
                 .unwrap()
