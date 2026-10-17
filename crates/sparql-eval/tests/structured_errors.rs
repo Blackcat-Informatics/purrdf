@@ -2323,7 +2323,89 @@ fn knn_space_refusals_keep_row_terms_dimensions_and_float_bits() {
     );
 }
 
+fn knn_artifact_refusals_retain_native_format_causes() {
+    use purrdf_core::{
+        EmbeddingError, PURREMB_HEADER_LENGTH, PURREMB_MAGIC, TargetSetId, VectorSpaceId,
+    };
+    use purrdf_sparql_eval::knn::{EmbeddingSpace, KnnGuard};
+
+    let mut unsupported = vec![0; PURREMB_HEADER_LENGTH as usize];
+    unsupported[..8].copy_from_slice(&PURREMB_MAGIC);
+    unsupported[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+    for (bytes, code, detail) in [
+        (
+            Vec::new(),
+            "purremb-truncated",
+            "truncated PURREMB artifact",
+        ),
+        (
+            vec![0; PURREMB_HEADER_LENGTH as usize],
+            "purremb-bad-magic",
+            "invalid PURREMB file magic",
+        ),
+        (
+            unsupported,
+            "purremb-unsupported-version",
+            "unsupported PURREMB version 4294967295",
+        ),
+    ] {
+        let original = EmbeddingSpace::from_artifact(
+            &bytes,
+            TargetSetId::from_raw([0; 32]),
+            VectorSpaceId::from_raw([0; 32]),
+            Vec::new(),
+            KnnGuard::new(1, 1).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            original.to_string(),
+            format!("malformed RDF input: the PURREMB artifact is unreadable: {detail}")
+        );
+        let EvalError::NativeDiagnostic(diagnostic) = &original else {
+            panic!("native cause required")
+        };
+        let native = diagnostic
+            .cause()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<EmbeddingError>()
+            .unwrap();
+        let original_ptr = std::ptr::from_ref(native);
+        let retained = original.clone();
+        drop(original);
+        drop(bytes);
+        let events = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let captured = Capture::read_with_buffer(&retained, events);
+        assert_eq!(window.close().allocations, 0);
+        let diagnostic = captured.child("cause");
+        assert_eq!(diagnostic.child("kind").code, "sparql-native-data");
+        let refusal = diagnostic.child("cause");
+        assert_eq!(refusal.code, "knn-artifact-unreadable");
+        let format = refusal.child("cause");
+        assert_eq!(format.code, code);
+        if code == "purremb-unsupported-version" {
+            assert!(
+                matches!(format.field("version"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+            );
+        }
+        let EvalError::NativeDiagnostic(diagnostic) = &retained else {
+            unreachable!()
+        };
+        let native = diagnostic
+            .cause()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<EmbeddingError>()
+            .unwrap();
+        assert_eq!(std::ptr::from_ref(native), original_ptr);
+    }
+}
+
 purrdf_testkit::harness_main!(
+    knn_artifact_refusals_retain_native_format_causes,
     knn_space_refusals_keep_row_terms_dimensions_and_float_bits,
     knn_guard_refusals_keep_both_full_width_bounds,
     standard_function_interception_keeps_original_configuration_fields,

@@ -33,6 +33,22 @@ pub enum DigestKind {
     Index,
 }
 
+impl purrdf_hash::error::StructuredError for DigestKind {
+    purrdf_hash::error_visit! {
+        Section => "purremb-digest-section" {},
+        ArtifactRoot => "purremb-digest-artifact-root" {},
+        SourceExact => "purremb-digest-source-exact" {},
+        CertifiedRdf => "purremb-digest-certified-rdf" {},
+        Contract => "purremb-digest-contract" {},
+        Target => "purremb-digest-target" {},
+        TargetSet => "purremb-digest-target-set" {},
+        Matrix => "purremb-digest-matrix" {},
+        Projection => "purremb-digest-projection" {},
+        ExternalBinding => "purremb-digest-external-binding" {},
+        Index => "purremb-digest-index" {},
+    }
+}
+
 impl DigestKind {
     /// Refuse unless the recomputed digest `actual` is the recorded `expected`: every
     /// digest and typed identity PURREMB carries — written or read — is verified
@@ -53,6 +69,52 @@ impl DigestKind {
         Ok(())
     }
 }
+
+/// An original failure while opening, constructing or certifying a pack input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EmbeddingPackError {
+    /// The pack container refused its input or construction.
+    Pack(crate::PackError),
+    /// Reconstructing the resident dataset failed with its native diagnostic.
+    Dataset(crate::RdfDiagnostic),
+    /// Native canonicalization refused the dataset.
+    Canonical(crate::CanonError),
+}
+
+impl purrdf_hash::error::StructuredError for EmbeddingPackError {
+    purrdf_hash::error_visit! {
+        Pack(error) => "purremb-pack-operation" { "cause" => Cause(error) },
+        Dataset(error) => "purremb-pack-dataset" { "cause" => Cause(error) },
+        Canonical(error) => "purremb-pack-canonical" { "cause" => Cause(error) },
+    }
+}
+
+impl fmt::Display for EmbeddingPackError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pack(error) => error.fmt(f),
+            Self::Dataset(error) => error.fmt(f),
+            Self::Canonical(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for EmbeddingPackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Pack(error) => Some(error),
+            Self::Dataset(error) => Some(error),
+            Self::Canonical(error) => Some(error),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(EmbeddingPackError {
+    Pack(crate::PackError),
+    Dataset(crate::RdfDiagnostic),
+    Canonical(crate::CanonError),
+});
 
 /// A fail-closed PURREMB format, identity, or verification error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,9 +203,9 @@ pub enum EmbeddingError {
         actual: u64,
     },
     /// The attached exact source bytes are not a structurally valid pack.
-    InvalidSourcePack(String),
+    InvalidSourcePack(Box<EmbeddingPackError>),
     /// A certified external binding does not contain a structurally valid pack.
-    InvalidExternalPack(String),
+    InvalidExternalPack(Box<EmbeddingPackError>),
     /// A cross-reference names no compatible record.
     MissingReference(&'static str),
     /// Two vector spaces are not semantically comparable.
@@ -183,6 +245,66 @@ pub enum EmbeddingError {
     CertificateMismatch,
     /// The file is structurally inconsistent.
     Malformed(&'static str),
+}
+
+impl purrdf_hash::error::StructuredError for EmbeddingError {
+    purrdf_hash::error_visit! {
+        Truncated => "purremb-truncated" {},
+        BadMagic => "purremb-bad-magic" {},
+        BadTrailerMagic => "purremb-bad-trailer-magic" {},
+        UnsupportedVersion(version) => "purremb-unsupported-version" {
+            "version" => Unsigned(u128::from(*version)),
+        },
+        UnsupportedCode { field, value } => "purremb-unsupported-code" {
+            "field" => Text(field), "value" => Unsigned(u128::from(*value)),
+        },
+        CountLimit { field, value } => "purremb-count-limit" {
+            "field" => Text(field), "value" => Unsigned(u128::from(*value)),
+        },
+        ArithmeticOverflow(context) => "purremb-arithmetic-overflow" { "context" => Text(context) },
+        InvalidSpan { context, offset, length } => "purremb-invalid-span" {
+            "context" => Text(context), "offset" => Unsigned(u128::from(*offset)),
+            "length" => ByteCount(u128::from(*length)),
+        },
+        Misaligned { context, offset, alignment } => "purremb-misaligned" {
+            "context" => Text(context), "offset" => Unsigned(u128::from(*offset)),
+            "alignment" => ByteCount(u128::from(*alignment)),
+        },
+        InvalidPadding { offset } => "purremb-invalid-padding" { "offset" => Unsigned(u128::from(*offset)) },
+        NonCanonicalOrder(context) => "purremb-non-canonical-order" { "context" => Text(context) },
+        Missing(field) => "purremb-missing" { "field" => Text(field) },
+        Duplicate(field) => "purremb-duplicate" { "field" => Text(field) },
+        ReservedNonzero(field) => "purremb-reserved-nonzero" { "field" => Text(field) },
+        MalformedTlv(context) => "purremb-malformed-tlv" { "context" => Text(context) },
+        InvalidUtf8(context) => "purremb-invalid-utf8" { "context" => Text(context) },
+        DigestMismatch { kind, expected, actual } => "purremb-digest-mismatch" {
+            "kind" => Record(kind), "expected" => Bytes(expected), "actual" => Bytes(actual),
+        },
+        SourceLengthMismatch { expected, actual } => "purremb-source-length-mismatch" {
+            "expected" => ByteCount(u128::from(*expected)), "actual" => ByteCount(u128::from(*actual)),
+        },
+        ExternalLengthMismatch { expected, actual } => "purremb-external-length-mismatch" {
+            "expected" => ByteCount(u128::from(*expected)), "actual" => ByteCount(u128::from(*actual)),
+        },
+        InvalidSourcePack(error) => "purremb-invalid-source-pack" { "cause" => Cause(&**error) },
+        InvalidExternalPack(error) => "purremb-invalid-external-pack" { "cause" => Cause(&**error) },
+        MissingReference(context) => "purremb-missing-reference" { "context" => Text(context) },
+        IncompatibleVectorSpaces => "purremb-incompatible-vector-spaces" {},
+        UnavailablePrefix(dimension) => "purremb-unavailable-prefix" { "dimension" => Unsigned(u128::from(*dimension)) },
+        NonFiniteScalar { row, column } => "purremb-non-finite-scalar" {
+            "row" => Unsigned(u128::from(*row)), "column" => Unsigned(u128::from(*column)),
+        },
+        ZeroNorm { row, dimension } => "purremb-zero-norm" {
+            "row" => Unsigned(u128::from(*row)), "dimension" => Unsigned(u128::from(*dimension)),
+        },
+        FloatEnvironment(error) => "purremb-float-environment" { "cause" => Cause(error) },
+        ContentMismatch(context) => "purremb-content-mismatch" { "context" => Text(context) },
+        OrdinalMismatch { target_kind, ordinal } => "purremb-ordinal-mismatch" {
+            "target_kind" => Unsigned(u128::from(*target_kind)), "ordinal" => Unsigned(u128::from(*ordinal)),
+        },
+        CertificateMismatch => "purremb-certificate-mismatch" {},
+        Malformed(context) => "purremb-malformed" { "context" => Text(context) },
+    }
 }
 
 impl fmt::Display for EmbeddingError {
@@ -275,6 +397,7 @@ impl std::error::Error for EmbeddingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::FloatEnvironment(error) => Some(error),
+            Self::InvalidSourcePack(error) | Self::InvalidExternalPack(error) => Some(&**error),
             _ => None,
         }
     }
@@ -327,13 +450,23 @@ mod tests {
         assert_eq!(DigestKind::Section.verify(&recorded, &recorded), Ok(()));
         let mut recomputed = recorded;
         recomputed[31] ^= 1;
+        let error = DigestKind::Target
+            .verify(&recorded, &recomputed)
+            .unwrap_err();
         assert_eq!(
-            DigestKind::Target.verify(&recorded, &recomputed),
-            Err(EmbeddingError::DigestMismatch {
+            error,
+            EmbeddingError::DigestMismatch {
                 kind: DigestKind::Target,
                 expected: recorded,
                 actual: recomputed,
-            })
+            }
         );
+        let capture = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(capture.code, "purremb-digest-mismatch");
+        assert_eq!(capture.child("kind").code, "purremb-digest-target");
+        assert!(matches!(capture.field("expected"),
+            purrdf_hash::error::ErrorValue::Bytes(bytes) if bytes == recorded));
+        assert!(matches!(capture.field("actual"),
+            purrdf_hash::error::ErrorValue::Bytes(bytes) if bytes == recomputed));
     }
 }

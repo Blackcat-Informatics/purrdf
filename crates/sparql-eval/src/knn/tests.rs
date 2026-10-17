@@ -525,10 +525,17 @@ fn a_corrupted_artifact_is_a_data_error_rather_than_a_panic() {
     let error = built
         .open(roomy())
         .expect_err("a flipped byte must be caught by PURREMB's own sealing");
+    let EvalError::NativeDiagnostic(diagnostic) = &error else {
+        panic!("expected original native format failure, got {error:?}");
+    };
+    assert_eq!(diagnostic.kind(), crate::error::NativeDiagnosticKind::Data);
     assert!(
-        matches!(error, EvalError::Data(_))
-            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data),
-        "got {error:?}"
+        diagnostic
+            .cause()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<purrdf_core::EmbeddingError>()
     );
 }
 

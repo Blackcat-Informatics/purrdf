@@ -69,7 +69,7 @@ impl CertifiedPurrpckSource {
     /// bytes, then derives their RDF-dataset target.
     pub fn certify(source_bytes: &[u8]) -> Result<Self, EmbeddingError> {
         let certified = verify_pack(source_bytes)
-            .map_err(|error| EmbeddingError::InvalidSourcePack(error.to_string()))?;
+            .map_err(|error| EmbeddingError::InvalidSourcePack(Box::new(error.into())))?;
         let certified_rdf_digest = RdfcDigest::from_raw(*certified.as_bytes());
         let dataset_target = RdfDatasetTarget {
             rdfc_digest: *certified.as_bytes(),
@@ -87,7 +87,7 @@ impl CertifiedPurrpckSource {
     /// Builds and certifies a `.purrpck` directly from a frozen RDF dataset.
     pub fn from_dataset(dataset: &RdfDataset) -> Result<(Self, Vec<u8>), EmbeddingError> {
         let bytes = PackBuilder::build_bytes(dataset)
-            .map_err(|error| EmbeddingError::InvalidSourcePack(error.to_string()))?;
+            .map_err(|error| EmbeddingError::InvalidSourcePack(Box::new(error.into())))?;
         let source = Self::certify(&bytes)?;
         Ok((source, bytes))
     }
@@ -850,7 +850,7 @@ impl ExternalBinding {
         contract: &ExternalBindingContract,
     ) -> Result<Self, EmbeddingError> {
         let certified = verify_pack(artifact_bytes)
-            .map_err(|error| EmbeddingError::InvalidExternalPack(error.to_string()))?;
+            .map_err(|error| EmbeddingError::InvalidExternalPack(Box::new(error.into())))?;
         Self::from_parts(
             scope,
             ContentDigest::of(artifact_bytes),
@@ -2573,10 +2573,17 @@ mod tests {
             bytes.len() as u64
         );
         assert_eq!(&encoded[24..56], source.source_exact_digest().as_bytes());
-        assert!(matches!(
-            CertifiedPurrpckSource::certify(b"not a pack"),
-            Err(EmbeddingError::InvalidSourcePack(_))
-        ));
+        let error = CertifiedPurrpckSource::certify(b"not a pack").unwrap_err();
+        assert!(matches!(error, EmbeddingError::InvalidSourcePack(_)));
+        let capture = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(capture.code, "purremb-invalid-source-pack");
+        assert_eq!(capture.child("cause").code, "purremb-pack-operation");
+        assert_eq!(capture.child("cause").child("cause").code, "pack-truncated");
+        let native = std::error::Error::source(&error)
+            .and_then(std::error::Error::source)
+            .and_then(|error| error.downcast_ref::<crate::PackError>())
+            .unwrap();
+        assert!(matches!(native, crate::PackError::Truncated));
     }
 
     #[test]
@@ -2651,10 +2658,12 @@ mod tests {
         assert_eq!(exact.certified_rdf_digest(), None);
         let certified = ExternalBinding::from_purrpck(scope, &pack, &contract).unwrap();
         assert!(certified.certified_rdf_digest().is_some());
-        assert!(matches!(
-            ExternalBinding::from_purrpck(scope, b"ordinary bytes", &contract),
-            Err(EmbeddingError::InvalidExternalPack(_))
-        ));
+        let error = ExternalBinding::from_purrpck(scope, b"ordinary bytes", &contract).unwrap_err();
+        assert!(matches!(error, EmbeddingError::InvalidExternalPack(_)));
+        let capture = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(capture.code, "purremb-invalid-external-pack");
+        assert_eq!(capture.child("cause").code, "purremb-pack-operation");
+        assert_eq!(capture.child("cause").child("cause").code, "pack-truncated");
     }
 
     #[test]

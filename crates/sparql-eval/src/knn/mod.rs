@@ -296,6 +296,45 @@ impl core::fmt::Display for SpaceRefusal {
 
 impl std::error::Error for SpaceRefusal {}
 
+#[derive(Debug)]
+enum ArtifactRefusal {
+    Unreadable(purrdf_core::EmbeddingError),
+    Unverified(purrdf_core::EmbeddingError),
+    Metric(purrdf_core::EmbeddingError),
+    Matrix(purrdf_core::EmbeddingError),
+}
+
+impl purrdf_hash::error::StructuredError for ArtifactRefusal {
+    purrdf_hash::error_visit! {
+        Unreadable(error) => "knn-artifact-unreadable" { "cause" => Cause(error) },
+        Unverified(error) => "knn-artifact-verification" { "cause" => Cause(error) },
+        Metric(error) => "knn-metric-unreadable" { "cause" => Cause(error) },
+        Matrix(error) => "knn-matrix-unreadable" { "cause" => Cause(error) },
+    }
+}
+
+impl core::fmt::Display for ArtifactRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unreadable(error) => write!(f, "the PURREMB artifact is unreadable: {error}"),
+            Self::Unverified(error) => write!(f, "the PURREMB artifact does not verify: {error}"),
+            Self::Metric(error) => write!(f, "the family's declared metric is unusable: {error}"),
+            Self::Matrix(error) => write!(f, "the effective matrix is unreadable: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ArtifactRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Unreadable(error)
+            | Self::Unverified(error)
+            | Self::Metric(error)
+            | Self::Matrix(error) => Some(error),
+        }
+    }
+}
+
 impl KnnGuard {
     /// A guard admitting a space of at most `max_candidates` rows and an invocation
     /// requesting at most `max_neighbours` neighbours.
@@ -439,10 +478,20 @@ impl EmbeddingSpace {
         // The float environment first: every number this constructor computes (the norms
         // a cosine space divides by) is already arithmetic under it.
         let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
-        let mut view = EmbeddingView::from_bytes(artifact)
-            .map_err(|e| EvalError::data(format!("the PURREMB artifact is unreadable: {e}")))?;
-        verify_embedding(&mut view)
-            .map_err(|e| EvalError::data(format!("the PURREMB artifact does not verify: {e}")))?;
+        let mut view = EmbeddingView::from_bytes(artifact).map_err(|error| {
+            crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Data,
+                ArtifactRefusal::Unreadable(error),
+                &crate::WorkspaceCapability::resident(),
+            )
+        })?;
+        verify_embedding(&mut view).map_err(|error| {
+            crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Data,
+                ArtifactRefusal::Unverified(error),
+                &crate::WorkspaceCapability::resident(),
+            )
+        })?;
 
         let space = view.vector_space(vector_space).ok_or_else(|| {
             EvalError::config(format!(
@@ -455,8 +504,12 @@ impl EmbeddingSpace {
                 space.family_id()
             ))
         })?;
-        let metric = family.metric().map_err(|e| {
-            EvalError::data(format!("the family's declared metric is unusable: {e}"))
+        let metric = family.metric().map_err(|error| {
+            crate::NativeDiagnostic::error_cause(
+                crate::NativeDiagnosticKind::Data,
+                ArtifactRefusal::Metric(error),
+                &crate::WorkspaceCapability::resident(),
+            )
         })?;
         let kernel = Kernel::of(&metric).ok_or_else(|| {
             EvalError::config(format!(
@@ -471,7 +524,13 @@ impl EmbeddingSpace {
         })?;
         let effective = view
             .effective_matrix(target_set, vector_space)
-            .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?
+            .map_err(|error| {
+                crate::NativeDiagnostic::error_cause(
+                    crate::NativeDiagnosticKind::Data,
+                    ArtifactRefusal::Matrix(error),
+                    &crate::WorkspaceCapability::resident(),
+                )
+            })?
             .ok_or_else(|| {
                 EvalError::config(format!(
                     "the artifact holds no matrix joining target set {target_set} to vector \
