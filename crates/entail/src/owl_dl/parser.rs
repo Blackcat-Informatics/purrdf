@@ -1335,7 +1335,9 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             // clausifies the whole inclusion list at once, which is what lets absorption split
             // an axiom against inclusions the scan had not yet reached.
             meta: Vec::new(),
+            meta_sources: Vec::new(),
             absorbed: Vec::new(),
+            absorbed_sources: Vec::new(),
             // Derived with them, and from them: the generating closure reads the absorbed table.
             generating: Vec::new(),
             inverses: acc.inverses,

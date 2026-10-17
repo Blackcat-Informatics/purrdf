@@ -471,14 +471,14 @@ pub(crate) struct ClauseSet {
     by_edge: BTreeMap<(u32, bool), Vec<usize>>,
     /// Role-first clauses awaiting [`Self::by_edge`] until the role axioms resolve them.
     role_first: Vec<(Role, usize)>,
-    /// Whether each clause is TBox-DERIVED, by clause index.
+    /// Original inclusion ordinal of each TBox-derived clause, by clause index.
     ///
     /// A TBox clause is scoped to the OBJECT domain: a general concept inclusion quantifies
     /// over `owl:Thing`, and a literal value is not in it, so firing one at a node of `Δ_D`
     /// would derive a consequence the ontology does not state. The concept-structure clauses
-    /// carry no such flag — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
+    /// carry no such source — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
     /// actually carries are statements about that concept, valid over either domain.
-    tbox: Vec<bool>,
+    tbox_sources: Vec<Option<std::num::NonZeroUsize>>,
     /// Number of original admitted schema guards appended logically to this
     /// compilation. Their bodies and sorted trigger directory remain in the Kb.
     schema_count: usize,
@@ -625,7 +625,7 @@ impl ClauseSet {
     /// Whether the clause at `index` is TBox-derived, and so scoped to the object domain.
     pub(crate) fn is_tbox(&self, index: usize) -> bool {
         if index < self.clauses.len() {
-            self.tbox[index]
+            self.tbox_sources[index].is_some()
         } else {
             assert!(
                 index < self.count(),
@@ -635,18 +635,28 @@ impl ClauseSet {
         }
     }
 
-    /// Record one clause, indexing it by its trigger.
-    fn push(&mut self, clause: DlClause) {
-        self.record(clause, false);
+    /// Original normalized inclusion behind an absorbed clause. Logical schema
+    /// guards can have several inclusion licenses and have no single ordinal here.
+    pub(crate) fn tbox_source(&self, index: usize) -> Option<usize> {
+        self.tbox_sources
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|source| source.get() - 1)
     }
 
-    /// Record one TBox-derived clause — see [`ClauseSet::tbox`].
-    fn push_tbox(&mut self, clause: DlClause) {
-        self.record(clause, true);
+    /// Record one clause, indexing it by its trigger.
+    fn push(&mut self, clause: DlClause) {
+        self.record(clause, None);
+    }
+
+    /// Record one TBox-derived clause — see [`ClauseSet::tbox_sources`].
+    fn push_tbox(&mut self, clause: DlClause, source: usize) {
+        self.record(clause, Some(source));
     }
 
     /// Record one clause, indexing it by its trigger and noting its provenance.
-    fn record(&mut self, clause: DlClause, tbox: bool) {
+    fn record(&mut self, clause: DlClause, source: Option<usize>) {
         let index = self.clauses.len();
         match (clause.trigger(), clause.first_role()) {
             (Some(concept), _) => self.by_trigger.entry(concept).or_default().push(index),
@@ -654,7 +664,12 @@ impl ClauseSet {
             (None, None) => self.untriggered.push(index),
         }
         self.clauses.push(clause);
-        self.tbox.push(tbox);
+        // An inclusion ordinal is below its allocated Vec length, so adding one
+        // cannot overflow. The niche keeps each provenance slot one native word.
+        self.tbox_sources.push(source.map(|source| {
+            std::num::NonZeroUsize::new(source + 1)
+                .expect("an allocated inclusion ordinal plus one is nonzero")
+        }));
     }
 
     /// Record `body → head` where the body opens with the trigger concept `trigger` on
@@ -682,7 +697,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         untriggered: Vec::new(),
         by_edge: BTreeMap::new(),
         role_first: Vec::new(),
-        tbox: Vec::new(),
+        tbox_sources: Vec::new(),
         schema_count: kb.schema.guards.len(),
         reads: Vec::new(),
         transitive_readers: Vec::new(),
@@ -755,7 +770,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
     // inclusion's guard, so emission is a translation and not a second place the encoding is
     // chosen. Marked as TBox-derived, which is what scopes it to the OBJECT domain — a
     // general concept inclusion quantifies over `owl:Thing`, and no literal value is in it.
-    for clause in &kb.absorbed {
+    for (ordinal, clause) in kb.absorbed.iter().enumerate() {
         // ATOMIC-HEAD invariant: a [`GuardedClause`] head is ONE concept id on ONE variable
         // (see its doc), so its translation is ONE disjunct of ONE atom — never a case split
         // of this clause's own. A `⊔` reached by way of an absorbed head still branches, but
@@ -775,10 +790,13 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             (1, 1),
             "an absorbed TBox clause's head must be one concept on one variable"
         );
-        out.push_tbox(DlClause {
-            body: clause.body.clone(),
-            head,
-        });
+        out.push_tbox(
+            DlClause {
+                body: clause.body.clone(),
+                head,
+            },
+            kb.absorbed_sources[ordinal],
+        );
     }
     // The two role axioms that constrain EDGES rather than labels, so neither can be
     // internalized as a general concept inclusion and neither has a concept to trigger it.

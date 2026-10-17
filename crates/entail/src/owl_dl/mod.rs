@@ -143,6 +143,8 @@ pub(crate) struct Kb {
     /// is the encoding a general concept inclusion gets when nothing better applies, and
     /// [`Kb::absorbed`] is what "better" means.
     pub(crate) meta: Vec<u32>,
+    /// Original inclusion ordinal for each internalized meta-concept.
+    pub(crate) meta_sources: Vec<usize>,
     /// The **absorbed** TBox: one guarded clause `⋀ body → head` per inclusion whose
     /// antecedent is FAITHFUL — see [`absorb`] for the criterion, the per-shape dispositions
     /// and why a guarded clause is not merely an optimization of the internalized form.
@@ -151,6 +153,8 @@ pub(crate) struct Kb {
     /// one-atom guard `A(x) → D(x)`, and `∃r.C ⊑ D`, `A ⊓ B ⊑ D`, `{a} ⊑ D`, `rdfs:domain`
     /// and `rdfs:range` are the cases that used to branch on every node instead.
     pub(crate) absorbed: Vec<GuardedClause>,
+    /// Original inclusion ordinal for each rewritten/absorbed clause.
+    pub(crate) absorbed_sources: Vec<usize>,
     /// Concept id → whether holding it FORCES an at-least head, over the absorbed table's own
     /// closure — see [`absorb::generating`], which computes it.
     ///
@@ -296,6 +300,8 @@ impl Kb {
         Self {
             interner: Interner::default(),
             source_terms: 0,
+            meta_sources: Vec::new(),
+            absorbed_sources: Vec::new(),
             tbox_sources: Vec::new(),
             table,
             schema: bounds::Preparation::default(),
@@ -579,7 +585,9 @@ impl Kb {
                 &mut poll,
             )?;
             self.absorbed = absorption.clauses;
+            self.absorbed_sources = absorption.clause_sources;
             self.meta = absorption.meta;
+            self.meta_sources = absorption.meta_sources;
             self.encoded = true;
             #[cfg(test)]
             {

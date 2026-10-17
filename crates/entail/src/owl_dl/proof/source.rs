@@ -346,6 +346,47 @@ impl DlProof {
     }
 }
 
+impl DlProofContext<'_> {
+    /// Inspect an absorbed clause's original TBox source in this prepared context.
+    ///
+    /// This is normalization metadata, not proof or current causal support. Structural
+    /// and RBox clauses have no TBox origin. Prepared schema guards can use several
+    /// inclusions; their checked derivations are available through ResolvedClash::schema.
+    pub fn clause_tbox_origin(
+        &self,
+        index: usize,
+    ) -> Result<Option<ResolvedAxiomSource<'_>>, DlProofError> {
+        if index >= self.clauses.count() {
+            return Err(DlProofError::UnknownClause {
+                clause: index,
+                clauses: self.clauses.count(),
+            });
+        }
+        Ok(self
+            .clauses
+            .tbox_source(index)
+            .map(|source| origin::resolve(&self.kb, self.kb.tbox_sources[source])))
+    }
+
+    /// Inspect internalized schema formulas and their original source operations.
+    ///
+    /// These quantify over the object domain; they are not asserted memberships or a
+    /// selected clash's causal premises. Output borrows the prepared source directly.
+    pub fn internalized_axioms(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (ResolvedConcept<'_>, ResolvedAxiomSource<'_>)> + '_ {
+        self.kb.meta.iter().enumerate().map(|(ordinal, &concept)| {
+            (
+                ResolvedConcept::of(&self.kb, concept),
+                origin::resolve(
+                    &self.kb,
+                    self.kb.tbox_sources[self.kb.meta_sources[ordinal]],
+                ),
+            )
+        })
+    }
+}
+
 impl std::fmt::Debug for ResolvedConcept<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.kind().fmt(f)
@@ -384,5 +425,7 @@ impl std::fmt::Debug for ResolvedClash<'_> {
     }
 }
 
+#[cfg(test)]
+mod normalization_tests;
 #[cfg(test)]
 mod tests;
