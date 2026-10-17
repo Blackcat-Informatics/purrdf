@@ -579,7 +579,9 @@ impl Parser<'_> {
     /// shapes. If the value C of sh:condition is a SHACL instance of both sh:NodeShape and
     /// rdfs:Class, then the focus nodes must also conform to the constraints of the
     /// non-deactivated SHACL superclasses of C that are also SHACL instances of both
-    /// sh:NodeShape and rdfs:Class." Those superclasses join the list.
+    /// sh:NodeShape and rdfs:Class." Those superclasses join the list. A superclass
+    /// deactivated by a node expression joins it too: the expression is evaluated at the
+    /// focus node the condition judges, where a deactivated shape is conformed to.
     ///
     /// The sub-parse runs with a FRESH in-flight set and with rule parsing disabled: a
     /// shape whose rule names that shape itself as its condition is legal, and the
@@ -649,7 +651,7 @@ impl Parser<'_> {
                 seen.push(superclass.clone());
                 pending.push(superclass.clone());
                 if class_shape(&mut instances, &superclass)
-                    && !self.deactivated_of(&superclass)?
+                    && !self.constantly_deactivated(&superclass)?
                     && !out.contains(&superclass)
                 {
                     out.push(superclass);

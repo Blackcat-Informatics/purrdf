@@ -3080,6 +3080,13 @@
     "note": "A SHACL 1.2 sh:closed sh:ByTypes constraint permits the properties each value node's own rdf:type values collect through the shapes graph; an object schema states one fixed key set for every instance, so the object is left open and the constraint is dropped (on a property shape, whose value nodes are node references, likewise)."
   },
   {
+    "code": "sh:deactivated",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 shape whose sh:deactivated is a node expression is deactivated at the focus nodes where the expression produces true; a JSON Schema cannot state a condition on the focus node, so the shape is projected as active."
+  },
+  {
     "code": "sh:defaultValue",
     "from": "shacl",
     "to": "json-schema",

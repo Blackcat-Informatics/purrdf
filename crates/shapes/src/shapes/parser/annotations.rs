@@ -52,6 +52,7 @@ use ::purrdf_rdf::{FastMap, TermId, TermRef};
 use purrdf_core::SmallVec;
 
 use crate::data::{GraphFilter, native_quads};
+use crate::expression::NodeExpr;
 use crate::model::sh;
 use crate::report::Severity;
 use crate::shapes::Parser;
@@ -107,6 +108,10 @@ impl AnnotationIndex {
 pub(crate) struct StatementAnnotation {
     /// Whether a reifier states `sh:deactivated true`.
     pub(crate) deactivated: bool,
+    /// The structured node expressions the reifiers state as `sh:deactivated`, each
+    /// the blank node that is the expression, in the order the reifiers hold them.
+    /// They are evaluated at each focus node, so no verdict is available here.
+    pub(crate) expressions: Vec<Term>,
     /// The one `sh:severity` the reifiers state.
     pub(crate) severity: Option<Severity>,
     /// The one `sh:message` set the reifiers state, as literal terms in canonical
@@ -118,19 +123,82 @@ pub(crate) struct StatementAnnotation {
 }
 
 /// What the annotations of one constraint's statements (its T) resolve to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) enum Annotated {
     /// No reifier annotates the constraint.
     Plain,
     /// A reifier deactivates the constraint: it is not emitted.
     Deactivated,
-    /// A reifier overrides the constraint's severity and/or message.
+    /// A reifier overrides the constraint's severity and/or message, or states a
+    /// `sh:deactivated` node expression that is evaluated at each focus node.
     Override {
         /// The override severity.
         severity: Option<Severity>,
         /// The override messages — the whole set, canonical order; empty for none.
         messages: Vec<Literal>,
+        /// The `sh:deactivated` node expressions: the constraint is deactivated at a
+        /// focus node where any of them produces `true`.
+        deactivated_when: Vec<NodeExpr>,
     },
+}
+
+impl Annotated {
+    /// Whether `self` and `other` annotate their constraints identically. Two
+    /// `sh:deactivated` node expressions are never compared, so an annotation that
+    /// states one is the same as no other.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Plain, Self::Plain) | (Self::Deactivated, Self::Deactivated) => true,
+            (
+                Self::Override {
+                    severity,
+                    messages,
+                    deactivated_when,
+                },
+                Self::Override {
+                    severity: other_severity,
+                    messages: other_messages,
+                    deactivated_when: other_deactivated_when,
+                },
+            ) => {
+                severity == other_severity
+                    && messages == other_messages
+                    && deactivated_when.is_empty()
+                    && other_deactivated_when.is_empty()
+            }
+            _ => false,
+        }
+    }
+
+    /// This annotation with `expressions` added to the constraint's
+    /// `sh:deactivated` node expressions. A constraint that is already deactivated
+    /// stays so, and one with no annotation becomes an override that changes nothing
+    /// but the deactivation.
+    pub(crate) fn with_deactivation(self, expressions: Vec<NodeExpr>) -> Self {
+        if expressions.is_empty() {
+            return self;
+        }
+        match self {
+            Self::Deactivated => Self::Deactivated,
+            Self::Plain => Self::Override {
+                severity: None,
+                messages: Vec::new(),
+                deactivated_when: expressions,
+            },
+            Self::Override {
+                severity,
+                messages,
+                mut deactivated_when,
+            } => {
+                deactivated_when.extend(expressions);
+                Self::Override {
+                    severity,
+                    messages,
+                    deactivated_when,
+                }
+            }
+        }
+    }
 }
 
 impl Parser<'_> {
@@ -218,12 +286,35 @@ impl Parser<'_> {
             let mut messages: Vec<Term> = Vec::new();
             for (annotation, value) in rows {
                 match annotation.as_str() {
+                    sh::DEACTIVATED
+                        if matches!(value, Term::BlankNode(_))
+                            && !self.is_bare_blank_node(&value) =>
+                    {
+                        // A structured node expression. SHACL 1.2 Core: "Let expr be
+                        // the value of sh:deactivated in a reifier on a triple that
+                        // has shape subject and a parameter as predicate. If
+                        // evalExpr(expr, data graph, focus node, {}) produces true as
+                        // its only output node, the constraints that use the triple
+                        // are called deactivated constraints." The 2017 Recommendation
+                        // allows `true` and `false` alone.
+                        if self.profile == crate::profile::ShaclProfile::REC_20170720 {
+                            return Err(format!(
+                                "sh:deactivated on {} is a node expression, but SHACL REC \
+                                 2017-07-20 allows only the xsd:boolean literals true and false",
+                                where_()
+                            ));
+                        }
+                        out.present = true;
+                        if !out.expressions.contains(&value) {
+                            out.expressions.push(value);
+                        }
+                    }
                     sh::DEACTIVATED => {
                         out.present = true;
                         let flag = super::node_expr::boolean_value(&value).ok_or_else(|| {
                             format!(
-                                "sh:deactivated on {} must be an xsd:boolean literal, got {value}; \
-                                 in SHACL Core the only valid values are true and false",
+                                "sh:deactivated on {} must be an xsd:boolean literal or a node \
+                                 expression that has properties, got {value}",
                                 where_()
                             )
                         })?;
@@ -315,6 +406,7 @@ impl Parser<'_> {
         let mut deactivated = false;
         let mut severity: Option<Severity> = None;
         let mut messages: Vec<Term> = Vec::new();
+        let mut expressions: Vec<Term> = Vec::new();
         for &(predicate, object) in triples {
             let annotation = self.statement_annotation(shape, predicate, object)?;
             if !annotation.present {
@@ -323,6 +415,11 @@ impl Parser<'_> {
             self.annotations_applied
                 .insert((shape.clone(), predicate.to_owned(), object.clone()));
             deactivated |= annotation.deactivated;
+            for expression in annotation.expressions {
+                if !expressions.contains(&expression) {
+                    expressions.push(expression);
+                }
+            }
             if let Some(level) = annotation.severity {
                 match &severity {
                     Some(seen) if *seen != level => {
@@ -353,7 +450,11 @@ impl Parser<'_> {
         if deactivated {
             return Ok(Annotated::Deactivated);
         }
-        if severity.is_none() && messages.is_empty() {
+        let mut deactivated_when: Vec<NodeExpr> = Vec::with_capacity(expressions.len());
+        for expression in &expressions {
+            deactivated_when.push(self.parse_deactivation_expression(shape, expression)?);
+        }
+        if severity.is_none() && messages.is_empty() && deactivated_when.is_empty() {
             return Ok(Annotated::Plain);
         }
         // Every message is checked to be a literal by `statement_annotation`.
@@ -366,7 +467,11 @@ impl Parser<'_> {
                 })
                 .collect(),
         );
-        Ok(Annotated::Override { severity, messages })
+        Ok(Annotated::Override {
+            severity,
+            messages,
+            deactivated_when,
+        })
     }
 
     /// Record the annotated statement `(shape, predicate, object)` as applied

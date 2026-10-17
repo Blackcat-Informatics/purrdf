@@ -217,6 +217,19 @@ pub const SHACL_SHACL_SUPERSEDED: &[Supersession] = &[
                    requires an IRI or a literal",
     },
     Supersession {
+        name: "node-expression-deactivated",
+        covers: &[(
+            "DatatypeConstraintComponent",
+            "<http://www.w3.org/ns/shacl#deactivated>",
+            "",
+        )],
+        citation: "SHACL 1.2 Core, \"Deactivating Shapes and Constraints\": \"The value of \
+                   sh:deactivated is a node expression that must have either true or false as \
+                   the (only) output node.\" A blank node carrying sh:select or another node \
+                   expression is evaluated at each focus node; shacl-shacl.ttl still requires \
+                   an xsd:boolean literal",
+    },
+    Supersession {
         name: "sequence-path-with-other-values",
         covers: &[(
             "XoneConstraintComponent",

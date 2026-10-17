@@ -81,6 +81,7 @@ fn shape_is_still_a_bare_literal() {
         messages: vec![],
         constraint_annotations: vec![],
         deactivated: false,
+        deactivated_when: Vec::new(),
         box_roles: Vec::new(),
         rules: Vec::new(),
     };
@@ -108,6 +109,7 @@ fn property_shape_is_still_a_bare_literal() {
         messages: vec![],
         constraint_annotations: vec![],
         deactivated: false,
+        deactivated_when: Vec::new(),
         box_roles: Vec::new(),
     };
     assert!(
@@ -143,6 +145,7 @@ fn shapes_still_builds_via_default_then_field_assignment() {
         messages: vec![],
         constraint_annotations: vec![],
         deactivated: false,
+        deactivated_when: Vec::new(),
         box_roles: Vec::new(),
         rules: Vec::new(),
     };

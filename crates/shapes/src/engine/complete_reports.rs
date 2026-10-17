@@ -258,6 +258,7 @@ fn rec_core_messages_ignore_draft_reifier_overrides_and_legacy_keeps_them() {
         constraint: AnnotatedConstraint::Constraint(0),
         severity: Some(Severity::Info),
         messages: vec![Literal::new_simple_literal("reifier")],
+        deactivated_when: Vec::new(),
     }];
     let binding = PreparedShapes::new(Arc::new(shapes))
         .bind_complete_shared_dataset(RdfDatasetBuilder::new().freeze().unwrap())

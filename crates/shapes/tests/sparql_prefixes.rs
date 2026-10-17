@@ -6,8 +6,8 @@
 //!
 //! > A SHACL processor collects a set of prefix mappings as the union of all
 //! > individual prefix mappings that are values of the SPARQL property path
-//! > `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare` of the SPARQL-based
-//! > constraint or validator. [...] If such a collection of prefix declarations
+//! > `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare` of
+//! > the SPARQL-based constraint, validator or SPARQL-based node expression. [...] If such a collection of prefix declarations
 //! > contains multiple different namespaces for the same value of `sh:prefix`, then
 //! > the shapes graph is ill-formed. (Note that SHACL processors MAY ignore prefix
 //! > declarations that are never reached). If a SPARQL query has no value for
@@ -187,8 +187,8 @@ fn a_query_with_prefixes_does_not_use_the_implicit_declarations() {
 
 // ── The sh:prefixes path ─────────────────────────────────────────────────────────
 
-/// `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`: the version IRI a query
-/// names is navigated back to its graph, whose imports are followed.
+/// `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare`: the
+/// version IRI a query names is navigated back to its graph, whose imports are followed.
 ///
 /// The path is prefix collection over the shapes graph as it stands. `ex:G`, `ex:Q` and
 /// `ex:R` are nodes of the shapes graph, and `ex:G` is neither the shapes graph's IRI nor an
@@ -234,6 +234,47 @@ fn the_prefixes_path_follows_version_iris_and_imports() {
         )),
         target_violation()
     );
+}
+
+/// The same path reaches the declarations on the node `sh:prefixes` names, on the graph
+/// its version IRI belongs to, and on each import in either spelling: the node an
+/// `owl:imports` step arrives at, or the graph whose `owl:versionIRI` it is.
+///
+/// `ex:V2` is the version IRI of `ex:Shapes`, which declares `t:`; `ex:Shapes` imports
+/// `ex:BaseV1`, the version IRI of `ex:Base`, which declares `o:`. The query uses both
+/// labels. The neighbours each cut one hop of the path and the query that needs it is
+/// refused, so the test fails on a path that is too short and on one that reaches everything.
+#[test]
+fn the_prefixes_path_reaches_declarations_on_each_hop() {
+    let query_using = |labels: &str| {
+        format!(
+            "{PREFIXES}ex:Shape a sh:NodeShape ; sh:targetNode ex:Focus ; sh:sparql ex:C1 .\n\
+             ex:C1 sh:prefixes ex:V2 ; sh:select \"\"\"\n\
+             SELECT $this ?value WHERE {{ $this ex:property ?value . {labels} }}\"\"\" .\n"
+        )
+    };
+    let graph = |declarations: &str| {
+        format!(
+            "{}ex:Shapes owl:versionIRI ex:V2 ; owl:imports ex:BaseV1 .\n\
+             ex:Base owl:versionIRI ex:BaseV1 .\n{declarations}",
+            query_using("FILTER (?value = t:Value) FILTER (?value != o:Value)")
+        )
+    };
+    let both = format!(
+        "ex:Shapes sh:declare {} .\nex:Base sh:declare {} .\n",
+        declare_t(TARGET),
+        r#"[ sh:prefix "o" ; sh:namespace "http://example.org/other#"^^xsd:anyURI ]"#
+    );
+    assert_eq!(violations(&graph(&both)), target_violation());
+
+    // Neighbours: a declaration the path does not reach leaves its label unbound.
+    let only_shapes = format!("ex:Shapes sh:declare {} .\n", declare_t(TARGET));
+    assert!(load_error(&graph(&only_shapes)).contains("undeclared prefix \"o\""));
+    let only_base = format!(
+        "ex:Base sh:declare {} .\n",
+        r#"[ sh:prefix "o" ; sh:namespace "http://example.org/other#"^^xsd:anyURI ]"#
+    );
+    assert!(load_error(&graph(&only_base)).contains("undeclared prefix \"t\""));
 }
 
 // ── Conflicts ────────────────────────────────────────────────────────────────────

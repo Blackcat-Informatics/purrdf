@@ -465,6 +465,115 @@ fn a_list_parameter_function_resolves_from_sparql_query_text() {
     );
 }
 
+/// The first column of every row `query` returns over `data_ttl` with the functions
+/// `shapes_ttl` declares registered, `None` for an unbound value.
+fn sparql_column(data_ttl: &str, shapes_ttl: &str, query: &str) -> Vec<Option<String>> {
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
+    let data = data_of(data_ttl);
+    let result = NativeSparqlEngine::new()
+        .query_with_options_view(
+            &data,
+            SparqlRequest {
+                query: &format!("PREFIX ex: <http://example.org/ns#>\n{query}"),
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::new()
+                .with_functions(
+                    &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                        .expect("the fixture's bodies parse and admit"),
+                )
+                .with_focus_graph(Some(&data)),
+        )
+        .expect("the query evaluates: a function error is a SPARQL error, not a failed query");
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("expected solutions");
+    };
+    rows.iter()
+        .map(|row| {
+            row.first()
+                .and_then(Option::as_ref)
+                .map(|v| format!("{v:?}"))
+        })
+        .collect()
+}
+
+/// SHACL 1.2 SPARQL Extensions §7.3: "an argument that evaluates to a blank node leads
+/// to an evaluation failure and thus an error" — the call is unbound, where the same
+/// function over an IRI argument returns it. An OPTIONAL parameter turns that error into
+/// an argument "unbound in the scope", and the arguments after it keep their indexes.
+#[test]
+fn a_blank_node_argument_is_an_error_unless_its_parameter_is_optional() {
+    const FNS: &str = r"
+        ex:identity a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:arg 0 ] ;
+          sh:parameter [ sh:path shnex:arg0 ] .
+        ex:total a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:sum [ shnex:concat (
+              [ shnex:arg 0 ] [ shnex:arg 1 ] [ shnex:arg 2 ] ) ] ] ;
+          sh:parameter [ sh:path shnex:arg0 ] ;
+          sh:parameter [ sh:path shnex:arg1 ; sh:optional true ] ;
+          sh:parameter [ sh:path shnex:arg2 ; sh:optional true ] .
+        ";
+    let data = "ex:alice ex:node [ ex:label \"blank\" ] ; ex:iri ex:b .";
+    let column = |call: &str| {
+        sparql_column(
+            data,
+            FNS,
+            &format!(
+                "SELECT ?v WHERE {{ ex:alice ex:node ?blank ; ex:iri ?iri . BIND ({call} AS ?v) }}"
+            ),
+        )
+    };
+    assert_eq!(
+        column("ex:identity(?blank)"),
+        vec![None],
+        "a blank node argument to a required parameter is an error"
+    );
+    assert_eq!(
+        column("ex:identity(?iri)").len(),
+        1,
+        "the neighbouring IRI argument is accepted"
+    );
+    assert!(column("ex:identity(?iri)")[0].is_some());
+    assert!(
+        column("ex:total(1, ?blank, 5)")[0]
+            .as_ref()
+            .is_some_and(|v| v.contains('6')),
+        "an optional blank node argument is unbound and the next argument keeps index 2: {:?}",
+        column("ex:total(1, ?blank, 5)")
+    );
+}
+
+/// §7.3: "If the list of output nodes `rs` has exactly one member, then return that
+/// node. Otherwise, or if the evaluation produces an evaluation failure, the result of
+/// the SPARQL function call is an error." A body producing two nodes, or none, is a SPARQL
+/// error — an unbound `BIND` — and does not fail the query around it; the neighbouring
+/// body producing exactly one node returns it.
+#[test]
+fn a_body_that_does_not_produce_exactly_one_node_is_a_sparql_error() {
+    const FN: &str = r"
+        ex:instanceOf a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:instancesOf [ shnex:arg 0 ] ] ;
+          sh:parameter [ sh:path shnex:arg0 ] .
+        ";
+    let data = "ex:one a ex:One . ex:first a ex:Two . ex:second a ex:Two .";
+    let column = |class: &str| {
+        sparql_column(
+            data,
+            FN,
+            &format!("SELECT ?v WHERE {{ BIND (ex:instanceOf({class}) AS ?v) }}"),
+        )
+    };
+    assert_eq!(column("ex:Two"), vec![None], "two nodes: an error");
+    assert_eq!(column("ex:None"), vec![None], "no node: an error");
+    let one = column("ex:One");
+    assert!(
+        one[0].as_ref().is_some_and(|v| v.contains("one")),
+        "exactly one node is returned: {one:?}"
+    );
+}
+
 /// §7.3 without a focus graph: the call is REFUSED, never answered.
 ///
 /// A body that reads a graph cannot be evaluated against no graph. Returning an

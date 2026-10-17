@@ -50,7 +50,8 @@ use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
 use crate::report::ConformanceDisallows;
 use crate::shapes::{
-    ClosedMode, ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
+    AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
+    NodeKindValue, Path, PropertyShape, Shape, Target,
 };
 use crate::term::{NamedNode, Term};
 use crate::unique_values::{UniqueGroups, UniqueSpec};
@@ -440,6 +441,12 @@ struct LoweredIndex {
 /// traversal that could drift from the first.
 #[derive(Debug)]
 pub(crate) struct LoweredShape {
+    /// The lowered `sh:deactivated` expressions, one per entry of
+    /// [`Shape::deactivated_when`].
+    deactivated_when: Box<[LoweredExpr]>,
+    /// The lowered reifier `sh:deactivated` expressions of each entry of
+    /// [`Shape::constraint_annotations`], positionally parallel to it.
+    annotation_deactivations: Box<[Box<[LoweredExpr]>]>,
     constraints: Box<[LoweredConstraint]>,
     properties: Box<[LoweredProperty]>,
 }
@@ -454,6 +461,12 @@ pub(crate) struct LoweredProperty {
     /// The lowered `sh:defaultValue` expression, exactly when the property shape
     /// has one.
     default_value: Option<LoweredExpr>,
+    /// The lowered `sh:deactivated` expressions, one per entry of
+    /// [`PropertyShape::deactivated_when`].
+    deactivated_when: Box<[LoweredExpr]>,
+    /// The lowered reifier `sh:deactivated` expressions of each entry of
+    /// [`PropertyShape::constraint_annotations`], positionally parallel to it.
+    annotation_deactivations: Box<[Box<[LoweredExpr]>]>,
     constraints: Box<[LoweredConstraint]>,
     properties: Box<[Self]>,
     reifiers: Box<[LoweredShape]>,
@@ -911,6 +924,37 @@ impl<'a> ShapePlan<'a> {
         self.shape
     }
 
+    /// The `sh:deactivated` expressions of the shape, each paired with its
+    /// lowering.
+    ///
+    /// # Errors
+    /// Returns an error when the shape and its lowering disagree on how many it has.
+    pub(crate) fn deactivated_when(
+        &self,
+    ) -> Result<impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>, String> {
+        pair(
+            &self.shape.deactivated_when,
+            &self.lowered.deactivated_when,
+            "sh:deactivated",
+        )
+    }
+
+    /// The reifier `sh:deactivated` expressions of the shape's constraint `which`,
+    /// each paired with its lowering; none when no annotation states one.
+    ///
+    /// # Errors
+    /// Returns an error when the annotations and their lowering disagree.
+    pub(crate) fn constraint_deactivation(
+        &self,
+        which: AnnotatedConstraint,
+    ) -> Result<impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>, String> {
+        pair_annotation(
+            &self.shape.constraint_annotations,
+            &self.lowered.annotation_deactivations,
+            which,
+        )
+    }
+
     /// This shape's prepared target index.
     #[inline]
     pub(crate) fn targets(&self) -> &'a PreparedTargets {
@@ -1136,6 +1180,40 @@ impl<'a> PropertyPlan<'a> {
             property.default_value.as_ref(),
             self.lowered.default_value.as_ref(),
             "sh:defaultValue",
+        )
+    }
+
+    /// The `sh:deactivated` expressions of the property shape, each paired with its
+    /// lowering. They are evaluated at the parent's focus node, like `sh:values`.
+    ///
+    /// # Errors
+    /// Returns an error when the property shape and its lowering disagree on how
+    /// many it has.
+    pub(crate) fn deactivated_when(
+        &self,
+        property: &'a PropertyShape,
+    ) -> Result<impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>, String> {
+        pair(
+            &property.deactivated_when,
+            &self.lowered.deactivated_when,
+            "sh:deactivated",
+        )
+    }
+
+    /// The reifier `sh:deactivated` expressions of the property shape's constraint
+    /// `which`, each paired with its lowering; none when no annotation states one.
+    ///
+    /// # Errors
+    /// Returns an error when the annotations and their lowering disagree.
+    pub(crate) fn constraint_deactivation(
+        &self,
+        property: &'a PropertyShape,
+        which: AnnotatedConstraint,
+    ) -> Result<impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>, String> {
+        pair_annotation(
+            &property.constraint_annotations,
+            &self.lowered.annotation_deactivations,
+            which,
         )
     }
 
@@ -1966,6 +2044,37 @@ fn pair<'a, A, B>(
     Ok(ast.iter().zip(lowered.iter()))
 }
 
+/// The reifier `sh:deactivated` expressions of the annotation of constraint `which`,
+/// paired with their lowerings; none when no annotation names `which`.
+///
+/// `lowered` is positionally parallel to `annotations`.
+fn pair_annotation<'a>(
+    annotations: &'a [ConstraintAnnotation],
+    lowered: &'a [Box<[LoweredExpr]>],
+    which: AnnotatedConstraint,
+) -> Result<impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>, String> {
+    if annotations.len() != lowered.len() {
+        return Err(format!(
+            "internal validation-plan defect: a shape declares {} constraint annotation(s) but \
+             its lowering holds {}, so the shape lowering and the shape it lowered have diverged",
+            annotations.len(),
+            lowered.len()
+        ));
+    }
+    match annotations
+        .iter()
+        .zip(lowered.iter())
+        .find(|(annotation, _)| annotation.constraint == which)
+    {
+        Some((annotation, lowered)) => pair(
+            &annotation.deactivated_when,
+            lowered,
+            "reifier sh:deactivated",
+        ),
+        None => pair(&[], &[], "reifier sh:deactivated"),
+    }
+}
+
 /// Pair an optional AST node with its optional lowering, refusing when exactly one
 /// of the two is present — the single-item twin of [`pair`].
 fn pair_optional<'a, A, B>(
@@ -1977,7 +2086,7 @@ fn pair_optional<'a, A, B>(
         (Some(ast), Some(lowered)) => Ok(Some((ast, lowered))),
         (None, None) => Ok(None),
         (ast, _) => Err(format!(
-            "internal validation-plan defect: a property shape {} {what} but its lowering {}, so \
+            "internal validation-plan defect: a shape {} {what} but its lowering {}, so \
              the shape lowering and the shape it lowered have diverged",
             if ast.is_some() {
                 "declares"
@@ -2284,6 +2393,8 @@ pub(crate) fn lower_standalone_expression(expr: &NodeExpr) -> StandaloneLowering
         expr: lowered,
         root: standalone_root(),
         root_lowered: LoweredShape {
+            deactivated_when: Box::new([]),
+            annotation_deactivations: Box::new([]),
             constraints: Box::new([]),
             properties: Box::new([]),
         },
@@ -2387,6 +2498,7 @@ fn standalone_root() -> Shape {
         messages: Vec::new(),
         constraint_annotations: vec![],
         deactivated: false,
+        deactivated_when: Vec::new(),
         box_roles: Vec::new(),
         rules: Vec::new(),
     }
@@ -2414,7 +2526,14 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
             | Target::NodeExpression(_) => {}
         }
     }
+    // `sh:deactivated` is evaluated at the focus node the shape is validated at, so
+    // its reads are recorded from the node the walk stands on, before the constraints.
+    let deactivated_when = lower_expressions(&shape.deactivated_when, walk);
+    let annotation_deactivations =
+        lower_annotation_deactivations(&shape.constraint_annotations, walk);
     let lowered = LoweredShape {
+        deactivated_when,
+        annotation_deactivations,
         constraints: lower_constraints(&shape.constraints, &shape.property_shapes, walk),
         properties: shape
             .property_shapes
@@ -2446,6 +2565,10 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         .default_value
         .as_ref()
         .map(|expr| lower_expression(expr, walk));
+    // `sh:deactivated` is evaluated at the same focus node.
+    let deactivated_when = lower_expressions(&property.deactivated_when, walk);
+    let annotation_deactivations =
+        lower_annotation_deactivations(&property.constraint_annotations, walk);
     // Every step of the path is a read, and everything below applies to the nodes
     // the path arrives at — so the footprint moves to those value nodes here, while
     // remembering the declaring node the property-pair comparands are read from.
@@ -2492,10 +2615,32 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         path,
         values,
         default_value,
+        deactivated_when,
+        annotation_deactivations,
         constraints,
         properties,
         reifiers,
     }
+}
+
+/// Lower each of `exprs`, in order.
+fn lower_expressions(exprs: &[NodeExpr], walk: &mut ShapeWalk) -> Box<[LoweredExpr]> {
+    exprs
+        .iter()
+        .map(|expr| lower_expression(expr, walk))
+        .collect()
+}
+
+/// Lower the reifier `sh:deactivated` expressions of each of `annotations`,
+/// positionally parallel to it.
+fn lower_annotation_deactivations(
+    annotations: &[ConstraintAnnotation],
+    walk: &mut ShapeWalk,
+) -> Box<[Box<[LoweredExpr]>]> {
+    annotations
+        .iter()
+        .map(|annotation| lower_expressions(&annotation.deactivated_when, walk))
+        .collect()
 }
 
 /// Lower one SHACL property path, resolving every predicate step to a slot.
@@ -3220,6 +3365,13 @@ ex:FlagShape a sh:NodeShape ;
         shape: &super::LoweredShape,
         out: &mut Vec<&'a str>,
     ) {
+        for expr in shape
+            .deactivated_when
+            .iter()
+            .chain(shape.annotation_deactivations.iter().flatten())
+        {
+            collect_expr_class_slots(lowered, expr, out);
+        }
         for constraint in &shape.constraints {
             collect_constraint_class_slots(lowered, constraint, out);
         }
@@ -3233,7 +3385,13 @@ ex:FlagShape a sh:NodeShape ;
         property: &super::LoweredProperty,
         out: &mut Vec<&'a str>,
     ) {
-        for expr in property.values.iter().chain(&property.default_value) {
+        for expr in property
+            .values
+            .iter()
+            .chain(&property.default_value)
+            .chain(&property.deactivated_when)
+            .chain(property.annotation_deactivations.iter().flatten())
+        {
             collect_expr_class_slots(lowered, expr, out);
         }
         for constraint in &property.constraints {

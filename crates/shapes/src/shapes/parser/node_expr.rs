@@ -544,10 +544,16 @@ impl Parser<'_> {
             // constraint has true as a value for the property sh:deactivated." A
             // reifier `sh:deactivated true` on the `sh:sparql` statement
             // deactivates it the same way.
+            //
+            // The constraint node's own value is a node expression too, "as for
+            // shapes", and joins the reifiers': the constraint is deactivated at a
+            // focus node where any of them produces `true`.
             let annotated = self.constraint_annotation(id, &[(sh::SPARQL, &c_node)])?;
-            if self.deactivated_of(&c_node)? {
+            let (own_deactivated, own_expressions) = self.deactivation_of(&c_node, id)?;
+            if own_deactivated {
                 continue;
             }
+            let annotated = annotated.with_deactivation(own_expressions);
             if !matches!(annotated, Annotated::Deactivated) {
                 self.sparql_sources
                     .borrow_mut()
@@ -601,9 +607,15 @@ impl Parser<'_> {
             // (A constant — an IRI or a literal — is a term, not a node carrying
             // expression properties.)
             let annotated = self.constraint_annotation(id, &[(sh::EXPRESSION, &expr_node)])?;
-            if matches!(expr_node, Term::BlankNode(_)) && self.deactivated_of(&expr_node)? {
+            let (own_deactivated, own_expressions) = if matches!(expr_node, Term::BlankNode(_)) {
+                self.deactivation_of(&expr_node, id)?
+            } else {
+                (false, Vec::new())
+            };
+            if own_deactivated {
                 continue;
             }
+            let annotated = annotated.with_deactivation(own_expressions);
             out.push(
                 Constraint::Expression {
                     expr,
@@ -964,7 +976,7 @@ impl Parser<'_> {
                 disjoint,
             };
             match (min_annotation, max_annotation) {
-                (Some(min), Some(max)) if min == max => {
+                (Some(min), Some(max)) if min.same_as(&max) => {
                     out.push(constraint(min_count, max_count), min);
                 }
                 (min, max) => {
@@ -2311,11 +2323,16 @@ impl ParsedConstraints {
         match annotated {
             Annotated::Deactivated => {}
             Annotated::Plain => self.constraints.push(constraint),
-            Annotated::Override { severity, messages } => {
+            Annotated::Override {
+                severity,
+                messages,
+                deactivated_when,
+            } => {
                 self.annotations.push(ConstraintAnnotation {
                     constraint: AnnotatedConstraint::Constraint(self.constraints.len()),
                     severity,
                     messages,
+                    deactivated_when,
                 });
                 self.constraints.push(constraint);
             }

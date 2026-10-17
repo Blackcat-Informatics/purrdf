@@ -131,10 +131,9 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "sparql-query-text",
         "has an unparsable sh:select query",
-        2,
+        1,
         "the text of a SPARQL-based constraint is SPARQL, which shacl-shacl.ttl does not \
-         parse: a query that does not parse (sparql-syntax-error-001), or that uses a prefix \
-         no declaration in scope binds (prefixes-003), is refused at load",
+         parse: a query that does not parse (sparql-syntax-error-001) is refused at load",
     ),
     (
         "unsupported-entailment-regime",
@@ -159,6 +158,8 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
 /// * `node-expression-target-node`: a blank-node sh:targetNode that is the subject of
 ///   no triple, and targetNode-select-001, whose structured sh:targetNode PurRDF
 ///   evaluates.
+/// * `node-expression-deactivated`: sparql/node/deactivated-select-001, whose
+///   `sh:deactivated` is a SPARQL node expression.
 /// * `sequence-path-with-other-values`: core/path/path-strange-002, whose sequence-path
 ///   node also carries sh:inversePath; the exact count keeps this pattern from absorbing
 ///   any other input.
@@ -166,6 +167,7 @@ const SHACL_SHACL_BEHIND_THE_SPEC: &[(&str, usize)] = &[
     ("list-valued-node-kind", 2),
     ("path-valued-property-pair", 4),
     ("node-expression-target-node", 2),
+    ("node-expression-deactivated", 1),
     ("sequence-path-with-other-values", 1),
 ];
 

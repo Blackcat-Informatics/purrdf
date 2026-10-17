@@ -185,16 +185,6 @@ const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
          sh:RulesEntailment and refuses the shapes graph at load",
     ),
     (
-        "w3c12/sparql/node/deactivated-select-001",
-        "sh:deactivated is a node expression, which the engine does not evaluate there; \
-         it refuses the shapes graph at load",
-    ),
-    (
-        "w3c12/sparql/node/prefixes-003",
-        "the sh:select query uses a prefix declared in no scope the engine resolves; it \
-         refuses the query as a syntax error (undeclared prefix test) at load",
-    ),
-    (
         "w3c12/sparql/pre-binding/pre-binding-009",
         "the sh:sparql query contains VALUES, which the engine refuses with pre-bound \
          variables (stricter than the Working Draft's mentions-a-pre-bound-variable rule)",
@@ -238,10 +228,9 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 ///
 /// # What it counts
 ///
-/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report but one: 199 of
-/// the suite's 213 — all but its [`W3C12_DECLARED_FAILURES`], its
-/// [`W3C12_REFUSED_AT_LOAD`] and `sparql/functions/singleInstanceOf-001`, whose three
-/// lanes agree on the same validation error instead. `validator-001` is among
+/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report: 202 of the
+/// suite's 213 — all but its [`W3C12_DECLARED_FAILURES`] and its
+/// [`W3C12_REFUSED_AT_LOAD`]. `validator-001` is among
 /// them in both suites: its `owl:imports <http://datashapes.org/dash>` sits on a node
 /// that is not an import anchor, so it is data, and the shapes graph loads with an
 /// empty import table. The other 195 come from the SHACL 1.0 suite and the
@@ -249,7 +238,7 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// carries the W3C vocabulary's own declarations of three built-ins, and the two
 /// SHACL 1.2 cases whose custom list function is called only from SPARQL text,
 /// which the product round trip carries without refusing the function.
-const AGREED_ON_REPORT_CASES: usize = 394;
+const AGREED_ON_REPORT_CASES: usize = 397;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -290,7 +279,7 @@ const AGREED_ON_REPORT_CASES: usize = 394;
 /// `uniqueValuesFor-004`, `deactivated-003` (whose only constraints a reifier
 /// deactivates) and `property-select-001` (whose computed full name satisfies
 /// `sh:hasValue "John Muir"`).
-const AGREED_WITH_RESULTS_CASES: usize = 371;
+const AGREED_WITH_RESULTS_CASES: usize = 374;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

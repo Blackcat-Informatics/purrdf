@@ -1254,7 +1254,9 @@ fn discover(
     shape: &Shape,
     gained: &[[Term; 3]],
 ) -> Option<Vec<Term>> {
-    if !rule.conditions.is_empty() {
+    // Which focus nodes a node-expression `sh:deactivated` leaves is decided over the
+    // graph as it stands, not from the triples gained.
+    if !rule.conditions.is_empty() || !shape.deactivated_when.is_empty() {
         return None;
     }
     let mut classes: Vec<&str> = Vec::new();
@@ -1319,9 +1321,23 @@ fn eligible_focus_nodes(
     // (and a host slicing its signal into yields gets the event loop back) between the
     // condition checks of successive focus nodes; the ungoverned path pays one branch.
     let governors = crate::sparql::current_governors();
+    let shape_plan = plan.shape_plan()?;
     let mut focus_nodes = Vec::new();
     for focus in plan.focus_nodes(data)? {
         crate::sparql::poll_between_evaluations(governors.as_deref())?;
+        // SHACL 1.2 Inference Rules: a shape rule is executed "for each target node of
+        // each of the linked and non-deactivated shapes", and Core decides a shape's
+        // deactivation per focus node when its `sh:deactivated` is a node expression.
+        if crate::constraints::deactivated_at(
+            data,
+            shape_plan,
+            0,
+            &crate::engine::FocusNode::resolve(data.core_view(), &focus),
+            &shape.id,
+            shape_plan.deactivated_when()?,
+        )? {
+            continue;
+        }
         if conditions_hold(data, &focus, &plan)? {
             focus_nodes.push(focus);
         }
@@ -1777,6 +1793,26 @@ pub(crate) fn expected_derived_triples(
                 if !focus.is_subject() {
                     continue;
                 }
+                // A node-expression `sh:deactivated` deactivates the shape, or the
+                // property shape, at the focus nodes where it produces `true`.
+                let focus_node = crate::engine::FocusNode::resolve(data.core_view(), &focus);
+                if crate::constraints::deactivated_at(
+                    data,
+                    plan,
+                    0,
+                    &focus_node,
+                    &shape.id,
+                    plan.deactivated_when()?,
+                )? || crate::constraints::deactivated_at(
+                    data,
+                    plan,
+                    0,
+                    &focus_node,
+                    &ps.id,
+                    property_plan.deactivated_when(ps)?,
+                )? {
+                    continue;
+                }
                 for value in
                     crate::constraints::property_value_terms(data, &focus, ps, property_plan)?
                 {
@@ -1834,6 +1870,17 @@ impl<'a> RulePlan<'a> {
                 .map(|node| node.to_term(data.core_view()))
                 .collect()
         })
+    }
+
+    /// The plan of the rule's own shape.
+    fn shape_plan(&self) -> Result<crate::plan::ShapePlan<'_>, String> {
+        self.lowered.plan(
+            self.shape,
+            0,
+            &self.binding,
+            self.lowered.classes(),
+            self.lowered.no_targets(),
+        )
     }
 
     /// The plan of the `position`-th `sh:condition` shape.

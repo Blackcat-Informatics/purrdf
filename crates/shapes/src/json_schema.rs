@@ -1505,6 +1505,7 @@ pub fn compile_with_value_vocab(
     // Enum enumeration losses (empty vocab, blank-node member) recorded first,
     // deterministically, ahead of the per-shape losses.
     ctx.record_entries(vocab_losses);
+    ctx.record_entries(node_expression_deactivation_losses(shapes));
 
     // Build $defs: one entry per `sh:targetClass` of every active node shape,
     // keyed by the class local name; the body is the shape compiled as an object
@@ -1672,6 +1673,7 @@ fn compile_with_surface(
     ctx.datatype_definitions
         .clone_from(&surface.datatype_definitions);
     ctx.record_entries(vocab_losses);
+    ctx.record_entries(node_expression_deactivation_losses(shapes));
 
     let mut defs: Map<String, Value> = Map::new();
     for shape in &shapes.node_shapes {
@@ -3497,6 +3499,56 @@ fn class_def_target_iri(target: &Target) -> Option<&str> {
 const NODE_EXPRESSION_TARGET_NOTE: &str = "A shape targeted via a node-expression sh:targetNode \
      selects the output nodes of that expression, not a class extension; it has no closed-world \
      JSON Schema $def and its constraints are not enforced by the emitted schema.";
+
+/// The loss note of a node-expression `sh:deactivated`.
+const NODE_EXPRESSION_DEACTIVATED_NOTE: &str = "A shape whose sh:deactivated is a node expression \
+     is deactivated at the focus nodes where that expression produces true; a JSON Schema cannot \
+     state a condition on the focus node, so the shape is projected as active.";
+
+/// One loss per shape of `shapes` that has a `sh:deactivated` node expression (a
+/// blank node), on the shape or a constraint of it, or on a reifier of one of its
+/// statements, in subject order.
+///
+/// Every projection below reads a shape's deactivation as the constant
+/// [`Shape::deactivated`], so a shape deactivated per focus node is projected as
+/// active. The shapes graph is searched rather than the shape tree because the
+/// expression is a property of the shape NODE, and the nodes reached through
+/// `sh:node`, `sh:and` and `sh:property` are as much shapes as the top-level ones.
+fn node_expression_deactivation_losses(shapes: &Shapes) -> Vec<LossEntry> {
+    let data = &shapes.shapes_dataset;
+    let predicate = Term::NamedNode(NamedNode::from(crate::model::sh::DEACTIVATED));
+    let mut subjects: Vec<String> =
+        native_quads(data, None, Some(&predicate), None, GraphFilter::AnyGraph)
+            .into_iter()
+            .filter(|(_, _, object)| matches!(object, Term::BlankNode(_)))
+            .map(|(subject, _, _)| subject.to_string())
+            .collect();
+    // The same value on a reifier annotates the statement it reifies: the shape that
+    // is that statement's subject is the one projected as active.
+    if let Some(deactivated) = data.term_id_by_iri(crate::model::sh::DEACTIVATED) {
+        let mut reified: Vec<(::purrdf_rdf::TermId, ::purrdf_rdf::TermId)> = Vec::new();
+        for quad in data.annotation_quads() {
+            if quad.p == deactivated
+                && matches!(data.resolve(quad.o), ::purrdf_rdf::TermRef::Blank { .. })
+            {
+                reified.push((quad.s, quad.o));
+            }
+        }
+        for quad in data.reifier_quads() {
+            if reified.iter().any(|(reifier, _)| *reifier == quad.s)
+                && let ::purrdf_rdf::TermRef::Triple { s, .. } = data.resolve(quad.o)
+            {
+                subjects.push(crate::term::term_id_to_native(data, s).to_string());
+            }
+        }
+    }
+    subjects.sort_unstable();
+    subjects.dedup();
+    subjects
+        .iter()
+        .map(|subject| loss_entry("sh:deactivated", subject, NODE_EXPRESSION_DEACTIVATED_NOTE))
+        .collect()
+}
 
 /// The loss note of a `sh:targetWhere`.
 const WHERE_TARGET_NOTE: &str = "A shape targeted via sh:targetWhere selects the nodes that \

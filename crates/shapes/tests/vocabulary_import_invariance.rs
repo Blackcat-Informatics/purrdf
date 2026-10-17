@@ -92,20 +92,6 @@ const REFUSED_AT_LOAD: &[(&str, &str)] = &[
         "sh:entailment names a rule set; only sh:RulesEntailment is supported",
     ),
     (
-        "w3c12/sparql/functions/singleInstanceOf-001",
-        "loads, but validation fails identically in both runs: a custom list function \
-         returns two output nodes, which SHACL 1.2 Node Expressions §6.2 treats as a \
-         failure the engine reports as a validation error",
-    ),
-    (
-        "w3c12/sparql/node/deactivated-select-001",
-        "sh:deactivated is a node expression the engine does not evaluate there",
-    ),
-    (
-        "w3c12/sparql/node/prefixes-003",
-        "the sh:select query uses a prefix no scope the engine resolves declares",
-    ),
-    (
         "w3c12/sparql/pre-binding/pre-binding-009",
         "the sh:sparql query contains VALUES, which the engine refuses with pre-bound variables",
     ),
@@ -139,7 +125,7 @@ const TOTAL_CASES: usize = 415;
 /// `owl:imports <http://datashapes.org/dash>` on a node that is not an import anchor,
 /// so the triple is data; both runs load it with an empty import table, and it is
 /// compared on a report like every other case.
-const COMPARED_ON_REPORT: usize = 394;
+const COMPARED_ON_REPORT: usize = 397;
 
 /// The inputs among [`TOTAL_CASES`] that must be refused at load and are compared on
 /// an identical error: the declared `sht:Failure` inputs (13, one of them in
