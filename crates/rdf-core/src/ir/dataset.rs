@@ -99,14 +99,14 @@ pub type ReifierRow = (TermId, TermId, Option<TermId>);
 pub type AnnotationRow = (TermId, TermId, TermId, Option<TermId>);
 
 /// Whether an owned graph slot — a quad's `graph_name` or a statement-layer row's
-/// `graph` — names the named graph whose IRI is `graph`.
+/// `graph` — belongs to the explicitly selected default or named graph.
 ///
-/// One predicate for all three tables, so [`RdfDataset::project_named_graph`] cannot
+/// One predicate for all three tables, so [`RdfDataset::project_graph`] cannot
 /// drift into selecting the base layer by one rule and the statement layer by
-/// another. `None` is the default graph and is never a named graph; a blank-node
-/// graph name is not addressable by IRI, so neither answers `true`.
-fn graph_slot_names(slot: Option<&RdfTerm>, graph: &str) -> bool {
-    matches!(slot, Some(RdfTerm::Iri(iri)) if iri == graph)
+/// another. `None` selects only the default graph; named selection retains the
+/// complete RDF term identity, including a blank graph's label.
+fn graph_slot_matches(slot: Option<&RdfTerm>, graph: Option<&RdfTerm>) -> bool {
+    slot == graph
 }
 
 /// A handle identifying a pushed quad by its dense (deduplicated) ordinal, used to
@@ -1220,23 +1220,23 @@ impl RdfDataset {
         self.named_graphs().map(|g| self.to_owned_term(g))
     }
 
-    /// Project one named graph into a fresh default-graph dataset — the named
+    /// Project one graph into a fresh default-graph dataset — the selected
     /// graph's whole content, base layer and RDF 1.2 statement layer alike, in
     /// isolation.
     ///
     /// Selection is graph-FAITHFUL and emission is graph-ERASING, uniformly across
     /// both layers:
     ///
-    /// * a base quad contributes when its graph name is the IRI `graph`, and is
+    /// * a base quad contributes when its graph slot equals `graph`, and is
     ///   re-emitted with no graph name;
     /// * a statement-layer row — a reifier declaration `(reifier, triple-term,
     ///   graph)` or an annotation `(reifier, predicate, object, graph)` — contributes
-    ///   when **its own graph slot** is the IRI `graph`, and is likewise re-emitted
+    ///   when **its own graph slot** equals `graph`, and is likewise re-emitted
     ///   with its graph slot cleared.
     ///
-    /// A default-graph row (`graph == None`) is not part of any named graph and is
-    /// never projected; nor is a row under a blank-node graph name, which no IRI
-    /// argument can address.
+    /// `None` selects the true default graph. `Some` selects exactly one IRI- or
+    /// blank-named graph. Neither selects rows asserted in another graph. A
+    /// missing or declaration-only graph produces an empty default-graph dataset.
     ///
     /// This is the exact mirror image of the rule [`mod@crate::describe`] settled on
     /// (graph-BLIND selection, graph-FAITHFUL emission), and deliberately so — a
@@ -1256,11 +1256,21 @@ impl RdfDataset {
     /// `<g1>`'s projection, and hence make
     /// [`PipelineBundle::graph_digest`](super::pipeline_bundle::PipelineBundle::graph_digest)
     /// a digest partly over another graph's content.
-    pub fn project_named_graph(&self, graph: &str) -> Result<Self, crate::RdfDiagnostic> {
+    ///
+    /// # Errors
+    /// Rejects a literal or triple-term graph name, and retains native allocation
+    /// or dataset-validation failures while assembling the selected RDF surface.
+    pub fn project_graph(&self, graph: Option<&RdfTerm>) -> Result<Self, crate::RdfDiagnostic> {
+        if graph.is_some_and(|name| !matches!(name, RdfTerm::Iri(_) | RdfTerm::BlankNode(_))) {
+            return Err(crate::RdfDiagnostic::error(
+                "rdf-ir-graph-name-invalid",
+                "projection graph must be an IRI or blank node",
+            ));
+        }
         let mut builder = super::builder::RdfDatasetBuilder::new();
 
         for mut quad in self.owned_quads() {
-            if !graph_slot_names(quad.graph_name.as_ref(), graph) {
+            if !graph_slot_matches(quad.graph_name.as_ref(), graph) {
                 continue;
             }
             quad.graph_name = None;
@@ -1268,7 +1278,7 @@ impl RdfDataset {
         }
 
         for mut reifier in self.owned_reifiers() {
-            if !graph_slot_names(reifier.graph.as_ref(), graph) {
+            if !graph_slot_matches(reifier.graph.as_ref(), graph) {
                 continue;
             }
             reifier.graph = None;
@@ -1276,7 +1286,7 @@ impl RdfDataset {
         }
 
         for mut annotation in self.owned_annotations() {
-            if !graph_slot_names(annotation.graph.as_ref(), graph) {
+            if !graph_slot_matches(annotation.graph.as_ref(), graph) {
                 continue;
             }
             annotation.graph = None;
@@ -4210,7 +4220,7 @@ mod tests {
         }
     }
 
-    mod named_graph_projection {
+    mod graph_projection {
         use super::*;
 
         /// The `graphReifierScope` shape, doubled: ONE reifier id `r1` is declared
@@ -4265,7 +4275,7 @@ mod tests {
         fn projection_does_not_absorb_another_graphs_statement_layer() {
             let ds = two_graphs_sharing_one_reifier();
 
-            let g1 = ds.project_named_graph("http://example.org/g1").unwrap();
+            let g1 = ds.project_graph(Some(&term("g1"))).unwrap();
             let quads: Vec<_> = g1.owned_quads().collect();
             assert_eq!(quads.len(), 2, "only <g1>'s two base quads: {quads:?}");
             assert!(
@@ -4297,7 +4307,7 @@ mod tests {
             assert!(annotations[0].graph.is_none());
 
             // The mirror image, so the test cannot pass by preferring one graph.
-            let g2 = ds.project_named_graph("http://example.org/g2").unwrap();
+            let g2 = ds.project_graph(Some(&term("g2"))).unwrap();
             let reifiers: Vec<_> = g2.owned_reifiers().collect();
             let annotations: Vec<_> = g2.owned_annotations().collect();
             assert_eq!(reifiers.len(), 1);
@@ -4325,10 +4335,112 @@ mod tests {
             b.push_annotation_in_graph(r1, kind, record, None).unwrap();
             let ds = b.freeze().expect("valid dataset");
 
-            let g1 = ds.project_named_graph("http://example.org/g1").unwrap();
+            let g1 = ds.project_graph(Some(&term("g1"))).unwrap();
             assert_eq!(g1.owned_quads().count(), 1);
             assert_eq!(g1.owned_reifiers().count(), 0);
             assert_eq!(g1.owned_annotations().count(), 0);
+
+            let default = ds.project_graph(None).unwrap();
+            assert_eq!(default.owned_quads().count(), 0);
+            assert_eq!(default.owned_reifiers().count(), 1);
+            assert_eq!(default.owned_annotations().count(), 1);
+            assert!(default.owned_reifiers().all(|row| row.graph.is_none()));
+            assert!(default.owned_annotations().all(|row| row.graph.is_none()));
+        }
+
+        #[test]
+        fn projection_isolates_default_iri_and_scoped_blank_worlds_in_every_table() {
+            let mut b = RdfDatasetBuilder::new();
+            let a = iri(&mut b, "a");
+            let related = iri(&mut b, "related");
+            let reifier = iri(&mut b, "shared-reifier");
+            let named = iri(&mut b, "named-world");
+            let blank = b.intern_blank("blank-world", BlankScope::DEFAULT).unwrap();
+            let scoped_blank = b.intern_blank("blank-world", BlankScope(7)).unwrap();
+            for (graph, label) in [
+                (None, "default-value"),
+                (Some(named), "named-value"),
+                (Some(blank), "blank-value"),
+                (Some(scoped_blank), "scoped-blank-value"),
+            ] {
+                let value = iri(&mut b, label);
+                b.push_quad(reifier, related, value, graph).unwrap();
+                let inner = b.intern_triple(a, related, value).unwrap();
+                let nested = b.intern_triple(a, related, inner).unwrap();
+                b.push_reifier_in_graph(reifier, nested, graph).unwrap();
+                b.push_annotation_in_graph(reifier, related, value, graph)
+                    .unwrap();
+            }
+            let ds = b.freeze().unwrap();
+            let named = term("named-world");
+            let blank = RdfTerm::BlankNode("blank-world".to_owned());
+            let scoped_blank = ds.to_owned_term(scoped_blank);
+            assert_ne!(blank, scoped_blank);
+            for (graph, label) in [
+                (None, "default-value"),
+                (Some(&named), "named-value"),
+                (Some(&blank), "blank-value"),
+                (Some(&scoped_blank), "scoped-blank-value"),
+            ] {
+                let selected = ds.project_graph(graph).unwrap();
+                let value = term(label);
+                let quads: Vec<_> = selected.owned_quads().collect();
+                assert_eq!(quads.len(), 1);
+                assert_eq!(quads[0].subject, term("shared-reifier"));
+                assert_eq!(quads[0].object, value);
+                assert!(quads[0].graph_name.is_none());
+                let reifiers: Vec<_> = selected.owned_reifiers().collect();
+                assert_eq!(reifiers.len(), 1);
+                assert_eq!(reifiers[0].reifier, term("shared-reifier"));
+                assert_eq!(reifiers[0].statement.subject, term("a"));
+                let RdfTerm::Triple(inner) = &reifiers[0].statement.object else {
+                    panic!("nested RDF 1.2 triple term must survive projection");
+                };
+                assert_eq!(inner.subject, term("a"));
+                assert_eq!(inner.object, value);
+                assert!(reifiers[0].graph.is_none());
+                let annotations: Vec<_> = selected.owned_annotations().collect();
+                assert_eq!(annotations.len(), 1);
+                assert_eq!(annotations[0].object, value);
+                assert!(annotations[0].graph.is_none());
+                assert_eq!(selected.named_graphs().count(), 0);
+            }
+        }
+
+        #[test]
+        fn projection_of_missing_and_declared_empty_worlds_is_empty() {
+            let mut b = RdfDatasetBuilder::new();
+            let empty = iri(&mut b, "empty");
+            b.declare_named_graph(empty).unwrap();
+            let a = iri(&mut b, "a");
+            let related = iri(&mut b, "related");
+            b.push_quad(a, related, a, None).unwrap();
+            let ds = b.freeze().unwrap();
+            for graph in [
+                term("empty"),
+                term("missing"),
+                RdfTerm::BlankNode("absent".to_owned()),
+            ] {
+                let selected = ds.project_graph(Some(&graph)).unwrap();
+                assert_eq!(selected.quad_count(), 0);
+                assert_eq!(selected.owned_reifiers().count(), 0);
+                assert_eq!(selected.owned_annotations().count(), 0);
+                assert_eq!(selected.named_graphs().count(), 0);
+            }
+        }
+
+        #[test]
+        fn projection_rejects_non_graph_names_even_when_no_row_can_match() {
+            let ds = RdfDatasetBuilder::new().freeze().unwrap();
+            let triple = RdfTerm::Triple(Box::new(RdfTriple::new(
+                term("a"),
+                "http://example.org/related",
+                term("b"),
+            )));
+            for graph in [RdfTerm::Literal(RdfLiteral::simple("invalid")), triple] {
+                let error = ds.project_graph(Some(&graph)).unwrap_err();
+                assert_eq!(error.code, "rdf-ir-graph-name-invalid");
+            }
         }
     }
 

@@ -636,7 +636,7 @@ fn finish(hasher: Sha256) -> ContentDigest {
 /// Blank-node graph names are deliberately absent: a per-graph digest is addressed
 /// by IRI on BOTH carriers (see
 /// [`canonicalize_graph_view`](super::canon::canonicalize_graph_view) and
-/// [`RdfDataset::project_named_graph`]), and a blank name is not stable across
+/// [`RdfDataset::project_graph`]), and a blank name is not stable across
 /// carriers anyway — composition standardizes blank scopes apart. Rows in a
 /// blank-named graph are folded into the pipeline root's residue leaf instead.
 fn iri_named_graphs<D: DatasetView>(view: &D) -> Vec<HandleKey> {
@@ -1110,7 +1110,7 @@ impl<H> PipelineBundle<H> {
     /// The canonical [`ContentDigest`] of the named graph `graph` — the subgraph of
     /// the dataset asserted in `<graph>`, canonicalized to N-Quads.
     ///
-    /// Built by [`RdfDataset::project_named_graph`] and hashed over the projection's
+    /// Built by [`RdfDataset::project_graph`] and hashed over the projection's
     /// canonical form. The RDF 1.2 reifier/annotation side-tables are keyed per graph
     /// in this IR (each row carries the graph its declaration or annotation was
     /// asserted in), so the projection admits exactly the rows whose own graph slot is
@@ -1829,7 +1829,7 @@ fn flat_graph_digest(
     graph: &str,
 ) -> Result<ContentDigest, PipelineBundleError> {
     let subgraph = dataset
-        .project_named_graph(graph)
+        .project_graph(Some(&crate::RdfTerm::iri(graph)))
         .map_err(PipelineBundleError::Materialization)?;
     let digest = ContentDigest::of(canonicalize(&subgraph).nquads.as_bytes());
     DigestWorkCounter::bump(&work.graph_canonicalizations);

@@ -625,7 +625,9 @@ fn flat_graph_scope_commutes_with_statement_layer_rows_present_in_both_graphs() 
     let via_scope = try_canonicalize_flat_graph_view(&*ds, &g, CanonHash::Sha256)
         .expect("g is admissible")
         .nquads;
-    let projected = ds.project_named_graph(&g).unwrap();
+    let projected = ds
+        .project_graph(Some(&purrdf_core::RdfTerm::iri(&g)))
+        .unwrap();
     let via_projection = try_canonicalize_flat_view(&projected, CanonHash::Sha256)
         .expect("g's projection is admissible")
         .nquads;
