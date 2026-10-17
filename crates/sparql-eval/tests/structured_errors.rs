@@ -3236,6 +3236,232 @@ fn knn_space_refusals_keep_row_terms_dimensions_and_float_bits() {
     );
 }
 
+fn knn_metric_and_duplicate_terms_keep_native_parameters_and_values() {
+    use purrdf_core::{DistanceMetric, TargetId, TermValue};
+    use purrdf_sparql_eval::knn::{EmbeddingSpace, KnnGuard, TermRows};
+
+    let metric = DistanceMetric::Extension {
+        identifier: "caller-metric".into(),
+        parameter_encoding: "opaque-v1".into(),
+        parameters: vec![0, 255, 128, 1],
+    };
+    let error = EmbeddingSpace::from_vectors(&metric, 2, Vec::new(), KnnGuard::new(1, 1).unwrap())
+        .unwrap_err();
+    drop(metric);
+    let fields =
+        memory_failure_fields(&error, NativeDiagnosticKind::Config, "knn-extension-metric");
+    assert!(matches!(fields.field("space"), ErrorValue::Absent));
+    let parameters = fields.child("metric");
+    assert_eq!(parameters.code, "embedding-metric-extension");
+    assert!(matches!(
+        parameters.field("identifier"),
+        ErrorValue::Text("caller-metric")
+    ));
+    assert!(matches!(
+        parameters.field("parameter_encoding"),
+        ErrorValue::Text("opaque-v1")
+    ));
+    assert!(matches!(
+        parameters.field("parameters"),
+        ErrorValue::Bytes([0, 255, 128, 1])
+    ));
+
+    let error = TermRows::new(vec![
+        TermValue::simple_literal("原文"),
+        TermValue::simple_literal("原文"),
+    ])
+    .unwrap_err();
+    let clone = error.clone();
+    drop(error);
+    let fields = memory_failure_fields(&clone, NativeDiagnosticKind::Config, "knn-duplicate-term");
+    let ErrorValue::Term(term) = fields.field("term") else {
+        panic!("original RDF term")
+    };
+    let literal = Capture::read(term);
+    assert_eq!(literal.code, "rdf-term-literal");
+    assert!(matches!(
+        literal.field("lexical_form"),
+        ErrorValue::Text("原文")
+    ));
+
+    let id = TargetId::from_raw([255; 32]);
+    let events = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&id, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "embedding-TargetId");
+    assert!(matches!(fields.field("bytes"), ErrorValue::Bytes(value) if value == [255; 32]));
+}
+
+fn knn_count_refusals_retain_exact_integer_owners_and_original_terms() {
+    use purrdf_core::TermValue;
+    use purrdf_sparql_eval::knn::{KnnGuard, neighbour_count};
+    use purrdf_testkit::error_capture::Event;
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    let guard = KnnGuard::new(1, u64::MAX).unwrap();
+    for (lexical, code, small, negative) in [
+        (
+            "-170141183460469231731687303715884105728",
+            "knn-negative-count",
+            Some(i128::MIN),
+            true,
+        ),
+        (
+            "18446744073709551616",
+            "knn-count-limit",
+            Some(1i128 << 64),
+            false,
+        ),
+        (
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936",
+            "knn-count-limit",
+            None,
+            false,
+        ),
+    ] {
+        let term = TermValue::typed_literal(lexical, XSD_INTEGER);
+        let original = neighbour_count(&term, guard).unwrap_err();
+        let retained = original.clone();
+        drop(original);
+        drop(term);
+        let fields = memory_failure_fields(&retained, NativeDiagnosticKind::Function, code);
+        let count = fields.child("count");
+        assert_eq!(count.code, "knn-integer-count");
+        assert!(matches!(count.field("datatype"), ErrorValue::Iri(value) if value == XSD_INTEGER));
+        let integer = count.child("value");
+        if let Some(expected) = small {
+            assert!(
+                matches!(integer.field("value"), ErrorValue::Signed(value) if value == expected)
+            );
+        } else {
+            let ErrorValue::Record(value) = integer.field("value") else {
+                panic!("original big integer")
+            };
+            let buffer = Vec::with_capacity(10);
+            let window = CurrentThreadWindow::open();
+            let integer = Capture::read_with_buffer(value, buffer);
+            assert_eq!(window.close().allocations, 0);
+            assert!(
+                matches!(integer.field("negative"), ErrorValue::Boolean(value) if value == negative)
+            );
+            let limbs: Vec<_> = integer
+                .events
+                .iter()
+                .filter_map(|event| {
+                    if let Event::Value(None, ErrorValue::Unsigned(value)) = event {
+                        Some(*value)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(limbs, [0, 0, 0, 0, 1]);
+        }
+        if code == "knn-count-limit" {
+            assert!(
+                matches!(fields.field("maximum"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+            );
+        }
+    }
+    let term = TermValue::iri("https://example.org/not-a-count");
+    let error = neighbour_count(&term, guard).unwrap_err();
+    drop(term);
+    let fields = memory_failure_fields(&error, NativeDiagnosticKind::Function, "knn-invalid-count");
+    let ErrorValue::Term(term) = fields.field("actual") else {
+        panic!("original count argument")
+    };
+    assert!(matches!(
+        Capture::read(term).field("iri"),
+        ErrorValue::Iri("https://example.org/not-a-count")
+    ));
+    assert_eq!(
+        neighbour_count(&TermValue::typed_literal("0", XSD_INTEGER), guard).unwrap(),
+        0
+    );
+}
+
+fn knn_invocation_refusals_keep_modes_arities_and_failed_distance_rows() {
+    use purrdf_core::{DistanceMetric, TermValue};
+    use purrdf_sparql_eval::knn::{EmbeddingKnnRelation, EmbeddingSpace, KnnGuard};
+    use purrdf_sparql_eval::{PfArgs, PropertyFunction};
+    use std::sync::Arc;
+    let seed = TermValue::iri("https://example.org/seed");
+    let count = TermValue::integer(2);
+    let space = EmbeddingSpace::from_vectors(
+        &DistanceMetric::SquaredEuclidean,
+        1,
+        vec![
+            (seed.clone(), vec![0.0]),
+            (
+                TermValue::iri("https://example.org/far"),
+                vec![f64::MAX / 4.0],
+            ),
+        ],
+        KnnGuard::new(2, 2).unwrap(),
+    )
+    .unwrap();
+    let relation = EmbeddingKnnRelation::new(Arc::new(space));
+    let subject = [None];
+    let wrong = [None, None];
+    let arity = relation
+        .open(&PfArgs::new(&subject, &wrong), None)
+        .err()
+        .unwrap();
+    let free_query = [None, Some(&count), None];
+    let query = relation
+        .open(&PfArgs::new(&subject, &free_query), None)
+        .err()
+        .unwrap();
+    let free_count = [Some(&seed), None, None];
+    let neighbours = relation
+        .open(&PfArgs::new(&subject, &free_count), None)
+        .err()
+        .unwrap();
+    let valid = [Some(&seed), Some(&count), None];
+    let mut cursor = relation.open(&PfArgs::new(&subject, &valid), None).unwrap();
+    let range = cursor.next().unwrap_err();
+    drop(cursor);
+    drop(relation);
+    drop(seed);
+    drop(count);
+    let fields = memory_failure_fields(
+        &arity,
+        NativeDiagnosticKind::Function,
+        "knn-invocation-arity",
+    );
+    assert!(matches!(
+        fields.child("supplied").field("object"),
+        ErrorValue::Unsigned(2)
+    ));
+    assert!(matches!(
+        fields.child("expected").field("object"),
+        ErrorValue::Unsigned(3)
+    ));
+    let fields = memory_failure_fields(&query, NativeDiagnosticKind::Function, "knn-free-query");
+    assert!(matches!(fields.field("position"), ErrorValue::Unsigned(1)));
+    assert!(matches!(
+        fields.field("search_mode"),
+        ErrorValue::Code("fbbf")
+    ));
+    assert!(matches!(
+        fields.field("membership_mode"),
+        ErrorValue::Code("bbff")
+    ));
+    let fields = memory_failure_fields(
+        &neighbours,
+        NativeDiagnosticKind::Function,
+        "knn-free-count",
+    );
+    assert!(matches!(fields.field("position"), ErrorValue::Unsigned(2)));
+    let fields = memory_failure_fields(&range, NativeDiagnosticKind::Data, "knn-distance-range");
+    assert!(matches!(fields.field("query_row"), ErrorValue::Unsigned(0)));
+    assert!(matches!(fields.field("row"), ErrorValue::Unsigned(1)));
+    assert_eq!(
+        fields.child("metric").code,
+        "embedding-metric-squared-euclidean"
+    );
+}
+
 fn knn_zero_norm_retains_row_after_original_owner_release() {
     use purrdf_core::{DistanceMetric, TermValue};
     use purrdf_sparql_eval::knn::{EmbeddingSpace, KnnGuard};
@@ -3348,6 +3574,9 @@ purrdf_testkit::harness_main!(
     memory_relation_source_failure_cannot_publish_partial_table,
     shacl_body_mismatch_keeps_original_boolean_solutions_and_graph,
     knn_zero_norm_retains_row_after_original_owner_release,
+    knn_metric_and_duplicate_terms_keep_native_parameters_and_values,
+    knn_count_refusals_retain_exact_integer_owners_and_original_terms,
+    knn_invocation_refusals_keep_modes_arities_and_failed_distance_rows,
     knn_artifact_refusals_retain_native_format_causes,
     knn_space_refusals_keep_row_terms_dimensions_and_float_bits,
     knn_guard_refusals_keep_both_full_width_bounds,

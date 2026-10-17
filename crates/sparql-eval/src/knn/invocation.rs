@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use purrdf_core::{TargetId, TargetSetView, TermValue};
 use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_INTEGER};
 
+use super::refusal::{ConfigurationRefusal, CountValue, InvocationRefusal};
 use crate::error::{EvalError, EvaluatorInvariant};
 use crate::property_fn::{IndexGeneration, PfArgs, PfArity, PfCursor, PfRow};
 
@@ -125,21 +126,18 @@ impl TermRows {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] when one term is claimed by two rows: a query seed names a
+    /// [`crate::NativeDiagnosticKind::Config`] when one term is claimed by two rows: a query seed names a
     /// term, so a term with two rows makes the seed ambiguous. The duplicate reported is
     /// the least in canonical term order, the same one on every run.
-    pub fn new(terms: Vec<TermValue>) -> Result<Self, EvalError> {
+    pub fn new(mut terms: Vec<TermValue>) -> Result<Self, EvalError> {
         let mut rows_by_term: Vec<usize> = (0..terms.len()).collect();
         rows_by_term.sort_unstable_by(|&left, &right| terms[left].cmp(&terms[right]));
         if let Some(pair) = rows_by_term
             .windows(2)
             .find(|pair| terms[pair[0]] == terms[pair[1]])
         {
-            return Err(EvalError::config(format!(
-                "the term {:?} is bound to two different rows; a query seed names a term, so \
-                 a term claimed by two rows makes the seed ambiguous",
-                terms[pair[0]]
-            )));
+            let term = terms.swap_remove(pair[0]);
+            return Err(ConfigurationRefusal::DuplicateTerm { term }.error());
         }
         Ok(Self {
             terms,
@@ -153,7 +151,7 @@ impl TermRows {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] naming the first binding or row that breaks the cover. A
+    /// [`crate::NativeDiagnosticKind::Config`] naming the first binding or row that breaks the cover. A
     /// row without a term is a refusal, not a skipped row: a space with an unnamed row
     /// would search every candidate and be able to report only some of them.
     pub fn bind(
@@ -163,30 +161,23 @@ impl TermRows {
         let row_count = set.row_count();
         let mut terms: Vec<Option<TermValue>> = vec![None; row_count];
         for (target, term) in bindings {
-            let row = set.row_for_target(target).ok_or_else(|| {
-                EvalError::config(format!(
-                    "the binding for target {target} names a target this space's target set \
-                     does not hold"
-                ))
-            })?;
+            let row = set
+                .row_for_target(target)
+                .ok_or_else(|| ConfigurationRefusal::UnknownTarget { target }.error())?;
             if terms[row].is_some() {
-                return Err(EvalError::config(format!(
-                    "target {target} (row {row}) is bound twice; a row stands for exactly one \
-                     RDF term"
-                )));
+                return Err(ConfigurationRefusal::DuplicateBinding { target, row }.error());
             }
             terms[row] = Some(term);
         }
         let mut bound: Vec<TermValue> = Vec::with_capacity(row_count);
         for (row, term) in terms.into_iter().enumerate() {
             let term = term.ok_or_else(|| {
-                EvalError::config(format!(
-                    "row {row} (target {}) has no bound RDF term; a space with an unnamed row \
-                     would search {row_count} candidates and be able to report only some of \
-                     them, so the top-k it returned would silently be the top-k of a subset",
-                    set.target(row)
-                        .map_or_else(|| "<unknown>".to_owned(), TargetId::to_hex)
-                ))
+                ConfigurationRefusal::MissingBinding {
+                    row,
+                    target: set.target(row),
+                    row_count,
+                }
+                .error()
             })?;
             bound.push(term);
         }
@@ -508,22 +499,15 @@ impl KnnInvocation {
         };
         let supplied = args.arity();
         if supplied != KNN_ARITY {
-            return Err(crate::error::NativeDiagnostic::error(
-                crate::error::NativeDiagnosticKind::Function,
-                format_args!("{relation} expects {KNN_ARITY} argument(s), got {supplied}"),
-                workspace,
-            ));
+            return Err(InvocationRefusal::Arity {
+                relation: workspace.authored_text(relation)?,
+                expected: KNN_ARITY,
+                supplied,
+            }
+            .error(workspace));
         }
         let Some(query) = args.get(KNN_QUERY) else {
-            return Err(crate::error::NativeDiagnostic::error(
-                crate::error::NativeDiagnosticKind::Function,
-                format_args!(
-                    "the query term at position {KNN_QUERY} is free; this relation retrieves the \
-                 neighbours of a seed and cannot enumerate seeds, which is why both of its \
-                 declared modes — `{KNN_MODE}` and `{KNN_MEMBERSHIP_MODE}` — demand it"
-                ),
-                workspace,
-            ));
+            return Err(InvocationRefusal::FreeQuery.error(workspace));
         };
         let query_row = rows.row_of_admitted(query, workspace)?;
         let (answer, count_term) = if let Some(count) = args.get(KNN_COUNT) {
@@ -544,17 +528,7 @@ impl KnnInvocation {
             )
         } else {
             let Some(candidate) = args.get(KNN_NEIGHBOUR) else {
-                return Err(crate::error::NativeDiagnostic::error(
-                    crate::error::NativeDiagnosticKind::Function,
-                    format_args!(
-                        "the neighbour count at position {KNN_COUNT} is free and so is the \
-                     neighbour at position {KNN_NEIGHBOUR}; how many neighbours to retrieve \
-                     is a question this relation is asked, not one it answers, so the only \
-                     call it serves without a count is the membership lookup \
-                     `{KNN_MEMBERSHIP_MODE}`, which names the one term it is about"
-                    ),
-                    workspace,
-                ));
+                return Err(InvocationRefusal::FreeCount.error(workspace));
             };
             membership_lookups.fetch_add(1, Ordering::Relaxed);
             let (count, allocation) = admitted_universe_size(rows.len(), workspace)?.into_parts();
@@ -628,50 +602,28 @@ fn neighbour_count_with(
     } else {
         None
     };
-    let Some(purrdf_xsd::XsdValue::Integer { value: count, .. }) = parsed.as_deref() else {
-        return Err(crate::error::NativeDiagnostic::error(
-            crate::error::NativeDiagnosticKind::Function,
-            format_args!(
-                "the neighbour count at position {KNN_COUNT} is not an integer literal; \
-             there is no number of neighbours that names"
-            ),
-            workspace,
-        ));
+    let Some(count) = parsed.and_then(CountValue::new) else {
+        return Err(InvocationRefusal::InvalidCount {
+            actual: workspace.clone_term(value)?,
+        }
+        .error(workspace));
     };
-    if count.is_negative() {
-        return Err(crate::error::NativeDiagnostic::error(
-            crate::error::NativeDiagnosticKind::Function,
-            format_args!(
-                "the neighbour count at position {KNN_COUNT} is {count}; a search cannot return a \
-             negative number of neighbours"
-            ),
-            workspace,
-        ));
+    if count.value().is_negative() {
+        return Err(InvocationRefusal::NegativeCount { count }.error(workspace));
     }
     let bound = i128::from(guard.max_neighbours());
-    if count > &purrdf_xsd::exact::Integer::from_i128(bound) {
-        return Err(crate::error::NativeDiagnostic::error(
-            crate::error::NativeDiagnosticKind::Function,
-            format_args!(
-                "the invocation asks for {count} neighbour(s), and the configured guard admits at \
-             most {bound}; returning the {bound} nearest instead would be a short answer \
-             reported as a complete one, so the request is refused rather than clamped"
-            ),
-            workspace,
-        ));
+    if count.value() > &purrdf_xsd::exact::Integer::from_i128(bound) {
+        return Err(InvocationRefusal::CountLimit {
+            count,
+            maximum: guard.max_neighbours(),
+        }
+        .error(workspace));
     }
     count
+        .value()
         .as_i128()
         .and_then(|value| usize::try_from(value).ok())
-        .ok_or_else(|| {
-            crate::error::NativeDiagnostic::error(
-                crate::error::NativeDiagnosticKind::Function,
-                format_args!(
-                    "the neighbour count {count} does not fit this platform's index range"
-                ),
-                workspace,
-            )
-        })
+        .ok_or_else(|| InvocationRefusal::CountIndex { count }.error(workspace))
 }
 
 /// The value the count position carries in a **membership** answer: the number of rows
@@ -882,14 +834,7 @@ impl<S: RankSource> RankedCursor<S> {
     /// The same admitted construction supplies resident and bounded pull paths.
     fn build(&self, scored: Ranked) -> Result<crate::property_fn::AdmittedPfRow, EvalError> {
         let neighbour = self.source.term(scored.row).ok_or_else(|| {
-            crate::error::NativeDiagnostic::error(
-                crate::error::NativeDiagnosticKind::Data,
-                format_args!(
-                    "the ranking named row {}, which the space does not hold",
-                    scored.row,
-                ),
-                &self.workspace,
-            )
+            InvocationRefusal::MissingRankedRow { row: scored.row }.error(&self.workspace)
         })?;
         let text = purrdf_xsd::numeric::canonical_double_text(scored.distance);
         let bytes = text
@@ -1029,7 +974,10 @@ mod tests {
     #[test]
     fn a_term_bound_to_two_rows_is_refused_and_distinct_terms_are_not() {
         let error = TermRows::new(vec![iri(0), iri(1), iri(0)]).expect_err("duplicate");
-        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+            "got {error:?}"
+        );
         assert!(
             error.to_string().contains("bound to two different rows"),
             "got {error}"
@@ -1062,12 +1010,48 @@ mod tests {
         ] {
             let error = neighbour_count(&count, guard()).expect_err(why);
             assert!(
-                matches!(error, EvalError::Function(_))
-                    || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+                matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
                 "got {error:?}"
             );
             assert!(error.to_string().contains(why), "{why}: got {error}");
         }
+    }
+
+    #[test]
+    fn retained_integer_count_keeps_its_original_admission_until_last_owner() {
+        use crate::workspace::owned_row_regressions::account;
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_testkit::error_capture::Capture;
+        let input = TermValue::typed_literal(
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936",
+            XSD_INTEGER,
+        );
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let window = CurrentThreadWindow::open();
+        let error = neighbour_count_with(&input, KnnGuard::new(1, u64::MAX).unwrap(), &capability)
+            .unwrap_err();
+        let measured = window.close();
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert_eq!(measured.retained_bytes, i64::try_from(live - base).unwrap());
+        assert!(live > base);
+        let clone_window = CurrentThreadWindow::open();
+        let retained = error.clone();
+        assert_eq!(clone_window.close().allocations, 0);
+        drop(error);
+        drop(input);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        let EvalError::RetainedNativeFailure(failure) = &retained else {
+            panic!("original numeric owner")
+        };
+        assert_eq!(
+            Capture::read(failure.cause()).child("count").code,
+            "knn-integer-count"
+        );
+        drop(retained);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
 
     #[test]

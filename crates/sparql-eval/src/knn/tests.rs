@@ -251,6 +251,102 @@ fn a_space_reads_the_metric_dimension_and_rows_the_artifact_declares() {
 }
 
 #[test]
+fn native_artifact_configuration_refusals_keep_original_bindings_and_ids() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    let built = fixture(&DistanceMetric::SquaredEuclidean, &points());
+    let missing_space = VectorSpaceId::from_raw([255; 32]);
+    let missing_set = TargetSetId::from_raw([254; 32]);
+    let unknown_target = TargetId::from_raw([253; 32]);
+    let mut unknown = built.bindings.clone();
+    unknown[0].0 = unknown_target;
+    let mut duplicate = built.bindings.clone();
+    let repeated = duplicate[0].clone();
+    duplicate.push(repeated.clone());
+    let mut short = built.bindings.clone();
+    let omitted = short.pop().unwrap().0;
+    let open = |set, space, bindings| {
+        EmbeddingSpace::from_artifact(&built.artifact, set, space, bindings, roomy()).unwrap_err()
+    };
+    let cases = [
+        (
+            open(built.target_set, missing_space, built.bindings.clone()),
+            "knn-missing-space",
+            "space",
+            *missing_space.as_bytes(),
+        ),
+        (
+            open(missing_set, built.vector_space, built.bindings.clone()),
+            "knn-missing-target-set",
+            "set",
+            *missing_set.as_bytes(),
+        ),
+        (
+            open(built.target_set, built.vector_space, unknown),
+            "knn-unknown-target",
+            "target",
+            *unknown_target.as_bytes(),
+        ),
+        (
+            open(built.target_set, built.vector_space, duplicate),
+            "knn-duplicate-binding",
+            "target",
+            *repeated.0.as_bytes(),
+        ),
+        (
+            open(built.target_set, built.vector_space, short),
+            "knn-missing-binding",
+            "target",
+            *omitted.as_bytes(),
+        ),
+    ];
+    let row_count = built.bindings.len();
+    drop(built);
+    for (error, code, field, bytes) in cases {
+        let EvalError::RetainedNativeFailure(failure) = &error else {
+            panic!("original native selection/binding cause")
+        };
+        assert_eq!(failure.kind(), crate::NativeDiagnosticKind::Config);
+        let fields = Capture::read(failure.cause());
+        assert_eq!(fields.code, code);
+        assert!(
+            matches!(fields.child(field).field("bytes"), ErrorValue::Bytes(value) if value == bytes)
+        );
+        if code == "knn-missing-binding" {
+            assert!(
+                matches!(fields.field("row_count"), ErrorValue::Unsigned(value) if value == row_count as u128)
+            );
+            assert!(
+                matches!(fields.field("row"), ErrorValue::Unsigned(value) if value < row_count as u128)
+            );
+        }
+    }
+
+    let extension = DistanceMetric::Extension {
+        identifier: "example-metric".into(),
+        parameter_encoding: "example-bytes".into(),
+        parameters: vec![0, 255],
+    };
+    let built = fixture(&extension, &points());
+    let space = *built.vector_space.as_bytes();
+    let error = built.open(roomy()).unwrap_err();
+    drop(built);
+    drop(extension);
+    let EvalError::RetainedNativeFailure(failure) = &error else {
+        panic!("original metric")
+    };
+    let fields = Capture::read(failure.cause());
+    assert_eq!(fields.code, "knn-extension-metric");
+    assert!(
+        matches!(fields.child("space").field("bytes"), ErrorValue::Bytes(value) if value == space)
+    );
+    assert!(matches!(
+        fields.child("metric").field("parameters"),
+        ErrorValue::Bytes([0, 255])
+    ));
+}
+
+#[test]
 fn rows_are_numbered_by_canonical_target_order_not_by_the_order_they_were_supplied() {
     // The tie-break's foundation. A PURREMB target set is sorted and deduplicated by
     // `TargetId` — a digest of canonical identity — so two hosts that supply the same
@@ -293,7 +389,10 @@ fn an_extension_metric_is_refused_and_every_built_in_metric_is_admitted() {
     let error = fixture(&extension, &points())
         .open(roomy())
         .expect_err("an opaque metric names a rule this engine cannot evaluate");
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
     assert!(
         error.to_string().contains("caller-defined distance metric"),
         "got {error}"
@@ -375,7 +474,10 @@ fn a_row_with_no_bound_term_is_refused_and_a_full_cover_is_not() {
         roomy(),
     )
     .expect_err("an unnamed row would search silently and report partially");
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
     assert!(
         error.to_string().contains("has no bound RDF term"),
         "got {error}"
@@ -453,7 +555,10 @@ fn an_unknown_target_set_or_vector_space_is_refused() {
         roomy(),
     )
     .expect_err("a target set the artifact does not declare");
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
 
     let error = EmbeddingSpace::from_artifact(
         &built.artifact,
@@ -463,7 +568,10 @@ fn an_unknown_target_set_or_vector_space_is_refused() {
         roomy(),
     )
     .expect_err("a vector space the artifact does not declare");
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
 
     // The neighbouring VALID case, so the two refusals above are about the identifiers
     // and not about the artifact being unopenable for some unrelated reason.
@@ -830,8 +938,7 @@ fn a_free_query_or_count_is_refused_and_the_bound_forms_are_not() {
     let error = invoke(&relation, &[None, None, Some(count(2)), None], None)
         .expect_err("this relation cannot enumerate seeds");
     assert!(
-        matches!(error, EvalError::Function(_))
-            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
         "got {error:?}"
     );
     assert!(error.to_string().contains("is free"), "got {error}");
@@ -839,8 +946,7 @@ fn a_free_query_or_count_is_refused_and_the_bound_forms_are_not() {
     let error = invoke(&relation, &[None, Some(iri("a")), None, None], None)
         .expect_err("this relation cannot invent how many neighbours to return");
     assert!(
-        matches!(error, EvalError::Function(_))
-            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
         "got {error:?}"
     );
 
@@ -865,15 +971,14 @@ fn a_non_integer_count_is_refused_and_a_derived_integer_type_is_not() {
     )));
 
     for bad in [
-        TermValue::typed_literal("2.5", "http://www.w3.org/2001/XMLSchema#decimal"),
-        TermValue::typed_literal("two", "http://www.w3.org/2001/XMLSchema#string"),
+        TermValue::typed_literal("2.5", purrdf_xsd::datatype::XSD_DECIMAL),
+        TermValue::typed_literal("two", purrdf_xsd::datatype::XSD_STRING),
         iri("a"),
     ] {
         let error = invoke(&relation, &[None, Some(iri("a")), Some(bad), None], None)
             .expect_err("there is no number of neighbours that names");
         assert!(
-            matches!(error, EvalError::Function(_))
-                || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
             "got {error:?}"
         );
     }
@@ -882,10 +987,10 @@ fn a_non_integer_count_is_refused_and_a_derived_integer_type_is_not() {
     // datatypes; a check that only admitted the literal string `xsd:integer` would refuse
     // a query that is perfectly well formed, and every test above would still pass.
     for good in [
-        TermValue::typed_literal("2", "http://www.w3.org/2001/XMLSchema#int"),
-        TermValue::typed_literal("2", "http://www.w3.org/2001/XMLSchema#long"),
-        TermValue::typed_literal("2", "http://www.w3.org/2001/XMLSchema#unsignedByte"),
-        TermValue::typed_literal("2", "http://www.w3.org/2001/XMLSchema#nonNegativeInteger"),
+        TermValue::typed_literal("2", purrdf_xsd::XsdDatatype::Int.iri()),
+        TermValue::typed_literal("2", purrdf_xsd::XsdDatatype::Long.iri()),
+        TermValue::typed_literal("2", purrdf_xsd::XsdDatatype::UnsignedByte.iri()),
+        TermValue::typed_literal("2", purrdf_xsd::XsdDatatype::NonNegativeInteger.iri()),
     ] {
         let rows = invoke(
             &relation,
@@ -911,8 +1016,7 @@ fn a_negative_count_is_refused_and_zero_is_an_honest_empty_answer() {
     )
     .expect_err("a search cannot return a negative number of neighbours");
     assert!(
-        matches!(error, EvalError::Function(_))
-            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
         "got {error:?}"
     );
 
@@ -950,8 +1054,7 @@ fn a_count_above_the_guard_is_refused_and_one_exactly_at_it_is_not() {
     )
     .expect_err("k one past the guard is refused, not clamped");
     assert!(
-        matches!(error, EvalError::Function(_))
-            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
         "got {error:?}"
     );
     assert!(error.to_string().contains("asks for 3"), "got {error}");
@@ -1004,8 +1107,7 @@ fn a_wrong_argument_count_is_refused_before_the_search() {
         panic!("a zero-argument subject side does not match the declaration")
     };
     assert!(
-        matches!(error, EvalError::Function(_))
-            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function),
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
         "got {error:?}"
     );
     assert!(error.to_string().contains("expects"), "got {error}");
@@ -3083,7 +3185,10 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
     let mut twice = vector_rows(&points());
     twice[2].0 = iri("a");
     let error = refuse(&euclid, 2, twice, roomy(), "bound to two different rows");
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
     let mut same_vector = vector_rows(&points());
     same_vector[2].1 = same_vector[1].1.clone();
     assert!(EmbeddingSpace::from_vectors(&euclid, 2, same_vector, roomy()).is_ok());
@@ -3163,7 +3268,10 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
         roomy(),
         "caller-defined distance metric",
     );
-    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+        "got {error:?}"
+    );
 }
 
 /// Both generation constructions are frozen over fixed inputs: a moved generation is a

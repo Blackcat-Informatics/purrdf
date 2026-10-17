@@ -138,6 +138,9 @@ use crate::property_fn::{
 };
 use crate::user_fn::Volatility;
 
+mod refusal;
+use refusal::{ConfigurationRefusal, InvocationRefusal};
+
 use crate::property_fn::ExclusionBasis;
 pub use invocation::{
     AdmittedKnnInvocation, KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE,
@@ -535,15 +538,17 @@ impl EmbeddingSpace {
         })?;
 
         let space = view.vector_space(vector_space).ok_or_else(|| {
-            EvalError::config(format!(
-                "the artifact declares no vector space {vector_space}"
-            ))
+            ConfigurationRefusal::MissingSpace {
+                space: vector_space,
+            }
+            .error()
         })?;
         let family = view.family(space.family_id()).ok_or_else(|| {
-            EvalError::data(format!(
-                "vector space {vector_space} names family {} , which the artifact does not hold",
-                space.family_id()
-            ))
+            ConfigurationRefusal::MissingFamily {
+                space: vector_space,
+                family: space.family_id(),
+            }
+            .error()
         })?;
         let metric = family.metric().map_err(|error| {
             crate::NativeDiagnostic::error_cause(
@@ -553,16 +558,16 @@ impl EmbeddingSpace {
             )
         })?;
         let kernel = Kernel::of(&metric).ok_or_else(|| {
-            EvalError::config(format!(
-                "vector space {vector_space} declares the caller-defined distance metric \
-                 {metric:?}, whose parameters are opaque bytes this engine cannot evaluate; \
-                 only the three built-in PURREMB metrics can be ranked here"
-            ))
+            ConfigurationRefusal::ExtensionMetric {
+                space: Some(vector_space),
+                metric: metric.clone(),
+            }
+            .error()
         })?;
 
-        let set = view.target_set(target_set).ok_or_else(|| {
-            EvalError::config(format!("the artifact declares no target set {target_set}"))
-        })?;
+        let set = view
+            .target_set(target_set)
+            .ok_or_else(|| ConfigurationRefusal::MissingSet { set: target_set }.error())?;
         let effective = view
             .effective_matrix(target_set, vector_space)
             .map_err(|error| {
@@ -573,10 +578,11 @@ impl EmbeddingSpace {
                 )
             })?
             .ok_or_else(|| {
-                EvalError::config(format!(
-                    "the artifact holds no matrix joining target set {target_set} to vector \
-                     space {vector_space}"
-                ))
+                ConfigurationRefusal::MissingMatrix {
+                    set: target_set,
+                    space: vector_space,
+                }
+                .error()
             })?;
 
         let row_count = set.row_count();
@@ -668,11 +674,11 @@ impl EmbeddingSpace {
         // space divides by are already arithmetic under it.
         let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
         let kernel = Kernel::of(metric).ok_or_else(|| {
-            EvalError::config(format!(
-                "the caller-defined distance metric {metric:?} carries parameters as opaque \
-                 bytes this engine cannot evaluate; only the three built-in PURREMB metrics \
-                 can be ranked here"
-            ))
+            ConfigurationRefusal::ExtensionMetric {
+                space: None,
+                metric: metric.clone(),
+            }
+            .error()
         })?;
         if dimension == 0 {
             return Err(crate::NativeDiagnostic::error_cause(
@@ -845,15 +851,12 @@ impl EmbeddingSpace {
             &mut distance,
         );
         distance[0].ok_or_else(|| {
-            crate::error::NativeDiagnostic::error(
-                crate::error::NativeDiagnosticKind::Data,
-                format_args!(
-                    "the distance from row {query_row} to row {row} left the finite range \
-                 under {:?}; the artifact's magnitudes cannot be ranked under this metric",
-                    self.metric
-                ),
-                workspace,
-            )
+            InvocationRefusal::DistanceRange {
+                query_row,
+                row,
+                metric: self.metric.clone(),
+            }
+            .error(workspace)
         })
     }
 
@@ -861,18 +864,13 @@ impl EmbeddingSpace {
     fn rows(&self, workspace: &crate::WorkspaceCapability) -> Result<RowsRef<'_, f64>, EvalError> {
         RowsRef::new(&self.vectors, self.row_count(), self.dimension, &self.norms).ok_or_else(
             || {
-                crate::error::NativeDiagnostic::error(
-                    crate::error::NativeDiagnosticKind::Internal,
-                    format_args!(
-                        "the space's {} value(s) and {} norm(s) do not describe {} row(s) of {} \
-                     component(s)",
-                        self.vectors.len(),
-                        self.norms.len(),
-                        self.row_count(),
-                        self.dimension
-                    ),
-                    workspace,
-                )
+                InvocationRefusal::RowsShape {
+                    values: self.vectors.len(),
+                    norms: self.norms.len(),
+                    rows: self.row_count(),
+                    components: self.dimension,
+                }
+                .error(workspace)
             },
         )
     }
@@ -931,16 +929,12 @@ impl EmbeddingSpace {
         let mut scored = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
         for (row, distance) in distances.into_iter().enumerate() {
             let distance = distance.ok_or_else(|| {
-                crate::error::NativeDiagnostic::error(
-                    crate::error::NativeDiagnosticKind::Data,
-                    format_args!(
-                        "the distance from row {query_row} to row {row} left the finite range \
-                     under {:?}; the artifact's magnitudes cannot be ranked under this \
-                     metric",
-                        self.metric
-                    ),
-                    workspace,
-                )
+                InvocationRefusal::DistanceRange {
+                    query_row,
+                    row,
+                    metric: self.metric.clone(),
+                }
+                .error(workspace)
             })?;
             scored.push(Ranked { distance, row })?;
         }
@@ -1243,14 +1237,16 @@ fn check_index_guards(
             continue;
         }
         if guard.matrix_id() != matrix || guard.projection_id() != projection {
-            return Err(EvalError::data(format!(
-                "derived index {} names target set {target_set} and vector space \
-                 {vector_space} but binds matrix {} / projection {}, where this space scans \
-                 matrix {matrix} / projection {projection}; the guard is stale or substituted",
-                guard.id(),
-                guard.matrix_id(),
-                guard.projection_id()
-            )));
+            return Err(ConfigurationRefusal::GuardMismatch {
+                index: guard.id(),
+                set: target_set,
+                space: vector_space,
+                bound_matrix: guard.matrix_id(),
+                bound_projection: guard.projection_id(),
+                matrix,
+                projection,
+            }
+            .error());
         }
     }
     Ok(())

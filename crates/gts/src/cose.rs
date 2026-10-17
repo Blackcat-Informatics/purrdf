@@ -64,6 +64,14 @@ impl std::fmt::Display for Encrypt0Error {
 
 impl std::error::Error for Encrypt0Error {}
 
+impl purrdf_hash::error::StructuredError for Encrypt0Error {
+    purrdf_hash::error_visit! {
+        Malformed => "gts-encrypt0-malformed" {},
+        MissingKey => "gts-encrypt0-missing-key" {},
+        AuthFailed => "gts-encrypt0-auth-failed" {},
+    }
+}
+
 /// The protected header for A256GCM: `{1: 3}` (canonical CBOR).
 fn encrypt0_protected() -> Vec<u8> {
     wire::encode(&Value::Map(vec![(

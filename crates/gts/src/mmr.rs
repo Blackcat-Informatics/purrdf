@@ -97,6 +97,24 @@ impl std::fmt::Display for MmrStateError {
 
 impl std::error::Error for MmrStateError {}
 
+impl purrdf_hash::error::StructuredError for MmrStateError {
+    purrdf_hash::error_visit! {
+        PeakCount { count, expected, actual } => "gts-mmr-peak-count" {
+            "count" => Unsigned(u128::from(*count)), "expected" => Unsigned(*expected as u128),
+            "actual" => Unsigned(*actual as u128),
+        },
+        PeakHeight { peak, expected, actual } => "gts-mmr-peak-height" {
+            "peak" => Unsigned(*peak as u128), "expected" => Unsigned(*expected as u128),
+            "actual" => Unsigned(*actual as u128),
+        },
+        PeakHashLength { peak, actual } => "gts-mmr-peak-hash-length" {
+            "peak" => Unsigned(*peak as u128), "actual" => Unsigned(*actual as u128),
+            "expected" => Unsigned(32),
+        },
+        CountOverflow => "gts-mmr-count-overflow" { "maximum" => Unsigned(u128::from(u64::MAX)) },
+    }
+}
+
 /// The portable, incremental commitment frontier of an ordered MMR.
 ///
 /// Only the count and its descending-height peaks are retained. Appending hashes
@@ -840,6 +858,55 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_frontier_and_envelope_refusals_expose_native_fields() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let error = MmrPeaks::from_parts(u64::MAX, Vec::new()).unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-mmr-peak-count");
+        assert!(
+            matches!(fields.field("count"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(matches!(fields.field("expected"), ErrorValue::Unsigned(64)));
+        assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(0)));
+        for (peak, code) in [
+            (
+                MmrPeak {
+                    height: 1,
+                    hash: vec![0; 32],
+                },
+                "gts-mmr-peak-height",
+            ),
+            (
+                MmrPeak {
+                    height: 0,
+                    hash: vec![0; 31],
+                },
+                "gts-mmr-peak-hash-length",
+            ),
+        ] {
+            let error = MmrPeaks::from_parts(1, vec![peak]).unwrap_err();
+            let fields = Capture::read(&error);
+            assert_eq!(fields.code, code);
+            assert!(matches!(fields.field("peak"), ErrorValue::Unsigned(0)));
+        }
+        assert!(MmrPeaks::from_parts(0, Vec::new()).is_ok());
+        let error = crate::cose::parse_sign1(&[]).expect_err("empty envelope");
+        assert_eq!(Capture::read(&error).code, "gts-sign1-malformed");
+        // A constructed nested component control, not a cryptographic failure run.
+        let error = crate::cose::Sign1Error::Composite(crate::cose::composite::Error::MlDsa(
+            crate::mldsa65::Error::NonceExhausted,
+        ));
+        let component = std::error::Error::source(&error).unwrap();
+        assert!(component.is::<crate::cose::composite::Error>());
+        assert!(component.source().unwrap().is::<crate::mldsa65::Error>());
+        assert_eq!(
+            Capture::read(&error).child("cause").child("cause").code,
+            "mldsa65-nonce-exhausted"
+        );
+    }
 
     fn id(n: u8) -> Vec<u8> {
         vec![n; 32]
