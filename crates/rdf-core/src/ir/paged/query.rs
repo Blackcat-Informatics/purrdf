@@ -100,6 +100,36 @@ pub struct PagedQueryEvidence {
     pub consumed_bytes: u64,
 }
 
+impl purrdf_hash::error::StructuredError for PagedQueryEvidence {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self {
+            generation,
+            requested_pages,
+            consumed_pages,
+            consumed_bytes,
+        } = self;
+        visitor.variant("paged-query-evidence");
+        visitor.value(
+            Some("generation"),
+            ErrorValue::Unsigned(generation.0.into()),
+        );
+        visitor.value(
+            Some("consumed_pages"),
+            ErrorValue::Unsigned((*consumed_pages).into()),
+        );
+        visitor.value(
+            Some("consumed_bytes"),
+            ErrorValue::ByteCount((*consumed_bytes).into()),
+        );
+        visitor.begin_list(Some("requested_pages"), requested_pages.len());
+        for page in requested_pages {
+            visitor.value(None, ErrorValue::Unsigned(page.0.into()));
+        }
+        visitor.end_list();
+    }
+}
+
 impl PagedQueryEvidence {
     fn new(generation: PageGeneration) -> Self {
         Self {

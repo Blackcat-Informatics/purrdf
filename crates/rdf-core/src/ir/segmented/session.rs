@@ -114,6 +114,21 @@ impl PartialEq for SegmentedRequest {
 }
 impl Eq for SegmentedRequest {}
 impl SegmentedRequest {
+    fn visit_fields(
+        snapshot: SegmentedSnapshot,
+        position: u64,
+        bytes: u32,
+        completed: bool,
+        visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'_>,
+    ) {
+        use purrdf_hash::error::ErrorValue;
+        visitor.begin_record(Some("snapshot"), "segmented-snapshot");
+        snapshot.visit_fields(visitor);
+        visitor.end_record();
+        visitor.value(Some("position"), ErrorValue::Unsigned(position.into()));
+        visitor.value(Some("bytes"), ErrorValue::ByteCount(bytes.into()));
+        visitor.value(Some("completed"), ErrorValue::Boolean(completed));
+    }
     /// Retain an exact request without allocating or copying its shared identity.
     ///
     /// # Errors
@@ -145,6 +160,19 @@ impl SegmentedRequest {
     #[must_use]
     pub const fn completed(&self) -> bool {
         self.completed
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SegmentedRequest {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visitor.variant("segmented-request");
+        Self::visit_fields(
+            self.snapshot(),
+            self.position,
+            self.bytes,
+            self.completed,
+            visitor,
+        );
     }
 }
 
@@ -553,6 +581,68 @@ impl<Identity: PartialEq> PartialEq for SegmentedEvidence<Identity> {
     }
 }
 impl<Identity: Eq> Eq for SegmentedEvidence<Identity> {}
+impl<Identity: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for SegmentedEvidence<Identity>
+{
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self {
+            snapshot,
+            state,
+            prefix,
+            hash,
+            io_bytes,
+            live_bytes,
+            unpinned_cache_bytes,
+            bookkeeping_bytes,
+            peak_bytes,
+            evictions,
+            _base: _,
+        } = self;
+        visitor.variant("segmented-evidence");
+        visitor.value(Some("snapshot"), ErrorValue::Record(snapshot));
+        visitor.value(Some("request_digest"), ErrorValue::Bytes(hash));
+        visitor.value(Some("io_bytes"), ErrorValue::ByteCount((*io_bytes).into()));
+        visitor.value(
+            Some("live_bytes"),
+            ErrorValue::ByteCount((*live_bytes).into()),
+        );
+        visitor.value(
+            Some("unpinned_cache_bytes"),
+            ErrorValue::ByteCount((*unpinned_cache_bytes).into()),
+        );
+        visitor.value(
+            Some("bookkeeping_bytes"),
+            ErrorValue::ByteCount((*bookkeeping_bytes).into()),
+        );
+        visitor.value(
+            Some("peak_bytes"),
+            ErrorValue::ByteCount((*peak_bytes).into()),
+        );
+        visitor.value(Some("evictions"), ErrorValue::Unsigned((*evictions).into()));
+        visitor.begin_list(Some("requests"), *prefix);
+        for index in 0..*prefix {
+            let (snapshot, position, bytes, completed) = {
+                let ledger = lock_read_state(state);
+                let request = &ledger.requests[index];
+                let fields = (
+                    request.snapshot(),
+                    request.position,
+                    request.bytes,
+                    request.completed,
+                );
+                drop(ledger);
+                fields
+            };
+            // Never invoke external code under the shared ledger lock. The
+            // checkpoint's immutable prefix survives later session requests.
+            visitor.begin_record(None, "segmented-request");
+            SegmentedRequest::visit_fields(snapshot, position, bytes, completed, visitor);
+            visitor.end_record();
+        }
+        visitor.end_list();
+    }
+}
 impl<Identity> SegmentedEvidence<Identity> {
     /// Original immutable carrier identity retained by this checkpoint.
     #[must_use]

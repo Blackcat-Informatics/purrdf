@@ -3,6 +3,8 @@
 
 //! Borrow original evaluator payloads through the generic consumer, on every host.
 
+mod support;
+
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::{ResourceDimension, StopCause, TrippedGovernor};
 use purrdf_hash::error::ErrorValue;
@@ -898,7 +900,184 @@ fn fallible_control_shapes_keep_unformatted_causes_and_both_partial_bounds() {
     }
 }
 
+fn segmented_failure_inspection_keeps_the_exact_request_prefix_and_original_cause() {
+    use purrdf_core::{SegmentedBytes, SegmentedReadLimits, SegmentedSession, SparqlRequest};
+    use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    use std::sync::Arc;
+    let (image, _) = support::segmented::fixture();
+    let healthy = support::segmented::open(&image, support::segmented::CEILING);
+    NativeSparqlEngine::new()
+        .query_fallible_view(
+            &healthy,
+            SparqlRequest {
+                query: support::segmented::QUERY,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap();
+    let touched_block = healthy.evidence().with_requests(|requests| {
+        requests
+            .iter()
+            .find(|request| request.position() >= 512 && request.bytes() == 512)
+            .unwrap()
+            .position()
+    });
+    drop(healthy);
+    let mut bytes = image.bytes().to_vec();
+    bytes[usize::try_from(touched_block).unwrap() + 24] ^= 1;
+    let source = SegmentedSession::open(
+        Arc::new(SegmentedBytes::new(
+            bytes.into(),
+            image.receipt().snapshot(),
+        )),
+        image.receipt(),
+        SegmentedReadLimits::new(8_000_000, 2, 2048, 20_000_000, 8),
+    )
+    .unwrap();
+    let error = NativeSparqlEngine::new()
+        .query_fallible_view(
+            &source,
+            SparqlRequest {
+                query: support::segmented::QUERY,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap_err();
+    let captured = Capture::read(&error);
+    assert_eq!(captured.code, "sparql-fallible-operational");
+    assert_eq!(captured.child("cause").code, "segmented-corrupt");
+    let evidence = captured.child("evidence");
+    assert_eq!(evidence.code, "segmented-evidence");
+    let original = source.evidence();
+    assert!(
+        matches!(evidence.field("request_digest"), ErrorValue::Bytes(bytes) if bytes == original.request_digest())
+    );
+    assert!(
+        matches!(evidence.field("io_bytes"), ErrorValue::ByteCount(bytes) if bytes == u128::from(original.io_bytes()))
+    );
+    let requests = evidence.records("requests");
+    assert_eq!(requests.len(), original.request_count());
+    assert!(!requests.is_empty());
+    original.with_requests(|native| {
+        for (record, request) in requests.iter().zip(native) {
+            assert_eq!(record.code, "segmented-request");
+            assert!(matches!(record.field("position"), ErrorValue::Unsigned(position) if position == u128::from(request.position())));
+            assert!(matches!(record.field("bytes"), ErrorValue::ByteCount(bytes) if bytes == u128::from(request.bytes())));
+            assert!(matches!(record.field("completed"), ErrorValue::Boolean(done) if done == request.completed()));
+            let snapshot = record.child("snapshot");
+            let actual: Vec<_> = snapshot.events.iter().filter_map(|event| match event {
+                purrdf_testkit::error_capture::Event::Value(None, ErrorValue::Unsigned(byte)) => Some(*byte),
+                _ => None,
+            }).collect();
+            assert_eq!(actual, request.snapshot().as_bytes().iter().map(|byte| u128::from(*byte)).collect::<Vec<_>>());
+        }
+    });
+    let events = Vec::with_capacity(original.request_count() * 43 + 64);
+    let window = CurrentThreadWindow::open();
+    let captured = Capture::read_with_buffer(&original, events);
+    assert_eq!(window.close().allocations, 0);
+    drop(captured);
+    let clone = original.clone();
+    let request_count = requests.len();
+    drop(error);
+    drop(source);
+    drop(original);
+    assert_eq!(
+        Capture::read(&clone).records("requests").len(),
+        request_count
+    );
+}
+
+fn segmented_inspection_releases_the_ledger_lock_before_consumer_callbacks() {
+    use purrdf_core::SegmentedEvidence;
+    use purrdf_hash::error::{ErrorVisitor, StructuredError};
+    struct Reenter<'a> {
+        evidence: &'a SegmentedEvidence,
+        records: usize,
+    }
+    impl<'error> ErrorVisitor<'error> for Reenter<'_> {
+        fn variant(&mut self, _: &'static str) {}
+        fn value(&mut self, _: Option<&'static str>, _: ErrorValue<'error>) {}
+        fn begin_list(&mut self, _: Option<&'static str>, _: usize) {}
+        fn end_list(&mut self) {}
+        fn begin_record(&mut self, _: Option<&'static str>, _: &'static str) {
+            self.evidence.with_requests(|requests| {
+                assert_eq!(requests.len(), self.evidence.request_count());
+            });
+            self.records += 1;
+        }
+        fn end_record(&mut self) {}
+    }
+    let (image, _) = support::segmented::fixture();
+    let source = support::segmented::open(&image, support::segmented::CEILING);
+    let before = source.evidence();
+    let count = before.request_count();
+    use purrdf_core::DatasetView;
+    assert!(source.quads().next().is_some());
+    assert!(source.evidence().request_count() > count);
+    let mut visitor = Reenter {
+        evidence: &before,
+        records: 0,
+    };
+    let window = CurrentThreadWindow::open();
+    before.visit(&mut visitor);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(visitor.records, count * 2);
+    assert_eq!(Capture::read(&before).records("requests").len(), count);
+}
+
+fn paged_operational_failure_exposes_the_native_page_receipt() {
+    use purrdf_core::{
+        InMemoryPageProvider, PageGeneration, PagedDataset, PagedQueryLimits, SparqlRequest,
+    };
+    use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    use std::sync::Arc;
+    let dataset = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(structured_graph_fixture(), 25)],
+        PageGeneration(u64::MAX),
+    )))
+    .unwrap();
+    let view = dataset.query_view(PagedQueryLimits::new(0, 0));
+    let error = NativeSparqlEngine::new()
+        .query_fallible_view(
+            &view,
+            SparqlRequest {
+                query: "SELECT ?s WHERE { ?s ?p ?o }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap_err();
+    let capture = Capture::read(&error);
+    assert_eq!(capture.code, "sparql-fallible-operational");
+    let evidence = capture.child("evidence");
+    assert_eq!(evidence.code, "paged-query-evidence");
+    assert!(
+        matches!(evidence.field("generation"), ErrorValue::Unsigned(generation) if generation == u128::from(u64::MAX))
+    );
+    assert!(matches!(
+        evidence.field("consumed_pages"),
+        ErrorValue::Unsigned(0)
+    ));
+    assert!(matches!(
+        evidence.field("consumed_bytes"),
+        ErrorValue::ByteCount(0)
+    ));
+    assert!(evidence.events.iter().any(|event| matches!(
+        event,
+        purrdf_testkit::error_capture::Event::BeginList(Some("requested_pages"), 1)
+    )));
+}
+
 purrdf_testkit::harness_main!(
+    segmented_failure_inspection_keeps_the_exact_request_prefix_and_original_cause,
+    segmented_inspection_releases_the_ledger_lock_before_consumer_callbacks,
+    paged_operational_failure_exposes_the_native_page_receipt,
     actual_aggregate_exhaustion_exposes_the_private_withholding_operator,
     actual_partial_graph_preserves_admitted_output_and_its_certificate,
     graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields,
