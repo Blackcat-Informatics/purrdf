@@ -204,9 +204,12 @@ enum PayloadError {
 impl From<CodecError> for PayloadError {
     fn from(e: CodecError) -> Self {
         match e {
-            CodecError::Unavailable { reason, detail } => Self::Unavailable { reason, detail },
-            CodecError::Failed(detail) => Self::Damaged(detail),
-            CodecError::Limit(detail) => Self::Budget(detail),
+            CodecError::Unavailable { reason, detail } => Self::Unavailable {
+                reason,
+                detail: detail.to_string(),
+            },
+            CodecError::Failed(detail) => Self::Damaged(detail.to_string()),
+            error @ CodecError::Limit { .. } => Self::Budget(error.to_string()),
         }
     }
 }
@@ -220,17 +223,18 @@ fn decrypt_codec(
     if codec.name != "cose-encrypt0" {
         return Err(CodecError::Unavailable {
             reason: "missing-key",
-            detail: format!("no decryptor for encrypt codec '{}'", codec.name),
+            detail: crate::codec::CodecUnavailable::NoDecryptor(codec.name.clone()),
         });
     }
     crate::cose::decrypt0_bounded(data, content_key, limit).map_err(|err| match err {
         crate::cose::BoundedDecrypt0Error::Crypto(err) => CodecError::Unavailable {
             reason: "missing-key",
-            detail: format!("{} decrypt failed: {err}", codec.name),
+            detail: crate::codec::CodecUnavailable::Decrypt {
+                codec: codec.name.clone(),
+                cause: err,
+            },
         },
-        crate::cose::BoundedDecrypt0Error::Limit => {
-            CodecError::Limit(format!("decoded transform output exceeds {limit} bytes"))
-        }
+        crate::cose::BoundedDecrypt0Error::Limit => CodecError::Limit { limit },
     })
 }
 

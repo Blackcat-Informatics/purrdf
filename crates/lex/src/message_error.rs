@@ -83,6 +83,9 @@ macro_rules! message_error {
 /// themselves and have no underlying cause. The original error is borrowed,
 /// preserving its type for downcasting without allocating or rendering it.
 /// The enum already supplies its `Debug` and `Display` implementations.
+/// The `Type => { pattern => cause, ... }` form also accepts named fields and
+/// a struct containing a typed reason. Each pattern binds the original cause;
+/// both forms generate the same source implementation.
 ///
 /// ```rust
 /// #[derive(Debug)]
@@ -107,10 +110,13 @@ macro_rules! message_error {
 #[macro_export]
 macro_rules! error_source {
     ($type:ty { $($variant:ident),+ $(,)? }) => {
+        $crate::error_source!($type => { $(Self::$variant(error) => error),+ });
+    };
+    ($type:ty => { $($pattern:pat => $error:ident),+ $(,)? }) => {
         impl ::core::error::Error for $type {
             fn source(&self) -> Option<&(dyn ::core::error::Error + 'static)> {
                 match self {
-                    $(Self::$variant(error) => Some(error),)+
+                    $($pattern => Some($error),)+
                     _ => None,
                 }
             }
@@ -152,5 +158,53 @@ mod tests {
         let error = Plain::new("x");
         let dynamic: &dyn core::error::Error = &error;
         assert!(dynamic.source().is_none());
+    }
+
+    #[test]
+    fn named_and_tuple_sources_preserve_the_original_error() {
+        #[derive(Debug)]
+        enum Wrapper {
+            Named { cause: Plain, label: &'static str },
+            Tuple(Detailed),
+            Local,
+        }
+        impl core::fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self {
+                    Self::Named { label, .. } => f.write_str(label),
+                    Self::Tuple(error) => error.fmt(f),
+                    Self::Local => f.write_str("local"),
+                }
+            }
+        }
+        crate::error_source!(Wrapper => {
+            Self::Named { cause, .. } => cause,
+            Self::Tuple(cause) => cause,
+        });
+        use core::error::Error as _;
+        let named = Wrapper::Named {
+            cause: Plain::new("original"),
+            label: "wrapper",
+        };
+        assert_eq!(
+            named
+                .source()
+                .unwrap()
+                .downcast_ref::<Plain>()
+                .unwrap()
+                .to_string(),
+            "original"
+        );
+        let tuple = Wrapper::Tuple(Detailed::new("tuple"));
+        assert_eq!(
+            tuple
+                .source()
+                .unwrap()
+                .downcast_ref::<Detailed>()
+                .unwrap()
+                .detail(),
+            "tuple"
+        );
+        assert!(Wrapper::Local.source().is_none());
     }
 }
