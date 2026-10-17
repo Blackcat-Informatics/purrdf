@@ -4771,7 +4771,7 @@ fn check_dl_proof_from_source(
         .prepare(&question)
         .map_err(|error| format!("question preparation: {error}"))?;
     let context = reasoner
-        .proof_context()
+        .borrowed_proof_context()
         .map_err(|error| format!("checking context: {error}"))?;
     let read = if asked == Service::ModuleExtraction {
         // Locality extraction opens no tableau, so it issues no DL certificate at all — its
@@ -4792,7 +4792,7 @@ fn check_dl_proof_from_source(
         Some(parse_dl_certificate(certificate)?)
     };
     let replay = term
-        .verify(&dataset, &question, read.as_ref(), &context)
+        .verify_prepared(&question, read.as_ref(), &context)
         .map_err(|error| format!("the proof does not check: {error}"))?;
     let bound = if answer.trim().is_empty() {
         None

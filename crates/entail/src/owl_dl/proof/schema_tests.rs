@@ -9,7 +9,8 @@ use crate::reasoner::{Reasoner, Verdict};
 use purrdf_alloc_probe::CurrentThreadWindow;
 use purrdf_iri::vocab::rdfs;
 
-fn derived() -> (DlProof, DlProofContext) {
+/// Build a derived cardinality clash together with its owning prepared context.
+fn derived() -> (DlProof, DlProofContext<'static>) {
     let mut fixture = Fixture::default();
     let class = fixture.name("A");
     let filler = fixture.name("F");
@@ -245,19 +246,23 @@ fn derived_membership_cannot_be_laundered_as_an_asserted_fact() {
 #[test]
 fn the_consumers_stop_signal_preserves_operational_refusal_instead_of_a_bad_proof_verdict() {
     #[derive(Debug)]
-    struct Stop;
+    struct Stop(std::sync::atomic::AtomicBool);
     impl purrdf_datalog::StopSignal for Stop {
         fn stopped(&self) -> bool {
-            true
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
         }
     }
     let (proof, mut context) = derived();
-    context.kb.stop = Some(std::sync::Arc::new(Stop));
+    let stop = std::sync::Arc::new(Stop(std::sync::atomic::AtomicBool::new(true)));
+    let ProofKnowledgeBase::Owned(kb) = &mut context.kb else {
+        panic!("the independently prepared fixture owns its knowledge base");
+    };
+    kb.stop = Some(stop.clone());
     assert_eq!(
         proof.replay_refutation(&context).unwrap_err(),
         DlProofError::Stopped
     );
-    context.kb.stop = None;
+    stop.0.store(false, std::sync::atomic::Ordering::Relaxed);
     assert_eq!(
         proof
             .replay_refutation(&context)

@@ -11,10 +11,11 @@ use crate::owl_dl::concept::{Concept, Role};
 use crate::owl_dl::{Kb, class_concept_ids};
 use purrdf_core::TermValue;
 
+/// Check this run's assumptions against the consumer-bound service question.
 pub(super) fn check_run(
     proof: &ServiceProof,
     index: usize,
-    ctx: &DlProofContext,
+    ctx: &DlProofContext<'_>,
 ) -> Result<(), DlProofError> {
     let assumptions = &proof.runs[index].assumptions;
     if index == 0 && bare(assumptions) {

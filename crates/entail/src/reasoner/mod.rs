@@ -114,6 +114,9 @@ pub mod realize;
 #[cfg(test)]
 pub(crate) mod schema_tests;
 
+#[cfg(test)]
+mod borrowed_tests;
+
 pub use axiom::DlAxiom;
 pub use certificate::{Certified, DlCertificate, DlCompleteness, Verdict};
 pub use classify::ClassHierarchy;
@@ -546,9 +549,37 @@ impl Reasoner {
     /// # Errors
     ///
     /// [`EntailError::ProofsNotRecorded`] when this reasoner came from [`Reasoner::new`].
-    pub fn proof_context(self) -> Result<crate::DlProofContext, EntailError> {
+    pub fn proof_context(self) -> Result<crate::DlProofContext<'static>, EntailError> {
         let input = self.input.ok_or(EntailError::ProofsNotRecorded)?;
         Ok(crate::DlProofContext::of_prepared_kb(self.kb, input))
+    }
+
+    /// Borrow this consumer's prepared source for the same native proof checker.
+    ///
+    /// Prepare the consumer's question first, as for [`Self::proof_context`]. No
+    /// source parsing, canonicalization, knowledge-base clone or search is run.
+    /// The context derives only the native clauses and their contract. Its borrow
+    /// prevents changing question preparation until it is dropped;
+    /// afterwards this reasoner remains available for subsequent services.
+    ///
+    /// ```compile_fail
+    /// use purrdf_core::RdfDataset;
+    /// use purrdf_entail::reasoner::{Question, Reasoner};
+    /// fn mutate_while_checking(dataset: &RdfDataset) {
+    ///     let mut consumer = Reasoner::with_proofs(dataset).unwrap();
+    ///     let context = consumer.borrowed_proof_context().unwrap();
+    ///     consumer.prepare(&Question::Consistency).unwrap();
+    ///     let _ = context.input();
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    /// [`EntailError::ProofsNotRecorded`] for an unrecorded reasoner.
+    pub fn borrowed_proof_context(&self) -> Result<crate::DlProofContext<'_>, EntailError> {
+        let input = self.input.ok_or(EntailError::ProofsNotRecorded)?;
+        Ok(crate::DlProofContext::borrowing_prepared_kb(
+            &self.kb, input,
+        ))
     }
 
     /// The question [`Reasoner::classify`] answers over this reasoner's own class list.

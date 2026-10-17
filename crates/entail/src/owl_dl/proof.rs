@@ -2686,12 +2686,12 @@ impl CompletionReplay {
 /// This type exists to make one property structural rather than promised. It is built from a
 /// [`RdfDataset`] the CONSUMER supplies and from nothing else: it holds no state a producer
 /// shipped, so a proof cannot be verified against the very stores that produced it. It
-/// constructs no `Hyper` driver and opens no
-/// `Session` — the only thing it runs is the reverse mapper and
-/// the clausifier, which are compilations of the ontology rather than searches over it.
-pub struct DlProofContext {
+/// may own its independently prepared source or borrow it from a consumer reasoner.
+/// Neither form holds a producer's completion graph or search state. Construction
+/// runs no search: it only prepares the source when needed and derives native clauses.
+pub struct DlProofContext<'kb> {
     /// The knowledge base the consumer's own dataset reverse-maps to.
-    pub(crate) kb: Kb,
+    pub(crate) kb: ProofKnowledgeBase<'kb>,
     /// The DL-clause set the consumer's own knowledge base produces.
     clauses: ClauseSet,
     /// The producer-independent identity of the consumer's dataset.
@@ -2700,7 +2700,29 @@ pub struct DlProofContext {
     contract: [u8; 32],
 }
 
-impl std::fmt::Debug for DlProofContext {
+/// Keep the existing inline owning representation without allocating for a borrow.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "owning contexts already store Kb inline; borrowing must not allocate or clone it"
+)]
+pub(crate) enum ProofKnowledgeBase<'kb> {
+    Owned(Kb),
+    Borrowed(&'kb Kb),
+}
+
+impl std::ops::Deref for ProofKnowledgeBase<'_> {
+    type Target = Kb;
+
+    /// Read the prepared knowledge base through either immutable storage choice.
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(kb) => kb,
+            Self::Borrowed(kb) => kb,
+        }
+    }
+}
+
+impl std::fmt::Debug for DlProofContext<'_> {
     /// The two digests and the clause count, never the knowledge base: a reverse-mapped OWL
     /// ontology has no bounded debug rendering, and a checking context is identified by what it
     /// binds rather than by what it holds.
@@ -2725,7 +2747,7 @@ fn proof_source_error(error: EntailError) -> DlProofError {
     }
 }
 
-impl DlProofContext {
+impl DlProofContext<'static> {
     /// Read `ontology` into a checking context.
     ///
     /// # Errors
@@ -2740,15 +2762,8 @@ impl DlProofContext {
     pub fn of_ontology(ontology: &RdfDataset) -> Result<Self, DlProofError> {
         let mut kb = Kb::from_dataset(ontology).map_err(proof_source_error)?;
         kb.finalize().map_err(proof_source_error)?;
-        let clauses = derive(&kb);
-        let contract = contract_digest(&clauses, &kb.schema);
         let input = try_input_digest(ontology, None).map_err(DlProofError::Canonicalization)?;
-        Ok(Self {
-            kb,
-            clauses,
-            input,
-            contract,
-        })
+        Ok(Self::of_prepared_kb(kb, input))
     }
 
     /// A checking context over a knowledge base directly — the companion to
@@ -2769,6 +2784,18 @@ impl DlProofContext {
     /// [`TrustBaseEntry::RefutationEncoding`]; `input` stays the identity of the caller's
     /// dataset, so a proof still cannot be verified against a store the producer chose.
     pub(crate) fn of_prepared_kb(kb: Kb, input: [u8; 32]) -> Self {
+        Self::prepared(ProofKnowledgeBase::Owned(kb), input)
+    }
+}
+
+impl<'kb> DlProofContext<'kb> {
+    /// Borrow the exact independently prepared consumer source without rebuilding it.
+    pub(crate) fn borrowing_prepared_kb(kb: &'kb Kb, input: [u8; 32]) -> Self {
+        Self::prepared(ProofKnowledgeBase::Borrowed(kb), input)
+    }
+
+    /// Clausification and identity binding are identical for both storage choices.
+    fn prepared(kb: ProofKnowledgeBase<'kb>, input: [u8; 32]) -> Self {
         let clauses = derive(&kb);
         let contract = contract_digest(&clauses, &kb.schema);
         Self {
@@ -3005,7 +3032,7 @@ impl DlProof {
     /// # Errors
     ///
     /// [`DlProofError::InputMismatch`] or [`DlProofError::ContractMismatch`].
-    pub fn bound_to(&self, ctx: &DlProofContext) -> Result<(), DlProofError> {
+    pub fn bound_to(&self, ctx: &DlProofContext<'_>) -> Result<(), DlProofError> {
         if ctx.input != self.input {
             return Err(DlProofError::InputMismatch {
                 expected: purrdf_hash::hex::encode(&ctx.input),
@@ -3051,7 +3078,7 @@ impl DlProof {
     pub fn replay_clash(
         &self,
         index: usize,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<ClashReplay, DlProofError> {
         self.replay_clash_assuming(index, ctx, &Assumptions::of_kb())
     }
@@ -3059,7 +3086,7 @@ impl DlProof {
     fn replay_clash_assuming(
         &self,
         index: usize,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         assumptions: &Assumptions<'_>,
     ) -> Result<ClashReplay, DlProofError> {
         self.bound_to(ctx)?;
@@ -3247,7 +3274,7 @@ impl DlProof {
     pub fn replay_branch(
         &self,
         index: usize,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<BranchReplay, DlProofError> {
         self.bound_to(ctx)?;
         let step = self
@@ -3374,7 +3401,7 @@ impl DlProof {
     pub fn replay_merge(
         &self,
         index: usize,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<MergeReplay, DlProofError> {
         self.bound_to(ctx)?;
         let step = self
@@ -3435,7 +3462,7 @@ impl DlProof {
         &self,
         index: usize,
         step: &MergeStep,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         checks: &mut CheckReport,
     ) -> Result<ProofGround, DlProofError> {
         let unlicensed = |detail: &str| DlProofError::UnlicensedMerge {
@@ -3543,13 +3570,13 @@ impl DlProof {
     ///
     /// [`DlProofError::WrongAnswer`] unless the proof is bound to [`ProofAnswer::Undecided`],
     /// and any rejection the three per-step replays make.
-    pub fn replay_partial(&self, ctx: &DlProofContext) -> Result<PartialReplay, DlProofError> {
+    pub fn replay_partial(&self, ctx: &DlProofContext<'_>) -> Result<PartialReplay, DlProofError> {
         self.replay_partial_assuming(ctx, &Assumptions::of_kb())
     }
 
     pub(crate) fn replay_partial_assuming(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         assumptions: &Assumptions<'_>,
     ) -> Result<PartialReplay, DlProofError> {
         self.bound_to(ctx)?;
@@ -3631,14 +3658,14 @@ impl DlProof {
     /// [`Self::replay_branch`] or [`Self::replay_clash`] makes.
     pub fn replay_refutation(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<RefutationReplay, DlProofError> {
         self.replay_refutation_assuming(ctx, &Assumptions::of_kb())
     }
 
     pub(crate) fn replay_refutation_assuming(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         assumptions: &Assumptions<'_>,
     ) -> Result<RefutationReplay, DlProofError> {
         self.bound_to(ctx)?;
@@ -3684,7 +3711,7 @@ impl DlProof {
     /// `seen` marks: a branch point is entered at most once, and there are finitely many.
     fn walk_closure(
         &self,
-        (ctx, assumptions): (&DlProofContext, &Assumptions<'_>),
+        (ctx, assumptions): (&DlProofContext<'_>, &Assumptions<'_>),
         outcome: BranchOutcome,
         at: Option<(usize, usize)>,
         seen: &mut [bool],
@@ -3812,7 +3839,7 @@ impl DlProof {
     /// a branch no test constrains.
     pub(crate) fn replay_completion_within(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
         budget: u64,
     ) -> Result<CompletionReplay, DlProofError> {
         self.bound_to(ctx)?;
@@ -3844,7 +3871,7 @@ impl DlProof {
     /// [`DlProofError::ClauseNotSatisfied`] or [`DlProofError::BlockingSignatureMismatch`].
     pub fn replay_completion(
         &self,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<CompletionReplay, DlProofError> {
         self.replay_completion_within(ctx, MAX_CHECK_WORK)
     }
@@ -6169,7 +6196,7 @@ mod tests {
 
     /// The proof of the disjoint-classes refutation, and a context over the SAME ontology built
     /// independently of it.
-    fn refutation() -> (Arc<RdfDataset>, DlProof, DlProofContext) {
+    fn refutation() -> (Arc<RdfDataset>, DlProof, DlProofContext<'static>) {
         let ontology = disjoint_classes();
         let (answer, proof) = prove_consistency(&ontology).expect("the fixture reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent, "C ⊓ D ⊑ ⊥ with a : C, D");
@@ -6652,7 +6679,7 @@ mod tests {
 
     /// The merge-bearing fixture's proof, and a context over the same ontology built
     /// independently of it.
-    fn nominal_merge() -> (DlProof, DlProofContext) {
+    fn nominal_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = merge_bearing_ontology();
         let (_, proof) = prove_consistency(&ontology).expect("reverse-maps");
         let ctx = DlProofContext::of_ontology(&ontology).expect("reverse-maps");
@@ -6893,7 +6920,7 @@ mod tests {
     }
 
     /// That ontology's proof, and a context built independently over it.
-    fn at_most_merge() -> (DlProof, DlProofContext) {
+    fn at_most_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = functional_clash();
         let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Inconsistent, "b ≠ c under `≤1 p`");
@@ -7106,7 +7133,7 @@ mod tests {
     }
 
     /// That ontology's proof, and a context built independently over it.
-    fn wide_at_most_merge() -> (DlProof, DlProofContext) {
+    fn wide_at_most_merge() -> (DlProof, DlProofContext<'static>) {
         let ontology = wide_at_most_clash();
         let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
         assert_eq!(
@@ -8207,7 +8234,7 @@ mod tests {
 
     /// The branching refutation's proof, and a context built independently over the same
     /// ontology.
-    fn branching_refutation() -> (DlProof, DlProofContext) {
+    fn branching_refutation() -> (DlProof, DlProofContext<'static>) {
         let ontology = closing_disjunction();
         let (answer, proof) = prove_consistency(&ontology).expect("the fixture reverse-maps");
         assert_eq!(
@@ -8253,7 +8280,7 @@ mod tests {
     }
 
     /// That ontology's consistency proof, and a context built independently over it.
-    fn subclass_completion() -> (DlProof, DlProofContext) {
+    fn subclass_completion() -> (DlProof, DlProofContext<'static>) {
         let ontology = subclass_consistent();
         let (answer, proof) = prove_consistency(&ontology).expect("reverse-maps");
         assert_eq!(answer, ProofAnswer::Consistent);
@@ -8279,7 +8306,7 @@ mod tests {
 
     /// That knowledge base's consistency proof, and a context built independently over a second
     /// copy of it.
-    fn blocking_chain_completion() -> (DlProof, DlProofContext) {
+    fn blocking_chain_completion() -> (DlProof, DlProofContext<'static>) {
         let (answer, proof) = prove_consistency_of_kb(&blocking_chain_kb());
         assert_eq!(answer, ProofAnswer::Consistent);
         (proof, DlProofContext::of_kb(blocking_chain_kb()))
