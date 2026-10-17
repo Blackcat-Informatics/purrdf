@@ -58,6 +58,83 @@ fn evidence(proof: &mut DlProof) -> &mut SchemaClashEvidence {
 }
 
 #[test]
+fn legacy_v4_prepared_prefixes_use_the_same_current_support_checker() {
+    let (proof, context) = derived();
+    let bytes = proof.encode();
+    let mut reader = Reader::new(&bytes);
+    assert_eq!(
+        reader.frame().unwrap(),
+        CURRENT_PROOF_ENCODING_TAG.as_bytes()
+    );
+    reader.digest().unwrap();
+    reader.digest().unwrap();
+    reader.byte().unwrap();
+    assert!(!reader.flag().unwrap());
+    assert_eq!(reader.byte().unwrap(), 0, "unrefused fixture");
+    for _ in 0..2 {
+        for _ in 0..reader.length().unwrap() {
+            reader.length().unwrap();
+        }
+    }
+    let header_end = bytes.len() - reader.bytes.len();
+    let mut legacy = bytes[..header_end].to_vec();
+    legacy[8 + PROOF_ENCODING_TAG.len() - 1] = b'4';
+    for _ in 0..reader.length().unwrap() {
+        if reader.flag().unwrap() {
+            reader.length().unwrap();
+        }
+        schema::decode_application(&mut reader).unwrap();
+    }
+    let count = reader.length().unwrap();
+    legacy.extend_from_slice(&(count as u64).to_le_bytes());
+    for step in &proof.clashes {
+        let start = bytes.len() - reader.bytes.len();
+        reader.length().unwrap();
+        reader.node().unwrap();
+        for _ in 0..reader.length().unwrap() {
+            reader.node().unwrap();
+        }
+        for _ in 0..reader.length().unwrap() {
+            reader.fact().unwrap();
+        }
+        assert!(reader.flag().unwrap(), "prepared bound law");
+        decode_schema_clash(&mut reader).unwrap();
+        legacy.extend_from_slice(&bytes[start..bytes.len() - reader.bytes.len()]);
+        assert!(reader.flag().unwrap(), "current support");
+        if reader.flag().unwrap() {
+            reader.length().unwrap();
+        }
+        schema::decode_frame(&mut reader).unwrap();
+        let current = step.current.as_ref().unwrap();
+        schema::encode_frame(&mut legacy, &current.frame);
+        let applications =
+            crate::owl_dl::support::prefix(&proof.support, current.latest, None).unwrap();
+        legacy.extend_from_slice(&(applications.len() as u64).to_le_bytes());
+        for application in applications {
+            schema::encode_application(&mut legacy, application);
+        }
+    }
+    legacy.extend_from_slice(reader.bytes);
+    let decoded = DlProof::decode(&legacy).unwrap();
+    assert_eq!(
+        decoded
+            .replay_refutation(&context)
+            .unwrap()
+            .checks()
+            .unattested(),
+        0
+    );
+    assert_eq!(
+        decoded.encode(),
+        bytes,
+        "v4 normalizes into the shared v5 arena"
+    );
+    let mut forged = decoded;
+    forged.support[0].application.head.clear();
+    assert!(forged.replay_refutation(&context).is_err());
+}
+
+#[test]
 fn schema_layout_without_its_evidence_is_not_a_second_encoding_of_a_legacy_proof() {
     let dataset = shared_schema(1, 0, false);
     let reasoner = Reasoner::with_proofs(&dataset).unwrap();
@@ -141,22 +218,27 @@ fn refusing_native_support_keeps_search_parity_and_a_typed_incomplete_proof() {
 #[test]
 fn derived_membership_cannot_be_laundered_as_an_asserted_fact() {
     let (proof, context) = derived();
-    assert!(proof.clashes.iter().any(|step| {
-        step.schema
-            .as_ref()
-            .is_some_and(|evidence| !evidence.support.is_empty())
-    }));
+    assert_ne!(proof.support, []);
     let mut forged = proof.clone();
-    evidence(&mut forged).support.clear();
+    forged.clashes.iter_mut().for_each(|step| {
+        if let Some(current) = &mut step.current {
+            current.latest = None;
+        }
+    });
     assert!(
         forged.replay_refutation(&context).is_err(),
         "a valid structural bound does not prove current membership"
     );
     let mut forged = proof.clone();
-    evidence(&mut forged).frame[0] = usize::MAX;
+    forged
+        .clashes
+        .iter_mut()
+        .find_map(|step| step.current.as_mut())
+        .unwrap()
+        .frame[0] = usize::MAX;
     assert!(forged.replay_refutation(&context).is_err());
     let mut forged = proof;
-    evidence(&mut forged).support[0].frame[0] = usize::MAX;
+    forged.support[0].application.frame[0] = usize::MAX;
     assert!(forged.replay_refutation(&context).is_err());
 }
 
@@ -196,8 +278,7 @@ fn source_restrictions_qualifiers_and_each_actual_support_head_are_checked() {
     evidence(&mut changed).bounds.class_steps.clear();
     assert!(changed.replay_refutation(&context).is_err());
     let mut changed = proof.clone();
-    let support = &mut evidence(&mut changed).support;
-    let first = support.first_mut().unwrap();
+    let first = &mut changed.support.first_mut().unwrap().application;
     first.head = vec![Ground::Concept(first.frame[0], u32::MAX)];
     assert!(
         changed.replay_refutation(&context).is_err(),

@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 138 named cases in 23 integration targets,
-with 143 executions across 27 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 143 named cases in 24 integration targets,
+with 148 executions across 28 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
@@ -85,6 +85,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-rdf` / `turtle_chains` | scalar | `exact_guard_neighbors_and_permuted_interning`, `cycles_shared_and_quoted_blanks_preserve_statements`, `tied_guarded_branches_keep_order_under_permutation`, `a_long_collection_keeps_every_member`, `continuation_objects_saturate_at_the_same_indent_guard` | Checks exact layout around the permanent forty-level guard, input permutation, cyclic/shared/quoted blank identity, continuation indentation and the indexed strict 100,000-member collection route. |
 | `purrdf-entail` / `regular_role_chains` | scalar | All seventeen exact production cases registered in `make wasm-test` | Replays the native recursive/inverse role, blocking, proof, query-service, fixed-role, malformed-input, source-witness retention, exhaustion and cancellation expectations through the portable reasoning implementation. |
 | `purrdf-entail` / `recorded_stop` | scalar | All seven exact cases registered in `make wasm-test` | Checks one caller signal through canonical identity, every observed ontology-preparation poll and decision search; preserves completed proof identity/replay and selected preparation ceilings, and reports cancellation without a semantic verdict. |
+| `purrdf-entail` / `current_clash_support` | scalar | All five exact cases registered in `make wasm-test` | Checks source-bound ordinary clash replay, named/scoped-blank identities and disconnected controls, public service/certificate parity, generated existential nodes, nominal equality and fresh refutation assumptions through the shared support arena. |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name` | Refuses an image naming a different WASM arithmetic path with its typed admission error. |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `the_image_records_the_path_and_shape_this_build_was_made_for` | Records wasm32 and the actual SIMD feature bit and arithmetic path in the image. |
 | `purrdf-hash-conformance` / `hex` | SIMD | `every_path_matches_portable` | Explicitly calls the wasm simd128 encoder over lengths, alignments and write boundaries and asserts its selection. |

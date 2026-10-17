@@ -3968,11 +3968,11 @@ mod tests {
             ),
             (
                 "instance-retrieval",
-                "06f904105e4067b818e7dda54feadc97710f7a29804c297f0eae1ef360706940",
+                "a832aa53d7e7489326a9e33566c69523bbb8246aac0dbcfa7af6819f6f513fbe",
             ),
             (
                 "axiom-entailment",
-                "679ab5f2568d3b61e46abdf3593c6627383513934cf5834794a34feb896b1879",
+                "bada3584baaee90a558f429add646d9d6dfc59eaffbf2dc889ecb71ffcbeff1a",
             ),
             (
                 "classification",
@@ -3980,7 +3980,7 @@ mod tests {
             ),
             (
                 "realization",
-                "163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76",
+                "edb8a0a810077d651de1ad60afcca2f6ed3e14f65471733e72fe0a3ad1d9b25e",
             ),
             (
                 "module-extraction",
