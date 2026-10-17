@@ -43,6 +43,7 @@ pub(crate) fn layout_check(
             g,
             sink,
             Diagnostic {
+                cause: None,
                 code: "StreamableLayoutError".to_string(),
                 detail: "segment claims layout 'streamable' but carries no intact \
                      index footer (§3.3)"
@@ -74,6 +75,7 @@ pub(crate) fn layout_check(
             g,
             sink,
             Diagnostic {
+                cause: None,
                 code: "StreamableLayoutError".to_string(),
                 detail: format!(
                     "index footer contradicts the frames it covers: count {count} \
@@ -91,6 +93,7 @@ pub(crate) fn layout_check(
                 g,
                 sink,
                 Diagnostic {
+                    cause: None,
                     code: "StreamableLayoutError".to_string(),
                     detail: format!(
                         "covered blob {digest} delivered before its stream:digest \
@@ -157,6 +160,7 @@ pub(crate) fn check_index_mmr(
                 g,
                 sink,
                 Diagnostic {
+                    cause: None,
                     code: "IndexMmrError".to_string(),
                     detail,
                     frame_index: Some(record.abs_index),

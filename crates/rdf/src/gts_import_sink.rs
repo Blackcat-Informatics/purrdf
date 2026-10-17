@@ -417,6 +417,17 @@ impl ResolvedSink for SinkImporter<'_> {
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
+        let location = || {
+            let location = RdfLocation::logical("gts:sink");
+            match diagnostic.frame_index {
+                Some(frame_index) => location.with_gts_frame(frame_index),
+                None => location,
+            }
+        };
+        let storage_error = |error| RdfDiagnostic::from(error).with_location(location());
+        if let Some(purrdf_gts::model::DiagnosticCause::Storage(error)) = &diagnostic.cause {
+            return Err(storage_error(*error));
+        }
         // A selected import's byte budget names what *this import will retain*,
         // not what the container is allowed to contain. A payload refused by that
         // budget is therefore not a fold failure: the archive is intact and its
@@ -436,20 +447,23 @@ impl ResolvedSink for SinkImporter<'_> {
         // Any other reader diagnostic is a hard fold failure on the IR path (the
         // IR is the authority, no degraded fold). The `SegmentResolver` latches
         // the first one returned here.
-        Err(RdfDiagnostic::error(
+        let cause = diagnostic
+            .clone()
+            .into_native_cause()
+            .map_err(storage_error)?;
+        let failure = RdfDiagnostic::error(
             "rdf-ir-gts-fold-diagnostic",
             format!(
                 "GTS fold diagnostic {}: {}",
                 diagnostic.code, diagnostic.detail
             ),
         )
-        .with_location({
-            let location = RdfLocation::logical("gts:sink");
-            match diagnostic.frame_index {
-                Some(frame_index) => location.with_gts_frame(frame_index),
-                None => location,
-            }
-        }))
+        .with_location(location());
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        Err(failure
+            .with_native_cause(cause, &mut memory)
+            .map_err(storage_error)?)
     }
 }
 
@@ -545,6 +559,79 @@ fn sink_term_error(diagnostic: RdfDiagnostic, segment_index: u64, gts_id: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_reader_cause_survives_actual_import_and_owner_destruction() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let error = {
+            let mut writer = Writer::new("generic");
+            writer
+                .add_frame_with_options(
+                    "terms",
+                    purrdf_gts::writer::FrameOptions {
+                        raw: Some(vec![0xff]),
+                        transform: vec!["gzip".into()],
+                        ..purrdf_gts::writer::FrameOptions::default()
+                    },
+                )
+                .unwrap();
+            let bytes = writer.into_bytes();
+            let Err(error) = import_gts_events(&bytes) else {
+                panic!("invalid transformed CBOR must refuse the import")
+            };
+            error
+        };
+        let retained = error.clone();
+        drop(error);
+        assert_eq!(retained.code, "rdf-ir-gts-fold-diagnostic");
+        assert_eq!(retained.location.as_ref().unwrap().gts_frame_index, Some(1));
+        let original = retained.native_cause().unwrap();
+        let native: &dyn std::error::Error = original;
+        assert!(native.is::<Diagnostic>());
+        let fields = Capture::read(original);
+        assert_eq!(fields.code, "gts-diagnostic");
+        assert!(matches!(
+            fields.field("code"),
+            ErrorValue::Code("DamagedFrame")
+        ));
+        let fields = fields.child("cause").child("detail");
+        assert_eq!(fields.code, "gts-payload-cbor");
+        let fields = fields.child("cause");
+        assert_eq!(fields.code, "cbor-document");
+        assert!(matches!(fields.field("offset"), ErrorValue::ByteCount(0)));
+        let mut cause = Some(native);
+        let mut found = false;
+        while let Some(error) = cause {
+            found |= error.is::<purrdf_lex::cbor::DecodeError>();
+            cause = error.source();
+        }
+        assert!(
+            found,
+            "standard sources must retain the original decoder error"
+        );
+    }
+
+    #[test]
+    fn native_diagnostic_storage_refusal_keeps_its_kind_and_frame() {
+        let diagnostic = Diagnostic {
+            code: purrdf_gts::reader::BLOB_BUDGET_DIAGNOSTIC.into(),
+            detail: "original semantic refusal".into(),
+            frame_index: Some(u64::MAX),
+            cause: Some(purrdf_gts::model::DiagnosticCause::Storage(
+                purrdf_lex::allocation::StorageError::AllocationFailed,
+            )),
+        };
+        let error = SinkImporter::new().diagnostic(&diagnostic).unwrap_err();
+        assert_eq!(
+            error.storage_error(),
+            Some(purrdf_lex::allocation::StorageError::AllocationFailed)
+        );
+        assert_eq!(
+            error.location.as_ref().unwrap().gts_frame_index,
+            Some(u64::MAX)
+        );
+    }
 
     #[test]
     fn segment_scope_refuses_exhaustion_and_preserves_its_valid_neighbour() {

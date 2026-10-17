@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 use crate::{FastMap, FastSet};
 use std::io::Read;
 
+mod payload_error;
+use payload_error::{PayloadCause, PayloadError};
+
 use purrdf_lex::cbor::{self, Value};
 
 use crate::codec::{
@@ -187,31 +190,6 @@ fn refused_identity(
         return (Some(digest_str(raw)), true);
     }
     (pub_meta.and_then(public_blob_digest), false)
-}
-
-enum PayloadError {
-    /// Missing capability — degrade to an opaque node with this reason.
-    Unavailable {
-        reason: &'static str,
-        detail: String,
-    },
-    /// Anything else — the frame is damaged.
-    Damaged(String),
-    /// A caller-supplied byte ceiling refused an otherwise well-formed payload.
-    Budget(String),
-}
-
-impl From<CodecError> for PayloadError {
-    fn from(e: CodecError) -> Self {
-        match e {
-            CodecError::Unavailable { reason, detail } => Self::Unavailable {
-                reason,
-                detail: detail.to_string(),
-            },
-            CodecError::Failed(detail) => Self::Damaged(detail.to_string()),
-            error @ CodecError::Limit { .. } => Self::Budget(error.to_string()),
-        }
-    }
 }
 
 fn decrypt_codec(
@@ -595,11 +573,29 @@ impl Folder<'_, '_, '_> {
             self.g,
             &mut self.sink,
             Diagnostic {
+                cause: None,
                 code: code.to_string(),
                 detail,
                 frame_index: index,
             },
         );
+    }
+
+    fn diag_payload(
+        &mut self,
+        error: PayloadError,
+        detail: String,
+        index: u64,
+        budget_code: &'static str,
+    ) {
+        let diagnostic = Diagnostic {
+            code: error.diagnostic_code(budget_code).into(),
+            detail,
+            frame_index: Some(index),
+            cause: None,
+        }
+        .with_native_cause(error);
+        push_diagnostic(self.g, &mut self.sink, diagnostic);
     }
 
     /// Report a payload the sink's own ceiling refused, before any decode.
@@ -677,7 +673,7 @@ impl Folder<'_, '_, '_> {
                 None => {
                     return Err(PayloadError::Unavailable {
                         reason: "unknown-codec",
-                        detail: format!("codec id {cid:?} not in catalog"),
+                        detail: PayloadCause::MissingCatalog(cid.clone()),
                     });
                 }
             }
@@ -696,17 +692,16 @@ impl Folder<'_, '_, '_> {
                 .and_then(StreamingSink::blob_encoded_limit)
             && bytes.len() > limit
         {
-            return Err(PayloadError::Budget(format!(
-                "encoded blob exceeds {limit} bytes"
-            )));
+            return Err(PayloadError::Budget(PayloadCause::EncodedBlobLimit {
+                actual: bytes.len(),
+                limit,
+            }));
         }
         if let Some(Value::Array(ids)) = map_get(frame, "x")
             && !ids.is_empty()
         {
             let Some(Value::Bytes(db)) = d else {
-                return Err(PayloadError::Damaged(
-                    "transformed frame 'd' must be a byte string".to_string(),
-                ));
+                return Err(PayloadError::Damaged(PayloadCause::TransformedNotBytes));
             };
             let chain = self.resolve_codecs(ids)?;
             // A blob frame is bounded by the blob ceiling; every other frame by
@@ -733,7 +728,7 @@ impl Folder<'_, '_, '_> {
                 return Ok(Value::Bytes(decoded));
             }
             return cbor::decode(&decoded, cbor::Limits::DEFAULT)
-                .map_err(|e| PayloadError::Damaged(e.to_string()));
+                .map_err(|e| PayloadError::Damaged(PayloadCause::Cbor(e)));
         }
         if blob
             && let Some(Value::Bytes(bytes)) = d
@@ -743,9 +738,10 @@ impl Folder<'_, '_, '_> {
                 .and_then(StreamingSink::blob_decode_limit)
             && bytes.len() > limit
         {
-            return Err(PayloadError::Budget(format!(
-                "decoded blob exceeds {limit} bytes"
-            )));
+            return Err(PayloadError::Budget(PayloadCause::DecodedBlobLimit {
+                actual: bytes.len(),
+                limit,
+            }));
         }
         Ok(d.cloned().unwrap_or(Value::Null))
     }
@@ -763,23 +759,10 @@ impl Folder<'_, '_, '_> {
             return;
         }
         let payload = match self.payload(frame, false) {
-            Err(PayloadError::Unavailable { reason, detail }) => {
-                self.opaque(frame, ftype, reason);
-                self.diag(diag_code_for(reason), detail, Some(index));
-                return;
-            }
-            Err(PayloadError::Damaged(detail)) => {
-                self.opaque(frame, ftype, "damaged");
-                self.diag(
-                    "DamagedFrame",
-                    format!("payload decode failed: {detail}"),
-                    Some(index),
-                );
-                return;
-            }
-            Err(PayloadError::Budget(detail)) => {
-                self.opaque(frame, ftype, "over-budget");
-                self.diag(FRAME_BUDGET_DIAGNOSTIC, detail, Some(index));
+            Err(error) => {
+                self.opaque(frame, ftype, error.opaque_reason());
+                let detail = error.diagnostic_detail();
+                self.diag_payload(error, detail, index, FRAME_BUDGET_DIAGNOSTIC);
                 return;
             }
             Ok(p) => p,
@@ -1111,20 +1094,10 @@ impl Folder<'_, '_, '_> {
         let chain = match map_get(frame, "x") {
             Some(Value::Array(ids)) if !ids.is_empty() => match self.resolve_codecs(ids) {
                 Ok(chain) => chain,
-                Err(PayloadError::Unavailable { reason, detail }) => {
-                    self.opaque(frame, "blob", reason);
-                    self.diag(diag_code_for(reason), detail, Some(index));
-                    return;
-                }
-                // Codec-id resolution reads the catalog and decodes nothing, so
-                // it cannot exceed a byte ceiling; handled for exhaustiveness.
-                Err(PayloadError::Damaged(detail) | PayloadError::Budget(detail)) => {
-                    self.opaque(frame, "blob", "damaged");
-                    self.diag(
-                        "DamagedFrame",
-                        format!("payload decode failed: {detail}"),
-                        Some(index),
-                    );
+                Err(error) => {
+                    self.opaque(frame, "blob", error.opaque_reason());
+                    let detail = error.diagnostic_detail();
+                    self.diag_payload(error, detail, index, BLOB_BUDGET_DIAGNOSTIC);
                     return;
                 }
             },
@@ -1161,30 +1134,21 @@ impl Folder<'_, '_, '_> {
                     }
                 }
                 Ok(_) => {}
-                Err(PayloadError::Budget(detail)) => {
-                    let (refused_digest, digest_computed) =
-                        refused_identity(&chain, d, pub_meta.as_ref());
-                    self.emit_blob_refusal(
-                        refused_digest.as_deref(),
-                        digest_computed,
-                        declared_metadata,
-                        encoded_len,
-                        &detail,
-                    );
-                    self.opaque(frame, "blob", "over-budget");
-                    self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
-                }
-                Err(PayloadError::Unavailable { reason, detail }) => {
-                    self.opaque(frame, "blob", reason);
-                    self.diag(diag_code_for(reason), detail, Some(index));
-                }
-                Err(PayloadError::Damaged(detail)) => {
-                    self.opaque(frame, "blob", "damaged");
-                    self.diag(
-                        "DamagedFrame",
-                        format!("payload decode failed: {detail}"),
-                        Some(index),
-                    );
+                Err(error) => {
+                    let detail = error.diagnostic_detail();
+                    if matches!(&error, PayloadError::Budget(_)) {
+                        let (refused_digest, digest_computed) =
+                            refused_identity(&chain, d, pub_meta.as_ref());
+                        self.emit_blob_refusal(
+                            refused_digest.as_deref(),
+                            digest_computed,
+                            declared_metadata,
+                            encoded_len,
+                            &detail,
+                        );
+                    }
+                    self.opaque(frame, "blob", error.opaque_reason());
+                    self.diag_payload(error, detail, index, BLOB_BUDGET_DIAGNOSTIC);
                 }
             }
             return;
@@ -1251,30 +1215,21 @@ impl Folder<'_, '_, '_> {
                 }
             }
             Ok(_) => {}
-            Err(PayloadError::Budget(detail)) => {
-                let (refused_digest, digest_computed) =
-                    refused_identity(&chain, d, pub_meta.as_ref());
-                self.emit_blob_refusal(
-                    refused_digest.as_deref(),
-                    digest_computed,
-                    declared_metadata,
-                    encoded_len,
-                    &detail,
-                );
-                self.opaque(frame, "blob", "over-budget");
-                self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
-            }
-            Err(PayloadError::Unavailable { reason, detail }) => {
-                self.opaque(frame, "blob", reason);
-                self.diag(diag_code_for(reason), detail, Some(index));
-            }
-            Err(PayloadError::Damaged(detail)) => {
-                self.opaque(frame, "blob", "damaged");
-                self.diag(
-                    "DamagedFrame",
-                    format!("payload decode failed: {detail}"),
-                    Some(index),
-                );
+            Err(error) => {
+                let detail = error.diagnostic_detail();
+                if matches!(&error, PayloadError::Budget(_)) {
+                    let (refused_digest, digest_computed) =
+                        refused_identity(&chain, d, pub_meta.as_ref());
+                    self.emit_blob_refusal(
+                        refused_digest.as_deref(),
+                        digest_computed,
+                        declared_metadata,
+                        encoded_len,
+                        &detail,
+                    );
+                }
+                self.opaque(frame, "blob", error.opaque_reason());
+                self.diag_payload(error, detail, index, BLOB_BUDGET_DIAGNOSTIC);
             }
         }
     }
@@ -1386,9 +1341,13 @@ impl Folder<'_, '_, '_> {
                     if let Some(limit) = ceiling
                         && bytes.len() > limit
                     {
-                        let detail = format!("snapshot blob exceeds {limit} bytes");
+                        let error = PayloadError::Budget(PayloadCause::SnapshotBlobLimit {
+                            actual: bytes.len(),
+                            limit,
+                        });
+                        let detail = error.diagnostic_detail();
                         self.emit_blob_refusal(Some(&digest), true, None, bytes.len(), &detail);
-                        self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
+                        self.diag_payload(error, detail, index, BLOB_BUDGET_DIAGNOSTIC);
                         continue;
                     }
                     if self.materialize {
@@ -1713,6 +1672,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
     if items.is_empty() {
         let mut g = Graph::default();
         g.diagnostics.push(Diagnostic {
+            cause: None,
             code: "EmptyFile".to_string(),
             detail: "no CBOR items".to_string(),
             frame_index: None,
@@ -1730,6 +1690,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
     if bounds.first() != Some(&0) {
         let mut g = Graph::default();
         g.diagnostics.push(Diagnostic {
+            cause: None,
             code: "DamagedFrame".to_string(),
             detail: "first item is not a header".to_string(),
             frame_index: Some(0),
@@ -1739,6 +1700,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
     if bounds.len() > 1 && !options.allow_segments {
         let mut g = read_segment_with_sink(&items[..bounds[1]], 0, 0, None, options.content_key);
         g.diagnostics.push(Diagnostic {
+            cause: None,
             code: "SegmentBoundary".to_string(),
             detail: format!(
                 "segment boundary at item {} but reader is in pre-segment mode; \
@@ -1768,6 +1730,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
         let last_head = g.segment_heads.last().cloned().unwrap_or_default();
         if last_head != expected {
             g.diagnostics.push(Diagnostic {
+                cause: None,
                 code: "TruncatedLog".to_string(),
                 detail: "observed head does not match expected head".to_string(),
                 frame_index: None,
@@ -1776,6 +1739,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
     }
     if let Some(offset) = torn {
         g.diagnostics.push(Diagnostic {
+            cause: None,
             code: "TornAppendError".to_string(),
             detail: format!("torn at offset {offset}"),
             frame_index: None,
@@ -1891,6 +1855,7 @@ impl ActiveStreamingSegment {
                         &mut g,
                         &mut sink_slot,
                         Diagnostic {
+                            cause: None,
                             code: "DamagedFrame".to_string(),
                             detail: "header self-hash mismatch".to_string(),
                             frame_index: Some(index_offset),
@@ -1904,6 +1869,7 @@ impl ActiveStreamingSegment {
                         &mut g,
                         &mut sink_slot,
                         Diagnostic {
+                            cause: None,
                             code: "DamagedFrame".to_string(),
                             detail: format!(
                                 "unsupported header magic/version {:?}/{:?}",
@@ -1921,6 +1887,7 @@ impl ActiveStreamingSegment {
                     &mut g,
                     &mut sink_slot,
                     Diagnostic {
+                        cause: None,
                         code: "DamagedFrame".to_string(),
                         detail: format!("invalid header: {e}"),
                         frame_index: Some(index_offset),
@@ -2199,6 +2166,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                         &mut result,
                         sink,
                         Diagnostic {
+                            cause: None,
                             code: "ResourceLimit".to_owned(),
                             detail: "GTS source byte offset exceeds u64::MAX".to_owned(),
                             frame_index: Some(item_index),
@@ -2218,6 +2186,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                         &mut result,
                         sink,
                         Diagnostic {
+                            cause: None,
                             code: "SegmentBoundary".to_string(),
                             detail: format!(
                                 "segment boundary at item {item_index} but reader is in \
@@ -2235,6 +2204,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                     &mut result,
                     sink,
                     Diagnostic {
+                        cause: None,
                         code: "DamagedFrame".to_string(),
                         detail: "first item is not a header".to_string(),
                         frame_index: Some(0),
@@ -2262,6 +2232,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                 &mut result,
                 sink,
                 Diagnostic {
+                    cause: None,
                     code: "DamagedFrame".to_string(),
                     detail: "first item is not a header".to_string(),
                     frame_index: Some(0),
@@ -2276,6 +2247,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                     &mut result,
                     sink,
                     Diagnostic {
+                        cause: None,
                         code: "ResourceLimit".to_owned(),
                         detail: "GTS item ordinal exceeds u64::MAX".to_owned(),
                         frame_index: Some(item_index),
@@ -2291,6 +2263,7 @@ pub fn read_to_sink_from_reader<R: Read>(
             &mut result,
             sink,
             Diagnostic {
+                cause: None,
                 code: "EmptyFile".to_string(),
                 detail: "no CBOR items".to_string(),
                 frame_index: None,
@@ -2309,6 +2282,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                 &mut result,
                 sink,
                 Diagnostic {
+                    cause: None,
                     code: "TruncatedLog".to_string(),
                     detail: "observed head does not match expected head".to_string(),
                     frame_index: None,
@@ -2321,6 +2295,7 @@ pub fn read_to_sink_from_reader<R: Read>(
             &mut result,
             sink,
             Diagnostic {
+                cause: None,
                 code: "TornAppendError".to_string(),
                 detail: format!("torn at offset {offset}"),
                 frame_index: None,
@@ -2353,6 +2328,7 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
             segments: Vec::new(),
             torn: torn.map(|offset| offset as u64),
             fatal: Some(Diagnostic {
+                cause: None,
                 code: "EmptyFile".to_string(),
                 detail: "no CBOR items".to_string(),
                 frame_index: None,
@@ -2370,6 +2346,7 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
             segments: Vec::new(),
             torn: torn.map(|offset| offset as u64),
             fatal: Some(Diagnostic {
+                cause: None,
                 code: "DamagedFrame".to_string(),
                 detail: "first item is not a header".to_string(),
                 frame_index: Some(0),
@@ -2450,6 +2427,7 @@ fn read_segment_with_sink(
                 &mut g,
                 &mut sink,
                 Diagnostic {
+                    cause: None,
                     code: "DamagedFrame".to_string(),
                     detail: format!("invalid header: {e}"),
                     frame_index: Some(index_offset),
@@ -2467,6 +2445,7 @@ fn read_segment_with_sink(
             &mut g,
             &mut sink,
             Diagnostic {
+                cause: None,
                 code: "DamagedFrame".to_string(),
                 detail: "header self-hash mismatch".to_string(),
                 frame_index: Some(index_offset),
@@ -2480,6 +2459,7 @@ fn read_segment_with_sink(
             &mut g,
             &mut sink,
             Diagnostic {
+                cause: None,
                 code: "DamagedFrame".to_string(),
                 detail: format!(
                     "unsupported header magic/version {:?}/{:?}",
