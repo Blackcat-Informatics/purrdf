@@ -1,0 +1,75 @@
+PASS: the walk reads every fixture file
+PASS: a renamed, re-spelt copy of a body is one isomorphic group with its original
+PASS: a body of the same size with different control flow is not grouped
+PASS: test-only code is never walked, and a tests/ file is walked as a test crate of its own
+PASS: the home resolves to its package
+PASS: a decimal spelling of a forbidden hex constant is a copy outside the home
+PASS: a hex-digit table is a forbidden fingerprint and a near-miss table is not
+PASS: a forbidden constant in a tests/ file is a copy too
+PASS: --count counts all three copies
+PASS: --check reports the unsanctioned group and all three copies
+PASS: an isomorphic variant row sanctions its group
+PASS: a forbidden variant row removes its copy from the count
+PASS: a distinct row naming exactly its group's members sanctions it
+PASS: a distinct row of the other kind does not sanction the group, and is STALE
+PASS: a group that gains a member its distinct row does not name fails, and the row is STALE
+PASS: a distinct row whose members are no group is STALE, and the group still fails
+PASS: a distinct row naming a member that no longer exists is STALE
+PASS: a distinct row whose anchor carries no documentation fails
+PASS: a distinct row whose anchor does not resolve fails
+PASS: the near-miss fixture walks cleanly
+PASS: two breadth-first searches that differ only in `&next`/`parent[&cursor]` against `next.as_str()`/`parent[cursor]` are one group
+PASS: a helper copied between two tests/ files is one group
+PASS: a copy below the old thirty-token floor is one group
+PASS: a support module every test target declares is one source, not a group
+PASS: a small body of the same shape with a different constant is another table
+PASS: two accessors of the same shape over different fields are not grouped
+PASS: a const generic argument is kept: `::<true, _>` and `::<false, _>` are not grouped
+PASS: a function whose body declares a nested struct and impl is one group with its copy once the nested type is renamed
+PASS: --check fails on exactly the four seeded near-miss groups
+PASS: feature cfg
+PASS: feature cfg valid neighbor
+PASS: nested feature cfg_attr
+PASS: cfg_attr valid neighbor
+PASS: raw feature macro
+PASS: macro valid neighbor
+PASS: braced feature macro
+PASS: braced macro valid neighbor
+PASS: bracketed feature macro
+PASS: bracketed macro valid neighbor
+PASS: cfg_select feature condition
+PASS: cfg_select payload is not a feature condition
+PASS: cfg_select macro transcriber feature condition
+PASS: cfg_select macro transcriber valid neighbor
+PASS: feature in macro body
+PASS: feature prose is data
+PASS: test cfg
+PASS: test cfg valid neighbor
+PASS: nested inner test cfg_attr
+PASS: cfg_attr test valid neighbor
+PASS: raw test cfg macro
+PASS: test macro valid neighbor
+PASS: braced test macro
+PASS: braced test macro valid neighbor
+PASS: bracketed test macro
+PASS: bracketed test macro valid neighbor
+PASS: cfg_select nested test condition
+PASS: cfg_select payload is not a test condition
+PASS: cfg_select bracketed test condition
+PASS: cfg_select parenthesized valid neighbor
+PASS: bare test attribute
+PASS: test attribute valid neighbor
+PASS: cfg_attr emits test
+PASS: named test value is not predicate
+PASS: test in macro body
+PASS: test prose is data
+PASS: exact empty capi marker
+PASS: missing capi marker
+PASS: expanded capi marker
+PASS: extra capi feature
+PASS: ordinary Cargo feature
+PASS: optional dependency implicit feature
+PASS: missing capi package
+PASS: invalid metadata is refused
+PASS: unbalanced Rust tokens are refused
+OK: helper-census self-test

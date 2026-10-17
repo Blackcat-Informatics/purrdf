@@ -1,0 +1,7 @@
+# Review and completion disposition
+
+The current merge brief reports hosted CI queued/running and CodeRabbit processing. No failure is reported in that capture. REST reviews/inline comments are empty and GraphQL threads are empty with hasNextPage=false. CodeRabbit's sole progress comment contains no submitted actionable finding; it remains pending, not approved or resolved. The published squash notes are the other process comment. Independent dispatch is unavailable; source-review.md is explicitly self-review.
+
+Local acceptance is complete: the actual census shows forty records with unchanged authorities and exact unique sink matches; source review traces all three changed constructor-domain files and preserves checked builder/error propagation. Only forty constructor bindings change. Complete helper check, CLI self-tests, ten actual capacity-proof regression tests, strict all-target helper Clippy, diff hygiene and normal hooks passed. The candidate merge-tree exited zero against the unchanged base.
+
+The user's explicit instruction permits ghprsq integration with hosted CI pending: "Please ghprsq this branch now, we'll create issues for anything that comes up in CI, but we need to get this code pushed and merged." No local failure, scanner rule or known review finding is waived. Subsequent hosted findings remain required work. Least independently established: broader hosted integration, though this change has no runtime code delta. No new engine capability or downstream logic completion is claimed.

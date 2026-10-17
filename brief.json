@@ -1,0 +1,50 @@
+{
+  "issue": 584,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Requalify capacity source proofs after canonicalization cancellation",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 492,
+      "title": "Triple-only carrier for RDF 1.2 consumers that use no named graphs (rows, permutations, Datalog atoms, identities)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 404,
+      "title": "Additive complete-state dataset digest",
+      "state": "CLOSED"
+    },
+    {
+      "number": 181,
+      "title": "SHACL 1.2 Rules SPARQLRule: blank nodes not serialized correctly",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "correctness": 2,
+    "none": 22,
+    "performance": 2,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/584-requalify-capacity-source-proofs-after"
+  },
+  "coverage": [
+    "issue #584 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Requalify', 'capacity', 'source']: 3 other item(s)",
+    "GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #584 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #584: 0",
+    "requirement candidates: 0 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 0 identifier(s), 1 workspace package(s), 0 URL(s)"
+  ]
+}

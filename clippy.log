@@ -1,0 +1,23 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/584-requalify-capacity-source-proofs-after/crates/hash)
+   Compiling proc-macro2 v1.0.106
+    Checking regex-syntax v0.8.11
+   Compiling quote v1.0.46
+    Checking unicode-ident v1.0.24
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/584-requalify-capacity-source-proofs-after/crates/lex)
+    Checking regex v1.12.4
+    Checking digest v0.11.3
+    Checking syn v2.0.118
+    Checking sha2 v0.11.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/584-requalify-capacity-source-proofs-after/crates/testkit)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/584-requalify-capacity-source-proofs-after/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/584-requalify-capacity-source-proofs-after/crates/iri)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/584-requalify-capacity-source-proofs-after/crates/jsonschema)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/584-requalify-capacity-source-proofs-after/crates/helper-census)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 11.25s

@@ -1,0 +1,14 @@
+{
+  "proof_count": 40,
+  "old_constructor_identities": [
+    "source:3d088bde0e0c4767"
+  ],
+  "current_constructor_identity": "source:3ebf2699c3bca59a",
+  "authority_mismatches": [],
+  "changed_constructor_files": [
+    "crates/rdf-core/src/governor.rs",
+    "crates/rdf-core/src/ir/canon.rs",
+    "crates/rdf-core/src/ir/mod.rs"
+  ],
+  "diagnostic_count": 40
+}

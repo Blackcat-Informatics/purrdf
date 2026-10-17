@@ -1,0 +1,51 @@
+$ stagectl pr-checks 585
+IN_PROGRESS Analyze (python)
+IN_PROGRESS pytest
+SKIPPED    native-profile-comparison
+QUEUED     simd-asm-config (x86_64-v4)
+QUEUED     wasm-package
+SKIPPED    native-profile
+QUEUED     test (lib)
+QUEUED     test (doc)
+QUEUED     test (integration-1)
+QUEUED     test (integration-2)
+QUEUED     test (integration-3)
+QUEUED     test (integration-4)
+QUEUED     test (integration-5)
+QUEUED     projection-oracles
+QUEUED     capi
+QUEUED     doc
+QUEUED     msrv
+QUEUED     wasm
+QUEUED     simd-asm-config (aarch64-neoverse-v1)
+QUEUED     wasm-exec
+QUEUED     geo-determinism
+QUEUED     wasm-schema-oracles
+QUEUED     simd-asm-config (x86_64)
+QUEUED     simd-asm-config (x86_64-v3)
+QUEUED     workspace
+SKIPPED    native-profile-admission
+QUEUED     simd-asm-config (aarch64)
+QUEUED     conformance (core)
+QUEUED     simd-asm-config (wasm32-simd128)
+SKIPPED    simd-asm-projection
+QUEUED     aarch64
+QUEUED     cross-arch
+QUEUED     windows-mtime
+QUEUED     cross-arch-riscv64 (suites)
+QUEUED     cross-arch-riscv64 (determinism-serial)
+QUEUED     cross-arch-riscv64 (determinism-one-worker)
+QUEUED     cross-arch-riscv64 (determinism-more-workers)
+QUEUED     avx512-sde
+QUEUED     conformance (python)
+QUEUED     python-publisher
+QUEUED     miri
+QUEUED     simd-asm-config (wasm32)
+QUEUED     conformance (sparql)
+QUEUED     conformance (shapes)
+QUEUED     Analyze (c-cpp)
+QUEUED     Analyze (javascript-typescript)
+QUEUED     Analyze (rust)
+QUEUED     Analyze (actions)
+PENDING    CodeRabbit
+state: pending
