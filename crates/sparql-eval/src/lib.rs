@@ -209,7 +209,9 @@ pub use engine::{
     FallibleGraphBuildResult, GraphBuildError, GraphBuildStats, NativeSparqlEngine, PlanCache,
     PreparedQuery, PreparedRdflibQuery, QueryOptions,
 };
-pub use error::{EvalError, EvaluatorInvariant, StackExpectation, UnsupportedKind};
+pub use error::{
+    EvalError, EvaluatorInvariant, RetainedInvariant, StackExpectation, UnsupportedKind,
+};
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };

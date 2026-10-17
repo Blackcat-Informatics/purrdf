@@ -68,6 +68,8 @@ use crate::registry_id::{RegistryId, append_framed_part};
 use crate::witness::RelationWitness;
 use crate::workspace::{AdmittedVec, WorkspaceCapability, WorkspaceTerm};
 
+mod body_mismatch;
+
 /// The result form of a function body: a `sh:select` returns the projected value of
 /// its one solution (a second solution is an error); a `sh:ask` returns an
 /// `xsd:boolean`.
@@ -78,6 +80,13 @@ pub enum UserFnBody {
     Select,
     /// A `sh:ask` body: the return value is the `xsd:boolean` of the ASK.
     Ask,
+}
+
+impl purrdf_hash::error::StructuredError for UserFnBody {
+    purrdf_hash::error_visit! {
+        Select => "shacl-function-body-select" {},
+        Ask => "shacl-function-body-ask" {},
+    }
 }
 
 /// Original native function execution refusals, before presentation.
@@ -2126,9 +2135,9 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
         // The declaration parser pairs `kind` with the matching body form, so a
         // mismatch is an internal invariant violation, not user input.
         (kind, outcome) => {
-            return Err(EvalError::internal(format!(
-                "SHACL-AF function <{iri}> body kind {kind:?} produced {outcome:?}"
-            )));
+            return Err(EvalError::RetainedInvariant(body_mismatch::retain(
+                iri, kind, outcome, &child,
+            )?));
         }
     };
 

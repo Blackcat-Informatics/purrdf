@@ -459,6 +459,49 @@ pub struct RetainedDiagnostic {
     payload: Shared<DiagnosticPayload>,
 }
 
+/// Original native cause with its box and shared-control layout admitted before
+/// either publication or optional presentation. The payload dies before its grant.
+pub(crate) struct PreparedDiagnosticCause<E> {
+    value: Box<E>,
+    frame: crate::workspace::LexicalFrame,
+}
+
+impl<E: purrdf_hash::error::NativeError + 'static> PreparedDiagnosticCause<E> {
+    pub(crate) fn new(
+        value: E,
+        mut frame: crate::workspace::LexicalFrame,
+    ) -> Result<Self, EvalError> {
+        let live = frame.admitted_bytes();
+        let value = purrdf_lex::allocation::Memory::resume(&mut frame, live)
+            .boxed(value)
+            .map_err(|error| frame.storage_error(error, "query diagnostic cause"))?;
+        let total = frame
+            .admitted_bytes()
+            .checked_add(
+                purrdf_core::diagnostic::DiagnosticCause::allocation_layout::<
+                    crate::WorkspaceAllocation,
+                >()
+                .size(),
+            )
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        frame.resize_live(total)?;
+        Ok(Self { value, frame })
+    }
+
+    pub(crate) fn publish(self) -> Result<purrdf_core::diagnostic::DiagnosticCause, EvalError> {
+        let Self { value, frame } = self;
+        let allocation = frame
+            .into_allocation()
+            .expect("native cause control has an original grant");
+        let cause: Box<dyn purrdf_hash::error::NativeError> = value;
+        purrdf_core::diagnostic::DiagnosticCause::try_from_admitted(cause, allocation).map_err(
+            |_| EvalError::AllocationFailed {
+                construct: "query diagnostic cause owner",
+            },
+        )
+    }
+}
+
 impl RetainedDiagnostic {
     /// Retain the original evaluator failure independently of the rendered
     /// diagnostic. Explicit resident copies keep that original cause grant.
@@ -478,34 +521,17 @@ impl RetainedDiagnostic {
     pub(crate) fn from_native<E: purrdf_hash::error::NativeError + 'static>(
         cause: E,
         code: impl FnOnce(&E) -> &str,
-        mut cause_frame: crate::workspace::LexicalFrame,
+        cause_frame: crate::workspace::LexicalFrame,
     ) -> Result<Self, EvalError> {
-        use purrdf_core::diagnostic::DiagnosticCause;
-        let live = cause_frame.admitted_bytes();
-        let cause = purrdf_lex::allocation::Memory::resume(&mut cause_frame, live)
-            .boxed(cause)
-            .map_err(|error| cause_frame.storage_error(error, "query diagnostic cause"))?;
-        let total = cause_frame
-            .admitted_bytes()
-            .checked_add(DiagnosticCause::allocation_layout::<crate::WorkspaceAllocation>().size())
-            .ok_or(EvalError::WorkspaceBoundOverflow)?;
-        cause_frame.resize_live(total)?;
-        let mut report_frame = crate::workspace::LexicalFrame::new(cause_frame.workspace());
+        let prepared = PreparedDiagnosticCause::new(cause, cause_frame)?;
+        let mut report_frame = crate::workspace::LexicalFrame::new(prepared.frame.workspace());
         let diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
-            code(&cause),
-            &cause,
+            code(&prepared.value),
+            &prepared.value,
             &mut purrdf_lex::allocation::Memory::new(&mut report_frame),
         )
         .map_err(|error| report_frame.storage_error(error, "query diagnostic text"))?;
-        let allocation = cause_frame
-            .into_allocation()
-            .expect("native cause control has an original grant");
-        let cause: Box<dyn purrdf_hash::error::NativeError> = cause;
-        let cause = DiagnosticCause::try_from_admitted(cause, allocation).map_err(|_| {
-            EvalError::AllocationFailed {
-                construct: "query diagnostic cause owner",
-            }
-        })?;
+        let cause = prepared.publish()?;
         let admitted = report_frame.admitted_bytes();
         let diagnostic = diagnostic
             .with_native_cause(

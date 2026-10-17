@@ -1665,6 +1665,153 @@ fn raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers() {
     );
 }
 
+fn shacl_body_mismatch_keeps_original_boolean_solutions_and_graph() {
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+    use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
+    use purrdf_sparql_eval::{
+        ExtensionEnv, NativeSparqlEngine, TypeConstraint, UserFnBody, UserFunction,
+        UserFunctionRegistry,
+    };
+
+    let iri = "https://example.org/函数";
+    let query = SparqlParser::new()
+        .parse_query(&format!("SELECT (<{iri}>() AS ?result) WHERE {{}}"))
+        .unwrap();
+    for (kind, body, form) in [
+        (UserFnBody::Select, "ASK {}", "boolean"),
+        (
+            UserFnBody::Ask,
+            "SELECT ?value WHERE { VALUES ?value { \"原文\" UNDEF \"新值\" \"原文\" } }",
+            "solution",
+        ),
+        (
+            UserFnBody::Select,
+            "CONSTRUCT { <https://example.org/s> <https://example.org/p> \"原文\" } WHERE {}",
+            "graph",
+        ),
+    ] {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("https://example.org/source").unwrap();
+        let predicate = builder.intern_iri("https://example.org/value").unwrap();
+        let value = builder.intern_literal(RdfLiteral::simple("原文")).unwrap();
+        builder.push_quad(subject, predicate, value, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let mut functions = UserFunctionRegistry::default();
+        functions.insert(
+            iri,
+            UserFunction {
+                params: Vec::new(),
+                required: 0,
+                body: body.into(),
+                kind,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let bound = NativeSparqlEngine::new()
+            .bind_functions(functions, ExtensionEnv::empty())
+            .unwrap();
+        let mut ctx = EvalCtx::new(&dataset).with_user_functions(&bound);
+        let original = evaluate_query(&query, &mut ctx).unwrap_err();
+        drop(ctx);
+        drop(bound);
+        drop(dataset);
+        let retained = original.clone();
+        assert_eq!(original, retained);
+        drop(original);
+        assert_eq!(retained.code(), Some(EvalError::INTERNAL_CODE));
+        assert_eq!(retained.diagnostic_code(), Some(EvalError::INTERNAL_CODE));
+        assert_eq!(
+            purrdf_sparql_eval::protocol::FailureCode::from(&retained),
+            purrdf_sparql_eval::protocol::FailureCode::Evaluation
+        );
+        let EvalError::RetainedInvariant(native) = &retained else {
+            panic!("the original mismatch must survive")
+        };
+        let buffer = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(native.cause(), buffer);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(fields.code, "shacl-function-body-mismatch");
+        assert!(matches!(fields.field("iri"), ErrorValue::Iri(value) if value == iri));
+        assert!(matches!(fields.field("actual"), ErrorValue::Code(value) if value == form));
+        assert_eq!(
+            fields.child("expected").code,
+            match kind {
+                UserFnBody::Select => "shacl-function-body-select",
+                UserFnBody::Ask => "shacl-function-body-ask",
+            }
+        );
+        assert_body_mismatch_result(&fields, form, iri, &retained);
+    }
+}
+
+fn assert_body_mismatch_result(fields: &Capture<'_>, form: &str, iri: &str, retained: &EvalError) {
+    use purrdf_testkit::error_capture::Event;
+    match form {
+        "boolean" => {
+            assert!(matches!(fields.field("outcome"), ErrorValue::Boolean(true)));
+            assert_eq!(
+                retained.to_string(),
+                format!(
+                    "internal evaluator error: SHACL-AF function <{iri}> body kind Select produced Boolean(true)"
+                )
+            );
+        }
+        "solution" => {
+            let table = fields.child("outcome");
+            assert_eq!(table.code, "shacl-function-body-solutions");
+            assert!(
+                table
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, Event::BeginList(Some("rows"), 4)))
+            );
+            assert!(
+                table
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, Event::Value(None, ErrorValue::Text("value"))))
+            );
+            let terms = table
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Value(None, ErrorValue::Term(value)) => Some(Capture::read(*value)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(terms.len(), 3);
+            let lexical = terms
+                .iter()
+                .map(|term| match term.field("lexical_form") {
+                    ErrorValue::Text(value) => value,
+                    _ => panic!("the original literal must retain its lexical form"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(lexical, ["原文", "新值", "原文"]);
+            assert_eq!(
+                table
+                    .events
+                    .iter()
+                    .filter(|event| matches!(event, Event::Value(None, ErrorValue::Absent)))
+                    .count(),
+                1
+            );
+        }
+        "graph" => {
+            let graph = fields.child("outcome");
+            assert_eq!(graph.code, "rdf-dataset");
+            assert!(
+                graph
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, Event::BeginList(Some("quads"), 1)))
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
 fn shacl_select_result_refusals_keep_original_iri_and_counts() {
     use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
     use purrdf_sparql_eval::{
@@ -2429,6 +2576,7 @@ fn knn_artifact_refusals_retain_native_format_causes() {
 }
 
 purrdf_testkit::harness_main!(
+    shacl_body_mismatch_keeps_original_boolean_solutions_and_graph,
     knn_zero_norm_retains_row_after_original_owner_release,
     knn_artifact_refusals_retain_native_format_causes,
     knn_space_refusals_keep_row_terms_dimensions_and_float_bits,

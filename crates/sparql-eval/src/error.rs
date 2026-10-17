@@ -30,6 +30,8 @@ use purrdf_sparql_algebra::ParseError;
 
 mod invariant;
 pub use invariant::{EvaluatorInvariant, StackExpectation};
+mod retained_invariant;
+pub use retained_invariant::RetainedInvariant;
 
 /// Which of the narrow, ENUMERATED classified-unsupported residue an
 /// [`EvalError::Unsupported`] belongs to — see that variant's docs for the full
@@ -394,6 +396,8 @@ impl purrdf_hash::error::StructuredError for NativeDiagnostic {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvalError {
+    /// A dynamic native invariant, retaining its original cause without formatting.
+    RetainedInvariant(RetainedInvariant),
     /// An immutable native diagnostic retaining its exact allocation grant.
     NativeDiagnostic(NativeDiagnostic),
     /// Original RDF diagnostic and immutable allocation owner.
@@ -492,8 +496,8 @@ pub enum EvalError {
     /// not match its schema. This indicates a bug in the evaluator, not bad input
     /// (a frozen, validated dataset and a parsed algebra cannot legitimately cause
     /// it); it is surfaced rather than panicking so callers fail cleanly.
-    /// Classified native reasons use [`Self::Invariant`] instead of formatting
-    /// their classification into this message variant.
+    /// Classified native reasons use [`Self::Invariant`]; dynamic native causes
+    /// use [`Self::RetainedInvariant`] instead of flattening their fields here.
     Internal(String),
 
     /// A native evaluator invariant, classified before diagnostic presentation.
@@ -732,6 +736,7 @@ impl purrdf_hash::error::StructuredError for EvalError {
     purrdf_hash::error_visit! {
         NativeDiagnostic(error) => "sparql-eval-native-diagnostic" { "cause" => Cause(error) },
         RetainedDiagnostic(error) => "sparql-eval-retained-diagnostic" { "cause" => Cause(error) },
+        RetainedInvariant(error) => "sparql-eval-retained-invariant" { "cause" => Cause(error) },
         RetainedServiceFailure(error) => "sparql-eval-retained-service" { "cause" => Cause(error) },
         UnstableNativeDiagnostic => "sparql-eval-unstable-diagnostic" {},
         Parse(error) => "sparql-eval-parse" { "cause" => Cause(error) },
@@ -941,7 +946,9 @@ impl EvalError {
             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
             Self::Capacity(_) => Some("native-sparql-capacity-exhausted"),
             Self::AllocationFailed { .. } => Some(Self::ALLOCATION_FAILED_CODE),
-            Self::Internal(_) | Self::Invariant(_) => Some(Self::INTERNAL_CODE),
+            Self::Internal(_) | Self::Invariant(_) | Self::RetainedInvariant(_) => {
+                Some(Self::INTERNAL_CODE)
+            }
             Self::CompositeBound(_) => Some(Self::COMPOSITE_BOUND_CODE),
             Self::FloatEnvironment(_) => Some(Self::FLOAT_ENVIRONMENT_CODE),
             Self::FunctionOperational(_) => Some(Self::FUNCTION_OPERATIONAL_CODE),
@@ -1148,6 +1155,7 @@ impl core::fmt::Display for EvalError {
                 diagnostic.message
             ),
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
+            Self::RetainedInvariant(cause) => write!(f, "internal evaluator error: {cause}"),
             Self::Invariant(reason) => write!(f, "internal evaluator error: {reason}"),
             Self::Remote(msg) | Self::ServiceUnconfigured(msg) => {
                 write!(f, "SERVICE federation error: {msg}")
@@ -1229,6 +1237,7 @@ impl std::error::Error for EvalError {
             Self::NativeDiagnostic(error) => Some(error),
             Self::Invariant(reason) => Some(reason),
             Self::RetainedDiagnostic(error) => Some(error),
+            Self::RetainedInvariant(error) => Some(error),
             Self::RetainedServiceFailure(error) => Some(error),
             Self::Parse(error) => Some(error),
             Self::Dataset(error) => Some(error),

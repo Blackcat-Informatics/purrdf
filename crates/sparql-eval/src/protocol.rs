@@ -1535,6 +1535,7 @@ impl From<&EvalError> for FailureCode {
             | EvalError::AllocationFailed { .. }
             | EvalError::Dataset(_)
             | EvalError::Internal(_)
+            | EvalError::RetainedInvariant(_)
             | EvalError::Invariant(_)
             | EvalError::Data(_)
             | EvalError::Function(_)
