@@ -1024,7 +1024,7 @@ impl<'a> CeExtractor<'a> {
             stop: self.stop,
         }
         .role(r)
-        .map_err(Into::into)
+        .map_err(|error| EntailError::from(error.with_source(self.interner)))
     }
 
     /// Parse a cardinality literal (an `xsd:nonNegativeInteger`/`integer`) as `u32`.
