@@ -186,7 +186,7 @@ pub use fno::{
 pub use governor::{
     EvidenceLease, ExpressionErrorEvidence, GovernorEvidence, ResourceDimension, ResourceVector,
     SilencedEvidence, SilencedEvidenceBuilder, SilencedInvocation, SilencedKind, SilencedTarget,
-    StopCause, TrippedGovernor,
+    StopCause, StopSignal, TrippedGovernor,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 #[cfg(not(target_arch = "wasm32"))]
@@ -228,8 +228,8 @@ pub use ir::{
     check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
     deskolemize, fold_term, graph_digest_view, skolemize, try_blank_count_view, try_canonicalize,
     try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
-    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
-    try_graph_digest_view, visit_nested,
+    try_canonicalize_view, try_canonicalize_view_with_stop, try_canonicalize_with,
+    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,

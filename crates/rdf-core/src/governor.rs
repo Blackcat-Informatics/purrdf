@@ -23,6 +23,25 @@
 
 use std::ops::Index;
 
+/// A caller-owned, latching stop request shared by preparation and execution.
+///
+/// Implementations must be cheap, independent of the data being processed, and
+/// permanently return `true` after the first stop request. A signal changes no
+/// complete answer or identity: an interrupted operation reports a typed stop
+/// instead of claiming completion. The host owns any clock or cancellation bit;
+/// this interface reads neither. `Send + Sync` permits sharing one signal across
+/// the stages of an operation, including on WebAssembly without host syscalls.
+pub trait StopSignal: Send + Sync + core::fmt::Debug {
+    /// Whether the caller has requested cancellation. The request must latch.
+    fn stopped(&self) -> bool;
+}
+
+/// Poll a caller signal; an explicitly ungoverned operation has no stop request.
+#[inline]
+pub fn is_stopped(stop: Option<&dyn StopSignal>) -> bool {
+    stop.is_some_and(StopSignal::stopped)
+}
+
 /// Why an operation stopped before it could complete on its own terms.
 ///
 /// Cancellation and a deadline are the same primitive — a host-supplied stop signal —

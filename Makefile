@@ -728,6 +728,15 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test recorded_stop -- --exact \
+				recorded_stop_preserves_complete_decisions_and_proof_identity \
+				recorded_stop_refuses_before_identity_preparation \
+				recorded_stop_retains_the_signal_after_identity \
+				recorded_stop_covers_identity_digest_streaming \
+				recorded_stop_reports_cancelled_search_without_a_semantic_verdict \
+				recorded_stop_preserves_preparation_budget_selection \
+				recorded_stop_covers_every_preparation_poll \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-rdf --test turtle_chains -- --exact \
 				blank_chains_at_one_hundred_thousand blank_chains_at_one_million \
 				exact_guard_neighbors_and_permuted_interning cycles_shared_and_quoted_blanks_preserve_statements \

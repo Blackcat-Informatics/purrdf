@@ -376,8 +376,20 @@ fn resolve_node(interner: &mut Interner, node: &QNode) -> Option<u32> {
 
 /// Index the data's default-graph triples over the (already-populated) interner.
 pub(crate) fn build_data_index<D: DatasetView>(ds: &D, interner: &mut Interner) -> TripleIndex {
+    build_data_index_until(ds, interner, || Ok::<(), core::convert::Infallible>(()))
+        .unwrap_or_else(|never| match never {})
+}
+
+/// The same data index, with a fallible boundary before each source row.
+pub(crate) fn build_data_index_until<D: DatasetView, E>(
+    ds: &D,
+    interner: &mut Interner,
+    mut poll: impl FnMut() -> Result<(), E>,
+) -> Result<TripleIndex, E> {
+    poll()?;
     let mut index: TripleIndex = BTreeMap::new();
     for q in ds.quads() {
+        poll()?;
         if q.g.is_some() {
             continue;
         }
@@ -395,7 +407,8 @@ pub(crate) fn build_data_index<D: DatasetView>(ds: &D, interner: &mut Interner) 
         );
         index_insert(&mut index, s, p, o);
     }
-    index
+    poll()?;
+    Ok(index)
 }
 
 /// The set of named (IRI) classes in the data — every IRI that appears in a
@@ -405,6 +418,20 @@ pub(crate) fn collect_named_classes(
     index: &TripleIndex,
     v: &Vocab,
 ) -> BTreeSet<u32> {
+    collect_named_classes_until(interner, index, v, || {
+        Ok::<(), core::convert::Infallible>(())
+    })
+    .unwrap_or_else(|never| match never {})
+}
+
+/// The same class signature, with a fallible boundary before each indexed row.
+pub(crate) fn collect_named_classes_until<E>(
+    interner: &Interner,
+    index: &TripleIndex,
+    v: &Vocab,
+    mut poll: impl FnMut() -> Result<(), E>,
+) -> Result<BTreeSet<u32>, E> {
+    poll()?;
     let mut out = BTreeSet::new();
     out.insert(v.thing);
     out.insert(v.nothing);
@@ -412,6 +439,7 @@ pub(crate) fn collect_named_classes(
     for (&s, preds) in index {
         for (&p, objs) in preds {
             for &o in objs {
+                poll()?;
                 if p == v.ty {
                     if o == v.class {
                         // `s a owl:Class` — a named class declaration.
@@ -435,7 +463,8 @@ pub(crate) fn collect_named_classes(
             }
         }
     }
-    out
+    poll()?;
+    Ok(out)
 }
 
 /// A task before its concepts are interned into the concept table.

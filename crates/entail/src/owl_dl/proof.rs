@@ -2704,7 +2704,7 @@ impl DlProofContext {
         kb.finalize().map_err(proof_source_error)?;
         let clauses = derive(&kb);
         let contract = contract_digest(&clauses, &kb.schema);
-        let input = try_input_digest(ontology).map_err(DlProofError::Canonicalization)?;
+        let input = try_input_digest(ontology, None).map_err(DlProofError::Canonicalization)?;
         Ok(Self {
             kb,
             clauses,
@@ -4137,7 +4137,7 @@ impl DlProof {
 /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
 /// [`purrdf_core::canonicalize`] would raise for the same input.
 pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof), EntailError> {
-    let input = try_input_digest(ontology).map_err(EntailError::Canonicalization)?;
+    let input = try_input_digest(ontology, None).map_err(EntailError::Canonicalization)?;
     let mut kb = Kb::from_dataset(ontology)?;
     kb.finalize()?;
     let contract = contract_of(&kb);
@@ -5178,17 +5178,35 @@ pub(crate) fn observe_completion(st: &State, blocks: &[(NodeRef, NodeRef)]) -> C
 /// bytes. The same shape [`Justification::digest`](crate::explain::Justification::digest)
 /// already uses.
 fn input_digest(ontology: &RdfDataset) -> [u8; 32] {
-    *purrdf_hash::blake3::hash(purrdf_core::canonicalize(ontology).nquads.as_bytes()).as_bytes()
+    try_input_digest(ontology, None).unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// The fallible sibling of [`input_digest`] — the untrusted-input entry point, exactly as
 /// [`purrdf_core::try_canonicalize`] is [`purrdf_core::canonicalize`]'s. See
 /// [`try_ontology_identity`].
-fn try_input_digest(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_core::CanonError> {
-    Ok(
-        *purrdf_hash::blake3::hash(purrdf_core::try_canonicalize(ontology)?.nquads.as_bytes())
-            .as_bytes(),
-    )
+fn try_input_digest(
+    ontology: &RdfDataset,
+    stop: Option<&dyn purrdf_core::StopSignal>,
+) -> Result<[u8; 32], purrdf_core::CanonError> {
+    let canonical = match stop {
+        Some(stop) => purrdf_core::try_canonicalize_view_with_stop(
+            ontology,
+            purrdf_core::CanonHash::Sha256,
+            stop,
+        )?,
+        None => purrdf_core::try_canonicalize(ontology)?,
+    };
+    let mut hash = purrdf_hash::blake3::Hasher::new();
+    for chunk in canonical.nquads.as_bytes().chunks(64 * 1024) {
+        if purrdf_core::governor::is_stopped(stop) {
+            return Err(purrdf_core::CanonError::Stopped);
+        }
+        hash.update(chunk);
+    }
+    if purrdf_core::governor::is_stopped(stop) {
+        return Err(purrdf_core::CanonError::Stopped);
+    }
+    Ok(*hash.finalize().as_bytes())
 }
 
 /// The PRODUCER-INDEPENDENT identity of an ontology, for a consumer to recompute.
@@ -5222,7 +5240,20 @@ pub fn ontology_identity(ontology: &RdfDataset) -> [u8; 32] {
 /// PurRDF's RDFC-1.0 reserved namespace; [`purrdf_core::CanonError::BudgetExceeded`] if the
 /// n-degree search's call/permutation budget is exhausted first.
 pub fn try_ontology_identity(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_core::CanonError> {
-    try_input_digest(ontology)
+    try_input_digest(ontology, None)
+}
+
+/// Compute the same producer-independent ontology identity with cooperative
+/// cancellation during canonicalization and digest streaming.
+///
+/// # Errors
+/// The source/profile refusals of [`try_ontology_identity`], or
+/// [`purrdf_core::CanonError::Stopped`]. No partial digest is returned.
+pub fn try_ontology_identity_with_stop(
+    ontology: &RdfDataset,
+    stop: &dyn purrdf_core::StopSignal,
+) -> Result<[u8; 32], purrdf_core::CanonError> {
+    try_input_digest(ontology, Some(stop))
 }
 
 /// The calculus/clausification contract: BLAKE3 over [`CALCULUS_VERSION`] and the canonical

@@ -494,6 +494,15 @@ impl Kb {
     /// completeness limit the finished terminology forces. Call once after all axioms and
     /// assertions are in place.
     pub(crate) fn finalize(&mut self) -> Result<(), EntailError> {
+        self.finalize_until(|| Ok::<(), EntailError>(()))
+    }
+
+    /// Complete the same encoding with a selected fallible work boundary.
+    pub(crate) fn finalize_until<E: From<roles::RoleHierarchyError>>(
+        &mut self,
+        mut poll: impl FnMut() -> Result<(), E>,
+    ) -> Result<(), E> {
+        poll()?;
         // The concept-tree `NN`-rule (the `cfg(test)` differential reference) adds a GUESSED
         // `≤m S.C` to a nominal node's label, and the concept table is immutable during a search,
         // so those sub-cardinalities must be interned now, before encoding. The production
@@ -501,7 +510,8 @@ impl Kb {
         // and its concept table is left byte-for-byte as it was.
         #[cfg(test)]
         self.intern_sub_cardinalities();
-        self.encode_until(|| Ok::<(), EntailError>(()))
+        self.encode_until(&mut poll)?;
+        poll()
     }
 
     /// Clausify the TBox, polling a caller-supplied fallible work boundary.
