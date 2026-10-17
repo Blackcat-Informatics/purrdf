@@ -219,6 +219,9 @@ pub(crate) fn shapes_error(
         ShapesError::Recursion(refusal) => {
             return CliError::Runtime(format!("{context}: {refusal}"));
         }
+        ShapesError::Preparation(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
         ShapesError::Storage(error) => return CliError::Runtime(format!("{context}: {error}")),
         ShapesError::Invalid(message) => return CliError::Runtime(format!("{context}: {message}")),
         ShapesError::ShaclJs(refusal) => {

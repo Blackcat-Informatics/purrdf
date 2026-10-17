@@ -116,7 +116,7 @@ impl NodeKindValue {
 }
 
 /// A SHACL property path (spec §2.3.1 — all six path forms are modelled).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Path {
     /// A plain IRI predicate path (`ex:name`).
     Predicate(NamedNode),
@@ -4923,7 +4923,7 @@ mod tests {
     #[test]
     fn node_expr_path() {
         let expr = parse_expr(&expr_ttl("ex:root ex:expr [ sh:path ex:knows ] .")).expect("parse");
-        match expr {
+        match &expr {
             NodeExpr::Path(Path::Predicate(n)) => {
                 assert_eq!(n.as_str(), "http://example.org/ns#knows");
             }

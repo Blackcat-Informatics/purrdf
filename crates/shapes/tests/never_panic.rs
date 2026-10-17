@@ -18,6 +18,9 @@ use purrdf_shapes::{
 };
 use purrdf_testkit::prop::prelude::*;
 
+#[global_allocator]
+static ALLOCATOR: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
 const NODE_EXPR_PREFIXES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
      @prefix ex: <http://example.org/ns#> .\n";
 
@@ -296,6 +299,178 @@ fn stack_refusal_is_not_a_conformance_or_validation_report() {
     assert!(conforms(&store, &focus, &shapes.node_shapes[0]).unwrap());
     assert!(validator.validate().unwrap().conforms);
     assert!(complete.validate().is_ok());
+}
+
+#[test]
+fn preparation_refusal_cannot_become_an_empty_path_or_product() {
+    use purrdf_shapes::engine::PreparedShapes;
+    use purrdf_shapes::product::{ProductDimension, ShapesProfile};
+    use purrdf_shapes::shapes::Path;
+    use purrdf_shapes::term::{NamedNode, Term};
+    use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+    use std::sync::Arc;
+
+    let shapes = Arc::new(
+        parse_shapes(
+            &format!("{NODE_EXPR_PREFIXES}ex:S sh:targetNode ex:a; sh:nodeKind sh:IRI ."),
+            None,
+        )
+        .unwrap(),
+    );
+    let data =
+        parse_turtle_to_dataset(&format!("{NODE_EXPR_PREFIXES}ex:a ex:p ex:b ."), None).unwrap();
+    let focus = Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#a"));
+    let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
+    let reserve = purrdf_stack::reserve(purrdf_stack::remaining());
+    let refused = PreparedShapes::new(Arc::clone(&shapes));
+    let bound = refused.bind_shared_dataset(Arc::clone(&data)).err();
+    let product = refused.to_product(&ShapesProfile::CORE);
+    let terms = purrdf_shapes::path::eval(data.as_ref(), &focus, &path);
+    let ids = purrdf_shapes::path::eval_ids(data.as_ref(), &focus, &path);
+    drop(reserve);
+
+    assert!(matches!(
+        bound.unwrap(),
+        purrdf_shapes::ShapesError::Preparation(purrdf_shapes::PreparationRefusal::StackMargin)
+    ));
+    let product_error = product.unwrap_err();
+    assert_eq!(product_error.dimension(), ProductDimension::DepthLimit);
+    assert_eq!(
+        product_error.preparation_refusal(),
+        Some(&purrdf_shapes::PreparationRefusal::StackMargin)
+    );
+    assert!(
+        std::error::Error::source(&product_error)
+            .unwrap()
+            .downcast_ref::<purrdf_shapes::PreparationRefusal>()
+            .is_some()
+    );
+    assert!(matches!(
+        terms.unwrap_err(),
+        purrdf_shapes::ShapesError::Preparation(purrdf_shapes::PreparationRefusal::StackMargin)
+    ));
+    assert!(matches!(
+        ids.unwrap_err(),
+        purrdf_shapes::ShapesError::Preparation(purrdf_shapes::PreparationRefusal::StackMargin)
+    ));
+    // A refused preparation cannot later publish a made-up empty class catalog.
+    assert!(refused.to_product(&ShapesProfile::CORE).is_err());
+    let fresh = PreparedShapes::new(shapes);
+    assert!(
+        fresh
+            .bind_shared_dataset(Arc::clone(&data))
+            .unwrap()
+            .validate()
+            .unwrap()
+            .conforms
+    );
+    assert!(fresh.to_product(&ShapesProfile::CORE).is_ok());
+    assert_eq!(
+        purrdf_shapes::path::eval(data.as_ref(), &focus, &path)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn deep_built_models_refuse_preparation_on_a_small_stack() {
+    use purrdf_shapes::engine::PreparedShapes;
+    use purrdf_shapes::expression::NodeExpr;
+    use purrdf_shapes::shapes::{Constraint, Path};
+    use purrdf_shapes::term::NamedNode;
+    use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+    use std::sync::Arc;
+
+    // Keep the owned deep model and its eventual destruction on the outer stack;
+    // the inner stack only borrows the graph during the actual preparation.
+    purrdf_stack::on_stack(32 * 1024 * 1024, || {
+        for family in 0..3 {
+            let mut shapes = parse_shapes(
+                &format!("{NODE_EXPR_PREFIXES}ex:S sh:targetNode ex:a; sh:nodeKind sh:IRI ."),
+                None,
+            )
+            .unwrap();
+            match family {
+                0 => {
+                    let leaf = shapes.node_shapes[0].clone();
+                    let mut nested = leaf.clone();
+                    for _ in 0..2000 {
+                        let mut parent = leaf.clone();
+                        parent.constraints = vec![Constraint::Node(Box::new(nested))];
+                        nested = parent;
+                    }
+                    shapes.node_shapes = vec![nested];
+                }
+                1 => {
+                    let mut path =
+                        Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
+                    for _ in 0..2000 {
+                        path = Path::ZeroOrOne(Box::new(path));
+                    }
+                    shapes.node_shapes[0].constraints = vec![Constraint::Equals(path)];
+                }
+                _ => {
+                    let mut expr = NodeExpr::This;
+                    for _ in 0..2000 {
+                        expr = NodeExpr::Distinct(Box::new(expr));
+                    }
+                    shapes.node_shapes[0].constraints = vec![Constraint::Expression {
+                        expr,
+                        messages: Vec::new(),
+                        severity: None,
+                    }];
+                }
+            }
+            let shapes = Arc::new(shapes);
+            let data = parse_turtle_to_dataset("", None).unwrap();
+            let error = purrdf_stack::on_stack_scoped(1024 * 1024, || {
+                // The frame starts above the canonical margin, with 32 KiB
+                // available for descent. This exercises refusal inside the walk;
+                // a 2,000-node chain can legitimately fit on the full 1 MiB.
+                let reserve = purrdf_stack::reserve(
+                    purrdf_stack::remaining()
+                        .saturating_sub(purrdf_stack::MARGIN_BYTES + 32 * 1024),
+                );
+                assert!(!purrdf_stack::is_low(), "the root frame must be admitted");
+                let error = PreparedShapes::new(Arc::clone(&shapes))
+                    .bind_shared_dataset(Arc::clone(&data))
+                    .expect_err("deep preparation must refuse before it exhausts the thread")
+                    .to_string();
+                drop(reserve);
+                error
+            })
+            .unwrap();
+            assert!(error.contains("stack margin"), "family {family}: {error}");
+        }
+    })
+    .unwrap();
+}
+
+#[test]
+fn shallow_path_copy_and_drop_add_no_work_list_allocations() {
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_shapes::shapes::Path;
+    use purrdf_shapes::term::NamedNode;
+
+    let first = "http://example.org/ns#a";
+    let second = "http://example.org/ns#b";
+    let path = Path::Sequence(vec![
+        Path::Predicate(NamedNode::new_unchecked(first)),
+        Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(second)))),
+    ]);
+    let window = CurrentThreadWindow::open();
+    let copied = path.clone();
+    let copied_allocations = window.close();
+    assert_eq!(copied_allocations.allocations, 4);
+    assert_eq!(
+        copied_allocations.requested_bytes,
+        u64::try_from(3 * size_of::<Path>() + first.len() + second.len()).unwrap()
+    );
+    assert_eq!(format!("{path:?}"), format!("{copied:?}"));
+    let window = CurrentThreadWindow::open();
+    drop(copied);
+    assert_eq!(window.close().allocations, 0);
 }
 
 /// A cyclic SHACL-AF node expression must be a hard `Err`, whatever node kind

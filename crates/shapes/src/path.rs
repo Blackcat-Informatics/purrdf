@@ -67,18 +67,18 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 /// therefore no outgoing/incoming quads: every STEP is empty, and the only value
 /// a path can yield is the focus itself via reflexive inclusion
 /// (`sh:zeroOrMore` / `sh:zeroOrOne`). That case returns the focus term verbatim.
-pub fn eval(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Vec<Term> {
-    let lowering = lower_standalone_path(path);
+///
+/// # Errors
+/// Returns preparation stack refusal or a broken lowered-path invariant. A failure
+/// is never represented by an empty set of reachable nodes.
+pub fn eval(
+    ds: &impl ShaclRead,
+    focus: &Term,
+    path: &Path,
+) -> Result<Vec<Term>, crate::error::ShapesError> {
+    let lowering = lower_standalone_path(path)?;
     let binding = lowering.bind(ds);
-    // The walk reports exactly one error — a slot the lowering never handed out —
-    // and the two lines above are why it cannot arrive here: the lowering that names
-    // the slots and the row that answers them come from the same `ShapeWalk`, made in
-    // this call, so the row has one entry per slot the lowered path can name. The
-    // empty answer is what a caller would receive from a path that matched nothing,
-    // and this module's own tests drive every path form through this function and
-    // require a non-empty result, so a lowering that ever did come apart would fail
-    // there by name rather than answer short here.
-    eval_planned(ds, focus, lowering.path(), &binding).unwrap_or_else(|_| Vec::new())
+    eval_planned(ds, focus, lowering.path(), &binding).map_err(Into::into)
 }
 
 /// Id-native value-node producer: the deduped set of value nodes reachable from
@@ -94,15 +94,25 @@ pub fn eval(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Vec<Term> {
 /// drive evaluation from a `sh:this` Constant that never appears in the data). Its
 /// value nodes have no id and must be produced in the owned-[`Term`] model by
 /// [`eval`]; that owned-term fallback is a genuine necessity, not optionality.
-pub fn eval_ids(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Option<IdVec> {
-    let focus_id = resolve_id(ds, focus)?;
-    let lowering = lower_standalone_path(path);
+///
+/// # Errors
+/// Returns preparation stack refusal or a broken lowered-path invariant.
+pub fn eval_ids(
+    ds: &impl ShaclRead,
+    focus: &Term,
+    path: &Path,
+) -> Result<Option<IdVec>, crate::error::ShapesError> {
+    let lowering = lower_standalone_path(path)?;
+    let Some(focus_id) = resolve_id(ds, focus) else {
+        return Ok(None);
+    };
     let binding = lowering.bind(ds);
-    // Unreachable for the reason [`eval`] states, and answered the same way.
-    Some(
-        eval_planned_ids_from_id(ds, focus_id, lowering.path(), &binding)
-            .unwrap_or_else(|_| IdVec::new()),
-    )
+    Ok(Some(eval_planned_ids_from_id(
+        ds,
+        focus_id,
+        lowering.path(),
+        &binding,
+    )?))
 }
 
 // ── The evaluator ──────────────────────────────────────────────────────────────
@@ -500,14 +510,133 @@ pub fn primary_predicate(path: &Path) -> Option<&NamedNode> {
 /// inverts anything: by the time either of those walks runs, the inversion is
 /// already inside the lowering they are handed.
 pub(crate) fn invert(path: &Path) -> Path {
-    match path {
-        Path::Predicate(_) => Path::Inverse(Box::new(path.clone())),
-        Path::Inverse(inner) => inner.as_ref().clone(),
-        Path::Sequence(parts) => Path::Sequence(parts.iter().rev().map(invert).collect()),
-        Path::Alternative(parts) => Path::Alternative(parts.iter().map(invert).collect()),
-        Path::ZeroOrMore(inner) => Path::ZeroOrMore(Box::new(invert(inner))),
-        Path::OneOrMore(inner) => Path::OneOrMore(Box::new(invert(inner))),
-        Path::ZeroOrOne(inner) => Path::ZeroOrOne(Box::new(invert(inner))),
+    copy_path(path, true)
+}
+
+impl Clone for Path {
+    fn clone(&self) -> Self {
+        copy_path(self, false)
+    }
+}
+
+/// Clone and inversion share this postorder reconstruction over the native work list.
+fn copy_path(path: &Path, inverted: bool) -> Path {
+    use purrdf_lex::walk::WorkList;
+    enum Build {
+        Inverse,
+        Sequence(usize),
+        Alternative(usize),
+        ZeroOrMore,
+        OneOrMore,
+        ZeroOrOne,
+    }
+    enum Task<'a> {
+        Visit(&'a Path, bool),
+        Build(Build),
+    }
+    let mut tasks = WorkList::<_, 16>::with(Task::Visit(path, inverted));
+    let mut values = WorkList::<Path, 16>::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(path, reverse) => match path {
+                Path::Predicate(predicate) => {
+                    let predicate = Path::Predicate(predicate.clone());
+                    values.push(if reverse {
+                        Path::Inverse(Box::new(predicate))
+                    } else {
+                        predicate
+                    });
+                }
+                Path::Inverse(inner) => {
+                    if !reverse {
+                        tasks.push(Task::Build(Build::Inverse));
+                    }
+                    tasks.push(Task::Visit(inner, false));
+                }
+                Path::Sequence(parts) | Path::Alternative(parts) => {
+                    let sequence = matches!(path, Path::Sequence(_));
+                    tasks.push(Task::Build(if sequence {
+                        Build::Sequence(parts.len())
+                    } else {
+                        Build::Alternative(parts.len())
+                    }));
+                    if sequence && reverse {
+                        for part in parts {
+                            tasks.push(Task::Visit(part, reverse));
+                        }
+                    } else {
+                        for part in parts.iter().rev() {
+                            tasks.push(Task::Visit(part, reverse));
+                        }
+                    }
+                }
+                Path::ZeroOrMore(inner) | Path::OneOrMore(inner) | Path::ZeroOrOne(inner) => {
+                    let build = match path {
+                        Path::ZeroOrMore(_) => Build::ZeroOrMore,
+                        Path::OneOrMore(_) => Build::OneOrMore,
+                        _ => Build::ZeroOrOne,
+                    };
+                    tasks.push(Task::Build(build));
+                    tasks.push(Task::Visit(inner, reverse));
+                }
+            },
+            Task::Build(build) => {
+                let value = match build {
+                    Build::Sequence(count) | Build::Alternative(count) => {
+                        let mut children: Vec<_> = (0..count)
+                            .map(|_| values.pop().expect("postorder path child"))
+                            .collect();
+                        children.reverse();
+                        if matches!(build, Build::Sequence(_)) {
+                            Path::Sequence(children)
+                        } else {
+                            Path::Alternative(children)
+                        }
+                    }
+                    Build::Inverse | Build::ZeroOrMore | Build::OneOrMore | Build::ZeroOrOne => {
+                        let child = Box::new(values.pop().expect("postorder unary path child"));
+                        match build {
+                            Build::Inverse => Path::Inverse(child),
+                            Build::ZeroOrMore => Path::ZeroOrMore(child),
+                            Build::OneOrMore => Path::OneOrMore(child),
+                            _ => Path::ZeroOrOne(child),
+                        }
+                    }
+                };
+                values.push(value);
+            }
+        }
+    }
+    values.pop().expect("postorder path root")
+}
+
+impl Drop for Path {
+    fn drop(&mut self) {
+        use purrdf_lex::walk::WorkList;
+        fn detach(path: &mut Path, pending: &mut WorkList<Path, 16>) {
+            match path {
+                Path::Predicate(_) => {}
+                Path::Inverse(child)
+                | Path::ZeroOrMore(child)
+                | Path::OneOrMore(child)
+                | Path::ZeroOrOne(child) => {
+                    pending.push(std::mem::replace(
+                        child.as_mut(),
+                        Path::Sequence(Vec::new()),
+                    ));
+                }
+                Path::Sequence(parts) | Path::Alternative(parts) => {
+                    for child in parts.drain(..) {
+                        pending.push(child);
+                    }
+                }
+            }
+        }
+        let mut pending = WorkList::new();
+        detach(self, &mut pending);
+        while let Some(mut path) = pending.pop() {
+            detach(&mut path, &mut pending);
+        }
     }
 }
 
@@ -521,6 +650,30 @@ mod tests {
 
     use super::*;
     use crate::term::Literal;
+
+    #[test]
+    fn deep_path_copy_inversion_and_destruction_use_heap_work_lists() {
+        purrdf_stack::on_stack(256 * 1024, || {
+            let mut path = Path::Predicate(NamedNode::new_unchecked("http://example.org/p"));
+            for _ in 0..5000 {
+                path = Path::ZeroOrMore(Box::new(path));
+            }
+            let copied = path.clone();
+            let inverted = invert(&path);
+            let depth = |mut path: &Path| {
+                let mut count = 0;
+                while let Path::ZeroOrMore(inner) = path {
+                    count += 1;
+                    path = inner;
+                }
+                count
+            };
+            assert_eq!(depth(&copied), 5000);
+            assert_eq!(depth(&inverted), 5000);
+            drop((path, copied, inverted));
+        })
+        .unwrap();
+    }
 
     // `NamedNode` is referenced through `super::*` (re-exported into scope by the
     // module's own `use`), so the test helpers below construct terms directly.
@@ -551,7 +704,7 @@ mod tests {
         let data = load_data(DATA);
         let focus = nn("http://example.org/ns#a");
         let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(result.len(), 2);
         assert!(result.contains(&nn("http://example.org/ns#b")));
@@ -565,7 +718,7 @@ mod tests {
         let path = Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
             "http://example.org/ns#q",
         ))));
-        let result = eval(&data, &focus, &path);
+        let result = eval(&data, &focus, &path).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], nn("http://example.org/ns#d"));
     }
@@ -575,7 +728,7 @@ mod tests {
         let data = load_data(DATA);
         let focus = Term::Literal(Literal::new_simple_literal("hello"));
         let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
-        assert_eq!(eval(&data, &focus, &path), [] as [_; 0]);
+        assert_eq!(eval(&data, &focus, &path).unwrap(), [] as [_; 0]);
     }
 
     #[test]
@@ -583,7 +736,7 @@ mod tests {
         let data = load_data(DATA);
         let focus = nn("http://example.org/ns#a");
         let path = Path::Predicate(NamedNode::new_unchecked("http://example.org/ns#p"));
-        let result = eval(&data, &focus, &path);
+        let result = eval(&data, &focus, &path).unwrap();
         // Should be exactly 2 distinct values
         assert_eq!(result.len(), 2);
     }
@@ -600,7 +753,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::Sequence(vec![pred("p"), pred("q")]);
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -619,7 +772,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::Sequence(vec![pred("p"), pred("q")]);
-        let result = eval(&data, &focus, &path);
+        let result = eval(&data, &focus, &path).unwrap();
         assert_eq!(result, vec![nn("http://example.org/ns#d")]);
     }
 
@@ -635,7 +788,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::Alternative(vec![pred("p"), pred("q")]);
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         // ex:c is reachable via both branches but reported once (set semantics).
         assert_eq!(
@@ -657,7 +810,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::ZeroOrMore(Box::new(pred("next")));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -680,7 +833,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::OneOrMore(Box::new(pred("next")));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -699,7 +852,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::OneOrMore(Box::new(pred("next")));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -717,7 +870,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#a");
         let path = Path::ZeroOrOne(Box::new(pred("next")));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         // Focus itself (zero steps) plus one step; c (two steps) excluded.
         assert_eq!(
@@ -743,7 +896,7 @@ mod tests {
             Path::Alternative(vec![pred("p"), pred("q")]),
             Path::ZeroOrMore(Box::new(pred("r"))),
         ]);
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -767,7 +920,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#d");
         let path = Path::Inverse(Box::new(Path::Sequence(vec![pred("p"), pred("q")])));
-        let result = eval(&data, &focus, &path);
+        let result = eval(&data, &focus, &path).unwrap();
         assert_eq!(result, vec![nn("http://example.org/ns#a")]);
     }
 
@@ -783,7 +936,7 @@ mod tests {
         );
         let focus = nn("http://example.org/ns#b");
         let path = Path::Inverse(Box::new(Path::ZeroOrMore(Box::new(pred("next")))));
-        let mut result = eval(&data, &focus, &path);
+        let mut result = eval(&data, &focus, &path).unwrap();
         crate::term::sort_terms_canonical(&mut result);
         assert_eq!(
             result,
@@ -814,7 +967,7 @@ mod tests {
         ];
         for path in &reflexive {
             assert_eq!(
-                eval(&data, &focus, path),
+                eval(&data, &focus, path).unwrap(),
                 vec![focus.clone()],
                 "reflexive path must yield the focus itself: {path:?}"
             );
@@ -829,7 +982,7 @@ mod tests {
         ];
         for path in &non_reflexive {
             assert!(
-                eval(&data, &focus, path).is_empty(),
+                eval(&data, &focus, path).unwrap().is_empty(),
                 "non-reflexive path must yield nothing: {path:?}"
             );
         }

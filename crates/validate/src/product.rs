@@ -121,6 +121,7 @@ impl ShapesProductRefusal {
             Self::Shapes(
                 error @ (ShapesError::Imports(_)
                 | ShapesError::Recursion(_)
+                | ShapesError::Preparation(_)
                 | ShapesError::Storage(_)
                 | ShapesError::ShaclJs(_)
                 | ShapesError::IllFormed(_)

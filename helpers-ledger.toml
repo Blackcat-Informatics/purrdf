@@ -1760,16 +1760,6 @@ reason = "A payload owns its encoded bytes and a descriptor carries only the len
 
 [[distinct]]
 members = [
-    "purrdf_core::sink::DrainError::new",
-    "purrdf_shapes::product::error::ShapesProductError::new",
-]
-kind = "shim"
-criterion = "b"
-anchor = "helper_census::normalize::shim_form"
-reason = "Field-wise constructors of two unrelated error types, a sink drain failure and a shapes product refusal, each pairing its own classification with a message."
-
-[[distinct]]
-members = [
     "purrdf_core::dataset_view::DatasetView::annotation_quads",
     "purrdf_core::dataset_view::DatasetView::reifier_quads",
 ]

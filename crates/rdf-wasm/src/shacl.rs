@@ -166,6 +166,7 @@ pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
         ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(*error).to_string(),
         ShapesError::Imports(error) => error.to_string(),
         ShapesError::Recursion(refusal) => refusal.to_string(),
+        ShapesError::Preparation(refusal) => refusal.to_string(),
         ShapesError::Invalid(message) => message.clone(),
         ShapesError::ShaclJs(refusal) => refusal.message().to_owned(),
         ShapesError::IllFormed(refusal) => refusal.to_string(),

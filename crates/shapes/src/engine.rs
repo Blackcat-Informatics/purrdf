@@ -1787,24 +1787,20 @@ impl ValidationOptions {
 #[derive(Debug, Clone)]
 pub struct PreparedShapes {
     shapes: Arc<Shapes>,
-    classes: Arc<ClassCatalog>,
+    /// Complete analysis or the original admission refusal. A refused walk never
+    /// supplies a placeholder class catalog to binding or product writing.
+    classes: Result<Arc<ClassCatalog>, crate::error::PreparationRefusal>,
     /// The stage-0 lowering of these shapes: their structure with every
     /// shape-constant derivation already made, shared with every binding.
     ///
-    /// Derived on first BIND rather than in a constructor, and that is the whole
-    /// point of the cell. [`Self::with_carried_analysis`] is the prepared-product
-    /// admit seam, and a restore is promised "no RDF reparsing, no shape
-    /// extraction, no repeated shared analysis" — a lowering built in
-    /// [`Self::with_provenance`] only would either be absent on a restored
-    /// preparation (leaving every `sh:in`, `sh:hasValue` and `sh:class` on it
-    /// unable to constrain, silently) or would have to be rebuilt at admit, which
-    /// is the repeated analysis the promise rules out. Deriving it here, once, on
-    /// whichever bind comes first, is the only placement that is correct for both
-    /// constructors.
+    /// Locally parsed shapes are lowered in [`Self::with_provenance`]. A restored
+    /// product keeps its carried class catalog and derives lowering on first bind,
+    /// so admission neither reparses RDF nor repeats the shared analysis.
     ///
-    /// Shared by `Arc` so a clone of a preparation shares the memoized lowering
-    /// rather than deriving a second one.
-    lowered: OnceLock<Arc<LoweredShapes>>,
+    /// Shared by `Arc` on success; the original refusal is memoized on failure.
+    /// Bind and product-write entry points return that refusal. Preparing afresh
+    /// on a larger stack makes a new attempt instead of reusing a failed walk.
+    lowered: OnceLock<Result<Arc<LoweredShapes>, crate::error::PreparationRefusal>>,
     /// Successful native pattern slots, allocated only by an explicit selection.
     xpath_caches: OnceLock<crate::xpath::Caches>,
     /// Where this preparation came from, recorded by the expression that built it.
@@ -1930,6 +1926,10 @@ impl PreparedShapes {
     /// artifact. That is stated HERE, at the construction site, rather than left for
     /// a caller to assert later — see [`ValidatorProvenance`] for why an accessor
     /// with an "unknown" answer would be worse than none.
+    ///
+    /// Stack admission failure is retained as [`ShapesError::Preparation`]; bind
+    /// and product-write operations return the original refusal rather than using
+    /// a partial analysis. To retry with more stack, construct a fresh preparation.
     #[must_use]
     pub fn new(shapes: Arc<Shapes>) -> Self {
         Self::with_provenance(shapes, ValidatorProvenance::Parsed)
@@ -1949,8 +1949,11 @@ impl PreparedShapes {
         // traversal beside it. The lowering is retained rather than discarded, so a
         // locally parsed preparation reaches its first bind with the memo already
         // filled and pays for the walk exactly as many times as a restored one.
-        let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
-        let classes = Arc::clone(lowered.classes());
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter()).map(Arc::new);
+        let classes = lowered
+            .as_ref()
+            .map(|lowered| Arc::clone(lowered.classes()))
+            .map_err(|error| *error);
         let prepared = Self::with_carried_analysis(shapes, provenance, classes);
         let _ = prepared.lowered.set(lowered);
         prepared
@@ -1977,7 +1980,7 @@ impl PreparedShapes {
     pub(crate) fn with_carried_analysis(
         shapes: Arc<Shapes>,
         provenance: ValidatorProvenance,
-        classes: Arc<ClassCatalog>,
+        classes: Result<Arc<ClassCatalog>, crate::error::PreparationRefusal>,
     ) -> Self {
         Self {
             shapes,
@@ -1993,12 +1996,10 @@ impl PreparedShapes {
     /// Idempotent and shared: the walk runs at most once per preparation however
     /// many datasets it is bound to, and a preparation restored from a prepared
     /// product reaches it by exactly the same route a locally parsed one does.
-    fn lowered(&self) -> Arc<LoweredShapes> {
-        Arc::clone(
-            self.lowered.get_or_init(|| {
-                Arc::new(crate::plan::lower_shapes(self.shapes.node_shapes.iter()))
-            }),
-        )
+    fn lowered(&self) -> Result<Arc<LoweredShapes>, crate::error::PreparationRefusal> {
+        self.lowered
+            .get_or_init(|| crate::plan::lower_shapes(self.shapes.node_shapes.iter()).map(Arc::new))
+            .clone()
     }
 
     /// Where this preparation came from: parsed in this process, or restored from a
@@ -2024,8 +2025,10 @@ impl PreparedShapes {
     /// restore does not have to walk the shape tree again, and
     /// `crate::product::identity`, which digests it so what a product carried can be
     /// checked against the digest the same product pinned.
-    pub(crate) fn class_catalog(&self) -> Arc<ClassCatalog> {
-        Arc::clone(&self.classes)
+    pub(crate) fn class_catalog(
+        &self,
+    ) -> Result<Arc<ClassCatalog>, crate::error::PreparationRefusal> {
+        self.classes.clone()
     }
 
     /// The parsed shapes this preparation analyzed.
@@ -2433,8 +2436,8 @@ impl PreparedValidator {
         let bound = BoundShapes::bind(
             &data,
             &shapes.node_shapes,
-            prepared.lowered(),
-            Arc::clone(&prepared.classes),
+            prepared.lowered()?,
+            prepared.class_catalog()?,
             &shapes.validation_options.conformance_disallows,
         )?;
         Ok(Self {
@@ -3984,7 +3987,7 @@ fn validate_data_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
-    let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
+    let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter())?);
     let classes = Arc::clone(lowered.classes());
     let bound = BoundShapes::bind_untargeted(
         data,
@@ -5215,7 +5218,10 @@ mod tests {
                     .unwrap();
             let data = project_dataset(&data).unwrap();
             let binding = prepared.bind_projected_dataset(Arc::clone(&data)).unwrap();
-            assert!(Arc::ptr_eq(&prepared.classes, &binding.bound.classes));
+            assert!(Arc::ptr_eq(
+                prepared.classes.as_ref().unwrap(),
+                &binding.bound.classes
+            ));
             assert!(Arc::ptr_eq(
                 &data,
                 &binding.data.core_arc().expect("bound native data")
@@ -5884,7 +5890,7 @@ mod tests {
              <http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Value> .\n",
         );
         let shapes = load_shapes_ttl(&shapes_ttl);
-        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter());
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter()).unwrap();
         let classes = lowered.classes();
         let binding = lowered.bind(data.as_ref(), classes);
 
@@ -5930,7 +5936,7 @@ mod tests {
             "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Root> .\n",
         );
         let shapes = load_shapes_ttl(&shapes_ttl);
-        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter());
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter()).unwrap();
         let classes = lowered.classes();
         let binding = lowered.bind(data.as_ref(), classes);
 

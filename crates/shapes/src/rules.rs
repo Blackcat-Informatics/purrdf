@@ -1314,7 +1314,7 @@ fn eligible_focus_nodes(
     rule: &Rule,
     shape: &Shape,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    let plan = RulePlan::of(data, shape, &rule.conditions);
+    let plan = RulePlan::of(data, shape, &rule.conditions)?;
     // Read once per resolution, polled per focus node: a governed rule application stops
     // (and a host slicing its signal into yields gets the event loop back) between the
     // condition checks of successive focus nodes; the ungoverned path pays one branch.
@@ -1506,8 +1506,12 @@ fn triple_rule_execution(
     // execution rather than once per focus node.
     let plans: Vec<Option<ExprPlan<'_>>> = expressions
         .iter()
-        .map(|expr| expr.as_ref().map(|expr| ExprPlan::of(data, expr)))
-        .collect();
+        .map(|expr| {
+            expr.as_ref()
+                .map(|expr| ExprPlan::of(data, expr))
+                .transpose()
+        })
+        .collect::<Result<_, crate::error::ShapesError>>()?;
     // Read once per execution, polled per focus node: a governed rule application stops
     // (and a host slicing its signal into yields gets the event loop back) between focus
     // nodes of a rule that runs no SPARQL; the ungoverned path pays one branch.
@@ -1554,7 +1558,7 @@ fn global_triple_rule(
     let mut guard = RecursionGuard::default();
     let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
     for expr in [subject, predicate, object] {
-        let mut values = ExprPlan::of(data, expr).eval(data, &absent, &mut guard)?;
+        let mut values = ExprPlan::of(data, expr)?.eval(data, &absent, &mut guard)?;
         values.retain(|value| *value != absent);
         sets.push(values);
     }
@@ -1760,7 +1764,7 @@ pub(crate) fn expected_derived_triples(
         {
             continue;
         }
-        let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape))?;
         let binding = lowered.bind(data.core_view(), lowered.classes());
         let focus_nodes =
             resolve_focus_nodes(data, &shape.id, &shape.targets, &binding, lowered.classes())?;
@@ -1806,15 +1810,19 @@ impl<'a> RulePlan<'a> {
     /// Lower the rule's shape TOGETHER WITH its conditions and bind the lot to `data`,
     /// once per execution. One lowering rather than several is what fixes the plan
     /// positions the rest of this type relies on.
-    fn of(data: &ShaclData, shape: &'a Shape, conditions: &'a [Shape]) -> Self {
-        let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions));
+    fn of(
+        data: &ShaclData,
+        shape: &'a Shape,
+        conditions: &'a [Shape],
+    ) -> Result<Self, crate::error::ShapesError> {
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions))?;
         let binding = lowered.bind(data.core_view(), lowered.classes());
-        Self {
+        Ok(Self {
             lowered,
             binding,
             shape,
             conditions,
-        }
+        })
     }
 
     /// Resolve the focus nodes of the rule's shape against the current dataset.
@@ -1857,14 +1865,14 @@ struct ExprPlan<'a> {
 
 impl<'a> ExprPlan<'a> {
     /// Lower `expr` standalone and resolve every identity it names against `data`.
-    fn of(data: &ShaclData, expr: &'a NodeExpr) -> Self {
-        let lowering = crate::plan::lower_standalone_expression(expr);
+    fn of(data: &ShaclData, expr: &'a NodeExpr) -> Result<Self, crate::error::ShapesError> {
+        let lowering = crate::plan::lower_standalone_expression(expr)?;
         let binding = lowering.bind(data.core_view());
-        Self {
+        Ok(Self {
             expr,
             lowering,
             binding,
-        }
+        })
     }
 
     /// Evaluate the expression at `focus`. `guard` is supplied rather than created here

@@ -512,7 +512,7 @@ mod tests {
             .admit(&ShapesProfile::CORE, &HostBindings::empty())
             .unwrap();
         assert!(restored.shapes().sparql_sources.get().is_none());
-        let original_classes = restored.class_catalog();
+        let original_classes = restored.class_catalog().unwrap();
         let source_dataset = Arc::clone(&restored.shapes().shapes_dataset);
         let provenance = restored.shapes().provenance();
         let mut parser = Parser::new(
@@ -546,7 +546,10 @@ mod tests {
             &source_dataset,
             &restored.shapes().shapes_dataset
         ));
-        assert!(Arc::ptr_eq(&original_classes, &restored.class_catalog()));
+        assert!(Arc::ptr_eq(
+            &original_classes,
+            &restored.class_catalog().unwrap()
+        ));
         assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
         let rejected = restored
             .shapes()
@@ -962,7 +965,7 @@ mod tests {
             .admit(&ShapesProfile::CORE, &HostBindings::empty())
             .unwrap();
         for prepared in [&prepared, &restored] {
-            let classes = prepared.class_catalog();
+            let classes = prepared.class_catalog().unwrap();
             for profile in DATED {
                 let sources = prepared
                     .shapes()
@@ -999,7 +1002,7 @@ mod tests {
                     IrRuleBody::Elements(_)
                 ));
             }
-            assert!(Arc::ptr_eq(&classes, &prepared.class_catalog()));
+            assert!(Arc::ptr_eq(&classes, &prepared.class_catalog().unwrap()));
             assert_eq!(prepared.to_product(&ShapesProfile::CORE).unwrap(), bytes);
         }
     }

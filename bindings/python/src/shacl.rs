@@ -1865,6 +1865,9 @@ fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
         purrdf_validate::ShapesError::Recursion(refusal) => {
             pyo3::exceptions::PyValueError::new_err(refusal.to_string())
         }
+        purrdf_validate::ShapesError::Preparation(refusal) => {
+            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        }
         purrdf_validate::ShapesError::Invalid(message) => {
             pyo3::exceptions::PyValueError::new_err(message)
         }

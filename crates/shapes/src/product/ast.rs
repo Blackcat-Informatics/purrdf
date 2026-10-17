@@ -382,6 +382,9 @@ pub(crate) fn open_level(
     depth: &mut u32,
     refusal: fn() -> ShapesProductError,
 ) -> Result<(), ShapesProductError> {
+    if purrdf_stack::is_low() {
+        return Err(crate::error::PreparationRefusal::StackMargin.into());
+    }
     if *depth >= MAX_DEPTH {
         return Err(refusal());
     }
@@ -2785,7 +2788,7 @@ fn decode_classes(reader: &mut AstReader<'_>) -> Result<ClassCatalog, ShapesProd
 pub(crate) fn encode_ast_derived(shapes: &Shapes) -> Result<Vec<u8>, ShapesProductError> {
     encode_ast(
         shapes,
-        crate::plan::lower_shapes(shapes.node_shapes.iter()).classes(),
+        crate::plan::lower_shapes(shapes.node_shapes.iter())?.classes(),
     )
 }
 

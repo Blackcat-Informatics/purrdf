@@ -1000,7 +1000,7 @@ pub fn validate_shape_with(
     // A caller holding only a parsed shape has no preparation to reuse, so the
     // lowering is derived here for this one call. A caller validating MANY focus
     // nodes should hold a `PreparedShapes`, which memoizes it.
-    let lowering = OneShotLowering::of(store, shape);
+    let lowering = OneShotLowering::of(store, shape)?;
     let focus = FocusNode::resolve(store.core_view(), focus);
     validate_shape_with_plan_at(store, &focus, box_role_vocab, lowering.plan()?)
 }
@@ -1037,14 +1037,14 @@ impl<'a> OneShotLowering<'a> {
     /// shape names all run here, again, per call. Only the entry points that are
     /// handed a bare [`Shape`] and have nothing to memoize against should reach
     /// it.
-    fn of(store: &ShaclData, shape: &'a Shape) -> Self {
-        let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+    fn of(store: &ShaclData, shape: &'a Shape) -> Result<Self, crate::error::ShapesError> {
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape))?;
         let binding = lowered.bind(store.core_view(), lowered.classes());
-        Self {
+        Ok(Self {
             lowered,
             binding,
             shape,
-        }
+        })
     }
 
     /// The plan for the single lowered shape, borrowing everything this holder
@@ -1433,7 +1433,7 @@ pub fn conforms(
     focus: &Term,
     shape: &Shape,
 ) -> Result<bool, crate::error::ShapesError> {
-    let lowering = OneShotLowering::of(store, shape);
+    let lowering = OneShotLowering::of(store, shape)?;
     conforms_with_id_depth(
         store,
         &FocusNode::resolve(store.core_view(), focus),

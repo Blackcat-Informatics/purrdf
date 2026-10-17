@@ -998,7 +998,7 @@ impl PreparedShapes {
         // digested into row 10 of the identity so what was written can be checked
         // against what the product claims. Two derivations for those two uses would
         // be two chances to disagree about one analysis.
-        let classes = self.class_catalog();
+        let classes = self.class_catalog()?;
         let ast_bytes = ast::encode_ast(shapes, &classes)?;
         let dataset_bytes = dataset::encode_dataset(shapes.dataset())?;
         // The PRODUCER certifies; the consumer trusts the digest chain. This is the

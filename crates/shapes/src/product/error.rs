@@ -241,6 +241,16 @@ pub struct ShapesProductError {
     dimension: ProductDimension,
     /// The prescriptive explanation, naming the fix.
     message: String,
+    /// The original native preparation refusal, when preparation failed.
+    preparation: Option<crate::error::PreparationRefusal>,
+}
+
+impl From<crate::error::PreparationRefusal> for ShapesProductError {
+    fn from(error: crate::error::PreparationRefusal) -> Self {
+        let mut refusal = Self::new(ProductDimension::DepthLimit, error.to_string());
+        refusal.preparation = Some(error);
+        refusal
+    }
 }
 
 /// Refuse on [`ProductDimension::Malformed`]: the structure is invalid in a way no
@@ -264,6 +274,7 @@ impl ShapesProductError {
         Self {
             dimension,
             message: message.into(),
+            preparation: None,
         }
     }
 
@@ -279,6 +290,12 @@ impl ShapesProductError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// The original native preparation refusal, without parsing the message.
+    #[must_use]
+    pub const fn preparation_refusal(&self) -> Option<&crate::error::PreparationRefusal> {
+        self.preparation.as_ref()
+    }
 }
 
 impl fmt::Display for ShapesProductError {
@@ -287,7 +304,12 @@ impl fmt::Display for ShapesProductError {
     }
 }
 
-impl std::error::Error for ShapesProductError {}
+impl std::error::Error for ShapesProductError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.preparation_refusal()
+            .map(|error| error as &dyn std::error::Error)
+    }
+}
 
 #[cfg(test)]
 mod tests {

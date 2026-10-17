@@ -1196,7 +1196,9 @@ mod tests {
     /// The class catalog a preparation derives from `shapes` — identity component
     /// 10, taken through the real analysis rather than rebuilt here.
     fn catalog_of(shapes: &Shapes) -> Arc<ClassCatalog> {
-        PreparedShapes::new(Arc::new(clone_shapes(shapes))).class_catalog()
+        PreparedShapes::new(Arc::new(clone_shapes(shapes)))
+            .class_catalog()
+            .unwrap()
     }
 
     /// Re-parse `shapes` from its own retained dataset and provenance.

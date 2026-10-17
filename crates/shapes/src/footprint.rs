@@ -434,6 +434,9 @@ impl FootprintWalk {
     /// being walked — the property-pair constraints walk their compared path from
     /// the DECLARING node.
     fn record_path_steps_at(&mut self, root: Root, path: &Path, prefix: &[Path]) {
+        if purrdf_stack::walk_is_low("SHACL preparation") {
+            return;
+        }
         match path {
             Path::Predicate(predicate) => {
                 self.emit(root, prefix, Some(predicate.clone()), Endpoint::Subject);

@@ -106,7 +106,7 @@ pub(crate) fn where_targets(
     shape: &Shape,
     disallows: &ConformanceDisallows,
 ) -> Result<Vec<TermId>, crate::error::ShapesError> {
-    let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+    let lowered = crate::plan::lower_shapes(std::iter::once(shape))?;
     let mut binding = lowered.bind(data.core_view(), lowered.classes());
     binding.set_conformance_disallows(disallows);
     let plan = lowered.plan(shape, 0, &binding, lowered.classes(), lowered.no_targets())?;

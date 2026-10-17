@@ -139,7 +139,7 @@ impl CertifiedParts {
                     identity: declared.clone(),
                     restore: ProductRestore::Admitted,
                 },
-                classes,
+                Ok(classes),
             ),
         })
     }

@@ -77,6 +77,9 @@ impl PurrdfError {
             purrdf_validate::ShapesError::Recursion(refusal) => {
                 Self::new(PurrdfStatus::ParseError, refusal.to_string())
             }
+            purrdf_validate::ShapesError::Preparation(refusal) => {
+                Self::new(PurrdfStatus::ParseError, refusal.to_string())
+            }
             purrdf_validate::ShapesError::Invalid(message) => {
                 Self::new(PurrdfStatus::ParseError, message)
             }

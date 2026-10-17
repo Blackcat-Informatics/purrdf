@@ -49,6 +49,8 @@ use crate::imports::ShapesImportError;
 pub enum ShapesError {
     /// A recursive shapes catalog requires an explicit recursion semantics.
     Recursion(RecursionRefusal),
+    /// The shapes model could not be prepared within the native stack margin.
+    Preparation(PreparationRefusal),
     /// Logical capacity or physical storage refused an operation.
     Storage(purrdf_lex::allocation::StorageError),
     /// The shapes graph's `owl:imports` closure is not in hand, or the import table the
@@ -91,6 +93,7 @@ impl ShapesError {
             Self::Imports(error) => Some(error),
             Self::ShaclJs(_)
             | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -107,6 +110,7 @@ impl ShapesError {
             Self::ShaclJs(refusal) => Some(refusal),
             Self::Imports(_)
             | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -123,6 +127,7 @@ impl ShapesError {
             Self::IllFormed(refusal) => Some(refusal),
             Self::Imports(_)
             | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::ShaclJs(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -139,6 +144,7 @@ impl ShapesError {
             Self::UnsupportedTarget(refusal) => Some(refusal),
             Self::Imports(_)
             | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
@@ -155,6 +161,7 @@ impl ShapesError {
             Self::SparqlTargetDisagreement(refusal) => Some(refusal),
             Self::Imports(_)
             | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
@@ -171,6 +178,7 @@ impl ShapesError {
             Self::Prebinding(violation) => Some(violation),
             Self::Imports(_)
             | Self::Recursion(_)
+            | Self::Preparation(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::UnsupportedTarget(_)
@@ -184,6 +192,7 @@ impl ShapesError {
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Preparation(refusal) => refusal.fmt(f),
             Self::Recursion(refusal) => refusal.fmt(f),
             Self::Storage(error) => error.fmt(f),
             Self::Imports(error) => error.fmt(f),
@@ -200,6 +209,7 @@ impl fmt::Display for ShapesError {
 impl std::error::Error for ShapesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Preparation(refusal) => Some(refusal),
             Self::Recursion(refusal) => Some(refusal),
             Self::Storage(error) => Some(error),
             Self::Imports(error) => Some(error),
@@ -212,6 +222,25 @@ impl std::error::Error for ShapesError {
         }
     }
 }
+
+/// A preparation refusal, distinct from malformed shapes and nonconformance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreparationRefusal {
+    /// A recursive lowering or model-codec frame would enter the stack margin.
+    StackMargin,
+}
+
+impl fmt::Display for PreparationRefusal {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StackMargin => out.write_str("SHACL preparation exhausted its stack margin; flatten the model or prepare it on a larger stack"),
+        }
+    }
+}
+
+impl std::error::Error for PreparationRefusal {}
+
+purrdf_lex::variant_from!(ShapesError { Preparation(PreparationRefusal) });
 
 /// How a shape reference affects the containing constraint's truth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

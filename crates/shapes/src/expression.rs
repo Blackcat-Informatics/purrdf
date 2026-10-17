@@ -1589,7 +1589,7 @@ fn eval_unlowered(
     scope: Scope<'_>,
     disallows: &crate::report::ConformanceDisallows,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    let lowering = crate::plan::lower_standalone_expression(expr);
+    let lowering = crate::plan::lower_standalone_expression(expr)?;
     let mut binding = lowering.bind(store.core_view());
     binding.set_conformance_disallows(disallows);
     eval_planned_node_expr_in_scope(
