@@ -254,7 +254,7 @@ fn the_consumers_stop_signal_preserves_operational_refusal_instead_of_a_bad_proo
     }
     let (proof, mut context) = derived();
     let stop = std::sync::Arc::new(Stop(std::sync::atomic::AtomicBool::new(true)));
-    let ProofKnowledgeBase::Owned(kb) = &mut context.kb else {
+    let OwnedOrBorrowed::Owned(kb) = &mut context.kb else {
         panic!("the independently prepared fixture owns its knowledge base");
     };
     kb.stop = Some(stop.clone());

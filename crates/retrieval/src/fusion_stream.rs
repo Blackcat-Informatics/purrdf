@@ -2235,7 +2235,7 @@ pub struct FusionStream<'p, S: RankedStream> {
     // no dictionary, row observation or native metadata arena allocation.
     scoped: Option<ScopedFusion>,
     streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
-    profile: ProfileInput<'p>,
+    profile: purrdf_core::ownership::OwnedOrBorrowed<'p, FusionProfile>,
     plan_id: Option<PlanId>,
     initialized: bool,
     heads: purrdf_sparql_eval::AdmittedVec<Option<Head>>,
@@ -2393,22 +2393,6 @@ pub struct FusionStream<'p, S: RankedStream> {
     last_row_won_a_tie: bool,
 }
 
-/// A caller-owned profile moves or borrows without copying its configuration.
-#[derive(Debug)]
-enum ProfileInput<'p> {
-    Owned(FusionProfile),
-    Borrowed(&'p FusionProfile),
-}
-impl std::ops::Deref for ProfileInput<'_> {
-    type Target = FusionProfile;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Owned(value) => value,
-            Self::Borrowed(value) => value,
-        }
-    }
-}
-
 impl<S: RankedStream> fmt::Debug for FusionStream<'_, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         struct Strata<'a, S>(&'a [(Iri, S)]);
@@ -2477,7 +2461,7 @@ impl<S: RankedStream> FusionStream<'static, S> {
     pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Result<Self, FusionError> {
         Self::with_profile(
             crate::fuse::admit_streams(streams)?,
-            ProfileInput::Owned(profile),
+            purrdf_core::ownership::OwnedOrBorrowed::Owned(profile),
         )
     }
 }
@@ -2487,7 +2471,10 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
         profile: &'p FusionProfile,
     ) -> Result<Self, FusionError> {
-        Self::with_profile(streams, ProfileInput::Borrowed(profile))
+        Self::with_profile(
+            streams,
+            purrdf_core::ownership::OwnedOrBorrowed::Borrowed(profile),
+        )
     }
 
     pub(crate) fn workspace(&self) -> &purrdf_sparql_eval::WorkspaceCapability {
@@ -2496,7 +2483,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
 
     fn with_profile(
         streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
-        profile: ProfileInput<'p>,
+        profile: purrdf_core::ownership::OwnedOrBorrowed<'p, FusionProfile>,
     ) -> Result<Self, FusionError> {
         let workspace = streams.workspace().clone();
         let count = streams.len();
