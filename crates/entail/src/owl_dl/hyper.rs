@@ -2186,16 +2186,23 @@ impl<'a> Hyper<'a> {
             },
         );
         let mut state = driver.g.init_state(assumptions);
+        let check = || {
+            if let Some(original) = driver.g.storage_refusal() {
+                return Err(super::proof::DlProofError::Storage(original));
+            }
+            poll()
+        };
         for application in applications {
-            poll()?;
-            if application.clause >= driver.clauses.count()
-                || !Self::frame_is_supported(
+            check()?;
+            let supported = application.clause < driver.clauses.count()
+                && Self::frame_is_supported(
                     &driver,
                     &state,
                     application.clause,
                     &application.frame,
-                )
-            {
+                );
+            check()?;
+            if !supported {
                 return Err(super::proof::malformed(
                     "current-support application has no established body",
                 ));
@@ -2260,22 +2267,23 @@ impl<'a> Hyper<'a> {
                     "current-support consequence is not the single licensed head",
                 ));
             }
-            if !driver.apply(&mut state, &application.head, &ApplySite::Unrecorded)
-                || state.clique_exhausted.get()
-            {
+            let open = driver.apply(&mut state, &application.head, &ApplySite::Unrecorded);
+            check()?;
+            if !open || state.clique_exhausted.get() {
                 return Err(super::proof::malformed(
                     "current-support replay did not produce a complete open prefix",
                 ));
             }
         }
-        if clause_index >= driver.clauses.count()
-            || !Self::frame_is_supported(&driver, &state, clause_index, frame)
-        {
+        let supported = clause_index < driver.clauses.count()
+            && Self::frame_is_supported(&driver, &state, clause_index, frame);
+        check()?;
+        if !supported {
             return Err(super::proof::malformed(
                 "prepared clash has no source-supported current inhabitant",
             ));
         }
-        poll()?;
+        check()?;
         Ok((
             frame_refs(&state, frame),
             observe_body(
@@ -2291,23 +2299,73 @@ impl<'a> Hyper<'a> {
         let Some(&root) = frame.first() else {
             return false;
         };
-        if frame.iter().any(|&node| node >= state.nodes.len())
+        if frame
+            .iter()
+            .any(|&node| node >= state.nodes.len() || find(state, node) != node)
             || (driver.clauses.is_tbox(index) && state.nodes[find(state, root)].concrete)
         {
             return false;
         }
-        let mut found = false;
-        Self::for_each_match(
-            &driver.g,
-            state,
-            driver.clauses.clause(index, &driver.g.kb().schema),
-            root,
-            &mut |current| {
-                found = current == frame;
-                found
-            },
-        );
-        found
+        // The proof supplies one complete binding. Read that binding through the
+        // native graph predicates instead of enumerating unrelated join/subset
+        // alternatives. This also gives dependency recording a selected-body
+        // boundary, rather than the reads of unsuccessful candidate frames.
+        let clause = driver.clauses.clause(index, &driver.g.kb().schema);
+        let mut bound = 1;
+        for atom in &clause.body {
+            driver.g.work().charge(1);
+            let holds = match *atom {
+                BodyAtom::Concept { var, concept } => {
+                    (var as usize) < bound
+                        && driver.g.has_concept(state, frame[var as usize], concept)
+                }
+                BodyAtom::Denotes { var, individual } => {
+                    (var as usize) < bound
+                        && state.nodes[frame[var as usize]]
+                            .nominals
+                            .contains(&individual)
+                }
+                BodyAtom::Role { from, to, role } => {
+                    if (from as usize) >= bound || (to as usize) > bound {
+                        return false;
+                    }
+                    if to as usize == bound {
+                        bound += 1;
+                    }
+                    bound <= frame.len()
+                        && driver.g.is_neighbour(
+                            state,
+                            frame[from as usize],
+                            role,
+                            frame[to as usize],
+                        )
+                }
+                BodyAtom::Successors {
+                    role,
+                    filler,
+                    first,
+                    count,
+                } => {
+                    let Some(end) = bound.checked_add(count as usize) else {
+                        return false;
+                    };
+                    if first as usize != bound || end > frame.len() {
+                        return false;
+                    }
+                    let selected = &frame[bound..end];
+                    bound = end;
+                    selected.windows(2).all(|pair| pair[0] < pair[1])
+                        && selected.iter().all(|&node| {
+                            driver.g.has_concept(state, node, filler)
+                                && driver.g.is_neighbour(state, frame[0], role, node)
+                        })
+                }
+            };
+            if !holds || driver.g.work().exhausted() {
+                return false;
+            }
+        }
+        bound == frame.len()
     }
 
     /// Call `visit` on every binding frame that satisfies `clause`'s body with variable `0`
@@ -3152,6 +3210,171 @@ mod tests {
     const R: u32 = 20;
     /// An individual term id.
     const IND: u32 = 30;
+
+    /// Recorded bindings use the same native predicates without exploring other subsets.
+    #[test]
+    fn fixed_frame_replay_matches_enumeration_and_skips_unselected_subsets() {
+        use crate::owl_dl::clause::BodyAtom;
+        let mut kb = Kb::empty();
+        let filler = kb.table.intern(Concept::Named(C));
+        let maximum = kb
+            .table
+            .intern(Concept::Max(5, Role::Named(R), Box::new(Concept::Named(C))));
+        kb.abox_types.push((IND, maximum));
+        kb.push_gci(Concept::Nominal(vec![IND]), Concept::Named(C));
+        kb.push_gci(
+            Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
+            Concept::Named(D),
+        );
+        kb.asymmetric.insert(R);
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let root = state.root_of[&IND];
+        let successors: Vec<_> = (0..10)
+            .map(|_| {
+                driver
+                    .g
+                    .new_successor(&mut state, root, Role::Named(R), &[filler])
+            })
+            .collect();
+        driver.g.add_self_loop(&mut state, root, Role::Named(R));
+        let index = (0..driver.clauses.count())
+            .find(|&index| {
+                driver
+                    .clauses
+                    .clause(index, &kb.schema)
+                    .body
+                    .iter()
+                    .any(|atom| matches!(atom, BodyAtom::Successors { count: 6, .. }))
+            })
+            .unwrap();
+        let mut selected = vec![root];
+        selected.extend_from_slice(&successors[4..]);
+        let before = driver.g.work().spent();
+        assert!(Hyper::frame_is_supported(&driver, &state, index, &selected));
+        let bound_work = driver.g.work().spent() - before;
+        let before = driver.g.work().spent();
+        let mut visited = 0;
+        assert!(Hyper::for_each_match(
+            &driver.g,
+            &state,
+            driver.clauses.clause(index, &kb.schema),
+            root,
+            &mut |frame| {
+                visited += 1;
+                frame == selected
+            }
+        ));
+        let enumeration_work = driver.g.work().spent() - before;
+        assert_eq!(
+            visited, 210,
+            "all six-element subsets of ten are visited to reach the final binding"
+        );
+        assert!(
+            bound_work < enumeration_work,
+            "selected={bound_work}, enumerated={enumeration_work}"
+        );
+
+        // Independently enumerate every admitted frame for every native clause/root,
+        // then compare all corresponding fixed-frame checks, including role aliases.
+        let mut witnessed = [false; 4];
+        for index in 0..driver.clauses.count() {
+            let clause = driver.clauses.clause(index, &kb.schema);
+            for root in 0..state.nodes.len() {
+                Hyper::for_each_match(&driver.g, &state, clause, root, &mut |frame| {
+                    for atom in &clause.body {
+                        witnessed[match atom {
+                            BodyAtom::Concept { .. } => 0,
+                            BodyAtom::Denotes { .. } => 1,
+                            BodyAtom::Role { .. } => 2,
+                            BodyAtom::Successors { .. } => 3,
+                        }] = true;
+                    }
+                    assert!(Hyper::frame_is_supported(&driver, &state, index, frame));
+                    false
+                });
+            }
+        }
+        assert_eq!(witnessed, [true; 4]);
+        for malformed in [Vec::new(), vec![root], vec![usize::MAX]] {
+            assert!(!Hyper::frame_is_supported(
+                &driver, &state, index, &malformed
+            ));
+        }
+        let mut duplicate = selected.clone();
+        duplicate[2] = duplicate[1];
+        assert!(!Hyper::frame_is_supported(
+            &driver, &state, index, &duplicate
+        ));
+        let mut reversed = selected.clone();
+        reversed[1..].reverse();
+        assert!(!Hyper::frame_is_supported(
+            &driver, &state, index, &reversed
+        ));
+        let wrong_role = driver
+            .g
+            .new_successor(&mut state, root, Role::Named(R + 1), &[filler]);
+        let wrong_filler = driver
+            .g
+            .new_successor(&mut state, root, Role::Named(R), &[kb.top]);
+        for wrong in [wrong_role, wrong_filler] {
+            let mut frame = selected.clone();
+            *frame.last_mut().unwrap() = wrong;
+            assert!(!Hyper::frame_is_supported(&driver, &state, index, &frame));
+        }
+        let alias = driver
+            .g
+            .new_successor(&mut state, root, Role::Named(R), &[filler]);
+        driver.g.merge_nodes(&mut state, successors[0], alias);
+        let mut noncanonical = selected.clone();
+        *noncanonical.last_mut().unwrap() = alias;
+        assert!(!Hyper::frame_is_supported(
+            &driver,
+            &state,
+            index,
+            &noncanonical
+        ));
+        let mut extra = selected;
+        extra.push(root);
+        assert!(!Hyper::frame_is_supported(&driver, &state, index, &extra));
+    }
+
+    /// Cancellation while resolving a recorded body is not a malformed proof.
+    #[test]
+    fn fixed_frame_replay_preserves_a_stop_that_fires_during_native_reads() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        #[derive(Debug)]
+        struct Stop(AtomicUsize);
+        impl purrdf_datalog::StopSignal for Stop {
+            fn stopped(&self) -> bool {
+                self.0.fetch_add(1, Ordering::Relaxed) >= 1
+            }
+        }
+        let mut kb = Kb::empty();
+        kb.asymmetric.insert(R);
+        kb.abox_roles.push((IND, R, IND));
+        kb.individuals.insert(IND);
+        kb.finalize().unwrap();
+        let clauses = derive(&kb);
+        let index = (0..clauses.count())
+            .find(|&index| clauses.clause(index, &kb.schema).body.len() == 2)
+            .unwrap();
+        kb.stop = Some(Arc::new(Stop(AtomicUsize::new(0))));
+        assert!(matches!(
+            Hyper::replay_support(&kb, &Assumptions::of_kb(), &[], index, &[0, 0], &[]),
+            Err(crate::owl_dl::proof::DlProofError::Stopped)
+        ));
+    }
 
     /// A knowledge base that branches, mints and counts: a three-way disjunction, a two-way
     /// one, an existential the first reaches, and a cardinality bound over the witnesses.

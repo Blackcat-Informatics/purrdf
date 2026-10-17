@@ -55,6 +55,44 @@ fn derived_for(individual: Option<TermValue>) -> (DlProof, DlProofContext<'stati
     checked_fixture(&input)
 }
 
+/// A checked application prefix is not a causal slice: retain this counterexample.
+#[test]
+fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
+    let mut f = Fixture::default();
+    let unrelated = f.name("Unrelated");
+    let derived = f.name("UnrelatedDerived");
+    f.edge(unrelated, rdfs::SUB_CLASS_OF, derived);
+    f.instance("earlier", unrelated);
+    let class = f.name("A");
+    let filler = f.name("F");
+    let property = f.name("p");
+    f.bounds(class, property, filler, 2, true, false);
+    f.bounds(class, property, filler, 1, false, false);
+    let edge = f.name("edge");
+    let from = f.name("from");
+    let inhabitant = f.name("inhabitant");
+    f.edge(edge, rdfs::RANGE, class);
+    f.builder.push_quad(from, edge, inhabitant, None).unwrap();
+    let (proof, ctx) = checked_fixture(&f.freeze());
+    let index = proof
+        .clashes
+        .iter()
+        .position(|step| step.schema.is_some())
+        .unwrap();
+    let step = &proof.clashes[index];
+    let prefix =
+        crate::owl_dl::support::prefix(&proof.support, step.current.as_ref().unwrap().latest, None)
+            .unwrap();
+    assert!(prefix.iter().any(|application| matches!(ctx.clause_tbox_origin(application.clause).unwrap(),
+        Some(ResolvedAxiomSource::Triple { subject: ResolvedTerm::Source(TermValue::Iri(subject)), .. })
+        if subject == "https://example.org/Unrelated")));
+    let checked = proof.resolve_clash(index, &ctx).unwrap();
+    assert!(checked.replay().current_supported());
+    assert!(checked.witness().all(|fact| matches!(fact,
+        ResolvedFact::Concept(ResolvedNode::Individual(ResolvedTerm::Source(TermValue::Iri(individual))), _)
+        if individual == "https://example.org/inhabitant")));
+}
+
 #[test]
 fn legacy_structural_success_is_not_checked_source_support() {
     let mut fixture = Fixture::default();
