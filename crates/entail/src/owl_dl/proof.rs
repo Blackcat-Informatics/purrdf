@@ -159,6 +159,8 @@ mod schema;
 
 #[cfg(test)]
 mod schema_tests;
+
+pub mod source;
 use schema::{decode_schema_clash, encode_schema_clash};
 
 const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v3");

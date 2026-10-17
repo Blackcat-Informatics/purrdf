@@ -152,6 +152,7 @@ pub use entails::{
 pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
 };
+pub use owl_dl::proof::source as proof_source;
 pub use owl_dl::proof::{
     BlockingPair, BranchOutcome, BranchReplay, BranchStep, CALCULUS_VERSION as DL_CALCULUS_VERSION,
     CheckReport, ClashReplay, ClashStep, Completion, CompletionEdge, CompletionNode,
