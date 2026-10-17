@@ -1964,10 +1964,19 @@ enum LengthKind {
     Octets,
 }
 
-/// The XML 1.0 `Char` alphabet size used by the `xsd:string` value space
-/// (`#x9`, `#xA`, `#xD`, `[#x20-#xD7FF]`, `[#xE000-#xFFFD]`, `[#x10000-#x10FFFF]`).
+/// The selected XML 1.1 `Char` alphabet size used by the native text spaces,
+/// derived from the same terminal ranges as admission.
 /// It also supplies a lower bound when counting only one admitted length.
-const STRING_ALPHABET_FLOOR: u64 = 3 + 55_264 + 8_190 + 1_048_576;
+const STRING_ALPHABET_FLOOR: u64 = {
+    let ranges = purrdf_lex::terminals::xml11_char_ranges();
+    let mut count = 0;
+    let mut index = 0;
+    while index < ranges.len() {
+        count += (ranges[index].1 - ranges[index].0 + 1) as u64;
+        index += 1;
+    }
+    count
+};
 
 /// The alphabet of one octet.
 const OCTET_ALPHABET: u64 = 256;
@@ -3478,8 +3487,9 @@ mod tests {
     fn finite_character_spaces_can_be_exhausted_and_large_lengths_stay_bounded() {
         let xml_characters = (0..=0x10_ffff)
             .filter_map(char::from_u32)
-            .filter(|value| purrdf_lex::terminals::is_xml_char(*value))
+            .filter(|value| purrdf_lex::terminals::is_xml11_char(*value))
             .count();
+        assert_eq!(xml_characters, 1_112_061);
         assert_eq!(xml_characters as u64, STRING_ALPHABET_FLOOR);
         let xml = xml_characters as u128;
         let uri = xml - 4;

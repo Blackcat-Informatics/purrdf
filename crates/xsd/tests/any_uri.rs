@@ -28,7 +28,7 @@ fn lexical_mapping_preserves_everything_except_xml_whitespace() {
             expected
         );
     }
-    for lexical in ["a\0b", "\u{b}", "\u{1f}", "\u{fffe}", "\u{ffff}"] {
+    for lexical in ["a\0b", "\u{fffe}", "\u{ffff}"] {
         for datatype in [D::String, D::AnyUri] {
             assert!(
                 parse(lexical, datatype).is_err(),
@@ -38,6 +38,14 @@ fn lexical_mapping_preserves_everything_except_xml_whitespace() {
     }
     let text = " \té\r\n 文\u{a0} ";
     assert_eq!(parse(text, D::String).unwrap().canonical_lexical(), text);
+    for lexical in ["\u{1}", "\u{b}", "\u{c}", "\u{1f}"] {
+        for datatype in [D::String, D::AnyUri] {
+            assert_eq!(
+                parse(lexical, datatype).unwrap().canonical_lexical(),
+                lexical
+            );
+        }
+    }
 }
 
 fn primitive_identity_is_disjoint_and_unordered() {

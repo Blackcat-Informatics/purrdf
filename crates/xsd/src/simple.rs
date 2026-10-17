@@ -11,12 +11,15 @@ use purrdf_lex::scan::in_runs;
 use crate::datatype::XsdDatatype;
 use crate::value::XsdError;
 
-/// Borrow an XSD string lexical unchanged after checking XML 1.0 `Char`.
+/// Borrow an XSD string lexical unchanged after checking XML 1.1 `Char`.
+///
+/// XSD 1.1 §1.3 permits selecting either XML character domain. Native text
+/// datatypes select XML 1.1, including its restricted control characters.
 ///
 /// # Errors
 /// Refuses a non-XML character without allocating diagnostic or value storage.
 pub fn read_xml_string(s: &str) -> Result<&str, &'static str> {
-    if s.chars().all(purrdf_lex::terminals::is_xml_char) {
+    if s.chars().all(purrdf_lex::terminals::is_xml11_char) {
         Ok(s)
     } else {
         Err("expected XML characters")
@@ -28,7 +31,7 @@ pub fn read_xml_string(s: &str) -> Result<&str, &'static str> {
 /// case and Unicode normalization are deliberately not rewritten.
 ///
 /// # Errors
-/// Refuses a character outside XML 1.0 `Char` before creating an owned value.
+/// Refuses a character outside XML 1.1 `Char` before creating an owned value.
 pub fn read_any_uri(s: &str) -> Result<CollapsedWhitespace<'_>, &'static str> {
     read_xml_string(s).map(CollapsedWhitespace)
 }
