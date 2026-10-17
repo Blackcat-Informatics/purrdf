@@ -48,7 +48,7 @@ use purrdf_core::{
 use purrdf_lex::json_escape::{JsonEscapes, push_string};
 use purrdf_lex::term_syntax;
 
-use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
+use crate::ast::{ExprRef, Schema, SemAct, Shape, ShapeExpr, TripleExpr};
 use crate::semact::{SemActContext, SemActRegistry};
 use crate::statement;
 use error::CheckError;
@@ -575,37 +575,11 @@ fn prepare_shape<'a>(
     })
 }
 
-fn collect_shapes<'a>(expr: &'a ShapeExpr, shapes: &mut Vec<&'a Shape>) {
-    match expr {
-        ShapeExpr::And(parts) | ShapeExpr::Or(parts) => {
-            for part in parts {
-                collect_shapes(part, shapes);
-            }
-        }
-        ShapeExpr::Not(inner) => collect_shapes(inner, shapes),
-        ShapeExpr::Shape(shape) => {
+fn collect_shapes<'a>(expr: ExprRef<'a>, shapes: &mut Vec<&'a Shape>) {
+    for node in expr.walk() {
+        if let ExprRef::Shape(ShapeExpr::Shape(shape)) = node {
             shapes.push(shape);
-            if let Some(expr) = &shape.expression {
-                collect_triple_expr_shapes(expr, shapes);
-            }
         }
-        ShapeExpr::Node(_) | ShapeExpr::External | ShapeExpr::Ref(_) => {}
-    }
-}
-
-fn collect_triple_expr_shapes<'a>(expr: &'a TripleExpr, shapes: &mut Vec<&'a Shape>) {
-    match expr {
-        TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
-            for child in &group.expressions {
-                collect_triple_expr_shapes(child, shapes);
-            }
-        }
-        TripleExpr::TripleConstraint(constraint) => {
-            if let Some(value_expr) = &constraint.value_expr {
-                collect_shapes(value_expr, shapes);
-            }
-        }
-        TripleExpr::Ref(_) => {}
     }
 }
 
@@ -636,13 +610,13 @@ impl<'a> Engine<'a> {
         let te_map: FastMap<&'a str, &'a TripleExpr> = te_labels.into_iter().collect();
         let mut shapes = Vec::new();
         for expr in shape_map.values() {
-            collect_shapes(expr, &mut shapes);
+            collect_shapes(ExprRef::Shape(expr), &mut shapes);
         }
         for expr in te_map.values() {
-            collect_triple_expr_shapes(expr, &mut shapes);
+            collect_shapes(ExprRef::Triple(expr), &mut shapes);
         }
         if let Some(start) = schema.start.as_deref() {
-            collect_shapes(start, &mut shapes);
+            collect_shapes(ExprRef::Shape(start), &mut shapes);
         }
         let mut prepared_shapes = FastMap::default();
         for shape in shapes {
