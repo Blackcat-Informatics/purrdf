@@ -1221,6 +1221,9 @@ impl RecursionGuard {
                 self.structural.saturating_add(1)
             ));
         }
+        if purrdf_stack::is_low() {
+            return Err("node expression evaluation exhausted its stack margin".to_owned());
+        }
         self.structural += 1;
         Ok(())
     }
@@ -1256,6 +1259,11 @@ impl RecursionGuard {
                  than allowed to exhaust the native stack"
             ));
         }
+        if purrdf_stack::is_low() {
+            return Err(format!(
+                "custom node-expression function <{iri}> exhausted its stack margin"
+            ));
+        }
         self.depth += 1;
         Ok(())
     }
@@ -1272,6 +1280,11 @@ impl RecursionGuard {
     /// Returns `Err(String)` if the pair is already in flight — a recursion
     /// cycle through `sh:filterShape` / `sh:exists`.
     pub fn enter(&mut self, shape_id: &str, focus: &str) -> Result<(), String> {
+        if purrdf_stack::is_low() {
+            return Err(format!(
+                "SHACL node-expression re-entry exhausted its stack margin at shape {shape_id}"
+            ));
+        }
         let key = (shape_id.to_owned(), focus.to_owned());
         if self.stack.contains(&key) {
             return Err(format!(

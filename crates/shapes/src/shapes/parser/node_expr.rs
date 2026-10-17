@@ -1052,14 +1052,9 @@ impl Parser<'_> {
         // the inner operand is this very node parsed with the paging keys
         // ignored, NOT a separate `sh:nodes` operand. A node carrying only paging
         // keys (no core expression) therefore hard-fails in `parse_node_expr_core`.
-        let guard_key = InFlight::NodeExpr(node.clone());
-        if self.in_flight.contains(&guard_key) {
-            return Err(format!("cyclic node expression on {node}"));
-        }
-        self.in_flight.insert(guard_key.clone());
-        let result = self.parse_node_expr_wrapped(node);
-        self.in_flight.remove(&guard_key);
-        result
+        self.with_expansion(InFlight::NodeExpr(node.clone()), |parser| {
+            parser.parse_node_expr_wrapped(node)
+        })
     }
 
     /// Apply the paging/ordering wrappers on top of the core expression.

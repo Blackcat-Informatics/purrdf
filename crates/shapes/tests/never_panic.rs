@@ -21,6 +21,155 @@ use purrdf_testkit::prop::prelude::*;
 const NODE_EXPR_PREFIXES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
      @prefix ex: <http://example.org/ns#> .\n";
 
+#[test]
+fn recursive_shape_references_are_failures_instead_of_empty_shapes() {
+    for body in [
+        "ex:S a sh:NodeShape; sh:node ex:S .",
+        "_:s a sh:NodeShape; sh:node _:s .",
+        "ex:S a sh:NodeShape; sh:node ex:T . ex:T sh:node ex:S .",
+        "ex:S a sh:NodeShape; sh:not ex:S .",
+        "ex:S a sh:NodeShape; sh:and (ex:S) .",
+        "ex:S a sh:NodeShape; sh:or (ex:S) .",
+        "ex:S a sh:NodeShape; sh:xone (ex:S) .",
+        "ex:S a sh:NodeShape; sh:property ex:P . ex:P sh:path ex:p; sh:node ex:S .",
+        "ex:P a sh:PropertyShape; sh:path ex:p; sh:property ex:P .",
+        "ex:P a sh:PropertyShape; sh:path ex:p; sh:node ex:P .",
+        "ex:S a sh:NodeShape; sh:property ex:P . ex:P sh:path ex:p; sh:qualifiedValueShape ex:S; sh:qualifiedMinCount 1 .",
+    ] {
+        let error = parse_shapes(&format!("{NODE_EXPR_PREFIXES}{body}"), None)
+            .expect_err("a cyclic shape must not be replaced with an unconstrained shape");
+        assert!(
+            error.to_string().contains("cyclic SHACL shape reference"),
+            "{body}: {error}"
+        );
+    }
+}
+
+#[test]
+fn shared_shape_references_are_not_cycles() {
+    let shapes = parse_shapes(
+        &format!(
+            "{NODE_EXPR_PREFIXES}\
+            ex:S a sh:NodeShape; sh:and (ex:Left ex:Right) .\
+            ex:Left sh:node ex:Shared . ex:Right sh:node ex:Shared .\
+            ex:Shared sh:nodeKind sh:IRI ."
+        ),
+        None,
+    )
+    .expect("the in-flight guard must release each completed reference");
+    assert!(!shapes.node_shapes.is_empty());
+}
+
+#[test]
+fn deep_acyclic_shape_loading_refuses_before_native_stack_exhaustion() {
+    for property in [false, true] {
+        let mut document = NODE_EXPR_PREFIXES.to_owned();
+        document.push_str("ex:S0 a sh:NodeShape .\n");
+        for index in 0..2000 {
+            use std::fmt::Write as _;
+            if property {
+                writeln!(
+                    document,
+                    "ex:S{index} sh:path ex:p; sh:property ex:S{} .",
+                    index + 1
+                )
+                .unwrap();
+            } else {
+                writeln!(document, "ex:S{index} sh:node ex:S{} .", index + 1).unwrap();
+            }
+        }
+        if property {
+            document.push_str("ex:S2000 sh:path ex:p .\n");
+        }
+        let error = purrdf_stack::on_stack(1024 * 1024, move || {
+            parse_shapes(&document, None).map_err(|error| error.to_string())
+        })
+        .unwrap()
+        .expect_err("the deep graph must return a physical refusal");
+        assert!(error.contains("stack margin"), "{error}");
+    }
+}
+
+#[test]
+fn deep_acyclic_paths_and_expressions_refuse_before_stack_exhaustion() {
+    use std::fmt::Write as _;
+    for expression in [false, true] {
+        let mut document = NODE_EXPR_PREFIXES.to_owned();
+        document.push_str(if expression {
+            "ex:S a sh:NodeShape; sh:expression ex:E0 .\n"
+        } else {
+            "ex:S a sh:NodeShape; sh:property [ sh:path _:p0 ] .\n"
+        });
+        for index in 0..2000 {
+            if expression {
+                writeln!(document, "ex:E{index} sh:union (ex:E{}) .", index + 1).unwrap();
+            } else {
+                writeln!(document, "_:p{index} sh:inversePath _:p{} .", index + 1).unwrap();
+            }
+        }
+        if !expression {
+            document.push_str("_:p2000 sh:inversePath ex:p .\n");
+        }
+        let error = purrdf_stack::on_stack(1024 * 1024, move || {
+            parse_shapes(&document, None).map_err(|error| error.to_string())
+        })
+        .unwrap()
+        .expect_err("the deep graph must return a physical refusal");
+        assert!(error.contains("stack margin"), "{error}");
+    }
+}
+
+#[test]
+fn stack_refusal_is_not_a_conformance_or_validation_report() {
+    use purrdf_shapes::constraints::conforms;
+    use purrdf_shapes::data::ShaclData;
+    use purrdf_shapes::engine::PreparedShapes;
+    use purrdf_shapes::term::NamedNode;
+    use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+    use std::sync::Arc;
+
+    let shapes = Arc::new(parse_shapes(
+        &format!("{NODE_EXPR_PREFIXES}ex:S a sh:NodeShape; sh:targetNode ex:alice; sh:nodeKind sh:IRI ."),
+        None,
+    ).unwrap());
+    let data = parse_turtle_to_dataset(
+        &format!("{NODE_EXPR_PREFIXES}ex:alice ex:p ex:object ."),
+        None,
+    )
+    .unwrap();
+    let prepared = PreparedShapes::new(Arc::clone(&shapes));
+    let validator = prepared.bind_shared_dataset(Arc::clone(&data)).unwrap();
+    let complete = prepared
+        .bind_complete_shared_dataset(Arc::clone(&data))
+        .unwrap();
+    let store = ShaclData::new(Arc::clone(&data), data, None);
+    let focus = NamedNode::new_unchecked("http://example.org/ns#alice").into_term();
+
+    // Reserve the available stack through the production admission API, then
+    // release it before inspecting results. No actual stack overflow is induced.
+    let reserve = purrdf_stack::reserve(purrdf_stack::remaining());
+    let conformance = conforms(&store, &focus, &shapes.node_shapes[0]);
+    let report = validator.validate();
+    let complete_report = complete.validate();
+    drop(reserve);
+    assert!(
+        conformance
+            .unwrap_err()
+            .to_string()
+            .contains("stack margin")
+    );
+    assert!(report.unwrap_err().contains("stack margin"));
+    assert!(
+        complete_report
+            .unwrap_err()
+            .to_string()
+            .contains("stack margin")
+    );
+    assert!(conforms(&store, &focus, &shapes.node_shapes[0]).unwrap());
+    assert!(validator.validate().unwrap().conforms);
+    assert!(complete.validate().is_ok());
+}
+
 /// A cyclic SHACL-AF node expression must be a hard `Err`, whatever node kind
 /// spells the cycle.
 ///

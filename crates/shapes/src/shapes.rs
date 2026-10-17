@@ -1611,6 +1611,8 @@ pub(crate) enum InFlight {
     /// A shape node being parsed, keyed by its rendered node id (the parser
     /// already carries that rendering for its error messages).
     Shape(String),
+    /// A property shape, including its constraints, currently being expanded.
+    PropertyShape(String),
     /// A SHACL-AF node expression being parsed, keyed by its node term.
     NodeExpr(Term),
 }
@@ -2093,7 +2095,7 @@ impl<'s> Parser<'s> {
             let shape = if self.first_object_of(&term, sh::PATH).is_some() {
                 self.parse_standalone_property_shape(term)?
             } else {
-                self.parse_node_shape(term)?
+                self.parse_node_shape(&term)?
             };
             node_shapes.push(shape);
         }
@@ -2576,32 +2578,33 @@ impl<'s> Parser<'s> {
             && native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph).is_empty()
     }
 
-    /// Parse a top-level node shape.
-    fn parse_node_shape(&mut self, id: Term) -> Result<Shape, String> {
-        let id_str = id.to_string();
-
-        // Guard against recursive `sh:node` cycles
-        let key = InFlight::Shape(id_str);
-        if self.in_flight.contains(&key) {
-            // Return a minimal stand-in to break the cycle; cyclic shapes are
-            // unusual but not forbidden.
-            return Ok(Shape {
-                id,
-                targets: vec![],
-                constraints: vec![],
-                property_shapes: vec![],
-                severity: Severity::Violation,
-                messages: vec![],
-                constraint_annotations: vec![],
-                deactivated: false,
-                box_roles: vec![],
-                rules: vec![],
+    /// Admit one parser expansion and release its in-flight key on every result.
+    fn with_expansion<T>(
+        &mut self,
+        key: InFlight,
+        parse: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if purrdf_stack::is_low() {
+            return Err("SHACL parsing exhausted its stack margin".to_owned());
+        }
+        if !self.in_flight.insert(key.clone()) {
+            return Err(match key {
+                InFlight::Shape(id) | InFlight::PropertyShape(id) => format!(
+                    "cyclic SHACL shape reference on {id}; recursive shapes are not supported"
+                ),
+                InFlight::NodeExpr(node) => format!("cyclic node expression on {node}"),
             });
         }
-        self.in_flight.insert(key.clone());
-        let result = self.parse_shape_inner(&id);
+        let result = parse(self);
         self.in_flight.remove(&key);
         result
+    }
+
+    /// Parse a top-level node shape.
+    fn parse_node_shape(&mut self, id: &Term) -> Result<Shape, String> {
+        self.with_expansion(InFlight::Shape(id.to_string()), |parser| {
+            parser.parse_shape_inner(id)
+        })
     }
 
     /// Inner parse logic shared between top-level and anonymous/inline shapes.
@@ -3039,6 +3042,12 @@ impl<'s> Parser<'s> {
 
     /// Parse a property shape node.
     fn parse_property_shape(&mut self, ps_node: &Term) -> Result<PropertyShape, String> {
+        self.with_expansion(InFlight::PropertyShape(ps_node.to_string()), |parser| {
+            parser.parse_property_shape_inner(ps_node)
+        })
+    }
+
+    fn parse_property_shape_inner(&mut self, ps_node: &Term) -> Result<PropertyShape, String> {
         let ps_str = ps_node.to_string();
 
         // sh:path is required
@@ -3066,41 +3075,15 @@ impl<'s> Parser<'s> {
         let parsed = self.parse_constraints(ps_node, true)?;
         let mut constraint_annotations = parsed.annotations;
 
-        // Nested sh:property on a property shape (spec §2.1: sh:property may
-        // appear on ANY shape) — each nested property shape applies to THIS
-        // shape's value nodes. `in_flight` breaks sh:property cycles by
-        // skipping a shape already being parsed (mirrors parse_node_shape's
-        // cycle stub).
+        // Each nested property shape applies to this shape's value nodes.
+        // The entry guard covers constraints and nested properties alike.
         let mut nested_nodes: Vec<Term> = self.objects_of(ps_node, sh::PROPERTY);
         crate::term::sort_terms_canonical(&mut nested_nodes);
         let mut property_shapes: Vec<PropertyShape> = Vec::new();
-        if !nested_nodes.is_empty() {
-            let key = InFlight::Shape(ps_str.clone());
-            self.in_flight.insert(key.clone());
-            for nested in nested_nodes {
-                let annotated =
-                    match self.constraint_annotation(ps_node, &[(sh::PROPERTY, &nested)]) {
-                        Ok(annotated) => annotated,
-                        Err(e) => {
-                            self.in_flight.remove(&key);
-                            return Err(e);
-                        }
-                    };
-                if self
-                    .in_flight
-                    .contains(&InFlight::Shape(nested.to_string()))
-                {
-                    continue;
-                }
-                match self.parse_property_shape(&nested) {
-                    Ok(parsed) => property_shapes.extend(annotate_property_edge(parsed, annotated)),
-                    Err(e) => {
-                        self.in_flight.remove(&key);
-                        return Err(e);
-                    }
-                }
-            }
-            self.in_flight.remove(&key);
+        for nested in nested_nodes {
+            let annotated = self.constraint_annotation(ps_node, &[(sh::PROPERTY, &nested)])?;
+            let parsed = self.parse_property_shape(&nested)?;
+            property_shapes.extend(annotate_property_edge(parsed, annotated));
         }
 
         let box_roles = self.box_roles_of(ps_node)?;
@@ -3259,6 +3242,11 @@ impl<'s> Parser<'s> {
         shape_id: &Term,
         in_flight: &mut FastSet<String>,
     ) -> Result<Path, String> {
+        if purrdf_stack::is_low() {
+            return Err(format!(
+                "SHACL path parsing exhausted its stack margin on {shape_id}"
+            ));
+        }
         match path_node {
             Term::NamedNode(nn) => Ok(Path::Predicate(nn.clone())),
             Term::BlankNode(label) => {
@@ -3426,31 +3414,11 @@ impl<'s> Parser<'s> {
     /// the path+constraints are wrapped into a single `PropertyShape` entry and
     /// the resulting `Shape` has empty node-level constraints.
     fn parse_inline_shape(&mut self, id: Term) -> Result<Shape, String> {
-        let id_str = id.to_string();
-
-        // Guard against cycles
-        let key = InFlight::Shape(id_str);
-        if self.in_flight.contains(&key) {
-            return Ok(Shape {
-                id,
-                targets: vec![],
-                constraints: vec![],
-                property_shapes: vec![],
-                severity: Severity::Violation,
-                messages: vec![],
-                constraint_annotations: vec![],
-                deactivated: false,
-                box_roles: vec![],
-                rules: vec![],
-            });
-        }
-
         if self.first_object_of(&id, sh::PATH).is_some() {
             // Treat as an inline property shape
-            self.in_flight.insert(key.clone());
-            let ps = self.parse_property_shape(&id);
-            self.in_flight.remove(&key);
-            let ps = ps?;
+            let ps = self.with_expansion(InFlight::Shape(id.to_string()), |parser| {
+                parser.parse_property_shape(&id)
+            })?;
             Ok(Shape {
                 id,
                 targets: vec![],
@@ -3464,7 +3432,7 @@ impl<'s> Parser<'s> {
                 rules: vec![],
             })
         } else {
-            self.parse_node_shape(id)
+            self.parse_node_shape(&id)
         }
     }
 }

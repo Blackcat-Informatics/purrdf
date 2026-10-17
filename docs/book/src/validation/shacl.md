@@ -79,6 +79,27 @@ validator and a `sh:SPARQLTarget` may carry only the terms their
 specification gives them, so an `sh:ask` beside a constraint's `sh:select`,
 or a misspelled `sh:mesage`, is refused rather than ignored.
 
+### Recursion and resource failures
+
+PurRDF rejects a cyclic shape reference when loading a shapes graph. This
+includes self-references, mutual references, logical shape lists and nested
+property shapes. A shared acyclic reference is accepted. The loader never
+replaces a recursive reference with an empty shape or skips its constraints.
+This is an explicit failure policy, permitted by
+[SHACL Core §6.6.3](https://www.w3.org/TR/shacl12-core/#shapes-recursion).
+It does not assign least- or greatest-fixed-point semantics to recursive
+shapes; the [sheval study](https://labra.weso.es/pdf/2026_sheval_DMKG26.pdf)
+explains how those semantics can produce different answers.
+
+Deep acyclic parsing and recursive validation also check the available stack.
+Node-expression evaluation retains its structural and function re-entry
+limits, including the 64-call limit on custom expression functions. A stack
+or depth refusal returns an error, never a conformance verdict or a partial
+validation report. Stack admission can refuse before a logical depth limit
+is reached; the available stack differs between native threads and WebAssembly.
+
+### Refused vocabulary terms
+
 The terms the SHACL vocabularies define and the engine refuses by name are:
 
 - the SHACL JavaScript Extensions (`sh:js`, `sh:JSConstraint` and the rest),

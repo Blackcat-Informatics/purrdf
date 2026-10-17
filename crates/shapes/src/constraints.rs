@@ -1205,6 +1205,13 @@ fn walk_shape<S: ResultSink>(
 ) -> Result<Flow, crate::error::ShapesError> {
     let plan = context.plan;
     let shape = plan.shape();
+    if purrdf_stack::is_low() {
+        return Err(format!(
+            "SHACL validation exhausted its stack margin at shape {}",
+            shape.id
+        )
+        .into());
+    }
     if context.depth > crate::expression::MAX_RECURSION_DEPTH {
         return Err(format!(
             "SHACL validation recursion depth exceeded ({} > {}) at shape {}: a cyclic sh:filterShape / sh:exists reference",

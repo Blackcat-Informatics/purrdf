@@ -4341,7 +4341,11 @@ pub(crate) fn shacl_dataset_from_dataset(
 ///
 /// [`ShapesError::Imports`] when the `owl:imports` closure is not in hand;
 /// [`ShapesError::Invalid`] if the shapes Turtle fails to parse (including a relative
-/// IRI reference with no base in scope) or contains unsupported SHACL constructs.
+/// IRI reference with no base in scope), contains unsupported SHACL constructs,
+/// expands a cyclic shape reference, or exhausts the parsing stack margin.
+/// Recursive shape references are refused, not replaced with unconstrained shapes;
+/// shared acyclic references are accepted. SHACL Core leaves recursion behavior
+/// to processors (section 6.6.3).
 pub fn parse_shapes(shapes_ttl: &str, base: Option<&str>) -> Result<Shapes, ShapesError> {
     parse_shapes_with_config(shapes_ttl, base, None, &ShapesImports::new())
 }
