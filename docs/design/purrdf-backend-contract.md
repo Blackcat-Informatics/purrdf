@@ -692,6 +692,19 @@ physical request to its chronological layer and original page, or the head.
 Sealed depth is the descriptor count. Compaction timing and depth policy remain
 consumer-owned, with no hidden ceiling or recursive per-layer call chain.
 
+`snapshot_at(k)` publishes all initial bases and the first `k` sealed delta
+generations through this same construction and query path, excluding the mutable
+head. Removal-only deltas count as generations; zero selects the base snapshot.
+`sealed_delta_count()` reports the latest selectable position, while a snapshot's
+`sealed_depth()` includes its initial bases. An unavailable position is refused with requested
+and available counts in `PagedStackSnapshotError`, while construction failures
+retain their original `PagedStackError` cause. Only the selected source
+descriptors, dictionaries, translations, removals and graph declarations are
+retained. Later sources are neither checked nor owned by that snapshot, so their
+drift cannot invalidate an earlier prefix. Selected-source drift retains the
+ordinary G9 fault semantics. Publication has the metadata cost described above
+for the selected prefix, and reads no lower page.
+
 At every operation checkpoint, the composed provider checks every pinned source
 generation and page count directly. A combined generation hash is never used as
 proof of vector equality. Drift in a skipped or zero-page source refuses even a

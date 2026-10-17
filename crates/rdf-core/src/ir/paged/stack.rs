@@ -116,6 +116,47 @@ impl std::error::Error for PagedStackError {
 
 purrdf_lex::variant_from!(PagedStackError { Storage(purrdf_lex::allocation::StorageError) });
 
+/// Admission or construction failure for a selected sealed history prefix.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum PagedStackSnapshotError {
+    /// The requested prefix extends beyond the available sealed history.
+    Position {
+        /// Requested sealed delta generation count, after the initial bases.
+        requested: usize,
+        /// Available sealed delta generation count.
+        available: usize,
+    },
+    /// The original selected-source or metadata construction failure.
+    Stack(PagedStackError),
+}
+
+impl std::fmt::Display for PagedStackSnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Position {
+                requested,
+                available,
+            } => write!(
+                f,
+                "sealed delta position {requested} exceeds available delta count {available}"
+            ),
+            Self::Stack(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for PagedStackSnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Position { .. } => None,
+            Self::Stack(error) => Some(error),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(PagedStackSnapshotError { Stack(PagedStackError) });
+
 #[derive(Debug)]
 struct Layer {
     dataset: Arc<PagedDataset>,
@@ -131,6 +172,7 @@ struct Layer {
 /// in all retained dictionary values and translation entries, not only the delta.
 #[derive(Debug)]
 pub struct PagedStack {
+    base_count: usize,
     layers: Vec<Layer>,
     head: BTreeSet<QuadValues>,
     removals: BTreeSet<QuadValues>,
@@ -149,6 +191,7 @@ impl PagedStack {
             return Err(PagedStackError::MissingBase);
         }
         let stack = Self {
+            base_count: bases.len(),
             layers: bases
                 .into_iter()
                 .map(|dataset| Layer {
@@ -162,12 +205,12 @@ impl PagedStack {
             graphs: BTreeSet::new(),
             sealed_snapshot: OnceLock::new(),
         };
-        stack.check_sources()?;
+        Self::check_sources(&stack.layers)?;
         Ok(stack)
     }
 
-    fn check_sources(&self) -> Result<(), PagedStackError> {
-        for (source, layer) in self.layers.iter().enumerate() {
+    fn check_sources(layers: &[Layer]) -> Result<(), PagedStackError> {
+        for (source, layer) in layers.iter().enumerate() {
             layer
                 .dataset
                 .provider
@@ -193,7 +236,7 @@ impl PagedStack {
         dataset: Arc<PagedDataset>,
         removals: Vec<QuadValues>,
     ) -> Result<(), PagedStackError> {
-        self.check_sources()?;
+        Self::check_sources(&self.layers)?;
         if !self.head.is_empty() || !self.removals.is_empty() || !self.graphs.is_empty() {
             return Err(PagedStackError::PendingHead);
         }
@@ -236,7 +279,7 @@ impl PagedStack {
         row: &QuadValues,
         limits: PagedQueryLimits,
     ) -> Result<bool, PagedStackError> {
-        self.check_sources()?;
+        Self::check_sources(&self.layers)?;
         let row = normalize_row(row)?;
         if self.head.contains(&row) {
             return Ok(true);
@@ -245,7 +288,7 @@ impl PagedStack {
             return Ok(false);
         }
         if self.sealed_snapshot.get().is_none() {
-            let snapshot = self.snapshot_with_head(false)?;
+            let snapshot = self.snapshot_with_head(self.layers.len(), false)?;
             let _ = self.sealed_snapshot.set(snapshot);
         }
         let snapshot = self
@@ -299,7 +342,7 @@ impl PagedStack {
     // Declarations share the value-consuming writer boundary with insertion.
     #[allow(clippy::needless_pass_by_value)]
     pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, PagedStackError> {
-        self.check_sources()?;
+        Self::check_sources(&self.layers)?;
         let mut builder = RdfDatasetBuilder::new();
         let id = builder.intern_value(&graph)?;
         builder.declare_named_graph(id)?;
@@ -342,17 +385,50 @@ impl PagedStack {
     /// # Errors
     /// Refuses invalid head data, descriptor drift, or metadata count exhaustion.
     pub fn snapshot(&self) -> Result<PagedStackSnapshot, PagedStackError> {
-        self.snapshot_with_head(true)
+        self.snapshot_with_head(self.layers.len(), true)
+    }
+
+    /// Number of sealed delta generations appended after the initial bases.
+    #[must_use]
+    pub fn sealed_delta_count(&self) -> usize {
+        self.layers.len() - self.base_count
+    }
+
+    /// Pin the initial bases and first `generation_count` sealed deltas.
+    ///
+    /// Initial bases are always included; zero selects the base snapshot.
+    /// Removal-only deltas count as generations. The mutable head is excluded.
+    /// Only selected sources are retained and checked: later changes
+    /// or faults do not invalidate this historical snapshot. The existing
+    /// guarded query view provides resource limits and original-page evidence.
+    ///
+    /// # Errors
+    /// Refuses an unavailable position with both counts, or an original
+    /// selected-source/metadata construction failure.
+    pub fn snapshot_at(
+        &self,
+        generation_count: usize,
+    ) -> Result<PagedStackSnapshot, PagedStackSnapshotError> {
+        let available = self.sealed_delta_count();
+        if generation_count > available {
+            return Err(PagedStackSnapshotError::Position {
+                requested: generation_count,
+                available,
+            });
+        }
+        self.snapshot_with_head(self.base_count + generation_count, false)
+            .map_err(Into::into)
     }
 
     fn snapshot_with_head(
         &self,
+        sealed_count: usize,
         include_head: bool,
     ) -> Result<PagedStackSnapshot, PagedStackError> {
-        self.check_sources()?;
+        let layers = &self.layers[..sealed_count];
+        Self::check_sources(layers)?;
         let has_head = include_head && (!self.head.is_empty() || !self.graphs.is_empty());
-        let mut sources: Vec<Arc<PagedDataset>> = self
-            .layers
+        let mut sources: Vec<Arc<PagedDataset>> = layers
             .iter()
             .map(|layer| Arc::clone(&layer.dataset))
             .collect();
@@ -368,8 +444,7 @@ impl PagedStack {
                 .map_err(PagedStackError::Freeze)?,
             ));
         }
-        let descriptors: Arc<[StackSource]> = self
-            .layers
+        let descriptors: Arc<[StackSource]> = layers
             .iter()
             .map(|layer| StackSource {
                 generation: layer.dataset.generation(),
@@ -420,7 +495,7 @@ impl PagedStack {
                     quad_count: slot.quad_count,
                     byte_len: slot.byte_len,
                 });
-                origins.push(if layer == self.layers.len() {
+                origins.push(if layer == layers.len() {
                     StackPageOrigin::Head
                 } else {
                     StackPageOrigin::Sealed {
@@ -433,8 +508,7 @@ impl PagedStack {
         }
         let empty_removals = BTreeSet::new();
         let empty_graph_values = BTreeSet::new();
-        let graph_declarations: Arc<[Arc<[TermValue]>]> = self
-            .layers
+        let graph_declarations: Arc<[Arc<[TermValue]>]> = layers
             .iter()
             .map(|layer| &layer.declared_graphs)
             .chain(std::iter::once(if include_head {
@@ -444,8 +518,7 @@ impl PagedStack {
             }))
             .map(|graphs| graphs.iter().cloned().collect::<Arc<[_]>>())
             .collect();
-        for graph in self
-            .layers
+        for graph in layers
             .iter()
             .flat_map(|layer| &layer.declared_graphs)
             .chain(self.graphs.iter().filter(|_| include_head))
@@ -461,8 +534,7 @@ impl PagedStack {
         } else {
             &empty_removals
         };
-        let removal_values: Arc<[Arc<[QuadValues]>]> = self
-            .layers
+        let removal_values: Arc<[Arc<[QuadValues]>]> = layers
             .iter()
             .map(|layer| &layer.removals)
             .chain(std::iter::once(head_removals))
@@ -534,7 +606,7 @@ impl PagedStack {
             &snapshot.removal_values,
             &snapshot.graph_declarations,
         ));
-        self.check_sources()?;
+        Self::check_sources(layers)?;
         Ok(snapshot)
     }
 
@@ -544,10 +616,10 @@ impl PagedStack {
     /// # Errors
     /// Source drift or head encoding failures publish no layer and retain the head.
     pub fn seal_head(&mut self, page_rows: NonZeroUsize) -> Result<(), PagedStackError> {
-        self.check_sources()?;
+        Self::check_sources(&self.layers)?;
         let dataset = canonical_paged_seal(self.frozen_head()?.as_ref(), page_rows)
             .map_err(PagedStackError::Seal)?;
-        self.check_sources()?;
+        Self::check_sources(&self.layers)?;
         self.layers
             .try_reserve(1)
             .map_err(|_| PagedStackError::Capacity)?;
