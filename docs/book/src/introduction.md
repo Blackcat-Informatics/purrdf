@@ -82,8 +82,8 @@ reimplemented per language.
   `SILENT` — gated by the W3C conformance suites.
   See [SPARQL](sparql/querying.md).
 - **SPARQL extensions outside `purrdf-core`** — deterministic full-text search with
-  exact fixed-point BM25 ([Full-Text Search](sparql/full-text.md)), exact and
-  float-free GeoSPARQL 1.1 ([GeoSPARQL](sparql/geosparql.md)), and
+  exact fixed-point BM25 ([Full-Text Search](sparql/full-text.md)), certified
+  GeoSPARQL 1.1 over exact coordinate inputs ([GeoSPARQL](sparql/geosparql.md)), and
   nearest-neighbour search over a PURREMB embedding space
   ([Embedding Nearest Neighbours](sparql/embedding-knn.md)) — each a consumer
   of the extension seams, registered under IRIs the caller supplies.
@@ -113,7 +113,7 @@ dataset already in memory, through the evaluator's caller-keyed extension seams
 
 | You needed | Usually from | Now inside PurRDF | Where it stops |
 | --- | --- | --- | --- |
-| Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no floating point in the crate. | Exact BM25F, explicit stemming/dictionaries and independent Han retrieval; no stop-word lists or query dialect; an in-memory index built once over a frozen dataset. |
+| Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no floating point in the crate. | Exact BM25F, explicit stemming/dictionaries and independent Han retrieval; no stop-word lists or query dialect; an in-memory index over frozen datasets. |
 | Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo-kernel` through `purrdf-geo`, with exact WKT/GeoJSON coordinates, DE-9IM relations, geographic metrics, buffers and explicit coordinate operations; no GEOS or PROJ. | References, units, operation chains, numerical limits and tolerances are explicit. No raster; concave hulls and overlay set operations remain named refusals. See the chapter's function coverage. |
 | Vector similarity | pgvector | [Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a PURREMB embedding space, binary64 in a pinned accumulation order. | Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no approximate index; PurRDF computes no embeddings — the vectors come from a PURREMB artifact the caller fills, which PurRDF itself writes (`EmbeddingBuilder`, `EmbeddingStreamWriter`; Rust only) and opens fail-closed. |
 
