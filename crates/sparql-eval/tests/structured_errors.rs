@@ -1665,7 +1665,72 @@ fn raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers() {
     );
 }
 
+fn shacl_select_result_refusals_keep_original_iri_and_counts() {
+    use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
+    use purrdf_sparql_eval::{
+        ExtensionEnv, NativeSparqlEngine, TypeConstraint, UserFnBody, UserFunction,
+        UserFunctionRegistry,
+    };
+
+    let iri = "https://example.org/函数";
+    let query = SparqlParser::new()
+        .parse_query(&format!("SELECT (<{iri}>() AS ?result) WHERE {{}}"))
+        .unwrap();
+    for (body, code, bound, detail) in [
+        (
+            "SELECT (1 AS ?a) (2 AS ?b) WHERE {}",
+            "shacl-function-select-columns",
+            "required",
+            "SELECT body must project exactly one variable, got 2",
+        ),
+        (
+            "SELECT ?a WHERE { VALUES ?a { 1 2 } }",
+            "shacl-function-select-solutions",
+            "maximum",
+            "SELECT body returned 2 solutions; SHACL Advanced Features says \"such SELECT queries should only return at most one solution\", read as a must, so the call has no single value",
+        ),
+    ] {
+        let dataset = support::empty_dataset();
+        let mut functions = UserFunctionRegistry::default();
+        functions.insert(
+            iri,
+            UserFunction {
+                params: Vec::new(),
+                required: 0,
+                body: body.into(),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let bound_functions = NativeSparqlEngine::new()
+            .bind_functions(functions, ExtensionEnv::empty())
+            .unwrap();
+        let mut ctx = EvalCtx::new(&dataset).with_user_functions(&bound_functions);
+        let original = evaluate_query(&query, &mut ctx).unwrap_err();
+        drop(ctx);
+        drop(bound_functions);
+        drop(dataset);
+        let retained = original.clone();
+        drop(original);
+        let fields = Capture::read(&retained).child("cause").child("cause");
+        assert_eq!(fields.code, code);
+        assert!(matches!(fields.field("iri"), ErrorValue::Iri(value) if value == iri));
+        assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(2)));
+        assert!(matches!(fields.field(bound), ErrorValue::Unsigned(1)));
+        let buffer = Vec::with_capacity(4);
+        let window = CurrentThreadWindow::open();
+        let _capture = Capture::read_with_buffer(&retained, buffer);
+        assert_eq!(window.close().allocations, 0);
+        assert!(retained.diagnostic_code().is_none());
+        assert_eq!(
+            retained.to_string(),
+            format!("host function error: SHACL-AF function <{iri}> {detail}")
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
+    shacl_select_result_refusals_keep_original_iri_and_counts,
     raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers,
     raw_completion_refusals_retain_original_governor_certificates,
     native_graph_and_standpoint_failures_keep_original_keys,

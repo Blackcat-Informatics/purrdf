@@ -80,6 +80,53 @@ pub enum UserFnBody {
     Ask,
 }
 
+/// A SELECT function body cannot supply one unambiguous return value.
+#[derive(Debug)]
+enum SelectResultRefusal {
+    Columns {
+        iri: purrdf_lex::allocation::SharedText,
+        actual: usize,
+    },
+    Solutions {
+        iri: purrdf_lex::allocation::SharedText,
+        actual: usize,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for SelectResultRefusal {
+    purrdf_hash::error_visit! {
+        Columns { iri, actual } => "shacl-function-select-columns" {
+            "iri" => Iri(iri.as_str()),
+            "actual" => Unsigned(*actual as u128),
+            "required" => Unsigned(1),
+        },
+        Solutions { iri, actual } => "shacl-function-select-solutions" {
+            "iri" => Iri(iri.as_str()),
+            "actual" => Unsigned(*actual as u128),
+            "maximum" => Unsigned(1),
+        },
+    }
+}
+
+impl core::fmt::Display for SelectResultRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Columns { iri, actual } => write!(
+                formatter,
+                "SHACL-AF function <{iri}> SELECT body must project exactly one variable, got {actual}"
+            ),
+            Self::Solutions { iri, actual } => write!(
+                formatter,
+                "SHACL-AF function <{iri}> SELECT body returned {actual} solutions; SHACL \
+                 Advanced Features says \"such SELECT queries should only return at most \
+                 one solution\", read as a must, so the call has no single value"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SelectResultRefusal {}
+
 /// The `sh:nodeKind` of a parameter or return value, when constrained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
@@ -1849,10 +1896,14 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
             // A SHACL-AF function SELECT body yields a single result variable; a
             // multi-projection body has no well-defined return value.
             if variables.len() != 1 {
-                return Err(EvalError::function(format!(
-                    "SHACL-AF function <{iri}> SELECT body must project exactly one variable, got {}",
-                    variables.len()
-                )));
+                return Err(NativeDiagnostic::error_cause(
+                    NativeDiagnosticKind::Function,
+                    SelectResultRefusal::Columns {
+                        iri: child.growth.authored_text(iri)?,
+                        actual: variables.len(),
+                    },
+                    &child.growth,
+                ));
             }
             // SHACL Advanced Features, "SPARQL-based Functions": "the function's return
             // value is the binding of the (single) result variable of the first solution
@@ -1862,12 +1913,14 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
             // return, and taking the first would make the call's value depend on an
             // order the query never fixed, so the call is refused rather than answered.
             if rows.len() > 1 {
-                return Err(EvalError::function(format!(
-                    "SHACL-AF function <{iri}> SELECT body returned {} solutions; SHACL \
-                     Advanced Features says \"such SELECT queries should only return at most \
-                     one solution\", read as a must, so the call has no single value",
-                    rows.len()
-                )));
+                return Err(NativeDiagnostic::error_cause(
+                    NativeDiagnosticKind::Function,
+                    SelectResultRefusal::Solutions {
+                        iri: child.growth.authored_text(iri)?,
+                        actual: rows.len(),
+                    },
+                    &child.growth,
+                ));
             }
             // The single projected value of the one solution row; an empty result set
             // is "no value".
