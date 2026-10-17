@@ -1862,6 +1862,9 @@ fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
     match error {
         purrdf_validate::ShapesError::Storage(error) => crate::py_store::storage_value_error(error),
         purrdf_validate::ShapesError::Imports(error) => import_error(py, &error),
+        purrdf_validate::ShapesError::Recursion(refusal) => {
+            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        }
         purrdf_validate::ShapesError::Invalid(message) => {
             pyo3::exceptions::PyValueError::new_err(message)
         }

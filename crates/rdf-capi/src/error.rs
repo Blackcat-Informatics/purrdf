@@ -74,6 +74,9 @@ impl PurrdfError {
                 Self::from_diagnostic(PurrdfStatus::StorageError, &error.into())
             }
             purrdf_validate::ShapesError::Imports(error) => Self::shapes_import(&error),
+            purrdf_validate::ShapesError::Recursion(refusal) => {
+                Self::new(PurrdfStatus::ParseError, refusal.to_string())
+            }
             purrdf_validate::ShapesError::Invalid(message) => {
                 Self::new(PurrdfStatus::ParseError, message)
             }
