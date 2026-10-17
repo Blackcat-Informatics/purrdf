@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **BLAKE3 modes and extended output:** keyed hashing and context-separated key
+  derivation share the existing portable and SIMD kernels. Both streaming buffer
+  sizes support keyed and derived input; an owned output reader fills caller
+  storage and seeks without rehashing input. One-shot XOF functions cover all
+  three modes, with no added dependency.
+
 - **Shared exact integer engine:** arbitrary-precision Integer, Decimal,
   Rational, numeric codecs and geometric facades share binary `u64` limbs.
   Small exact integers retain inline `i128` arithmetic; the binary engine adds

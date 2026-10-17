@@ -166,7 +166,11 @@ mod blake3_sse2;
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 mod blake3_wasm;
 
-pub(crate) fn blake3_four(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 4]> {
+pub(crate) fn blake3_four(
+    bytes: &[u8],
+    counter: u64,
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 4]> {
     if bytes.is_empty() || bytes.len() > 4096 {
         return None;
     }
@@ -174,14 +178,14 @@ pub(crate) fn blake3_four(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 4]> {
     {
         if std::is_x86_feature_detected!("sse2") {
             // SAFETY: runtime detection establishes SSE2; array/input bounds are checked.
-            return Some(unsafe { blake3_sse2::chunk_cvs(bytes, counter) });
+            return Some(unsafe { blake3_sse2::chunk_cvs(bytes, counter, mode) });
         }
         None
     }
     #[cfg(target_arch = "x86_64")]
     {
         // SAFETY: SSE2 is baseline on x86-64 and input bounds are checked.
-        Some(unsafe { blake3_sse2::chunk_cvs(bytes, counter) })
+        Some(unsafe { blake3_sse2::chunk_cvs(bytes, counter, mode) })
     }
     #[cfg(all(
         target_arch = "aarch64",
@@ -190,11 +194,11 @@ pub(crate) fn blake3_four(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 4]> {
     ))]
     {
         // SAFETY: NEON is enabled for this target; input bounds are checked.
-        Some(unsafe { blake3_neon::chunk_cvs(bytes, counter) })
+        Some(unsafe { blake3_neon::chunk_cvs(bytes, counter, mode) })
     }
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
     {
-        Some(blake3_wasm::chunk_cvs(bytes, counter))
+        Some(blake3_wasm::chunk_cvs(bytes, counter, mode))
     }
     #[cfg(not(any(
         target_arch = "x86_64",
@@ -207,30 +211,34 @@ pub(crate) fn blake3_four(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 4]> {
         all(target_arch = "wasm32", target_feature = "simd128")
     )))]
     {
-        let _ = counter;
+        let _ = (counter, mode);
         None
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 mod blake3_avx2;
-pub(crate) fn blake3_eight(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 8]> {
+pub(crate) fn blake3_eight(
+    bytes: &[u8],
+    counter: u64,
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 8]> {
     #[cfg(target_arch = "x86_64")]
     if !bytes.is_empty() && bytes.len() <= 8192 && std::is_x86_feature_detected!("avx2") {
         // SAFETY: the processor has AVX2 and the input contains at most eight chunks.
-        return Some(unsafe { blake3_avx2::chunk_cvs(bytes, counter) });
+        return Some(unsafe { blake3_avx2::chunk_cvs(bytes, counter, mode) });
     }
-    let _ = (bytes, counter);
+    let _ = (bytes, counter, mode);
     None
 }
 
-pub(crate) fn blake3_compress4(
+pub(crate) fn blake3_compress4<const OUTPUT: usize>(
     cv: [u32; 8],
     words: &[u32; 16],
     counter: u64,
     length: u32,
     flags: u32,
-) -> Option<[u32; 8]> {
+) -> Option<[u32; OUTPUT]> {
     #[cfg(target_arch = "x86")]
     {
         if std::is_x86_feature_detected!("sse2") {
@@ -274,14 +282,14 @@ pub(crate) fn blake3_compress4(
 }
 
 #[inline]
-pub(crate) fn blake3_compress_on(
+pub(crate) fn blake3_compress_on<const OUTPUT: usize>(
     backend: crate::blake3::Backend,
     cv: [u32; 8],
     words: &[u32; 16],
     counter: u64,
     length: u32,
     flags: u32,
-) -> Option<[u32; 8]> {
+) -> Option<[u32; OUTPUT]> {
     use crate::blake3::Backend;
     use crate::dispatch::Backend as _;
     if !backend.is_available() {
@@ -311,19 +319,22 @@ pub(crate) fn blake3_compress_on(
     }
 }
 
-pub(crate) fn blake3_parents4(children: &[[u32; 8]; 8]) -> Option<[[u32; 8]; 4]> {
+pub(crate) fn blake3_parents4(
+    children: &[[u32; 8]; 8],
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 4]> {
     #[cfg(target_arch = "x86")]
     {
         if std::is_x86_feature_detected!("sse2") {
             // SAFETY: runtime detection establishes SSE2; array/input bounds are checked.
-            return Some(unsafe { blake3_sse2::parents(children) });
+            return Some(unsafe { blake3_sse2::parents(children, mode) });
         }
         None
     }
     #[cfg(target_arch = "x86_64")]
     {
         // SAFETY: SSE2 is baseline, and the input has eight full child CVs.
-        Some(unsafe { blake3_sse2::parents(children) })
+        Some(unsafe { blake3_sse2::parents(children, mode) })
     }
     #[cfg(all(
         target_arch = "aarch64",
@@ -332,11 +343,11 @@ pub(crate) fn blake3_parents4(children: &[[u32; 8]; 8]) -> Option<[[u32; 8]; 4]>
     ))]
     {
         // SAFETY: NEON is enabled; the array has every child CV.
-        Some(unsafe { blake3_neon::parents(children) })
+        Some(unsafe { blake3_neon::parents(children, mode) })
     }
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
     {
-        Some(blake3_wasm::parents(children))
+        Some(blake3_wasm::parents(children, mode))
     }
     #[cfg(not(any(
         target_arch = "x86_64",
@@ -349,31 +360,38 @@ pub(crate) fn blake3_parents4(children: &[[u32; 8]; 8]) -> Option<[[u32; 8]; 4]>
         all(target_arch = "wasm32", target_feature = "simd128")
     )))]
     {
-        let _ = children;
+        let _ = (children, mode);
         None
     }
 }
-pub(crate) fn blake3_parents8(children: &[[u32; 8]; 16]) -> Option<[[u32; 8]; 8]> {
+pub(crate) fn blake3_parents8(
+    children: &[[u32; 8]; 16],
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 8]> {
     #[cfg(target_arch = "x86_64")]
     if std::is_x86_feature_detected!("avx2") {
         // SAFETY: AVX2 is available; the array has every child CV.
-        return Some(unsafe { blake3_avx2::parents(children) });
+        return Some(unsafe { blake3_avx2::parents(children, mode) });
     }
-    let _ = children;
+    let _ = (children, mode);
     None
 }
 
 /// Four live chunks with AVX-512VL rotations and 128-bit transposes.
 #[cfg(target_arch = "x86_64")]
-pub(crate) fn blake3_four_avx512(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 4]> {
+pub(crate) fn blake3_four_avx512(
+    bytes: &[u8],
+    counter: u64,
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 4]> {
     if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
         // SAFETY: both required features were detected; the kernel checks
         // lengths and pads partial chunks before its fixed-size loads.
         Some(unsafe {
             if let Ok(full) = <&[u8; 4096]>::try_from(bytes) {
-                blake3_rows::chunks(full, counter)
+                blake3_rows::chunks(full, counter, mode)
             } else {
-                blake3_sse2::avx512::chunk_cvs(bytes, counter)
+                blake3_sse2::avx512::chunk_cvs(bytes, counter, mode)
             }
         })
     } else {
@@ -382,10 +400,13 @@ pub(crate) fn blake3_four_avx512(bytes: &[u8], counter: u64) -> Option<[[u32; 8]
 }
 
 #[cfg(target_arch = "x86_64")]
-pub(crate) fn blake3_parents4_avx512(children: &[[u32; 8]; 8]) -> Option<[[u32; 8]; 4]> {
+pub(crate) fn blake3_parents4_avx512(
+    children: &[[u32; 8]; 8],
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 4]> {
     if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
         // SAFETY: features were detected; every load reads a full input array.
-        Some(unsafe { blake3_sse2::avx512::parents(children) })
+        Some(unsafe { blake3_sse2::avx512::parents(children, mode) })
     } else {
         None
     }
@@ -396,14 +417,17 @@ mod blake3_parents2;
 
 /// Two parents packed into two independent four-word SIMD groups.
 #[cfg(target_arch = "x86_64")]
-pub(crate) fn blake3_parents2_avx512(children: &[[u32; 8]; 4]) -> Option<[[u32; 8]; 2]> {
+pub(crate) fn blake3_parents2_avx512(
+    children: &[[u32; 8]; 4],
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 2]> {
     if std::is_x86_feature_detected!("avx2")
         && std::is_x86_feature_detected!("avx512f")
         && std::is_x86_feature_detected!("avx512vl")
     {
         // SAFETY: every required feature is present; the input contains both
         // complete parent blocks, with no alignment requirement.
-        Some(unsafe { blake3_parents2::parents(children) })
+        Some(unsafe { blake3_parents2::parents(children, mode) })
     } else {
         None
     }
@@ -415,14 +439,18 @@ mod blake3_rows;
 /// Complete four-chunk subtree, retaining its two final children for ROOT.
 /// This entry avoids the partial-chunk kernel's padding frame entirely.
 #[cfg(target_arch = "x86_64")]
-pub(crate) fn blake3_subtree_four(bytes: &[u8; 4096], counter: u64) -> Option<[[u32; 8]; 2]> {
+pub(crate) fn blake3_subtree_four(
+    bytes: &[u8; 4096],
+    counter: u64,
+    mode: crate::blake3::Mode,
+) -> Option<[[u32; 8]; 2]> {
     if std::is_x86_feature_detected!("avx2")
         && std::is_x86_feature_detected!("avx512f")
         && std::is_x86_feature_detected!("avx512vl")
     {
         // SAFETY: every required feature is present, all four chunks are
         // complete, and the local child array contains both parent blocks.
-        Some(unsafe { blake3_parents2::parents(&blake3_rows::chunks(bytes, counter)) })
+        Some(unsafe { blake3_parents2::parents(&blake3_rows::chunks(bytes, counter, mode), mode) })
     } else {
         None
     }

@@ -51,12 +51,12 @@ const _: () = {
 
 #[inline]
 #[target_feature(enable = "avx512f")]
-fn initial(first: usize) -> __m512i {
+fn initial(key: &[u32; 8], first: usize) -> __m512i {
     let [a, b, c, d] = [
-        IV[first] as i32,
-        IV[first + 1] as i32,
-        IV[first + 2] as i32,
-        IV[first + 3] as i32,
+        key[first] as i32,
+        key[first + 1] as i32,
+        key[first + 2] as i32,
+        key[first + 3] as i32,
     ];
     _mm512_setr_epi32(a, b, c, d, a, b, c, d, a, b, c, d, a, b, c, d)
 }
@@ -64,9 +64,9 @@ fn initial(first: usize) -> __m512i {
 /// All loads are inside four complete chunks; the caller checks AVX-512F.
 #[inline]
 #[target_feature(enable = "avx512f")]
-pub(crate) fn chunks(bytes: &[u8; 4096], counter: u64) -> [[u32; 8]; 4] {
-    let mut cv_a = initial(0);
-    let mut cv_b = initial(4);
+pub(crate) fn chunks(bytes: &[u8; 4096], counter: u64, mode: crate::blake3::Mode) -> [[u32; 8]; 4] {
+    let mut cv_a = initial(&mode.key, 0);
+    let mut cv_b = initial(&mode.key, 4);
     let counters: [u32; 16] = core::array::from_fn(|lane| match lane % 4 {
         0 => (counter + (lane / 4) as u64) as u32,
         1 => ((counter + (lane / 4) as u64) >> 32) as u32,
@@ -112,10 +112,10 @@ pub(crate) fn chunks(bytes: &[u8; 4096], counter: u64) -> [[u32; 8]; 4] {
             _mm512_shuffle_epi32::<0x93>(even_last),
             _mm512_shuffle_epi32::<0x93>(odd_last),
         ];
-        let flags = u32::from(block == 0) | (u32::from(block == 15) << 1);
+        let flags = mode.flags | u32::from(block == 0) | (u32::from(block == 15) << 1);
         let mut a = cv_a;
         let mut b = cv_b;
-        let mut c = initial(0);
+        let mut c = initial(&IV, 0);
         let mut d = _mm512_mask_set1_epi32(counters, 0x8888, flags as i32);
         macro_rules! g {
             ($x:expr, $y:expr) => {{
