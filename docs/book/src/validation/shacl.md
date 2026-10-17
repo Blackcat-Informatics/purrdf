@@ -16,7 +16,10 @@ It validates an RDF 1.2 data graph against a SHACL shapes graph with **no
 inference** (parity with pySHACL `inference="none"`); combine with
 [Entailment](../entailment.md) if you want to validate a materialized closure,
 or declare `sh:entailment sh:RulesEntailment` to run the shapes graph's own
-rules first.
+rules first, or name a `sh:RuleSet` of the shapes graph as an `sh:entailment`
+value to run only that rule set's rules (its included rule sets' too); several
+such values run together as one rule set. Any other `sh:entailment` value is
+refused, as SHACL requires of a processor that does not support it.
 
 ## What it covers
 

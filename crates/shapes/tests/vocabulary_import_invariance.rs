@@ -74,28 +74,10 @@ const INVARIANCE_EXCEPTIONS: &[(&str, &str)] = &[(
 /// Cases that end in an error, not a report, although no manifest declares `sht:Failure`
 /// for them, as `(case id, reason)`: SHACL 1.2 features the engine does not evaluate. The
 /// ledger runs both ways, and its reasons are those of the prepared-product harness.
-const REFUSED_AT_LOAD: &[(&str, &str)] = &[
-    (
-        "w3c12/inference-rules/rules-entailment-ruleset-and-all",
-        "sh:entailment names a rule set; only sh:RulesEntailment is supported",
-    ),
-    (
-        "w3c12/inference-rules/rules-entailment-ruleset-includes",
-        "sh:entailment names a rule set; only sh:RulesEntailment is supported",
-    ),
-    (
-        "w3c12/inference-rules/rules-entailment-ruleset-multiple",
-        "sh:entailment names a rule set; only sh:RulesEntailment is supported",
-    ),
-    (
-        "w3c12/inference-rules/rules-entailment-ruleset-validation",
-        "sh:entailment names a rule set; only sh:RulesEntailment is supported",
-    ),
-    (
-        "w3c12/sparql/pre-binding/pre-binding-009",
-        "the sh:sparql query contains VALUES, which the engine refuses with pre-bound variables",
-    ),
-];
+const REFUSED_AT_LOAD: &[(&str, &str)] = &[(
+    "w3c12/sparql/pre-binding/pre-binding-009",
+    "the sh:sparql query contains VALUES, which the engine refuses with pre-bound variables",
+)];
 
 /// Every case the three corpora contribute (129 + 73 + 213).
 const TOTAL_CASES: usize = 415;
@@ -125,7 +107,7 @@ const TOTAL_CASES: usize = 415;
 /// `owl:imports <http://datashapes.org/dash>` on a node that is not an import anchor,
 /// so the triple is data; both runs load it with an empty import table, and it is
 /// compared on a report like every other case.
-const COMPARED_ON_REPORT: usize = 397;
+const COMPARED_ON_REPORT: usize = 401;
 
 /// The inputs among [`TOTAL_CASES`] that must be refused at load and are compared on
 /// an identical error: the declared `sht:Failure` inputs (13, one of them in

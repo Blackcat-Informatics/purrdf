@@ -243,6 +243,12 @@ pub struct RuleGraph {
     /// that do support the SHACL rules entailment regime execute the rules following the
     /// rules execution instructions prior to performing the actual validation."
     pub entailment: bool,
+    /// The rule sets the shapes graph names as values of `sh:entailment`, in IRI order.
+    /// SHACL 1.2 Inference Rules, "Entailment using Rule Sets": "If the shapes graph has
+    /// more than one such value for sh:entailment, or also has the value
+    /// sh:RulesEntailment, then the rules of all of them are executed together as a
+    /// single rule set."
+    pub entailment_rule_sets: Vec<NamedNode>,
 }
 
 /// What a host declares a `sh:ruleProcessor` value to mean.
@@ -269,8 +275,8 @@ pub enum RuleProcessor {
 pub struct RuleOptions {
     /// The `sh:ruleProcessor` values the host handles, and how.
     processors: Vec<(Term, RuleProcessor)>,
-    /// The rule set to execute; `None` for the default rule set.
-    rule_set: Option<NamedNode>,
+    /// The rule sets to execute together as one; `None` for the default rule set.
+    rule_sets: Option<Vec<NamedNode>>,
     /// Whether to track each inferred triple's rule with `sh:sourceRule`.
     source_rules: bool,
     /// The caller's term-generating round limit ([`Self::with_max_term_generating_rounds`]).
@@ -301,7 +307,17 @@ impl RuleOptions {
     /// is the set of all rules in the graph."
     #[must_use]
     pub fn with_rule_set(mut self, iri: NamedNode) -> Self {
-        self.rule_set = Some(iri);
+        self.rule_sets = Some(vec![iri]);
+        self
+    }
+
+    /// Execute the rule sets `iris` together as a single rule set instead of the default
+    /// rule set. SHACL 1.2 Inference Rules, "Entailment using Rule Sets": "the rules of
+    /// all of them are executed together as a single rule set." The rules of each set
+    /// include those of the sets it includes; an empty `iris` executes no rule.
+    #[must_use]
+    pub fn with_rule_sets(mut self, iris: impl IntoIterator<Item = NamedNode>) -> Self {
+        self.rule_sets = Some(iris.into_iter().collect());
         self
     }
 
@@ -423,10 +439,10 @@ impl RuleOptions {
             .map(|(_, processor)| *processor)
     }
 
-    /// The rule set to execute, if not the default.
+    /// The rule sets to execute together, if not the default rule set.
     #[must_use]
-    pub fn rule_set(&self) -> Option<&NamedNode> {
-        self.rule_set.as_ref()
+    pub fn rule_sets(&self) -> Option<&[NamedNode]> {
+        self.rule_sets.as_deref()
     }
 
     /// Whether inferred triples are tracked with `sh:sourceRule`.
@@ -1004,9 +1020,9 @@ pub fn shacl_rule_set<'a>(
             }
         }
     }
-    let members = match options.rule_set() {
+    let members = match options.rule_sets() {
         None => None,
-        Some(iri) => Some(rule_set_members(&shapes.rules.rule_sets, iri)?),
+        Some(iris) => Some(rule_set_members(&shapes.rules.rule_sets, iris)?),
     };
     let selected = |rule: &Rule| members.as_ref().is_none_or(|set| set.contains(&rule.id));
 
@@ -1110,14 +1126,14 @@ fn ir_rule<'a>(rule: &'a Rule, shapes: Vec<&'a Shape>) -> srl::ir::IrRule<'a> {
     }
 }
 
-/// The rules of rule set `iri`, its included rule sets' transitively.
+/// The rules of the rule sets `iris`, their included rule sets' transitively.
 ///
 /// # Errors
 ///
-/// When `iri`, or a rule set it includes, is not a declared rule set.
-fn rule_set_members(sets: &[RuleSetDeclaration], iri: &NamedNode) -> Result<Vec<Term>, String> {
+/// When an IRI, or a rule set it includes, is not a declared rule set.
+fn rule_set_members(sets: &[RuleSetDeclaration], iris: &[NamedNode]) -> Result<Vec<Term>, String> {
     let mut members: Vec<Term> = Vec::new();
-    let mut pending = vec![iri.clone()];
+    let mut pending = iris.to_vec();
     let mut seen: Vec<NamedNode> = Vec::new();
     while let Some(next) = pending.pop() {
         if seen.contains(&next) {

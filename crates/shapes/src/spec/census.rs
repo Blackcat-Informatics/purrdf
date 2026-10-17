@@ -291,8 +291,9 @@ static EXPLICIT: &[CensusRow] = &[
     // engine does not read them from the data graph.
     structural(sh_iri!("incomplete"), Role::Graph),
     structural(sh_iri!("incompleteURIStart"), Role::Graph),
-    // "The IRI sh:RulesEntailment represents the SHACL rules entailment regime" — the one
-    // regime this processor supports; any other `sh:entailment` value is refused at load.
+    // "The IRI sh:RulesEntailment represents the SHACL rules entailment regime" — with the
+    // shapes graph's rule sets, the regimes this processor supports; any other
+    // `sh:entailment` value is refused at load.
     structural(sh::ENTAILMENT, Role::Graph),
     vocabulary(sh::RULES_ENTAILMENT),
     // ── Validation reports (§3.6) ──

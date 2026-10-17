@@ -1577,6 +1577,7 @@ fn rule_graph_round_trips() {
                 processors: vec![ex_term("processor")],
             }],
             entailment: true,
+            entailment_rule_sets: vec![ex("set")],
         },
         ..shapes_of(vec![leaf_shape("S")])
     };
@@ -1590,6 +1591,7 @@ fn rule_graph_round_trips() {
     );
     assert_eq!(parts.rules.rule_sets, shapes.rules.rule_sets);
     assert!(parts.rules.entailment);
+    assert_eq!(parts.rules.entailment_rule_sets, [ex("set")]);
     let without = Shapes {
         rules: RuleGraph::default(),
         ..shapes_of(vec![leaf_shape("S")])

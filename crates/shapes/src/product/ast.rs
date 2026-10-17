@@ -98,7 +98,7 @@
 //! | 1 | `fn_decls` | `seq<decl>` | the custom node-expression function declarations, **sorted by IRI** |
 //! | 2 | `fn_bodies` | `opt<node_expr>` × `fn_decls` count | each declaration's `sh:bodyExpression`, in the same order |
 //! | 3 | `node_shapes` | `seq<shape>` | the shapes graph's top-level node shapes |
-//! | 4 | `rule_graph` | `seq<rule>`, `seq<rule_set>`, `bool` | the global rules, the rule sets, and whether `sh:RulesEntailment` is declared |
+//! | 4 | `rule_graph` | `seq<rule>`, `seq<rule_set>`, `bool`, `seq<iri>` | the global rules, the rule sets, whether `sh:RulesEntailment` is declared, and the rule sets declared as `sh:entailment` values, **sorted by IRI** |
 //! | 5 | `box_role_vocab` | `opt<box_role_vocab>` | absent = the box-role feature is inactive |
 //! | 6 | `target_types` | `seq<(str, sparql_target_type)>` | `sh:SPARQLTargetType` declarations, **key-sorted** |
 //! | 7 | `shapes_graph` | `opt<str>` | the named-graph IRI the shapes dataset is exposed under |
@@ -1543,6 +1543,10 @@ impl AstWriter {
             }
         }
         self.flag(rules.entailment);
+        self.count(rules.entailment_rule_sets.len());
+        for set in &rules.entailment_rule_sets {
+            self.named_node(set);
+        }
         Ok(())
     }
 
@@ -2466,10 +2470,13 @@ impl<'a> AstReader<'a> {
                 processors: reader.seq(Self::term)?,
             })
         })?;
+        let entailment = self.flag()?;
+        let entailment_rule_sets = self.seq(Self::named_node)?;
         Ok(RuleGraph {
             global_rules,
             rule_sets,
-            entailment: self.flag()?,
+            entailment,
+            entailment_rule_sets,
         })
     }
 

@@ -84,7 +84,7 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 /// 4,736 since a shape and a property shape carry their `sh:deactivated` expression: each
 /// writes one presence flag, and the fixture's four node shapes and four property shapes
 /// declare none (+8).
-const GOLDEN_LEN: usize = 4_736;
+const GOLDEN_LEN: usize = 4_744;
 
 /// The product artifact frozen by the commit that introduced the prepared-product
 /// format, for the forward-compatibility proof. See

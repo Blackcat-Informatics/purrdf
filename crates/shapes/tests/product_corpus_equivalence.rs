@@ -163,33 +163,11 @@ const W3C12_DECLARED_FAILURES: usize = 6;
 /// failure loads, packs and agrees — including
 /// `inference-rules/rules-entailment-validation`, whose `sh:RulesEntailment`
 /// regime runs the rules before validation.
-const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
-    (
-        "w3c12/inference-rules/rules-entailment-ruleset-and-all",
-        "sh:entailment names a rule set (ex:FullNameRules); the engine supports only \
-         sh:RulesEntailment and refuses the shapes graph at load",
-    ),
-    (
-        "w3c12/inference-rules/rules-entailment-ruleset-includes",
-        "sh:entailment names a rule set (ex:AllRules); the engine supports only \
-         sh:RulesEntailment and refuses the shapes graph at load",
-    ),
-    (
-        "w3c12/inference-rules/rules-entailment-ruleset-multiple",
-        "sh:entailment names a rule set (ex:FullNameRules); the engine supports only \
-         sh:RulesEntailment and refuses the shapes graph at load",
-    ),
-    (
-        "w3c12/inference-rules/rules-entailment-ruleset-validation",
-        "sh:entailment names a rule set (ex:FullNameRules); the engine supports only \
-         sh:RulesEntailment and refuses the shapes graph at load",
-    ),
-    (
-        "w3c12/sparql/pre-binding/pre-binding-009",
-        "the sh:sparql query contains VALUES, which the engine refuses with pre-bound \
+const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[(
+    "w3c12/sparql/pre-binding/pre-binding-009",
+    "the sh:sparql query contains VALUES, which the engine refuses with pre-bound \
          variables (stricter than the Working Draft's mentions-a-pre-bound-variable rule)",
-    ),
-];
+)];
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
 
@@ -238,7 +216,7 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// carries the W3C vocabulary's own declarations of three built-ins, and the two
 /// SHACL 1.2 cases whose custom list function is called only from SPARQL text,
 /// which the product round trip carries without refusing the function.
-const AGREED_ON_REPORT_CASES: usize = 397;
+const AGREED_ON_REPORT_CASES: usize = 401;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.

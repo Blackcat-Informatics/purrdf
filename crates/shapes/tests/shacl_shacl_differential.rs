@@ -71,7 +71,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        255,
+        259,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -134,14 +134,6 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
         1,
         "the text of a SPARQL-based constraint is SPARQL, which shacl-shacl.ttl does not \
          parse: a query that does not parse (sparql-syntax-error-001) is refused at load",
-    ),
-    (
-        "unsupported-entailment-regime",
-        "this processor supports the entailment regime sh:RulesEntailment only",
-        4,
-        "SHACL 1.2 requires a processor to signal a failure for an sh:entailment regime it \
-         does not support; shacl-shacl.ttl does not know which regimes a processor supports, \
-         so it accepts a rule set named by sh:entailment",
     ),
 ];
 
@@ -503,8 +495,8 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
 const BASE_INPUTS: usize = 415;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 203 literal-for-IRI, 112
-/// non-integer counts, 172 lists-for-single-values, 41 non-boolean flags and 255
+/// mutation kind that finds a statement to rewrite): 207 literal-for-IRI, 116
+/// non-integer counts, 176 lists-for-single-values, 41 non-boolean flags and 259
 /// misspelled predicates.
 ///
 /// # What some bases contribute
@@ -548,6 +540,10 @@ const BASE_INPUTS: usize = 415;
 ///   rewrites its `sh:targetClass` (1), the non-integer-count and
 ///   list-for-single-value kinds its property shape's `sh:minCount` (2), and the
 ///   property shape gains a misspelled predicate (1, refused under `unknown-term`).
+/// * `inference-rules/rules-entailment-ruleset-{and-all,includes,multiple,validation}`:
+///   each is rewritten once per kind: a literal-for-IRI `sh:targetClass`, a
+///   non-integer count, a list-for-single-value and a misspelled predicate (refused
+///   under `unknown-term`): 16 in all.
 ///
 /// * `sparql/component/validator-001`, once in each vendored suite, loads with an
 ///   empty import table, its `owl:imports` being data: the list-for-single-value kind
@@ -558,7 +554,7 @@ const BASE_INPUTS: usize = 415;
 /// `equals-002`, `disjoint-002`, `lessThan-003` and `lessThanOrEquals-002` (see
 /// `path-valued-property-pair`) and `targetNode-select-001` (see
 /// `node-expression-target-node`), which PurRDF loads and `shacl-shacl.ttl` flags.
-const MUTANT_INPUTS: usize = 783;
+const MUTANT_INPUTS: usize = 799;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -675,11 +671,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 203),
-        ("non-integer-count", 112),
-        ("list-where-a-single-value-is-required", 172),
+        ("literal-where-an-IRI-is-required", 207),
+        ("non-integer-count", 116),
+        ("list-where-a-single-value-is-required", 176),
         ("non-boolean-flag", 41),
-        (UNKNOWN_TERM, 255),
+        (UNKNOWN_TERM, 259),
     ]
     .into_iter()
     .collect();

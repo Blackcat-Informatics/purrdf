@@ -107,10 +107,10 @@ impl Parser<'_> {
     ///
     /// # Errors
     ///
-    /// A malformed global rule, rule set or template; an `sh:entailment` value other than
-    /// `sh:RulesEntailment`.
+    /// A malformed global rule, rule set or template; an `sh:entailment` value that is neither
+    /// `sh:RulesEntailment` nor a declared rule set.
     pub(crate) fn parse_rule_graph(&mut self) -> Result<RuleGraph, String> {
-        let entailment = self.parse_entailment()?;
+        let (entailment, entailment_rule_sets) = self.parse_entailment()?;
         let linked: FastSet<Term> = self
             .quads_with(None, Some(sh::RULE), None)
             .into_iter()
@@ -140,32 +140,48 @@ impl Parser<'_> {
             global_rules,
             rule_sets,
             entailment,
+            entailment_rule_sets,
         })
     }
 
-    /// Whether the shapes graph declares the SHACL rules entailment regime.
+    /// The entailment regimes the shapes graph declares: whether it names
+    /// `sh:RulesEntailment`, and the rule sets it names, in IRI order.
     ///
     /// SHACL 1.2 Core: "If a shapes graph contains any triple with the predicate
     /// sh:entailment and the object E and the SHACL processor does not support E as an
     /// entailment regime for the given data graph then the processor MUST signal a
-    /// failure." This processor supports exactly `sh:RulesEntailment` — SHACL 1.2
-    /// Inference Rules: "Validation engines that do support the SHACL rules entailment
-    /// regime execute the rules following the rules execution instructions prior to
-    /// performing the actual validation."
-    fn parse_entailment(&self) -> Result<bool, String> {
+    /// failure." This processor supports `sh:RulesEntailment` and, per SHACL 1.2
+    /// Inference Rules, "Entailment using Rule Sets": "Any rule set can be used as a
+    /// value of sh:entailment, i.e. any IRI that is a SHACL instance of sh:RuleSet in
+    /// the shapes graph." Every other value is a regime this processor does not support.
+    fn parse_entailment(&self) -> Result<(bool, Vec<NamedNode>), String> {
         let mut rules = false;
+        let mut sets: Vec<NamedNode> = Vec::new();
+        let mut instances = ShaclInstances::new(self.data);
+        let rule_set_class = self.data.term_id_by_iri(sh::RULE_SET);
         for (subject, _, object) in self.quads_with(None, Some(sh::ENTAILMENT), None) {
             if object == Term::NamedNode(NamedNode::from(sh::RULES_ENTAILMENT)) {
                 rules = true;
                 continue;
             }
+            if let Term::NamedNode(iri) = &object
+                && crate::data::resolve_id(self.data, &object)
+                    .is_some_and(|node| instances.is_instance(node, rule_set_class))
+            {
+                if !sets.contains(iri) {
+                    sets.push(iri.clone());
+                }
+                continue;
+            }
             return Err(format!(
                 "the shapes graph declares {subject} sh:entailment {object}; this processor \
-                 supports the entailment regime sh:RulesEntailment only, and SHACL requires a \
-                 processor to signal a failure for a regime it does not support"
+                 supports the entailment regime sh:RulesEntailment and the rule sets of the \
+                 shapes graph (SHACL instances of sh:RuleSet), and SHACL requires a processor \
+                 to signal a failure for a regime it does not support"
             ));
         }
-        Ok(rules)
+        sets.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        Ok((rules, sets))
     }
 
     /// Every node that is a SHACL instance of `sh:Rule`, `sh:TripleRule` or
