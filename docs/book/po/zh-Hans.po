@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-17T00:04:45-06:00\n"
+"POT-Creation-Date: 2026-10-17T08:16:08-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -851,8 +851,8 @@ msgid ""
 "Every engine hangs off the same facade. For example, the IRI layer, which "
 "has no third-party dependency, and the ShEx schema layer:"
 msgstr ""
-"每个引擎都挂在同一个门面之下。例如，IRI 层（不依赖任何第三方包）与 ShEx "
-"模式层："
+"每个引擎都挂在同一个门面之下。例如，IRI 层（不依赖任何第三方包）与 ShEx 模式"
+"层："
 
 #: src/getting-started/rust.md:76 src/getting-started/rust.md:77
 #: src/concepts/interned-dataset.md:33 src/sparql/querying.md:31
@@ -23802,7 +23802,7 @@ msgstr ""
 "`Graph.query`、SPARQL 处理器、`Dataset` 和 `ConjunctiveGraph` 采用编译到原生"
 "求值器中的上下文初始绑定语义。查询赋值可以替换初始值，而初始映射仍可供外层操"
 "作使用。命名图视图和 `default_union` 决定查询的图作用域。直接使用 "
-"`purrdf.Store.query` 和`Store.prepare` 接口时，仍遵循原生预绑定规则。"
+"`purrdf.Store.query` 和 `Store.prepare` 接口时，仍遵循原生预绑定规则。"
 
 #: src/interop/rdflib.md:36
 msgid "Tier 2: the `purrdf[rdflib]` shadow distribution"
@@ -23812,6 +23812,10 @@ msgstr "第 2 层：`purrdf[rdflib]` 影子发行包"
 msgid "For a literal, zero-change `import rdflib`, install the opt-in extra:"
 msgstr ""
 "若要让 `import rdflib` 字面上零改动即可使用，请安装这个需主动启用的 extra："
+
+#: src/interop/rdflib.md:41
+msgid "\"purrdf[rdflib]\""
+msgstr "\"purrdf[rdflib]\""
 
 #: src/interop/rdflib.md:54
 msgid "How compatibility is kept honest"
